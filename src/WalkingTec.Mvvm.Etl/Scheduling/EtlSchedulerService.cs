@@ -25,19 +25,51 @@ namespace WalkingTec.Mvvm.Etl.Scheduling;
 /// That freshly-resolved context has no HTTP identity, so its <c>TenantCode</c> is always
 /// null (see <c>WTMContext.CreateDC</c>: <c>tenantCode</c> only resolves from
 /// <c>LoginUserInfo.CurrentTenant</c>, which requires an authenticated request). This service
-/// is the single shared, app-wide job scheduler/executor — like a cron daemon, it must see and
-/// operate on every tenant's <see cref="EtlJobDefinition"/>/<see cref="EtlRunLog"/>/
-/// <see cref="EtlDeadLetterRow"/> rows regardless of which tenant they belong to; the caller
-/// only ever identifies a specific row by id (<c>jobId</c>/<c>runLogId</c>), never by an
-/// ambient tenant scope. Every <see cref="ITenant"/>-filtered read below therefore calls
-/// <c>IgnoreQueryFilters()</c> explicitly -- without it, #862's ITenant fix would silently
-/// stop the scheduler from ever finding a tenant-scoped job again (confirmed empirically while
-/// building this fix: a <c>FindAsync</c> for a real tenant's job returned null once the ITenant
-/// filter started applying). This is deliberately DIFFERENT from the VM layer
-/// (<c>EtlJobListVM</c>, <c>EtlRunLogListVM</c>, <c>EtlJobDefinitionVM</c>) and
-/// <c>EtlDashboardService.BuildSummary</c>, both of which correctly use the calling
-/// controller's own <c>Wtm.DC</c> and SHOULD stay tenant-scoped -- that is the actual security
-/// fix #841/#862 exist to deliver for the admin UI.
+/// is the single shared, app-wide job scheduler/executor — like a cron daemon for the FOUR
+/// genuinely background-only entry points (<see cref="ResetGhostRunningJobsAsync"/>,
+/// <see cref="LoadJobsFromDbAsync"/>, <see cref="PruneRunLogsAsync"/>,
+/// <see cref="PruneDeadLetterAsync"/> — called only from <c>EtlHostedService.StartAsync</c>),
+/// which must see and operate on every tenant's <see cref="EtlJobDefinition"/>/
+/// <see cref="EtlRunLog"/>/<see cref="EtlDeadLetterRow"/> rows regardless of which tenant they
+/// belong to, so those four call <c>IgnoreQueryFilters()</c> unconditionally.
+/// <para>
+/// <b>#883 (P0): every OTHER public method here is reachable from an HTTP controller action</b>
+/// (<c>_EtlJobController</c>/<c>_EtlRunLogController</c>/<c>EtlJobDefinitionVM</c> — confirmed
+/// by grepping every call site in <c>src/</c>/<c>demo/</c>, not assumed) and none of them are
+/// ALSO called from any background/Quartz path. Before #883 they used the SAME unconditional
+/// <c>IgnoreQueryFilters()</c> pattern as the four background methods above — reachable from
+/// HTTP with a caller-supplied <c>jobId</c>/<c>runLogId</c> and NO check that the row belonged
+/// to the caller's own tenant, an IDOR: tenant A's ETLAdmin could operate on (or, for
+/// <see cref="DryRunAsync"/>, read source-data preview rows from) tenant B's job just by
+/// supplying its id. Several of them also called into Quartz directly
+/// (<c>TriggerJob</c>/<c>Interrupt</c>/<c>PauseTrigger</c>/<c>ResumeTrigger</c>/<c>DeleteJob</c>/
+/// <c>RescheduleJob</c>) with NO DB lookup at all on the common path — Quartz's own trigger
+/// store has no tenant concept, so even a tenant check on the DB row alone would not have been
+/// enough; the ownership check has to happen BEFORE any Quartz call, not just before a DB write.
+/// </para>
+/// <para>
+/// Fixed via <see cref="LoadJobDefinitionForCallerAsync"/> — the #843 <c>declaredSystemQuery</c>
+/// contract (a named, review-visible boolean parameter, not a config flag; reused here rather
+/// than inventing a second mechanism for the same problem) reused for job-definition lookups:
+/// every HTTP-reachable method below now loads (and, for Quartz-touching methods, verifies
+/// ownership of) the target row through this ONE helper BEFORE doing anything else, passing its
+/// own caller's <c>Wtm.LoginUserInfo?.CurrentTenant</c> as <c>callerTenantCode</c> and leaving
+/// <c>declaredSystemQuery</c> at its default <c>false</c>. No production call site currently
+/// passes <c>true</c> — exactly like #843's own flag, it ships fail-closed immediately and
+/// exists as the one sanctioned, explicit escape hatch for a future genuine background caller,
+/// not a currently-exercised path. <see cref="ScheduleJobAsync"/> and
+/// <see cref="UpdateStatusAsync"/> (private helpers) keep their own unconditional
+/// <c>IgnoreQueryFilters()</c> writes-by-id unchanged, with a comment at each site explaining
+/// why: every caller reaching them has already verified ownership of that exact id one level up
+/// (<see cref="LoadJobsFromDbAsync"/> for the background case,
+/// <see cref="LoadJobDefinitionForCallerAsync"/> for every HTTP case), so re-checking tenant
+/// scope on an already-validated id would be redundant, not a second layer of defense. This is
+/// deliberately DIFFERENT from the VM layer (<c>EtlJobListVM</c>, <c>EtlRunLogListVM</c>,
+/// <c>EtlJobDefinitionVM</c>'s own reads) and <c>EtlDashboardService.BuildSummary</c>, both of
+/// which correctly use the calling controller's own <c>Wtm.DC</c> and were ALREADY
+/// tenant-scoped — that is the read-path security fix #841/#862 delivered for the admin UI;
+/// #883 is its write/action-path twin.
+/// </para>
 /// </remarks>
 public class EtlSchedulerService
 {
@@ -122,24 +154,40 @@ public class EtlSchedulerService
     /// <c>LastWatermarkValue</c>（defense-in-depth 防 TOCTOU 競態）。
     /// 正常手動觸發請保持 <c>null</c>。
     /// </param>
-    public virtual async Task TriggerNowAsync(Guid jobId, string? watermarkOverride = null)
+    /// <param name="callerTenantCode">
+    /// #883: the calling controller's own <c>Wtm.LoginUserInfo?.CurrentTenant</c>. Required
+    /// (defaults null, which only matches a null-tenant job) for every HTTP caller so this
+    /// verifies ownership BEFORE the unconditional <see cref="IScheduler.TriggerJob"/> call
+    /// below -- Quartz's own trigger store has no tenant concept, so the DB check must happen
+    /// first regardless of whether the job is already registered in Quartz.
+    /// </param>
+    /// <param name="declaredSystemQuery">
+    /// #843-style explicit escape hatch. See <see cref="LoadJobDefinitionForCallerAsync"/>.
+    /// No production call site passes <c>true</c> today.
+    /// </param>
+    public virtual async Task TriggerNowAsync(
+        Guid jobId,
+        string? watermarkOverride = null,
+        string? callerTenantCode = null,
+        bool declaredSystemQuery = false)
     {
         EnsureScheduler();
+
+        // #883: verify ownership BEFORE touching Quartz at all -- the pre-fix code only did
+        // this DB lookup in the "not yet registered in Quartz" branch below, so the COMMON
+        // case (job already scheduled, the normal state for any Enabled job) called
+        // _scheduler.TriggerJob(jobKey, ...) directly by id with zero ownership check.
+        using var scope = _sp.CreateScope();
+        var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
+        var jobDef = await LoadJobDefinitionForCallerAsync(wtm, jobId, callerTenantCode, declaredSystemQuery);
+        if (jobDef == null)
+            throw new InvalidOperationException($"Job {jobId} not found.");
 
         var jobKey = GetJobKey(jobId);
         if (!await _scheduler!.CheckExists(jobKey))
         {
-            // Job 可能是 Disabled 狀態，臨時建立一次性觸發
-            using var scope = _sp.CreateScope();
-            var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
-            // #862: IgnoreQueryFilters() -- see class remarks. FindAsync() cannot be used
-            // here because DbSet.FindAsync always respects global query filters with no way
-            // to opt out; FirstOrDefaultAsync is the IgnoreQueryFilters-compatible equivalent.
-            var jobDef = await wtm.DC.Set<EtlJobDefinition>()
-                .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(j => j.ID == jobId);
-            if (jobDef == null)
-                throw new InvalidOperationException($"Job {jobId} not found.");
+            // Job 可能是 Disabled 狀態，臨時建立一次性觸發 -- jobDef already loaded and
+            // ownership-verified above, no second query needed.
             await ScheduleJobAsync(jobDef);
         }
 
@@ -151,25 +199,52 @@ public class EtlSchedulerService
     }
 
     /// <summary>⏸ 暫停</summary>
-    public virtual async Task PauseAsync(Guid jobId)
+    /// <param name="jobId">Job ID.</param>
+    /// <param name="callerTenantCode">
+    /// #883: caller's own tenant. Verified BEFORE the unconditional
+    /// <see cref="IScheduler.PauseTrigger"/> call -- Quartz's trigger store has no tenant
+    /// concept, so without this any caller could pause any tenant's job by id alone.
+    /// </param>
+    /// <param name="declaredSystemQuery">#843-style escape hatch; see <see cref="LoadJobDefinitionForCallerAsync"/>.</param>
+    public virtual async Task PauseAsync(Guid jobId, string? callerTenantCode = null, bool declaredSystemQuery = false)
     {
         EnsureScheduler();
+        await EnsureCallerOwnsJobAsync(jobId, callerTenantCode, declaredSystemQuery);
         await _scheduler!.PauseTrigger(GetTriggerKey(jobId));
         await UpdateStatusAsync(jobId, EtlJobStatus.Paused);
     }
 
     /// <summary>▶ 恢復</summary>
-    public virtual async Task ResumeAsync(Guid jobId)
+    /// <param name="jobId">Job ID.</param>
+    /// <param name="callerTenantCode">#883: caller's own tenant -- see <see cref="PauseAsync"/>.</param>
+    /// <param name="declaredSystemQuery">#843-style escape hatch; see <see cref="LoadJobDefinitionForCallerAsync"/>.</param>
+    public virtual async Task ResumeAsync(Guid jobId, string? callerTenantCode = null, bool declaredSystemQuery = false)
     {
         EnsureScheduler();
+        await EnsureCallerOwnsJobAsync(jobId, callerTenantCode, declaredSystemQuery);
         await _scheduler!.ResumeTrigger(GetTriggerKey(jobId));
         await UpdateStatusAsync(jobId, EtlJobStatus.Enabled);
     }
 
     /// <summary>✏️ 修改排程</summary>
-    public virtual async Task RescheduleAsync(Guid jobId, string newCron)
+    /// <param name="jobId">Job ID.</param>
+    /// <param name="newCron">New cron expression.</param>
+    /// <param name="callerTenantCode">
+    /// #883: caller's own tenant. Verified BEFORE the unconditional
+    /// <see cref="IScheduler.RescheduleJob"/> call, which the pre-fix code issued first, with
+    /// zero ownership check -- Quartz's trigger store has no tenant concept.
+    /// </param>
+    /// <param name="declaredSystemQuery">#843-style escape hatch; see <see cref="LoadJobDefinitionForCallerAsync"/>.</param>
+    public virtual async Task RescheduleAsync(
+        Guid jobId, string newCron, string? callerTenantCode = null, bool declaredSystemQuery = false)
     {
         EnsureScheduler();
+
+        using var scope = _sp.CreateScope();
+        var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
+        var jobDef = await LoadJobDefinitionForCallerAsync(wtm, jobId, callerTenantCode, declaredSystemQuery);
+        if (jobDef == null)
+            throw new InvalidOperationException($"Job {jobId} not found.");
 
         var triggerKey = GetTriggerKey(jobId);
         var newTrigger = TriggerBuilder.Create()
@@ -179,33 +254,41 @@ public class EtlSchedulerService
 
         await _scheduler!.RescheduleJob(triggerKey, newTrigger);
 
-        // 同步更新 DB
-        using var scope = _sp.CreateScope();
-        var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
-        // #862: IgnoreQueryFilters() -- see class remarks; FindAsync cannot bypass filters.
-        var jobDef = await wtm.DC.Set<EtlJobDefinition>()
-            .IgnoreQueryFilters()
-            .FirstOrDefaultAsync(j => j.ID == jobId);
-        if (jobDef != null)
-        {
-            jobDef.CronExpression = newCron;
-            jobDef.NextFireAt = newTrigger.GetNextFireTimeUtc()?.UtcDateTime;
-            wtm.DC.Set<EtlJobDefinition>().Update(jobDef);
-            await wtm.DC.SaveChangesAsync();
-        }
+        // 同步更新 DB -- jobDef already loaded and ownership-verified above.
+        jobDef.CronExpression = newCron;
+        jobDef.NextFireAt = newTrigger.GetNextFireTimeUtc()?.UtcDateTime;
+        wtm.DC.Set<EtlJobDefinition>().Update(jobDef);
+        await wtm.DC.SaveChangesAsync();
     }
 
     /// <summary>⛔ 中止執行中的 Job（透過 CancellationToken）</summary>
-    public virtual async Task AbortAsync(Guid jobId)
+    /// <param name="jobId">Job ID.</param>
+    /// <param name="callerTenantCode">
+    /// #883: caller's own tenant. Verified BEFORE the unconditional
+    /// <see cref="IScheduler.Interrupt(JobKey)"/> call -- not itself in #883's own reported
+    /// list of seven, but the same IDOR shape (a caller can DoS another tenant's in-flight run
+    /// by id, with zero DB lookup on the pre-fix path) and fixed under the same commit per this
+    /// repo's "review entire codebase for similar issues" security convention.
+    /// </param>
+    /// <param name="declaredSystemQuery">#843-style escape hatch; see <see cref="LoadJobDefinitionForCallerAsync"/>.</param>
+    public virtual async Task AbortAsync(Guid jobId, string? callerTenantCode = null, bool declaredSystemQuery = false)
     {
         EnsureScheduler();
+        await EnsureCallerOwnsJobAsync(jobId, callerTenantCode, declaredSystemQuery);
         var result = await _scheduler!.Interrupt(GetJobKey(jobId));
         if (!result)
             throw new InvalidOperationException($"Job {jobId} is not currently running.");
     }
 
     /// <summary>⏭ 跳過下次</summary>
-    public virtual async Task SkipNextAsync(Guid jobId)
+    /// <param name="jobId">Job ID.</param>
+    /// <param name="callerTenantCode">
+    /// #883: caller's own tenant. Added to the <c>ExecuteUpdateAsync</c> predicate below so a
+    /// wrong-tenant id matches zero rows (silent no-op) -- the same behaviour the pre-fix code
+    /// already had for a genuinely non-existent id, now also covering a real-but-other-tenant one.
+    /// </param>
+    /// <param name="declaredSystemQuery">#843-style escape hatch; see <see cref="LoadJobDefinitionForCallerAsync"/>.</param>
+    public virtual async Task SkipNextAsync(Guid jobId, string? callerTenantCode = null, bool declaredSystemQuery = false)
     {
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
@@ -216,24 +299,27 @@ public class EtlSchedulerService
         // SkipCount is incremented server-side (j => j.SkipCount + 1) to eliminate
         // the read-then-write ABA race present in the old FindAsync + ++ + SaveChangesAsync path.
         var now = (_sp.GetService<TimeProvider>() ?? TimeProvider.System).GetLocalNow().DateTime;
-        // #862: IgnoreQueryFilters() -- see class remarks.
-        await wtm.DC.Set<EtlJobDefinition>()
-            .IgnoreQueryFilters()
-            .Where(j => j.ID == jobId)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(j => j.SkipCount, j => j.SkipCount + 1)
-                .SetProperty(j => j.UpdateTime, now));
+        // #862: IgnoreQueryFilters() -- see class remarks. #883: TenantCode predicate added
+        // below (unless declaredSystemQuery) so this can never match another tenant's row.
+        var query = wtm.DC.Set<EtlJobDefinition>().IgnoreQueryFilters().Where(j => j.ID == jobId);
+        if (!declaredSystemQuery)
+        {
+            query = query.Where(j => j.TenantCode == callerTenantCode);
+        }
+        await query.ExecuteUpdateAsync(s => s
+            .SetProperty(j => j.SkipCount, j => j.SkipCount + 1)
+            .SetProperty(j => j.UpdateTime, now));
     }
 
     /// <summary>🔄 啟用</summary>
-    public virtual async Task EnableAsync(Guid jobId)
+    /// <param name="jobId">Job ID.</param>
+    /// <param name="callerTenantCode">#883: caller's own tenant -- see <see cref="LoadJobDefinitionForCallerAsync"/>.</param>
+    /// <param name="declaredSystemQuery">#843-style escape hatch; see <see cref="LoadJobDefinitionForCallerAsync"/>.</param>
+    public virtual async Task EnableAsync(Guid jobId, string? callerTenantCode = null, bool declaredSystemQuery = false)
     {
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
-        // #862: IgnoreQueryFilters() -- see class remarks; FindAsync cannot bypass filters.
-        var jobDef = await wtm.DC.Set<EtlJobDefinition>()
-            .IgnoreQueryFilters()
-            .FirstOrDefaultAsync(j => j.ID == jobId);
+        var jobDef = await LoadJobDefinitionForCallerAsync(wtm, jobId, callerTenantCode, declaredSystemQuery);
         if (jobDef == null) return;
 
         jobDef.Status = EtlJobStatus.Enabled;
@@ -245,9 +331,17 @@ public class EtlSchedulerService
     }
 
     /// <summary>🔄 停用</summary>
-    public virtual async Task DisableAsync(Guid jobId)
+    /// <param name="jobId">Job ID.</param>
+    /// <param name="callerTenantCode">
+    /// #883: caller's own tenant. Verified BEFORE the unconditional
+    /// <see cref="IScheduler.DeleteJob(JobKey)"/> call, which the pre-fix code issued with no
+    /// DB lookup at all -- any caller could delete any tenant's Quartz job by id alone.
+    /// </param>
+    /// <param name="declaredSystemQuery">#843-style escape hatch; see <see cref="LoadJobDefinitionForCallerAsync"/>.</param>
+    public virtual async Task DisableAsync(Guid jobId, string? callerTenantCode = null, bool declaredSystemQuery = false)
     {
         EnsureScheduler();
+        await EnsureCallerOwnsJobAsync(jobId, callerTenantCode, declaredSystemQuery);
 
         var jobKey = GetJobKey(jobId);
         if (await _scheduler!.CheckExists(jobKey))
@@ -267,18 +361,24 @@ public class EtlSchedulerService
     /// <param name="jobId">Job definition ID to preview.</param>
     /// <param name="sampleSize">Max preview rows to return (default 10).</param>
     /// <param name="cancellationToken">Cancellation.</param>
+    /// <param name="callerTenantCode">
+    /// #883: caller's own tenant. Without this, DryRun was the most severe of the seven --
+    /// it returns actual SOURCE DATA preview rows (<c>EtlExecutionResult.PreviewRows</c>), not
+    /// just metadata, for any tenant's job whose id the caller could observe or guess (e.g. via
+    /// the unrelated #883 <c>EtlProgressTracker</c> tenant-dimension gap fixed alongside this).
+    /// </param>
+    /// <param name="declaredSystemQuery">#843-style escape hatch; see <see cref="LoadJobDefinitionForCallerAsync"/>.</param>
     public virtual async Task<EtlExecutionResult> DryRunAsync(
         Guid jobId,
         int sampleSize = 10,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? callerTenantCode = null,
+        bool declaredSystemQuery = false)
     {
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
 
-        // #862: IgnoreQueryFilters() -- see class remarks; FindAsync cannot bypass filters.
-        var jobDef = await wtm.DC.Set<EtlJobDefinition>()
-            .IgnoreQueryFilters()
-            .FirstOrDefaultAsync(j => j.ID == jobId, cancellationToken);
+        var jobDef = await LoadJobDefinitionForCallerAsync(wtm, jobId, callerTenantCode, declaredSystemQuery, cancellationToken);
         if (jobDef == null)
             throw new InvalidOperationException($"Job {jobId} not found.");
 
@@ -326,23 +426,36 @@ public class EtlSchedulerService
     }
 
     /// <summary>從 RunLog snapshot 重跑</summary>
+    /// <param name="runLogId">Run-log ID to rerun from.</param>
+    /// <param name="callerTenantCode">
+    /// #883: caller's own tenant. <c>EtlRunLog</c> carries its own <c>TenantCode</c> (#841/#862)
+    /// so the run-log lookup itself is scoped by it directly; the same value is then threaded
+    /// through to <see cref="TriggerNowAsync"/> below so that call re-verifies too (defence in
+    /// depth -- a run log's <c>JobId</c> should always share its own <c>TenantCode</c> by
+    /// construction, but nothing here assumes that without checking).
+    /// </param>
+    /// <param name="declaredSystemQuery">#843-style escape hatch; see <see cref="LoadJobDefinitionForCallerAsync"/>.</param>
     /// <exception cref="InvalidOperationException">
     /// 若 Job 目前正在執行（Status == Running），拒絕重跑以避免 TOCTOU 競態
     /// 導致重跑起點被正在執行的 job finally 寫覆。
     /// </exception>
-    public virtual async Task RerunFromSnapshotAsync(Guid runLogId)
+    public virtual async Task RerunFromSnapshotAsync(
+        Guid runLogId, string? callerTenantCode = null, bool declaredSystemQuery = false)
     {
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
         // #862: IgnoreQueryFilters() -- see class remarks; FindAsync cannot bypass filters.
-        var runLog = await wtm.DC.Set<EtlRunLog>()
-            .IgnoreQueryFilters()
-            .FirstOrDefaultAsync(r => r.ID == runLogId);
+        // #883: TenantCode predicate added below (unless declaredSystemQuery) so a caller can
+        // never rerun from another tenant's run-log snapshot.
+        var runLogQuery = wtm.DC.Set<EtlRunLog>().IgnoreQueryFilters().Where(r => r.ID == runLogId);
+        if (!declaredSystemQuery)
+        {
+            runLogQuery = runLogQuery.Where(r => r.TenantCode == callerTenantCode);
+        }
+        var runLog = await runLogQuery.FirstOrDefaultAsync();
         if (runLog == null) return;
 
-        var jobDef = await wtm.DC.Set<EtlJobDefinition>()
-            .IgnoreQueryFilters()
-            .FirstOrDefaultAsync(j => j.ID == runLog.JobId);
+        var jobDef = await LoadJobDefinitionForCallerAsync(wtm, runLog.JobId, callerTenantCode, declaredSystemQuery);
         if (jobDef == null) return;
 
         // Guard 1: 拒絕在 Job 執行中觸發重跑。
@@ -363,7 +476,7 @@ public class EtlSchedulerService
         // Guard 2: 透過 JobDataMap 傳遞快照 watermark 作為覆蓋值（防 TOCTOU 殘餘競態）。
         // EtlQuartzJob.Execute 會優先使用此值而非重新讀取 DB 中的 LastWatermarkValue，
         // 確保即使 DB 值被再次修改，重跑仍從正確的 W0 開始。
-        await TriggerNowAsync(runLog.JobId, runLog.WatermarkSnapshot);
+        await TriggerNowAsync(runLog.JobId, runLog.WatermarkSnapshot, callerTenantCode, declaredSystemQuery);
     }
 
     /// <summary>
@@ -526,7 +639,12 @@ public class EtlSchedulerService
 
         using var scope = _sp.CreateScope();
         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
-        // #862: IgnoreQueryFilters() -- see class remarks.
+        // #862: IgnoreQueryFilters() -- see class remarks. #883: intentionally unconditional
+        // (no tenant predicate) -- every caller of ScheduleJobAsync has already established
+        // ownership of jobDef.ID one level up (LoadJobsFromDbAsync loaded it via its own
+        // deliberate cross-tenant background scan; every HTTP path routes through
+        // LoadJobDefinitionForCallerAsync first), so this write-by-already-validated-id needs
+        // no second tenant check of its own.
         await wtm.DC.Set<EtlJobDefinition>()
             .IgnoreQueryFilters()
             .Where(j => j.ID == jobDefId)
@@ -547,13 +665,62 @@ public class EtlSchedulerService
         // (null parity with the old SaveChanges path — the interceptor also leaves UpdateBy
         // as-is when there is no active HTTP session).
         var now = (_sp.GetService<TimeProvider>() ?? TimeProvider.System).GetLocalNow().DateTime;
-        // #862: IgnoreQueryFilters() -- see class remarks.
+        // #862: IgnoreQueryFilters() -- see class remarks. #883: intentionally unconditional --
+        // this private helper is only reachable via PauseAsync/ResumeAsync/DisableAsync, every
+        // one of which now calls EnsureCallerOwnsJobAsync (or, for DisableAsync,
+        // LoadJobDefinitionForCallerAsync's sibling check) BEFORE this runs, so the id here is
+        // already tenant-verified by the caller.
         await wtm.DC.Set<EtlJobDefinition>()
             .IgnoreQueryFilters()
             .Where(j => j.ID == jobId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(j => j.Status, status)
                 .SetProperty(j => j.UpdateTime, now));
+    }
+
+    /// <summary>
+    /// #883: the single point every HTTP-reachable method funnels through to load an
+    /// <see cref="EtlJobDefinition"/> by id, scoped to the caller's own tenant unless the
+    /// caller explicitly declares this is a system (background) query -- the #843
+    /// <c>declaredSystemQuery</c> contract, reused verbatim rather than inventing a second
+    /// mechanism for the same "who is allowed to see every tenant's rows" problem. Returns
+    /// <c>null</c> both when the id genuinely does not exist AND when it belongs to a
+    /// different tenant -- the two cases are intentionally indistinguishable to the caller, so
+    /// this can never be used to enumerate which ids exist in other tenants.
+    /// </summary>
+    private static async Task<EtlJobDefinition?> LoadJobDefinitionForCallerAsync(
+        WTMContext wtm,
+        Guid jobId,
+        string? callerTenantCode,
+        bool declaredSystemQuery,
+        CancellationToken cancellationToken = default)
+    {
+        var query = wtm.DC.Set<EtlJobDefinition>().IgnoreQueryFilters().Where(j => j.ID == jobId);
+        if (!declaredSystemQuery)
+        {
+            // EF Core translates == against a null callerTenantCode as "TenantCode IS NULL",
+            // not "match everything" -- the same null-safe-equality precedent this codebase
+            // already relies on elsewhere (WtmFileProvider.DeleteFileTenantScoped, #843).
+            query = query.Where(j => j.TenantCode == callerTenantCode);
+        }
+        return await query.FirstOrDefaultAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// #883: for the methods that only need a yes/no ownership check before calling straight
+    /// into Quartz (<see cref="PauseAsync"/>/<see cref="ResumeAsync"/>/<see cref="AbortAsync"/>/
+    /// <see cref="DisableAsync"/>) rather than needing the loaded entity itself. Throws the same
+    /// "not found" <see cref="InvalidOperationException"/> shape as
+    /// <see cref="LoadJobDefinitionForCallerAsync"/>'s callers use, so a wrong-tenant id and a
+    /// genuinely-nonexistent one are indistinguishable to the caller here too.
+    /// </summary>
+    private async Task EnsureCallerOwnsJobAsync(Guid jobId, string? callerTenantCode, bool declaredSystemQuery)
+    {
+        using var scope = _sp.CreateScope();
+        var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
+        var jobDef = await LoadJobDefinitionForCallerAsync(wtm, jobId, callerTenantCode, declaredSystemQuery);
+        if (jobDef == null)
+            throw new InvalidOperationException($"Job {jobId} not found.");
     }
 
     private void EnsureScheduler()

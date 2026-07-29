@@ -185,7 +185,10 @@ public class EtlJobDefinitionVM : BaseCRUDVM<EtlJobDefinition>
         if (Entity.Status == EtlJobStatus.Enabled)
         {
             var scheduler = Wtm.ServiceProvider.GetService<EtlSchedulerService>();
-            scheduler?.EnableAsync(Entity.ID).GetAwaiter().GetResult();
+            // #883: caller's own tenant -- see EtlSchedulerService's class remarks. Entity was
+            // just created through this same Wtm/DC, so its TenantCode already equals this.
+            scheduler?.EnableAsync(Entity.ID, callerTenantCode: Wtm.LoginUserInfo?.CurrentTenant)
+                .GetAwaiter().GetResult();
         }
     }
 
@@ -200,18 +203,22 @@ public class EtlJobDefinitionVM : BaseCRUDVM<EtlJobDefinition>
         var scheduler = Wtm.ServiceProvider.GetService<EtlSchedulerService>();
         if (scheduler == null) return;
 
+        // #883: caller's own tenant -- see EtlSchedulerService's class remarks.
+        var callerTenantCode = Wtm.LoginUserInfo?.CurrentTenant;
+
         // Handle status change
         if (oldStatus != Entity.Status)
         {
             if (Entity.Status == EtlJobStatus.Enabled)
-                scheduler.EnableAsync(Entity.ID).GetAwaiter().GetResult();
+                scheduler.EnableAsync(Entity.ID, callerTenantCode: callerTenantCode).GetAwaiter().GetResult();
             else if (Entity.Status == EtlJobStatus.Disabled)
-                scheduler.DisableAsync(Entity.ID).GetAwaiter().GetResult();
+                scheduler.DisableAsync(Entity.ID, callerTenantCode: callerTenantCode).GetAwaiter().GetResult();
         }
         // Handle cron change (only if still enabled)
         else if (oldCron != Entity.CronExpression && Entity.Status == EtlJobStatus.Enabled)
         {
-            scheduler.RescheduleAsync(Entity.ID, Entity.CronExpression).GetAwaiter().GetResult();
+            scheduler.RescheduleAsync(Entity.ID, Entity.CronExpression, callerTenantCode: callerTenantCode)
+                .GetAwaiter().GetResult();
         }
     }
 
@@ -224,7 +231,9 @@ public class EtlJobDefinitionVM : BaseCRUDVM<EtlJobDefinition>
         }
 
         var scheduler = Wtm.ServiceProvider.GetService<EtlSchedulerService>();
-        scheduler?.DisableAsync(Entity.ID).GetAwaiter().GetResult();
+        // #883: caller's own tenant -- see EtlSchedulerService's class remarks.
+        scheduler?.DisableAsync(Entity.ID, callerTenantCode: Wtm.LoginUserInfo?.CurrentTenant)
+            .GetAwaiter().GetResult();
 
         base.DoDelete();
     }

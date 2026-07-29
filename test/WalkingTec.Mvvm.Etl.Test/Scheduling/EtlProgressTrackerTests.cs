@@ -28,7 +28,7 @@ public class EtlProgressTrackerTests
         _tracker.Update(p1);
         _tracker.Update(p2);
 
-        var result = _tracker.Get(jobId);
+        var result = _tracker.Get(jobId, callerTenantCode: null);
         Assert.IsNotNull(result);
         Assert.AreEqual("Load", result!.Phase);
         Assert.AreEqual(200, result.ProcessedRows);
@@ -37,7 +37,7 @@ public class EtlProgressTrackerTests
     [TestMethod]
     public void Get_returns_null_for_unknown_job()
     {
-        Assert.IsNull(_tracker.Get(Guid.NewGuid()));
+        Assert.IsNull(_tracker.Get(Guid.NewGuid(), callerTenantCode: null));
     }
 
     [TestMethod]
@@ -48,7 +48,7 @@ public class EtlProgressTrackerTests
         _tracker.Update(new EtlProgress { JobId = id1, Phase = "Extract" });
         _tracker.Update(new EtlProgress { JobId = id2, Phase = "Load" });
 
-        var all = _tracker.GetAll();
+        var all = _tracker.GetAll(callerTenantCode: null);
         Assert.AreEqual(2, all.Count);
     }
 
@@ -60,8 +60,8 @@ public class EtlProgressTrackerTests
 
         _tracker.Remove(jobId);
 
-        Assert.IsNull(_tracker.Get(jobId));
-        Assert.AreEqual(0, _tracker.GetAll().Count);
+        Assert.IsNull(_tracker.Get(jobId, callerTenantCode: null));
+        Assert.AreEqual(0, _tracker.GetAll(callerTenantCode: null).Count);
     }
 
     [TestMethod]
@@ -80,8 +80,8 @@ public class EtlProgressTrackerTests
 
         _tracker.Remove(id1);
 
-        Assert.IsNull(_tracker.Get(id1));
-        Assert.IsNotNull(_tracker.Get(id2));
-        Assert.AreEqual(20, _tracker.Get(id2)!.ProcessedRows);
+        Assert.IsNull(_tracker.Get(id1, callerTenantCode: null));
+        Assert.IsNotNull(_tracker.Get(id2, callerTenantCode: null));
+        Assert.AreEqual(20, _tracker.Get(id2, callerTenantCode: null)!.ProcessedRows);
     }
 }

@@ -40,9 +40,16 @@ services.AddWtmEtl();
 protected override void OnModelCreating(ModelBuilder modelBuilder)
 {
     base.OnModelCreating(modelBuilder);
-    modelBuilder.ApplyEtlModels();
+    modelBuilder.ApplyEtlModels(this);
 }
 ```
+
+> **#883**: pass `this`. The zero-argument `ApplyEtlModels()` overload is `[Obsolete]` — it still
+> registers tables/columns/indexes, but it has no way to apply the `ITenant` global query filter
+> to `EtlJobDefinition`/`EtlRunLog`/`EtlDeadLetterRow`/`EtlLineageRecord` (issue #862), so every
+> read through it is silently unscoped across tenants. `[Obsolete]` only warns when you recompile
+> against source — a NuGet-only upgrade never sees it, which is exactly how this stayed live
+> after #862 shipped.
 
 此方法建立兩張表：
 
@@ -335,34 +342,60 @@ ETL 模組使用 Quartz.NET 3.x 做排程。Cron 格式為 **6-7 欄位**（含�
 
 ### EtlSchedulerService API
 
+> **#883 (10.21.0, BREAKING)**: every method below except the four background-only ones
+> (`LoadJobsFromDbAsync`/`ResetGhostRunningJobsAsync`/`PruneRunLogsAsync`/`PruneDeadLetterAsync`,
+> unchanged) gained trailing `string? callerTenantCode = null, bool declaredSystemQuery = false`
+> parameters — a cross-tenant IDOR fix, not a cosmetic addition. **Recompiling against this
+> version without updating call sites does not preserve behaviour**: `callerTenantCode` defaulting
+> to `null` restricts the call to host-scope (`TenantCode == null`) rows only, so an existing
+> tenant-scoped caller that omits it starts getting `InvalidOperationException: Job {id} not
+> found.` for its own jobs. See `CHANGELOG.md`'s `### Migration` section (10.21.0) for the
+> required call-site update — in short: pass `callerTenantCode: Wtm.LoginUserInfo?.CurrentTenant`
+> for a tenant-scoped caller, `declaredSystemQuery: true` for a genuine cross-tenant background
+> caller, and update any derived-class override's full signature. `EtlProgressTracker.Get`/
+> `GetAll` and `EtlDashboardService.BuildSummary` (below) went further: their `callerTenantCode`
+> has no default at all (mandatory), for the same reason.
+
 ```csharp
 public class EtlSchedulerService
 {
-    // 啟動時載入所有 Enabled/Failed Job
+    // 啟動時載入所有 Enabled/Failed Job -- background-only, signature unchanged
     public virtual async Task LoadJobsFromDbAsync();
 
     // 立即執行（Trigger = Manual）
-    public virtual async Task TriggerNowAsync(Guid jobId);
+    public virtual async Task TriggerNowAsync(
+        Guid jobId,
+        string? watermarkOverride = null,
+        string? callerTenantCode = null,
+        bool declaredSystemQuery = false);
 
     // 暫停/恢復排程觸發
-    public virtual async Task PauseAsync(Guid jobId);
-    public virtual async Task ResumeAsync(Guid jobId);
+    public virtual async Task PauseAsync(Guid jobId, string? callerTenantCode = null, bool declaredSystemQuery = false);
+    public virtual async Task ResumeAsync(Guid jobId, string? callerTenantCode = null, bool declaredSystemQuery = false);
 
     // 更新 Cron 並重新排程
-    public virtual async Task RescheduleAsync(Guid jobId, string newCron);
+    public virtual async Task RescheduleAsync(Guid jobId, string newCron, string? callerTenantCode = null, bool declaredSystemQuery = false);
 
     // 中止執行中的 Job（透過 CancellationToken）
-    public virtual async Task AbortAsync(Guid jobId);
+    public virtual async Task AbortAsync(Guid jobId, string? callerTenantCode = null, bool declaredSystemQuery = false);
 
     // 跳過下次排程
-    public virtual async Task SkipNextAsync(Guid jobId);
+    public virtual async Task SkipNextAsync(Guid jobId, string? callerTenantCode = null, bool declaredSystemQuery = false);
 
     // 啟用/停用 Job
-    public virtual async Task EnableAsync(Guid jobId);
-    public virtual async Task DisableAsync(Guid jobId);
+    public virtual async Task EnableAsync(Guid jobId, string? callerTenantCode = null, bool declaredSystemQuery = false);
+    public virtual async Task DisableAsync(Guid jobId, string? callerTenantCode = null, bool declaredSystemQuery = false);
+
+    // Dry-run 對來源資料抽樣預覽
+    public virtual async Task<EtlExecutionResult> DryRunAsync(
+        Guid jobId,
+        int sampleSize = 10,
+        CancellationToken cancellationToken = default,
+        string? callerTenantCode = null,
+        bool declaredSystemQuery = false);
 
     // 從歷史記錄重跑（還原 watermark）
-    public virtual async Task RerunFromSnapshotAsync(Guid runLogId);
+    public virtual async Task RerunFromSnapshotAsync(Guid runLogId, string? callerTenantCode = null, bool declaredSystemQuery = false);
 
     // 判斷是否可執行
     public static bool ShouldExecute(EtlJobDefinition job);
@@ -394,8 +427,14 @@ Thread-safe 的記憶體內進度字典（`ConcurrentDictionary`）。
 public class EtlProgressTracker
 {
     public void Update(EtlProgress progress);       // 更新/新增進度
-    public EtlProgress? Get(Guid jobId);             // 取得單一 Job 進度
-    public IReadOnlyList<EtlProgress> GetAll();     // 取得所有執行中的 Job
+
+    // #883 (10.21.0, BREAKING): callerTenantCode is REQUIRED (no default) -- see the note
+    // above EtlSchedulerService API. Pass the caller's own Wtm.LoginUserInfo?.CurrentTenant
+    // for a tenant-scoped caller, or (null, declaredSystemQuery: true) for a genuine
+    // cross-tenant background/system caller.
+    public EtlProgress? Get(Guid jobId, string? callerTenantCode, bool declaredSystemQuery = false);   // 取得單一 Job 進度（限呼叫者自己的租戶，除非 declaredSystemQuery）
+    public IReadOnlyList<EtlProgress> GetAll(string? callerTenantCode, bool declaredSystemQuery = false); // 取得執行中的 Job（同上）
+
     public void Remove(Guid jobId);                  // 清除（Job 完成後）
 }
 ```

@@ -146,8 +146,18 @@ public class EtlQuartzJob : WtmJob
                 throw new InvalidOperationException($"Target connection key '{jobDef.TargetCsKey}' not found in Configs.Connections");
             var targetCs = targetCsEntry.Value ?? "";
 
-            // ETL-006: propagate tenant context to dead-letter rows
-            var tenantCode = dc.TenantCode;
+            // ETL-006: propagate tenant context to dead-letter rows.
+            // #883 fix: this used to read dc.TenantCode -- dc is Wtm.DC, resolved from the
+            // Quartz-triggered background WTMContext, which has no HTTP identity and so always
+            // resolves TenantCode == null (see EtlSchedulerService's class remarks for the full
+            // rationale, which applies identically here). jobDef.TenantCode is the ALREADY
+            // loaded (via IgnoreQueryFilters() above) job definition's real tenant -- using it
+            // instead means dead-letter/lineage rows for a real multi-tenant job actually carry
+            // that tenant's code, instead of permanently null (and therefore hidden from every
+            // real tenant once the #862 ITenant filter applies to EtlDeadLetterRow/
+            // EtlLineageRecord -- confirmed this was happening for every job the built-in Quartz
+            // scheduler ever ran, not merely a theoretical gap).
+            var tenantCode = jobDef.TenantCode;
 
             var config = new EtlPipelineConfig
             {

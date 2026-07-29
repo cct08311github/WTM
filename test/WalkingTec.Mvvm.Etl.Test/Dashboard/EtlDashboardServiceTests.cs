@@ -65,7 +65,7 @@ public class EtlDashboardServiceTests
         SeedJob("c", EtlJobStatus.Disabled);
         SeedJob("d", EtlJobStatus.Failed);
 
-        var s = _svc.BuildSummary(_dc);
+        var s = _svc.BuildSummary(_dc, callerTenantCode: null);
 
         Assert.AreEqual(4, s.Kpi.TotalJobs);
         Assert.AreEqual(2, s.Kpi.ActiveJobs);
@@ -79,7 +79,7 @@ public class EtlDashboardServiceTests
         var jobId = SeedJob("a");
         _tracker.Update(new EtlProgress { JobId = jobId, JobName = "a", ProcessedRows = 10, StartedAt = DateTime.UtcNow });
 
-        var s = _svc.BuildSummary(_dc);
+        var s = _svc.BuildSummary(_dc, callerTenantCode: null);
 
         Assert.AreEqual(1, s.Kpi.RunningNow);
     }
@@ -96,7 +96,7 @@ public class EtlDashboardServiceTests
         SeedRun(jobId, EtlRunResult.Success, now.AddHours(-4));
         SeedRun(jobId, EtlRunResult.Failed,  now.AddHours(-5));
 
-        var s = _svc.BuildSummary(_dc, windowDays: 7);
+        var s = _svc.BuildSummary(_dc, callerTenantCode: null, windowDays: 7);
 
         Assert.AreEqual(5, s.Kpi.RunsInWindow);
         Assert.AreEqual(0.8m, s.Kpi.SuccessRate);
@@ -106,7 +106,7 @@ public class EtlDashboardServiceTests
     public void Kpi_success_rate_null_when_no_runs()
     {
         SeedJob("a");
-        var s = _svc.BuildSummary(_dc);
+        var s = _svc.BuildSummary(_dc, callerTenantCode: null);
         Assert.IsNull(s.Kpi.SuccessRate);
     }
 
@@ -119,7 +119,7 @@ public class EtlDashboardServiceTests
         SeedRun(jobId, EtlRunResult.Success, now, loadedRows: 2500);
         SeedRun(jobId, EtlRunResult.Failed,  now, loadedRows: 0);
 
-        var s = _svc.BuildSummary(_dc);
+        var s = _svc.BuildSummary(_dc, callerTenantCode: null);
 
         Assert.AreEqual(3500L, s.Kpi.TotalRowsLoadedInWindow);
     }
@@ -134,7 +134,7 @@ public class EtlDashboardServiceTests
         SeedRun(jobId, EtlRunResult.Success, now.AddDays(-1));
         SeedRun(jobId, EtlRunResult.Success, now.AddDays(-50)); // outside default 7-day window
 
-        var s = _svc.BuildSummary(_dc, windowDays: 7);
+        var s = _svc.BuildSummary(_dc, callerTenantCode: null, windowDays: 7);
         Assert.AreEqual(1, s.Kpi.RunsInWindow);
     }
 
@@ -142,9 +142,9 @@ public class EtlDashboardServiceTests
     public void Window_clamped_between_1_and_90()
     {
         SeedJob("a");
-        var s1 = _svc.BuildSummary(_dc, windowDays: -5);
+        var s1 = _svc.BuildSummary(_dc, callerTenantCode: null, windowDays: -5);
         Assert.AreEqual(1, s1.WindowDays, "Negative clamps up to 1.");
-        var s2 = _svc.BuildSummary(_dc, windowDays: 1000);
+        var s2 = _svc.BuildSummary(_dc, callerTenantCode: null, windowDays: 1000);
         Assert.AreEqual(90, s2.WindowDays, "Out-of-bounds clamps down to 90.");
     }
 
@@ -160,7 +160,7 @@ public class EtlDashboardServiceTests
         SeedRun(jobId, EtlRunResult.Failed,  now);
         SeedRun(jobId, EtlRunResult.Aborted, now);
 
-        var s = _svc.BuildSummary(_dc);
+        var s = _svc.BuildSummary(_dc, callerTenantCode: null);
 
         var byResult = s.StatusDistribution.ToDictionary(x => x.Result, x => x.Count);
         Assert.AreEqual(2, byResult[EtlRunResult.Success]);
@@ -174,7 +174,7 @@ public class EtlDashboardServiceTests
     public void DailyTrend_emits_one_point_per_day_oldest_first()
     {
         SeedJob("a");
-        var s = _svc.BuildSummary(_dc, windowDays: 7);
+        var s = _svc.BuildSummary(_dc, callerTenantCode: null, windowDays: 7);
 
         Assert.AreEqual(7, s.DailyTrend.Count);
         for (int i = 1; i < s.DailyTrend.Count; i++)
@@ -193,7 +193,7 @@ public class EtlDashboardServiceTests
         SeedRun(jobId, EtlRunResult.Success, today.AddHours(15));
         SeedRun(jobId, EtlRunResult.Failed,  today.AddDays(-1).AddHours(10));
 
-        var s = _svc.BuildSummary(_dc, windowDays: 3);
+        var s = _svc.BuildSummary(_dc, callerTenantCode: null, windowDays: 3);
         var todayPoint = s.DailyTrend.Single(p => p.Date == today);
         var yesterdayPoint = s.DailyTrend.Single(p => p.Date == today.AddDays(-1));
 
@@ -214,7 +214,7 @@ public class EtlDashboardServiceTests
         SeedRun(jobId, EtlRunResult.Failed,  now.AddMinutes(-5),  error: "newer failure");
         SeedRun(jobId, EtlRunResult.Aborted, now.AddMinutes(-3));
 
-        var s = _svc.BuildSummary(_dc, topN: 5);
+        var s = _svc.BuildSummary(_dc, callerTenantCode: null, topN: 5);
 
         Assert.AreEqual(2, s.RecentFailures.Count);
         Assert.AreEqual("newer failure", s.RecentFailures[0].ErrorMessage);
@@ -231,7 +231,7 @@ public class EtlDashboardServiceTests
             SeedRun(jobId, EtlRunResult.Failed, DateTime.UtcNow.AddMinutes(-i));
         }
 
-        var s = _svc.BuildSummary(_dc, topN: 3);
+        var s = _svc.BuildSummary(_dc, callerTenantCode: null, topN: 3);
 
         Assert.AreEqual(3, s.RecentFailures.Count);
     }
@@ -254,7 +254,7 @@ public class EtlDashboardServiceTests
         SeedRun(fastJob, EtlRunResult.Success, now, elapsedMs: 90);
         SeedRun(fastJob, EtlRunResult.Success, now, elapsedMs: 110);
 
-        var s = _svc.BuildSummary(_dc);
+        var s = _svc.BuildSummary(_dc, callerTenantCode: null);
 
         // SlowImport must rank first; 5_000 not 1_000_000.
         Assert.AreEqual("SlowImport", s.SlowestJobs[0].JobName);
@@ -274,7 +274,7 @@ public class EtlDashboardServiceTests
         // Tracker entry with empty JobName → service should backfill from DB.
         _tracker.Update(new EtlProgress { JobId = jobId, JobName = null!, ProcessedRows = 50, StartedAt = DateTime.UtcNow });
 
-        var s = _svc.BuildSummary(_dc);
+        var s = _svc.BuildSummary(_dc, callerTenantCode: null);
 
         Assert.AreEqual(1, s.Running.Count);
         Assert.AreEqual("ImportOrders", s.Running[0].JobName);
@@ -287,7 +287,7 @@ public class EtlDashboardServiceTests
     {
         SeedJob("a");
         var before = DateTime.UtcNow;
-        var s = _svc.BuildSummary(_dc);
+        var s = _svc.BuildSummary(_dc, callerTenantCode: null);
         var after = DateTime.UtcNow;
         Assert.IsTrue(s.GeneratedAtUtc >= before && s.GeneratedAtUtc <= after);
     }

@@ -18,6 +18,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Localization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Routing;
 using Asp.Versioning;
 using Microsoft.AspNetCore.SpaServices.ReactDevelopmentServer;
@@ -435,6 +436,89 @@ namespace WalkingTec.Mvvm.Mvc
             services.TryAddSingleton(TimeProvider.System);
             services.AddScoped<WTMContext>();
             services.AddScoped<WtmFileProvider>();
+            // Issue #876: decorate the already-registered IControllerActivator so WTMContext.Wtm
+            // is populated at controller-CONSTRUCTION time, before any filter runs -- ASP.NET
+            // Core's own controller-owned ControllerActionFilter is hard-coded to
+            // Order = int.MinValue and always runs before DataContextFilter/PrivilegeFilter/
+            // FrameworkFilter (global MvcOptions.Filters) regardless of any Order given to
+            // them, so those filters can never be "first" for a controller that reads Wtm from
+            // its own OnActionExecuting override. See WtmControllerActivator's doc comment for
+            // the full root-cause writeup.
+            //
+            // #882 review: this used to be an unconditional services.Replace(...Singleton...)
+            // that discarded whatever IControllerActivator was already registered -- silently
+            // undoing a host's .AddControllersAsServices() (which replaces it with
+            // ServiceBasedControllerActivator, whose disposal is owned by the DI container, not
+            // a manual Dispose() call) and reimplementing Create/Release/ReleaseAsync from
+            // scratch instead of preserving whatever disposal contract was already in place. It
+            // now WRAPS whatever is currently registered (falling back to nothing -- see the
+            // exception below -- only if nothing is), preserving that activator's Create AND its
+            // disposal contract exactly, and keeping the original registration's ServiceLifetime
+            // (both DefaultControllerActivator and ServiceBasedControllerActivator are
+            // TryAddTransient by ASP.NET Core itself) so a captive-dependency mistake isn't
+            // introduced for a hypothetical third-party activator with scoped constructor deps.
+            //
+            // This requires AddMvc()/AddControllers() (and, if used,
+            // .AddControllersAsServices()) to run BEFORE AddWtmContext() -- both of this repo's
+            // real Startup.cs files already call them in that order. Failing fast here instead
+            // of silently installing some fallback means a future call-order regression breaks
+            // at startup, not as a silently-undone security fix in production.
+            //
+            // #882 review, second round (comment corrected in the third round -- see below):
+            // only consider UNKEYED descriptors here. .NET 8+ keyed services
+            // (ServiceDescriptor.IsKeyedService) can register an IControllerActivator under a
+            // key -- its ImplementationType/ImplementationFactory/ImplementationInstance
+            // getters all return NULL for a keyed descriptor, not throw (verified against the
+            // real Microsoft.Extensions.DependencyInjection.Abstractions 10.0.9 assembly: each
+            // getter's body is `if (!IsKeyedService) { return the real value; } return null;`).
+            // What DOES throw is the reverse misuse: calling the KeyedImplementationType/
+            // -Factory/-Instance getters (the ones that apply to a KEYED descriptor) on an
+            // UNKEYED one. Without this filter, the null ImplementationType/Factory/Instance
+            // would fall through to the `_ => throw ...` arm below when the descriptor picked
+            // out by LastOrDefault happened to be keyed -- an unrelated exception with a
+            // confusing message, not a graceful "not found". Separately, and independent of
+            // which getter throws or returns null: an unkeyed
+            // sp.GetRequiredService<IControllerActivator>() call -- what this activator, and
+            // MVC itself, actually performs -- never resolves a keyed registration regardless
+            // of where it sits in registration order, so picking the last KEYED one here (as
+            // the version before this filter did) would always have wrapped the wrong thing
+            // even before any exception was in play.
+            var existingActivatorDescriptor = services
+                .Where(d => d.ServiceType == typeof(IControllerActivator) && !d.IsKeyedService)
+                .LastOrDefault();
+            if (existingActivatorDescriptor == null)
+            {
+                throw new InvalidOperationException(
+                    "AddWtmContext() requires an IControllerActivator to already be registered. " +
+                    "Call services.AddMvc() or services.AddControllers() (and, if used, " +
+                    ".AddControllersAsServices()) BEFORE services.AddWtmContext().");
+            }
+
+            services.Replace(ServiceDescriptor.Describe(
+                typeof(IControllerActivator),
+                sp =>
+                {
+                    // #882 review, second round: AddWtmContext builds `inner` itself here,
+                    // bypassing the DI container's own creation path -- which is what normally
+                    // enrolls a freshly-created disposable instance into the current scope's
+                    // disposables list. `ownsInner` tracks whether THIS code is the one that
+                    // "created" inner (ImplementationFactory/ImplementationType: yes, nothing
+                    // else will ever dispose it, so WtmControllerActivator must) or whether
+                    // inner is a pre-built, possibly cross-request-shared ImplementationInstance
+                    // (no -- the container does not auto-dispose ImplementationInstance
+                    // registrations either, by original design, and disposing a shared instance
+                    // from a single per-resolution wrapper's teardown would break every other
+                    // resolution still using it). See WtmControllerActivator's doc comment.
+                    (IControllerActivator inner, bool ownsInner) = existingActivatorDescriptor switch
+                    {
+                        { ImplementationInstance: IControllerActivator instance } => (instance, false),
+                        { ImplementationFactory: not null } => ((IControllerActivator)existingActivatorDescriptor.ImplementationFactory!(sp), true),
+                        { ImplementationType: not null } => ((IControllerActivator)ActivatorUtilities.CreateInstance(sp, existingActivatorDescriptor.ImplementationType!), true),
+                        _ => throw new InvalidOperationException("Unable to resolve the existing IControllerActivator registration to wrap it."),
+                    };
+                    return new WalkingTec.Mvvm.Mvc.Helper.WtmControllerActivator(inner, ownsInner);
+                },
+                existingActivatorDescriptor.Lifetime));
 
             // Issue #407: register the default no-op upload validator.
             // Hosts can override by calling services.AddScoped<IUploadValidator, MyValidator>()

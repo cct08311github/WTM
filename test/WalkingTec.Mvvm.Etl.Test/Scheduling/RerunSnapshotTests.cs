@@ -310,7 +310,11 @@ internal sealed class SpyEtlSchedulerService : EtlSchedulerService
 
     public SpyEtlSchedulerService(IServiceProvider sp) : base(sp) { }
 
-    public override Task TriggerNowAsync(Guid jobId, string? watermarkOverride = null)
+    public override Task TriggerNowAsync(
+        Guid jobId,
+        string? watermarkOverride = null,
+        string? callerTenantCode = null,
+        bool declaredSystemQuery = false)
     {
         TriggerNowCalled = true;
         CapturedWatermarkOverride = watermarkOverride;

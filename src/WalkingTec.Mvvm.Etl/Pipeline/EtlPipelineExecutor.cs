@@ -963,7 +963,12 @@ public class EtlPipelineExecutor
             TotalRows = null,
             Phase = phase,
             RowsPerSecond = totalLoaded / Math.Max(sw.Elapsed.TotalSeconds, 0.001),
-            StartedAt = DateTime.UtcNow - sw.Elapsed
+            StartedAt = DateTime.UtcNow - sw.Elapsed,
+            // #883: same source EtlDeadLetterRow/EtlLineageRecord use -- despite the name,
+            // DeadLetterTenantCode carries the executing job's tenant code generally (see
+            // EtlPipelineConfig's doc comment). Without this, EtlProgressTracker's entries
+            // carried no tenant dimension at all.
+            TenantCode = config.DeadLetterTenantCode,
         });
     }
 

@@ -38,8 +38,23 @@ public class EtlDashboardService
     /// queries bounded). <paramref name="topN"/> bounds the
     /// "recent failures" + "slowest jobs" lists.
     /// </summary>
+    /// <param name="dc">Caller's own tenant-scoped <see cref="IDataContext"/> (e.g. <c>Wtm.DC</c>).</param>
+    /// <param name="callerTenantCode">
+    /// #883: the calling controller's own <c>Wtm.LoginUserInfo?.CurrentTenant</c>. Required, no
+    /// default -- threaded through to <see cref="EtlProgressTracker.GetAll(string?, bool)"/> for
+    /// both the KPI running-count and the live-running list below. Found in review: this
+    /// parameter was missing entirely and both call sites used the tracker's parameterless
+    /// overload, which (a) leaked host/null-tenant job ids/names/phases/rates to every tenant
+    /// caller, since the tracker's own default resolves to "TenantCode == null" entries, and
+    /// (b) as a direct consequence showed a tenant caller NONE of its own running jobs. `dc`
+    /// itself was already correctly tenant-scoped (its DB reads below were never the leak); only
+    /// the tracker calls were not.
+    /// </param>
+    /// <param name="windowDays">Trailing window in days, clamped 1..90.</param>
+    /// <param name="topN">Bounds the "recent failures"/"slowest jobs" lists.</param>
     public EtlDashboardSummary BuildSummary(
         IDataContext dc,
+        string? callerTenantCode,
         int windowDays = 7,
         int topN = 10)
     {
@@ -84,7 +99,7 @@ public class EtlDashboardService
             ActiveJobs = jobs.Count(j => j.Status == EtlJobStatus.Enabled),
             DisabledJobs = jobs.Count(j => j.Status == EtlJobStatus.Disabled
                                          || j.Status == EtlJobStatus.Failed),
-            RunningNow = _tracker.GetAll().Count,
+            RunningNow = _tracker.GetAll(callerTenantCode).Count,
             RunsInWindow = totalRuns,
             SuccessRate = totalRuns == 0
                 ? null
@@ -124,7 +139,7 @@ public class EtlDashboardService
         summary.DailyTrend = trend;
 
         // ── Live running ──────────────────────────────────────────────
-        summary.Running = _tracker.GetAll()
+        summary.Running = _tracker.GetAll(callerTenantCode)
             .Select(p => new EtlDashboardRunning(
                 JobId: p.JobId,
                 JobName: string.IsNullOrEmpty(p.JobName)

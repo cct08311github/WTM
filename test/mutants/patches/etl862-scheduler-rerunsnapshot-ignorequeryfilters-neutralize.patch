@@ -1,14 +1,13 @@
 diff --git a/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs b/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs
-index 5d6ada039..0d72d0598 100644
+index 0000000..0000000 100644
 --- a/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs
 +++ b/src/WalkingTec.Mvvm.Etl/Scheduling/EtlSchedulerService.cs
-@@ -334,9 +334,7 @@ public class EtlSchedulerService
-     {
-         using var scope = _sp.CreateScope();
-         var wtm = scope.ServiceProvider.GetRequiredService<WTMContext>();
--        // #862: IgnoreQueryFilters() -- see class remarks; FindAsync cannot bypass filters.
-         var runLog = await wtm.DC.Set<EtlRunLog>()
--            .IgnoreQueryFilters()
-             .FirstOrDefaultAsync(r => r.ID == runLogId);
-         if (runLog == null) return;
- 
+@@ -447,7 +447,7 @@ namespace WalkingTec.Mvvm.Etl.Scheduling;
+         // #862: IgnoreQueryFilters() -- see class remarks; FindAsync cannot bypass filters.
+         // #883: TenantCode predicate added below (unless declaredSystemQuery) so a caller can
+         // never rerun from another tenant's run-log snapshot.
+-        var runLogQuery = wtm.DC.Set<EtlRunLog>().IgnoreQueryFilters().Where(r => r.ID == runLogId);
++        var runLogQuery = wtm.DC.Set<EtlRunLog>().Where(r => r.ID == runLogId);
+         if (!declaredSystemQuery)
+         {
+             runLogQuery = runLogQuery.Where(r => r.TenantCode == callerTenantCode);

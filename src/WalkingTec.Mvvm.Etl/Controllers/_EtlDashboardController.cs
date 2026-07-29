@@ -76,7 +76,8 @@ public class _EtlDashboardController : BaseController
     [HttpGet]
     public IActionResult Stats(int days = 7, int topN = 10)
     {
-        var summary = _service.BuildSummary(Wtm.DC, days, topN);
+        // #883: caller's own tenant -- see EtlDashboardService.BuildSummary's doc comment.
+        var summary = _service.BuildSummary(Wtm.DC, Wtm.LoginUserInfo?.CurrentTenant, days, topN);
         return Ok(summary);
     }
 }
