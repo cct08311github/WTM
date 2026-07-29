@@ -12,6 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core.Analysis;
 using WalkingTec.Mvvm.Core.Extensions;
+using WalkingTec.Mvvm.Core.Services;
 using WalkingTec.Mvvm.Core.Support.Json;
 
 namespace WalkingTec.Mvvm.Core.Dashboard;
@@ -82,6 +83,30 @@ public class AnalysisWidgetDataSource : IWidgetDataSource
                 $"VM type '{vmType.FullName}' must inherit from BaseVM.");
 
         if (wtm != null) vm.Wtm = wtm;
+
+        // #843: DashboardSnapshotJob / DashboardAlertHostedService resolve this WTMContext from
+        // a bare _serviceProvider.CreateScope() with no HttpContext, so wtm.LoginUserInfo is
+        // always null here. WTMContext.CreateDC() (WTMContext.CreateDC.cs) derives the
+        // DataContext's TenantCode exclusively from LoginUserInfo.CurrentTenant, so the
+        // lazily-created wtm.DC that GetSearchQuery() below relies on would default to
+        // TenantCode == null. Under EF Core's global ITenant query filter (DataContext.cs) that
+        // resolves to "rows whose own TenantCode is also null" — not "all tenants" and not "this
+        // widget's tenant" — so a background job for a real (non-null) tenant would see NEITHER
+        // its own tenant's rows NOR any other tenant's. This is the Dashboard-shaped twin of
+        // #832 (the ETL scheduler's identical CreateDC gap, tracked separately). Build the
+        // DataContext explicitly from the widget/job's own known TenantId instead, using the
+        // same IWtmDataContextFactory pattern WorkflowEngine/WorkflowTimerHostedService already
+        // use for no-HttpContext execution. Interactive (HTTP) callers are unaffected: they
+        // always have a LoginUserInfo, so this branch never runs for them.
+        if (wtm != null && wtm.LoginUserInfo == null && !string.IsNullOrEmpty(request.TenantId))
+        {
+            var dcFactory = scope.ServiceProvider.GetService<IWtmDataContextFactory>();
+            var scopedDc = dcFactory?.CreateDC(currentTenant: request.TenantId);
+            if (scopedDc != null)
+            {
+                wtm.DC = scopedDc;
+            }
+        }
 
         // 3. RBAC: apply the same AllowedRoles check as _AnalysisController.CheckAccess().
         //    Any user lacking the required role receives UnauthorizedAccessException, which

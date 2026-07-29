@@ -1,0 +1,17 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Extensions/DCExtension.cs b/src/WalkingTec.Mvvm.Core/Extensions/DCExtension.cs
+index 4f6fd01f8..d765d7323 100644
+--- a/src/WalkingTec.Mvvm.Core/Extensions/DCExtension.cs
++++ b/src/WalkingTec.Mvvm.Core/Extensions/DCExtension.cs
+@@ -361,7 +361,11 @@ namespace WalkingTec.Mvvm.Core.Extensions
+             if (wtmcontext?.DataPrivilegeSettings == null) return baseQuery;
+             var elementType = baseQuery.ElementType;
+             if (!typeof(TopBasePoco).IsAssignableFrom(elementType)) return baseQuery;
+-            if (wtmcontext.LoginUserInfo == null && declaredSystemQuery)
++            // MUTANT test/mutants entries/dcext843-declaredsystemquery-guard-neutralize: dropped
++            // "&& declaredSystemQuery" so every no-identity call is treated as a declared system
++            // query again -- the exact pre-#843 fail-open behaviour. See
++            // test/mutants/manifest.json for the mutant record.
++            if (wtmcontext.LoginUserInfo == null)
+             {
+                 // #843: caller explicitly declared this is an intentionally-unfiltered system
+                 // query — the only sanctioned way back to the old fail-open behaviour.

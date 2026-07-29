@@ -559,6 +559,64 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             gone.Should().BeNull("same-tenant delete must remove the record");
         }
 
+        // ── Widget data (#843: TenantId bridging) ──────────────────────────────
+
+        /// <summary>Captures the WidgetDataRequest passed to GetDataAsync for assertion.</summary>
+        private sealed class CapturingDataSource : IWidgetDataSource
+        {
+            public string Name => "test-capture";
+            public WidgetDataSourceKind Kind => WidgetDataSourceKind.Custom;
+            public WidgetDataRequest? CapturedRequest { get; private set; }
+
+            public Task<WidgetDataResult> GetDataAsync(WidgetDataRequest request, System.Threading.CancellationToken ct = default)
+            {
+                CapturedRequest = request;
+                return Task.FromResult(new WidgetDataResult { Value = 42 });
+            }
+        }
+
+        /// <summary>
+        /// #843: WidgetDataRequest.TenantId existed as a field but was never populated by either
+        /// dashboard service — AnalysisWidgetDataSource had no way to know which tenant a
+        /// background job's widget belonged to, so it could not scope the DataContext correctly
+        /// for no-HttpContext execution. Proves the tenant-aware GetWidgetDataAsync overload now
+        /// threads tenantId all the way into the WidgetDataRequest handed to the data source.
+        /// </summary>
+        [TestMethod]
+        public async Task GetWidgetData_bridges_tenantId_into_request()
+        {
+            var capture = new CapturingDataSource();
+            var svc = BuildService(dataSources: new IWidgetDataSource[] { capture });
+
+            var def = new DashboardDefinition
+            {
+                Title = "Tenant Bridge Test",
+                Owner = "alice",
+                TenantId = "tenantA",
+                Widgets = new Dictionary<string, WidgetDefinition>
+                {
+                    ["w1"] = new WidgetDefinition
+                    {
+                        Type = "chart",
+                        Title = "Test",
+                        Source = new WidgetSourceDefinition
+                        {
+                            Kind = "custom",
+                            Name = "test-capture",
+                            ListVmType = "MyApp.ViewModels.OrderListVM"
+                        }
+                    }
+                }
+            };
+
+            var id = await svc.CreateAsync(def);
+            await svc.GetWidgetDataAsync(id, "w1", null, "tenantA");
+
+            capture.CapturedRequest.Should().NotBeNull();
+            capture.CapturedRequest!.TenantId.Should().Be("tenantA",
+                "#843: the tenant-aware GetWidgetDataAsync overload must bridge tenantId into WidgetDataRequest.TenantId.");
+        }
+
         // ── Minimal private DbContextFactory ─────────────────────────────────
 
         private sealed class TestDbContextFactory : IDbContextFactory<DashboardDbContext>

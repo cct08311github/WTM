@@ -1,0 +1,22 @@
+{
+  "id": "dcext843-declaredsystemquery-guard-neutralize",
+  "kind": "security",
+  "description": "VERDICT: KILLED. Issue #843: DCExtension.ApplyDataPrivilegeForAnalysis used to fail OPEN whenever WTMContext.LoginUserInfo == null -- it returned the caller's query completely unfiltered instead of denying it. Every background execution path (DashboardSnapshotJob, DashboardAlertHostedService) resolves WTMContext from a bare IServiceProvider.CreateScope() with no HttpContext, so LoginUserInfo is always null there -- row-level DataPrivilege was silently skipped for every widget those jobs execute. Fixed by making the null-identity path fail CLOSED by default (reusing AppendSelfDPWhere's existing dps==null => '1 != 1' denial for any model with a configured DataPrivilege rule), with a new declaredSystemQuery parameter (default false) as the one explicit, review-visible escape hatch back to the old unfiltered behaviour. This mutant deletes the '&& declaredSystemQuery' conjunct from the guard `if (wtmcontext.LoginUserInfo == null && declaredSystemQuery)`, restoring the exact pre-#843 unconditional fail-open branch -- the production line whose deletion turns the red assertion red.",
+  "target_file": "src/WalkingTec.Mvvm.Core/Extensions/DCExtension.cs",
+  "target_symbol": "DCExtension.ApplyDataPrivilegeForAnalysis(IQueryable, WTMContext?, bool) -- the '&& declaredSystemQuery' conjunct on the LoginUserInfo==null guard",
+  "patch": "patches/dcext843-declaredsystemquery-guard-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Extensions.ApplyDataPrivilegeForAnalysisTests.ApplyDataPrivilege_DeniesAll_WhenLoginUserInfoIsNull_AndModelHasDataPrivilegeConfigured",
+  "red_tests": [
+    "WalkingTec.Mvvm.Core.Test.Extensions.ApplyDataPrivilegeForAnalysisTests.ApplyDataPrivilege_DeniesAll_WhenLoginUserInfoIsNull_AndModelHasDataPrivilegeConfigured"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Core.Test.Extensions.ApplyDataPrivilegeForAnalysisTests.ApplyDataPrivilege_DeniesAll_WhenLoginUserInfoIsNull_AndModelHasDataPrivilegeConfigured": "Assert\\.AreEqual failed\\. Expected:<0>\\. Actual:<1>"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first) with the mutant patch applied: \"Assert.AreEqual failed. Expected:<0>. Actual:<1>. #843: no identity + a DataPrivilege rule configured for this model must deny all rows by default.\" -- i.e. the query reverts to the exact pre-#843 unfiltered result (the single seeded row is returned instead of being denied).",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Extensions.ApplyDataPrivilegeForAnalysisTests.ApplyDataPrivilege_FiltersRowsByAllowedIds",
+  "green_tests": [
+    "WalkingTec.Mvvm.Core.Test.Extensions.ApplyDataPrivilegeForAnalysisTests.ApplyDataPrivilege_FiltersRowsByAllowedIds"
+  ]
+}

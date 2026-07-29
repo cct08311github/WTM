@@ -286,6 +286,47 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             dims.Should().Contain("Date");
         }
 
+        /// <summary>
+        /// #843: WidgetDataRequest.TenantId existed as a field but was never populated by either
+        /// dashboard service — AnalysisWidgetDataSource had no way to know which tenant a
+        /// background job's widget belonged to, so it could not scope the DataContext correctly
+        /// for no-HttpContext execution. Proves the tenant-aware GetWidgetDataAsync overload now
+        /// threads tenantId all the way into the WidgetDataRequest handed to the data source.
+        /// </summary>
+        [TestMethod]
+        public async Task GetWidgetData_bridges_tenantId_into_request()
+        {
+            var capture = new CapturingDataSource();
+            var svc = CreateServiceWithDataSource(capture);
+
+            var def = new DashboardDefinition
+            {
+                Title = "Tenant Bridge Test",
+                TenantId = "tenantA",
+                Widgets = new Dictionary<string, WidgetDefinition>
+                {
+                    ["w1"] = new WidgetDefinition
+                    {
+                        Type = "chart",
+                        Title = "Test",
+                        Source = new WidgetSourceDefinition
+                        {
+                            Kind = "custom",
+                            Name = "test-capture",
+                            ListVmType = "MyApp.ViewModels.OrderListVM"
+                        }
+                    }
+                }
+            };
+
+            await svc.CreateAsync(def);
+            await svc.GetWidgetDataAsync(def.Id, "w1", null, "tenantA");
+
+            capture.CapturedRequest.Should().NotBeNull();
+            capture.CapturedRequest!.TenantId.Should().Be("tenantA",
+                "#843: the tenant-aware GetWidgetDataAsync overload must bridge tenantId into WidgetDataRequest.TenantId.");
+        }
+
         [TestMethod]
         public async Task GetWidgetData_caller_filters_not_overwritten_by_source()
         {

@@ -590,9 +590,13 @@ public class JsonFileDashboardService : IDashboardService
             }
         }
 
+        // #843: thread tenantId through so background/no-HttpContext callers (AnalysisWidgetDataSource)
+        // can scope the DataContext to this widget's own tenant instead of defaulting to
+        // WTMContext.CreateDC()'s LoginUserInfo-derived (and, in the background case, always-null) tenant.
         var request = new WidgetDataRequest
         {
-            Parameters = parameters
+            Parameters = parameters,
+            TenantId = tenantId
         };
 
         // Q9: per-widget timeout — prevents one slow OLAP/REST widget from starving the thread

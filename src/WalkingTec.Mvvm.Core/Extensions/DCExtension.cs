@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Data.Common;
@@ -14,6 +15,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Transactions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core.Support.Json;
 
 namespace WalkingTec.Mvvm.Core.Extensions
@@ -289,17 +291,106 @@ namespace WalkingTec.Mvvm.Core.Extensions
             typeof(DCExtension).GetMethod("AppendSelfDPWhere", BindingFlags.Static | BindingFlags.NonPublic)!;
 
         /// <summary>
+        /// #843 observability: element-type names (via <c>Type.FullName</c>) that have already
+        /// logged a fail-closed denial in <see cref="ApplyDataPrivilegeForAnalysis"/> during this
+        /// process's lifetime. Backs the "log once per element type per process" throttle — see
+        /// that method's doc comment for why this cadence was chosen over per-call or per-job-run.
+        /// </summary>
+        private static readonly ConcurrentDictionary<string, byte> _loggedNoIdentityDenials = new();
+
+        /// <summary>
         /// Analysis Mode 防禦性 DataPrivilege 過濾（#554）。
         /// 對非泛型 IQueryable 套用 AppendSelfDPWhere，確保 Analysis 查詢受同一行級權限保護。
         /// </summary>
-        public static IQueryable ApplyDataPrivilegeForAnalysis(IQueryable baseQuery, WTMContext? wtmcontext)
+        /// <param name="baseQuery">未過濾的查詢來源。</param>
+        /// <param name="wtmcontext">
+        /// 呼叫端的 <see cref="WTMContext"/>。<see cref="WTMContext.LoginUserInfo"/> 為 <c>null</c>
+        /// 代表沒有可信身分 — 典型情況是背景執行：
+        /// <see cref="WalkingTec.Mvvm.Core.Dashboard.Snapshot.DashboardSnapshotJob"/>、
+        /// <see cref="WalkingTec.Mvvm.Core.Dashboard.Alerting.DashboardAlertHostedService"/> 透過
+        /// <c>IServiceProvider.CreateScope()</c> 解析出的 <see cref="WTMContext"/> 沒有
+        /// <c>HttpContext</c> 可讀，因此永遠不帶 <c>LoginUserInfo</c>。
+        /// </param>
+        /// <param name="declaredSystemQuery">
+        /// #843：顯式宣告「這是不受列級 DataPrivilege 限制的系統查詢」。預設 <c>false</c>。
+        /// <para>
+        /// 修法之前（#554 之後、#843 之前），<c>LoginUserInfo == null</c> 會直接跳過過濾、回傳
+        /// 未過濾的查詢 — 等同把「沒有身分」當成「不過濾」，而不是「不放行」。背景 job 因此能看到
+        /// 使用者自己透過 HTTP 建立、且受 DataPrivilege 限制的 widget/查詢設定所指向的資料，即使
+        /// 那個使用者自己在互動路徑上受同一組規則限制、根本看不到那些列。
+        /// </para>
+        /// <para>
+        /// 現在 <c>LoginUserInfo == null</c> 預設會改為呼叫 <see cref="AppendSelfDPWhere"/>（傳入
+        /// <c>dps = null</c>）——沿用它既有處理「已認證但沒被指派任何 RelateId」的邏輯（該 model
+        /// 有設定 DataPrivilege 規則時，<c>dps == null</c> 產生 <c>1 != 1</c> 全拒），只是把觸發
+        /// 條件從「已認證但沒有 RelateId」擴大到「完全沒有身分」。沒有為該 model 設定 DataPrivilege
+        /// 規則的查詢不受影響（沿用原本「無規則 = 不過濾」的語意，與是否有身分無關）。
+        /// </para>
+        /// <para>
+        /// 只有呼叫端明確傳入 <c>declaredSystemQuery: true</c>——一個 review 時看得到的具名參數，
+        /// 不是設定檔旗標——才會回到「略過 DataPrivilege」的舊行為，且僅在
+        /// <c>LoginUserInfo == null</c> 時才生效；已認證的呼叫者（<c>LoginUserInfo != null</c>）
+        /// 傳 <c>true</c> 沒有作用，無法用這個參數繞過自己的列級限制。
+        /// <see cref="WalkingTec.Mvvm.Core.Dashboard.AnalysisWidgetDataSource"/>
+        /// 目前兩個消費者（互動式 Dashboard 檢視與背景 job）都不傳 <c>true</c>：互動路徑一律有
+        /// <c>LoginUserInfo</c>，這個分支根本不會被觸發；背景路徑刻意留在預設的 fail-closed，
+        /// 因為目前沒有機制能重建「這個 widget 的建立者當初的 DataPrivilege 範圍」（issue #843
+        /// 討論過「job 建立者身分」與「租戶系統身分」兩個替代方案，均因需要不存在的新基礎設施而
+        /// 否決 — 見 issue 討論與 CHANGELOG）。
+        /// </para>
+        /// <para>
+        /// <b>Observability</b>：fail-closed 預設是**靜默**的隱患——背景 job 因此回傳空結果，
+        /// 但沒有任何訊號連到這個原因，operator 只會看到一張空圖表或全零的 snapshot 列。因此，
+        /// 每當這個方法因為「無身分 + 該 model 有設定 DataPrivilege 規則」而實際拒絕（不是
+        /// no-op）時，會透過 <see cref="CoreProgram.GetLogger(string)"/>（category
+        /// <c>"DCExtension"</c>，與 <c>WtmFileProvider</c> 等既有 static helper 相同模式，
+        /// 因為此類無法走 DI 注入 <c>ILogger</c>）記一筆 <c>LogWarning</c>，內容含 element type
+        /// 名稱與補救方式（<c>declaredSystemQuery: true</c>）。**節流**：每個 element type
+        /// 在單一 process 生命週期內只記一次——這是查詢路徑上的 helper，排程 job 可能每幾分鐘
+        /// 重跑同一個 widget，逐次呼叫都記會洗版；沒有現成的「job run」邊界可用（那個邊界在
+        /// 呼叫端好幾層之上，把它往下傳會擴大這個與 <c>_AnalysisController</c> 共用的 static
+        /// helper 的介面，超出這次 observability 修補的範圍），故選擇「每 element type 每
+        /// process 一次」，並隨 process 重啟自然重置。
+        /// </para>
+        /// </param>
+        public static IQueryable ApplyDataPrivilegeForAnalysis(
+            IQueryable baseQuery,
+            WTMContext? wtmcontext,
+            bool declaredSystemQuery = false)
         {
             if (wtmcontext?.DataPrivilegeSettings == null) return baseQuery;
-            if (wtmcontext.LoginUserInfo == null) return baseQuery;
             var elementType = baseQuery.ElementType;
             if (!typeof(TopBasePoco).IsAssignableFrom(elementType)) return baseQuery;
+            if (wtmcontext.LoginUserInfo == null && declaredSystemQuery)
+            {
+                // #843: caller explicitly declared this is an intentionally-unfiltered system
+                // query — the only sanctioned way back to the old fail-open behaviour.
+                return baseQuery;
+            }
+            if (wtmcontext.LoginUserInfo == null)
+            {
+                // #843 observability: only warn when this denial is actually consequential —
+                // i.e. the model has a DataPrivilege rule configured, so AppendSelfDPWhere below
+                // will deny rows rather than no-op. Without this check, every background query
+                // against every model (including ones with nothing to protect) would log.
+                var elementTypeName = elementType.FullName ?? elementType.Name;
+                var isGated = wtmcontext.DataPrivilegeSettings.Any(x => x.ModelName == elementType.Name);
+                if (isGated && _loggedNoIdentityDenials.TryAdd(elementTypeName, 0))
+                {
+                    CoreProgram.GetLogger("DCExtension")?.LogWarning(
+                        "ApplyDataPrivilegeForAnalysis denied all rows for '{ElementType}': no " +
+                        "identity (WTMContext.LoginUserInfo is null) and a DataPrivilege rule is " +
+                        "configured for this model, so the query fails closed by default (#843). " +
+                        "This is expected during background execution (DashboardSnapshotJob, " +
+                        "DashboardAlertHostedService) and means the resulting widget data or " +
+                        "snapshot will be empty for this model. If this specific query is genuinely " +
+                        "meant to run unfiltered, pass declaredSystemQuery: true at the call site. " +
+                        "Logged once per element type per process.",
+                        elementTypeName);
+                }
+            }
             var method = _appendSelfDPWhereMethod.MakeGenericMethod(elementType);
-            var dps = wtmcontext.LoginUserInfo.DataPrivileges;
+            var dps = wtmcontext.LoginUserInfo?.DataPrivileges;
             return (IQueryable)method.Invoke(null, new object?[] { baseQuery, wtmcontext, dps })!;
         }
 
