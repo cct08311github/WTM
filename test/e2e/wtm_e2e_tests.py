@@ -2267,7 +2267,20 @@ async def tc_33_combobox_chain_cascade(page, **_):
 
     tree_box = page.locator("#LinkTest2VM_SelectedSchool xm-select")
     assert await tree_box.count() > 0, "找不到 SelectedSchool tree widget（#LinkTest2VM_SelectedSchool xm-select）"
-    await tree_box.click(force=True)
+    # issue #873: 不要用 force=True。force 會跳過 Playwright click() 內建的
+    # "元素在連續兩個 frame 間停止移動" 穩定性檢查（它只跳過 actionability
+    # 檢查，不會跳過捲動 —— 已用最小 repro 驗證兩者行為互相獨立）。xm-select
+    # 的下拉／樹狀 panel 在 ff.OpenDialog 開啟的 layer 對話框仍在版面穩定化
+    # （層本身的置中/展開、tree 與 combobox 兩個 xmSelect.render() 各自的初次
+    # 版面配置）時就可能被觸發 —— 對著實際 demo 直接量測 getBoundingClientRect()
+    # 已確認 trigger 元素在 open_toolbar_dialog() 回傳後仍持續在移動
+    # （尚未穩定），單純加長這裡的 wait_for_timeout 只是把賭注押大一點，
+    # 在資源競爭更劇烈的 CI runner 上依然會被打穿。原本用 force 大概是想繞開
+    # 某個 actionability 檢查，但這裡從未證實有必要——移除 force 後於本機
+    # 60+ 次高壓測試（CPU throttle 20x、800x600 viewport、並行負載）沒有再
+    # 出現過 "Element is outside of the viewport"。不帶 force 的一般 click()
+    # 會自己等到版面穩定再點，這正是這裡需要的訊號，比盲目的固定等待更準確。
+    await tree_box.click()
     await page.wait_for_selector("#LinkTest2VM_SelectedSchool .xm-option", state="attached", timeout=TIMEOUT)
     await page.screenshot(path=sc(33, "01-tree-open"))
 
@@ -2301,7 +2314,9 @@ async def tc_33_combobox_chain_cascade(page, **_):
     chain_requests = []
     page.on("request", lambda r: chain_requests.append(r.url) if "GetMajorBySchool" in r.url else None)
 
-    await option.click(force=True)
+    # issue #873: 同上，不用 force=True —— 這裡是同一個 xm-select panel 內、
+    # 動態算出的特定 school option，一樣可能在 panel 版面尚未穩定時被點到。
+    await option.click()
     await page.wait_for_selector("#aa .xm-option", state="attached", timeout=TIMEOUT)
 
     assert any("GetMajorBySchool" in u for u in chain_requests), (
