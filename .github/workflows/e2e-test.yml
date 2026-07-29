@@ -24,52 +24,60 @@ on:
       - 'demo/**'
       - 'test/e2e/**'
 
-jobs:
-  e2e:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # Issue #681: second leg exercises the #627 legacy-script-rehydration
-        # kill-switch (docs/csp-hardening.md). "killswitch" sets WTM_E2E_KILLSWITCH=1,
-        # which _Layout.cshtml reads to emit the opt-in meta tag for THIS matrix leg's
-        # demo process only — the "baseline" leg (and every non-matrix run) is
-        # byte-identical to today. Both legs run the same suite: most TC-01..31 are
-        # direct-navigation/API checks unaffected by the switch either way, and the
-        # #681-added dialog-driven checks (tc_32+) branch their own assertions on
-        # WTM_E2E_KILLSWITCH so neither leg produces a false failure.
-        #
-        # Issue #837: third leg exercises the #470 island-render opt-in
-        # (WtmUIOptions.UseSelectIslandRender, default OFF — demo's own appsettings.json
-        # never sets it, so every e2e run before this leg only ever exercised the legacy
-        # inline-script path across the whole #470/#567/#655 campaign). "island" sets
-        # UIOptions__UseSelectIslandRender=true — the standard ASP.NET Core
-        # double-underscore environment-variable convention for the nested config key
-        # "UIOptions:UseSelectIslandRender" — for THIS matrix leg's demo process only.
-        # Same mechanism/shape as WTM_E2E_KILLSWITCH (a leg-scoped env var, read via
-        # IConfiguration, with zero effect on any other leg or any non-e2e run), but
-        # routed through the option's own already-documented, already-tested config path
-        # (services.Configure<WtmUIOptions>(config.GetSection("UIOptions")) in
-        # FrameworkServiceExtension.cs, the same binding UIOptionsSplitBrainTests.cs
-        # exercises) rather than adding a second, parallel ad-hoc flag — no _Layout.cshtml
-        # or Program.cs change needed. Runs the full suite (not a curated subset like
-        # killswitch): UseSelectIslandRender's opt-in gates are spread across nearly every
-        # LayUI TagHelper (grid, combobox, transfer, upload, tree, chart, date, color,
-        # slider, richtext, submit button, panel, tab, search panel — see
-        # .claude/rules/security-invariants.md and the TagHelper doc comments for the
-        # full list), so a curated subset would defeat the point of adding this leg: making
-        # the previously-unexercised state actually exercised, not narrowing it again.
-        leg: [baseline, killswitch, island]
-    env:
-      # PEP 668: allow pip into the disposable runner container's system Python when setup-python degrades (issue #292)
-      PIP_BREAK_SYSTEM_PACKAGES: "1"
-      WTM_E2E_BASE_URL: http://localhost:52837
-      WTM_E2E_HEADLESS: "true"
-      WTM_E2E_TIMEOUT: "20000"
-      WTM_E2E_REPORT: test/e2e/results/junit.xml
-      WTM_E2E_KILLSWITCH: ${{ matrix.leg == 'killswitch' && '1' || '0' }}
-      UIOptions__UseSelectIslandRender: ${{ matrix.leg == 'island' && 'true' || 'false' }}
+# Issue #885: the three legs below (baseline, killswitch, island — see each job's own
+# comment for what it exercises) run one at a time via `needs:`, not as a matrix.
+#
+# This USED to be a single `e2e` job with `strategy.matrix.leg: [baseline, killswitch,
+# island]`. #837 added the third ("island") leg, and the same day five distinct
+# timing-sensitive failures surfaced across unrelated PRs (TC-33 viewport-outside-click,
+# TC-04 screenshot timeout, TC-26 "Target crashed", a WorkFlow race test, a TOCTOU test) —
+# all downstream of resource contention, not test-logic bugs. Measured on this host
+# (2026-07-29, live workflow_dispatch runs): act_runner's Docker backend is capped at
+# 4 CPU / 3.8GiB RAM (`docker info`) — independent of the Mac mini host's real 10 CPU /
+# 16GB, because act_runner drives job containers through the Docker Desktop VM's own
+# daemon (docker.sock bind-mount), not the host's. Two of the three legs' containers alone
+# (each running a dotnet demo app process plus a headless Chromium instance) were observed
+# using up to ~360% of the VM's 400% CPU budget and ~2.85GiB (~75%) of its 3.8GiB RAM
+# within 30s of the run starting.
+#
+# The first fix attempt was `strategy.matrix.max-parallel: 1` on the single matrixed job.
+# It had NO effect: a live re-run still started all three legs' containers within 6 seconds
+# of each other. This is a known upstream Gitea Actions gap, not a config mistake —
+# go-gitea/gitea#35561 ("Cannot make steps run sequentially with matrix and
+# max-parallel = 1"). `needs:` is a basic job-dependency-graph feature already used
+# elsewhere in this repo's own workflows (ci-build.yml's security-scan needs
+# build-and-test; mutation-gate.yml's mutants needs changes) and was verified in a live
+# run to actually serialize execution, unlike max-parallel. See #885 for the full
+# measurements and the two alternatives considered (per-test timing fixes, raising
+# timeouts) and why concurrency was picked over both.
+#
+# Each downstream job carries `if: ${{ !cancelled() }}` so one leg failing doesn't skip
+# the next — matching the matrix's old `fail-fast: false` (independent legs; every leg
+# always gets a chance to run and report its own result) — WITHOUT also keeping the job
+# alive through a cancellation the way `always()` would (cross-vendor review on PR #887
+# caught this: job conditions are re-evaluated when the workflow is cancelled, e.g. by
+# the concurrency block above on a superseded PR push, and `always()` stays true through
+# that, silently defeating the concurrency group; `!cancelled()` does not). Measured
+# cost: before-fix run 5835 (concurrent) took ~3m20s total; after-fix run 5837 (this
+# needs:-chained version, live workflow_dispatch) took ~8m58s — roughly +5.5min, since
+# the three legs no longer overlap at all (their durations now sum instead of
+# overlapping).
 
+env:
+  # PEP 668: allow pip into the disposable runner container's system Python when setup-python degrades (issue #292)
+  PIP_BREAK_SYSTEM_PACKAGES: "1"
+  WTM_E2E_BASE_URL: http://localhost:52837
+  WTM_E2E_HEADLESS: "true"
+  WTM_E2E_TIMEOUT: "20000"
+  WTM_E2E_REPORT: test/e2e/results/junit.xml
+
+jobs:
+  e2e-baseline:
+    name: e2e (baseline)
+    runs-on: ubuntu-latest
+    env:
+      WTM_E2E_KILLSWITCH: "0"
+      UIOptions__UseSelectIslandRender: "false"
     steps:
       - uses: actions/checkout@v5
 
@@ -84,16 +92,7 @@ jobs:
       - name: Start demo app
         working-directory: demo/WalkingTec.Mvvm.Demo
         env:
-          # Read by _Layout.cshtml via IConfiguration to opt this leg's demo process
-          # into the #627 kill-switch meta tag. Explicitly re-declared here (rather
-          # than relying on job-level env inheritance alone) so the intent is visible
-          # at the point the ASP.NET Core process actually starts.
           WTM_E2E_KILLSWITCH: ${{ env.WTM_E2E_KILLSWITCH }}
-          # #837: same reasoning — explicitly re-declared so it's visible at the point
-          # the ASP.NET Core process starts. Binds into Configs.UIOptions.UseSelectIslandRender
-          # via the standard ASP.NET Core environment-variable configuration provider
-          # (double underscore -> nested key), the same "UIOptions" section
-          # FrameworkServiceExtension.cs's services.Configure<WtmUIOptions>(...) binds from.
           UIOptions__UseSelectIslandRender: ${{ env.UIOptions__UseSelectIslandRender }}
         run: |
           dotnet run -c Release --no-build \
@@ -134,41 +133,7 @@ jobs:
         run: playwright install chromium --with-deps
 
       - name: Run E2E tests (baseline)
-        if: matrix.leg == 'baseline'
         working-directory: test/e2e
-        run: |
-          python wtm_e2e_tests.py \
-            --headless \
-            --report results/junit.xml
-
-      - name: Run E2E tests (killswitch subset)
-        if: matrix.leg == 'killswitch'
-        working-directory: test/e2e
-        # Issue #681: a focused subset rather than the full 36-check suite — most of
-        # TC-01..31 are direct-navigation/API checks with no dialog-widget dependency
-        # and would just duplicate the baseline leg's signal. This subset covers: a
-        # security smoke check (01), basic login/logout (06/07), the full-page-load
-        # analysis panel (04, NOT routed through ff.OpenDialog so it's a useful control
-        # showing the switch didn't break unrelated UI), structural CRUD markup (26),
-        # and every #681-added dialog-driven check (32-36), which self-assert
-        # kill-switch-aware expectations via the WTM_E2E_KILLSWITCH env var.
-        run: |
-          python wtm_e2e_tests.py \
-            --tc 1,4,6,7,26,32,33,34,35,36 \
-            --headless \
-            --report results/junit.xml
-
-      - name: Run E2E tests (island)
-        if: matrix.leg == 'island'
-        working-directory: test/e2e
-        # Issue #837: full suite, not a curated subset — see the matrix comment above for
-        # why (UseSelectIslandRender's opt-in gates are spread across nearly every LayUI
-        # TagHelper, unlike killswitch's narrow CSP-only surface). No wtm_e2e_tests.py
-        # check currently branches its own assertions on this flag the way the #681
-        # dialog checks (32-36) branch on WTM_E2E_KILLSWITCH — this leg's job is to make
-        # the island-render path exercised at all, per #837's fixture-first mandate;
-        # island-render-aware assertions are follow-up work, not something this leg's
-        # first run is expected to have solved.
         run: |
           python wtm_e2e_tests.py \
             --headless \
@@ -179,7 +144,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-screenshots-${{ matrix.leg }}
+          name: e2e-screenshots-baseline
           path: test/e2e/screenshots/
           if-no-files-found: ignore
           retention-days: 7
@@ -189,8 +154,225 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-junit-report-${{ matrix.leg }}
+          name: e2e-junit-report-baseline
           path: test/e2e/results/junit.xml
           if-no-files-found: ignore
           retention-days: 30
 
+  e2e-killswitch:
+    name: e2e (killswitch)
+    needs: e2e-baseline
+    # !cancelled(), not always(): a job condition is re-evaluated when the workflow is
+    # cancelled (e.g. a superseded PR run via the concurrency block above), and
+    # always() stays true through a cancellation — so an always()-gated downstream job
+    # would keep starting/running even after the run it belongs to was supposed to be
+    # cancelled, defeating the concurrency group entirely. !cancelled() still runs this
+    # job when the previous leg merely failed (preserving fail-fast: false's old
+    # semantics — every leg still gets a chance to run and report), but stops once the
+    # run itself is cancelled.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    env:
+      # Issue #681: second leg exercises the #627 legacy-script-rehydration kill-switch
+      # (docs/csp-hardening.md). WTM_E2E_KILLSWITCH=1 is read by _Layout.cshtml to emit the
+      # opt-in meta tag for THIS leg's demo process only — the baseline leg (and every
+      # non-e2e run) is byte-identical to today. Runs a focused subset rather than the full
+      # 36-check suite — most of TC-01..31 are direct-navigation/API checks with no
+      # dialog-widget dependency and would just duplicate the baseline leg's signal. This
+      # subset covers: a security smoke check (01), basic login/logout (06/07), the
+      # full-page-load analysis panel (04, NOT routed through ff.OpenDialog so it's a
+      # useful control showing the switch didn't break unrelated UI), structural CRUD
+      # markup (26), and every #681-added dialog-driven check (32-36), which self-assert
+      # kill-switch-aware expectations via the WTM_E2E_KILLSWITCH env var.
+      WTM_E2E_KILLSWITCH: "1"
+      UIOptions__UseSelectIslandRender: "false"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build demo app
+        run: dotnet build demo/WalkingTec.Mvvm.Demo/WalkingTec.Mvvm.Demo.csproj -c Release
+
+      - name: Start demo app
+        working-directory: demo/WalkingTec.Mvvm.Demo
+        env:
+          WTM_E2E_KILLSWITCH: ${{ env.WTM_E2E_KILLSWITCH }}
+          UIOptions__UseSelectIslandRender: ${{ env.UIOptions__UseSelectIslandRender }}
+        run: |
+          dotnet run -c Release --no-build \
+            --urls http://0.0.0.0:52837 \
+            -- --environment Development > "$GITHUB_WORKSPACE/demo-app.log" 2>&1 &
+          echo "DEMO_PID=$!" >> $GITHUB_ENV
+
+      - name: Wait for demo to be ready
+        run: |
+          echo "Waiting for demo app on port 52837..."
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:52837/Login/Login > /dev/null 2>&1; then
+              echo "Demo app ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Demo app did not start in 90s"
+          exit 1
+
+      - name: Show demo app log on readiness failure
+        if: failure()
+        run: |
+          echo "---- tail -50 demo-app.log ----"
+          tail -50 "$GITHUB_WORKSPACE/demo-app.log" || echo "demo-app.log not found"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: test/e2e/requirements.txt
+
+      - name: Install Python dependencies
+        run: pip install -r test/e2e/requirements.txt
+
+      - name: Install Playwright browsers
+        run: playwright install chromium --with-deps
+
+      - name: Run E2E tests (killswitch subset)
+        working-directory: test/e2e
+        run: |
+          python wtm_e2e_tests.py \
+            --tc 1,4,6,7,26,32,33,34,35,36 \
+            --headless \
+            --report results/junit.xml
+
+      - name: Upload screenshots
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots-killswitch
+          path: test/e2e/screenshots/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload JUnit XML report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-junit-report-killswitch
+          path: test/e2e/results/junit.xml
+          if-no-files-found: ignore
+          retention-days: 30
+
+  e2e-island:
+    name: e2e (island)
+    needs: e2e-killswitch
+    # !cancelled(), not always() — same reasoning as e2e-killswitch above.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    env:
+      # Issue #837: third leg exercises the #470 island-render opt-in
+      # (WtmUIOptions.UseSelectIslandRender, default OFF — demo's own appsettings.json
+      # never sets it, so every e2e run before this leg only ever exercised the legacy
+      # inline-script path across the whole #470/#567/#655 campaign). UIOptions__UseSelectIslandRender=true
+      # is the standard ASP.NET Core double-underscore environment-variable convention for
+      # the nested config key "UIOptions:UseSelectIslandRender" — for THIS leg's demo
+      # process only. Same mechanism/shape as WTM_E2E_KILLSWITCH (a leg-scoped env var,
+      # read via IConfiguration, with zero effect on any other leg or any non-e2e run), but
+      # routed through the option's own already-documented, already-tested config path
+      # (services.Configure<WtmUIOptions>(config.GetSection("UIOptions")) in
+      # FrameworkServiceExtension.cs, the same binding UIOptionsSplitBrainTests.cs
+      # exercises) rather than adding a second, parallel ad-hoc flag — no _Layout.cshtml or
+      # Program.cs change needed. Runs the full suite (not a curated subset like
+      # killswitch): UseSelectIslandRender's opt-in gates are spread across nearly every
+      # LayUI TagHelper (grid, combobox, transfer, upload, tree, chart, date, color,
+      # slider, richtext, submit button, panel, tab, search panel — see
+      # .claude/rules/security-invariants.md and the TagHelper doc comments for the full
+      # list), so a curated subset would defeat the point of adding this leg: making the
+      # previously-unexercised state actually exercised, not narrowing it again.
+      WTM_E2E_KILLSWITCH: "0"
+      UIOptions__UseSelectIslandRender: "true"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build demo app
+        run: dotnet build demo/WalkingTec.Mvvm.Demo/WalkingTec.Mvvm.Demo.csproj -c Release
+
+      - name: Start demo app
+        working-directory: demo/WalkingTec.Mvvm.Demo
+        env:
+          WTM_E2E_KILLSWITCH: ${{ env.WTM_E2E_KILLSWITCH }}
+          UIOptions__UseSelectIslandRender: ${{ env.UIOptions__UseSelectIslandRender }}
+        run: |
+          dotnet run -c Release --no-build \
+            --urls http://0.0.0.0:52837 \
+            -- --environment Development > "$GITHUB_WORKSPACE/demo-app.log" 2>&1 &
+          echo "DEMO_PID=$!" >> $GITHUB_ENV
+
+      - name: Wait for demo to be ready
+        run: |
+          echo "Waiting for demo app on port 52837..."
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:52837/Login/Login > /dev/null 2>&1; then
+              echo "Demo app ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Demo app did not start in 90s"
+          exit 1
+
+      - name: Show demo app log on readiness failure
+        if: failure()
+        run: |
+          echo "---- tail -50 demo-app.log ----"
+          tail -50 "$GITHUB_WORKSPACE/demo-app.log" || echo "demo-app.log not found"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: test/e2e/requirements.txt
+
+      - name: Install Python dependencies
+        run: pip install -r test/e2e/requirements.txt
+
+      - name: Install Playwright browsers
+        run: playwright install chromium --with-deps
+
+      - name: Run E2E tests (island)
+        working-directory: test/e2e
+        run: |
+          python wtm_e2e_tests.py \
+            --headless \
+            --report results/junit.xml
+
+      - name: Upload screenshots
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots-island
+          path: test/e2e/screenshots/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload JUnit XML report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-junit-report-island
+          path: test/e2e/results/junit.xml
+          if-no-files-found: ignore
+          retention-days: 30

@@ -393,12 +393,13 @@ jobs:
 
   # Single pass/fail summary (issue #834 rule #6: "CI ... reports a single pass/fail")
   # and the required status check for dotnet10 (issue #834 rule #7). This job carries
-  # NO path filter and NO `if:` condition of its own (`if: always()` only, so it also
-  # runs when an upstream job failed) -- it is the one job in this workflow that must
-  # ALWAYS post a status, because Gitea's required-check evaluation for a PR hangs
-  # forever on a context that never arrives. `mutants`/`meta-selftest` being SKIPPED
-  # (the `changes` job found nothing gated) is treated as a pass here, not a failure
-  # -- only an actual `failure`/`cancelled` result fails the gate.
+  # NO path filter, and its own `if: ${{ !cancelled() }}` condition (see below), so it
+  # still runs when an upstream job failed or was skipped -- it is the one job in this
+  # workflow that must post a status in every non-cancelled outcome, because Gitea's
+  # required-check evaluation for a PR hangs forever on a context that never arrives.
+  # `mutants`/`meta-selftest` being SKIPPED (the `changes` job found nothing gated) is
+  # treated as a pass here, not a failure -- only an actual `failure`/`cancelled` result
+  # fails the gate.
   #
   # Judge this job's own log, not the Gitea badge, for the same reason as every other
   # workflow in this repo (see CLAUDE.md "CI red does not mean failed") -- but see the
@@ -407,7 +408,15 @@ jobs:
   # gap. Read the step output either way.
   gate:
     needs: [changes, mutants, meta-selftest]
-    if: always()
+    # !cancelled(), not always() (#885 cross-vendor review, PR #887): this workflow has a
+    # concurrency block with cancel-in-progress on pull_request — a job condition is
+    # re-evaluated when the run is cancelled (e.g. a superseded PR push), and always()
+    # stays true through that, so an always()-gated job could still start after the run
+    # it belongs to was supposed to be cancelled. !cancelled() preserves the "run even if
+    # mutants/meta-selftest were skipped (changes.outputs.relevant == 'false')" behavior
+    # this condition exists for — skipped is not cancelled — while actually stopping on
+    # cancellation.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
     - name: Summarize mutation gate result

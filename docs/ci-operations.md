@@ -2,7 +2,7 @@
 
 > **適用版本**：10.5.1+
 > **最後更新**：2026-06-21
-> **CI 平台**：Gitea Actions（self-hosted at `mac-mini.tailde842d.ts.net`）。**兩個 runner**（見下方「Runner 拓撲」）：WTM 的 `ubuntu-latest` jobs 跑在 Docker `act_runner`；另有一個 Homebrew runner 服務其他專案。
+> **CI 平台**：Gitea Actions（self-hosted at `mac-mini.tailde842d.ts.net`）。**至少三個已註冊 runner**（見下方「Runner 拓撲」，2026-07-29／#885 更正——原記錄的兩個之外還有一個先前沒記到的 `azure-overflow-runner`）：WTM 的 `ubuntu-latest` jobs 主要跑在本機 Docker `act_runner`（`local-runner`），但也可能被 Gitea 排到 `azure-overflow-runner`；另有一個 Homebrew runner 服務其他專案。
 
 本文件涵蓋 WTM CI 工作流總覽、Gitea Actions 與 GitHub Actions 的四大已知不相容點，以及排錯 SOP。完整修復脈絡見 [Issue #11](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/issues/11) / [PR #12](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/pulls/12)。
 
@@ -161,6 +161,67 @@ pull_request-event 的 job。修正後 feature 分支只會有 pull_request-even
 
 ---
 
+## e2e 三條 matrix leg 並行導致的時序性失敗（#885，2026-07-29 修正）
+
+`#837` 為 `e2e-test.yml` 加了第三條 matrix leg（`island`）之後，同一天內出現五種不同的
+時序敏感失敗（`Page.screenshot` timeout、`Target crashed`、並行競態測試、TOCTOU 測試、
+testhost 崩潰），分散在互不相關的 PR 上——形狀都一樣：**一個對時間做了假設的測試，在
+資源競爭下假設破裂**，不是測試邏輯壞掉。
+
+**量測**（本票在 `ci/885-runner-capacity` 分支上用 `workflow_dispatch` 對 `e2e-test.yml`
+觸發的即時 run 5835，`docker stats` 現場觀察；另對照 PR #881 當天的 e2e run 5833）：
+
+- act_runner 背後的 Docker Desktop VM 硬上限是 **4 CPU / 3.8GiB RAM**（`docker info`），
+  與 Mac mini 主機實際的 10 CPU / 16GB **無關**——act_runner 透過 bind-mount 的
+  `docker.sock` 用 Docker Desktop VM 自己的 daemon 開 job 容器，不是主機的。
+- run 5835 三條 leg 的 job 在 6 秒內全部被 Gitea 排入執行（用 job 的 `runner_id`/
+  `runner_name` 查證，不是猜的）。這台 Gitea 實例其實掛了**三個**已註冊 runner，不是
+  「Runner 拓撲」小節記錄的兩個：`local-runner`（本機 Docker，`capacity: 2`）、
+  `bms-macos-runner`（Homebrew，服務 BMS 等其他專案）、以及先前這份文件沒記到的
+  `azure-overflow-runner`（本機看不到它的容器，規格未知）。**哪條 leg 分到哪個
+  runner 是 Gitea 排程當下決定，`e2e-test.yml` 本身完全不宣告**——run 5835 是
+  baseline+island 分到 `local-runner`、killswitch 分到 `azure-overflow-runner`；但
+  下面「修法」驗證用的 run 5837 卻是 baseline+killswitch 同時分到 `local-runner`。
+  **不能假設三條 leg 會自然分散到不同機器**，也不能假設固定是哪條 leg 分到哪個
+  runner。
+- 光是被排到 `local-runner` 的那兩條 leg，各自跑一個 dotnet demo process + 一個
+  headless Chromium，`docker stats` 現場量到在啟動後 30 秒內就吃到約 **360% CPU**
+  （VM 400% 上限的 9 成）與 **2.85GiB 記憶體**（3.8GiB 上限的 75%）——這是本機直接
+  量到的數字，不是推算，也還沒把 `local-runner` 上可能同時排進來的其他 workflow
+  job（`ci-build.yml`、`mutation-gate.yml`）算進去。這就是 #885 列的失敗形狀：
+  `Page.screenshot` timeout（CPU 被搶到來不及 compositing）與 `Target crashed`
+  （Chromium 被 OOM kill）。
+- e2e 測試腳本（`test/e2e/wtm_e2e_tests.py`）目前對每個 TC 都無條件拍照（79 處
+  `page.screenshot(...)`，其中 13 處 `full_page=True`），不分成功失敗——這會放大每條 leg
+  的資源用量，但量測顯示真正的瓶頸是「同時幾個瀏覽器+dotnet process 在跑」而非拍照本身；
+  改成只在失敗時拍照是可考慮的後續優化，未在本票處理範圍內（另開 issue 追蹤）。
+
+**修法**：讓三條 leg 依序跑而非搶著並行。第一次嘗試是 `.github/workflows/e2e-test.yml`
+單一矩陣 job 加 `strategy.matrix.max-parallel: 1`——**這個設定完全沒有效果**：用
+`workflow_dispatch` 重跑後，三條 leg 的 job container 依然在 6 秒內全部啟動、整段並行。
+這是已知的 Gitea Actions 上游缺陷（[go-gitea/gitea#35561](https://github.com/go-gitea/gitea/issues/35561)：
+"Cannot make steps run sequentially with matrix and max-parallel = 1"），不是設定寫錯。
+最終改法：拆掉 matrix，改成三個獨立 job（`e2e-baseline` / `e2e-killswitch` / `e2e-island`），
+用 `needs:` 串接——這是本 repo 其他 workflow 已經在用、確定有效的基本功能（`ci-build.yml`
+的 `security-scan` needs `build-and-test`；`mutation-gate.yml` 的 `mutants` needs
+`changes`），現場重跑驗證確實會依序執行而非並行。下游兩個 job 都帶 `if: always()`，維持
+原本 matrix `fail-fast: false` 的語意——某條 leg 失敗不會連帶跳過後面的 leg。實測代價：
+修法前 run 5835（並行）總時長約 3 分 20 秒；修法後 run 5837（這個 `needs:` 串接版本，
+`workflow_dispatch` 現場跑）總時長約 8 分 58 秒——多了約 5.5 分鐘，因為三條 leg 不再
+重疊，時長變成三者相加。換取的是可預測、不再被資源競爭污染的結果。
+**沒有**調大 timeout——那只會延後問題、讓 CI 變慢（issue 本文已排除）；也沒有逐支修測試的
+時間假設——除了已經修好的 TC-33（`ccbcbe532`，拿掉 `force=True` 讓 Playwright 自己等
+layout 穩定）之外，其餘四種失敗的根因是資源競爭本身，逐支修無法解決同時開太多瀏覽器這
+件事。
+
+**SOP 影響**：e2e workflow 現在會比 #837 之前慢；不要因為「怎麼變慢了」重新把三條 leg
+改回並行——那正是 #885 五種失敗的共同觸發器。**也不要在這個 repo 的其他 workflow 用
+`strategy.matrix.max-parallel` 期待它限制並行度**——目前這個 Gitea 版本會靜默忽略它。
+若未來 host 容量提升、`local-runner` `capacity` 調整、或 Gitea 修好 #35561，可重新評估
+是否要把這三個 job 併回矩陣。
+
+---
+
 ## 排錯 SOP
 
 當 PR 的 CI conclusion 是 failure：
@@ -273,8 +334,20 @@ Mac-mini 上全部跑在 **Docker**（`/Volumes/T7/dockerdata-binds/gitea/`）�
 |--------|------|--------|----------|----------|--------|
 | `local-runner` | Docker `gitea/act_runner`（跑 `catthehacker/ubuntu` 容器） | `ubuntu-latest` / `ubuntu-22.04` / `ubuntu-20.04` | **WTM**（所有 workflow 都用 `runs-on: ubuntu-latest`） | **2** | `/Volumes/T7/dockerdata-binds/gitea/data/runner/config.yaml` |
 | `bms-macos-runner` | Homebrew `gitea-runner` | `self-hosted:host` / `macos:host` | 其他專案（BMS 等，host 直跑） | 3 | `/opt/homebrew/etc/gitea-runner/config.yaml` |
+| `azure-overflow-runner` | 未知（不在這台 Mac mini 的 `docker ps` 裡；規格、config 位置未查） | `ubuntu-latest` / `ubuntu-24.04` / `ubuntu-22.04` | 未知——名稱暗示遠端/雲端 overflow 容量 | 未知 | 未查 |
 
-- **WTM CI 的吞吐瓶頸是 Docker `local-runner` 的 `capacity`（目前 2）**，不是 Homebrew runner。大量 PR 連續 merge 時 job 會排隊；`security-scan`（`needs: build-and-test`）會排在最後，可能 pending 很久 → 看起來像「卡住」。
+> **修正（#885，2026-07-29）**：上面「有兩個 runner」是舊資訊。查 `action_runner` 表
+> （`docker exec gitea-db psql -U gitea -d gitea -c "SELECT id,name,agent_labels FROM
+> action_runner;"`）才發現第三個已註冊、且 `last_online` 顯示活躍的 runner。因為它的
+> label 也含 `ubuntu-latest`，WTM 任何一個 `runs-on: ubuntu-latest` 的 job 都可能被
+> Gitea 排到它身上，而不是 `local-runner`——`e2e-test.yml` 的三條 leg 分到哪個 runner
+> 因執行而異（見下面 #885 小節的實測）。這裡只記錄「它存在」，規格與用途待補；下次
+> 排查 runner 容量問題時先查這張表，不要只看 `docker ps`。
+
+- **WTM CI 的吞吐瓶頸是 Docker `local-runner` 的 `capacity`（目前 2）**——這句話現在只
+  精確描述「job 落在 `local-runner` 上時」的情形；`azure-overflow-runner` 的容量未知，
+  不能假設它比較寬裕或比較緊繃。大量 PR 連續 merge 時 job 會排隊；`security-scan`
+  （`needs: build-and-test`）會排在最後，可能 pending 很久 → 看起來像「卡住」。
 - 讀內部狀態：`docker logs gitea`、`docker logs gitea-actions-runner`、`docker ps`。
 - **無依賴變更（沒動 `Directory.Packages.props` / `src` 的 `.csproj`）的 PR**：可只等 `build-and-test` 綠就合併 —— `security-scan` 對無依賴變更是確定性綠燈（不可能冒出新 CVE）；runner 真正塞爆時用本機 gate（`dotnet build` + `dotnet test` + `dotnet list --vulnerable`）替代。
 
