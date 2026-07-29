@@ -15,8 +15,8 @@
     "WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_MissingIntermediateSegmentThenStaticFinal_ReturnsFalse": "Assert\\.IsFalse failed",
     "WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_MissingIntermediateSegmentThenAmbiguousFinal_ReturnsFalse": "Assert\\.IsFalse failed"
   },
-  "red_expected_assertion_patterns_provisional": true,
-  "red_expected_assertion_patterns_observed": null,
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout with the mutant patch applied (stale demo.db under bin/ removed first): both red tests failed with 'Assert.IsFalse failed.' (neither test has a custom message, so this is the full MSTest failure text for both). Confirmed via python3 test/mutants/run_mutant.py --mutant wtmsec867-zero-resolution-guard-neutralize: 'VERDICT: KILLED' / 'GATE: PASS'.",
   "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_SearcherDotCustomFilterField_ReturnsTrue",
   "green_tests": [
     "WalkingTec.Mvvm.Core.Test.Helper.RequestBindingPolicyTests867.IsPathAllowed_SearcherDotCustomFilterField_ReturnsTrue"
