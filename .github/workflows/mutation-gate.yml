@@ -180,6 +180,40 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       security_count: ${{ steps.run.outputs.security_count }}
+    env:
+      # DOTNET_gcServer=0: use workstation GC instead of server GC. Server GC sizes its
+      # heap budget against the WHOLE container (here: act_runner's 4 CPU / 3.8GiB Docker
+      # VM), which is the primary driver of this job's OOM kills (issue #900) -- this job
+      # evaluates roughly 30-35 mutant entries per run (security-kind, see
+      # test/mutants/entries/; the three incident runs behind issue #900 -- 12743/12813/
+      # 12940 -- executed 32/33/30 of them), of which a small subset (currently 10, those
+      # targeting the demo tree under demo/) additionally trigger the largest/most
+      # expensive compiles (~2 Demo builds each, since evaluate_mutant() in
+      # test/mutants/run_mutant.py builds the test project once for the clean baseline
+      # and once more after the patch is applied). Across the whole job that's on the
+      # order of dozens of dotnet builds back to back, and server GC's per-build peak is
+      # much higher. Workstation GC has a much lower peak; the cost is 10-30% slower
+      # compiles. Do NOT remove this to "speed up CI" without re-reading issue #900 --
+      # removing it reintroduces the exact OOM-kill (csc exit 137) this workflow keeps
+      # failing on.
+      DOTNET_gcServer: "0"
+      # UseSharedCompilation=false: disable the resident VBCSCompiler build server. With
+      # it enabled, ONE compiler process stays resident across this job's dozens of
+      # back-to-back builds (see the DOTNET_gcServer comment above for how that count
+      # breaks down) and its heap high-water-mark accumulates across all of them instead
+      # of being released between builds -- a second, independent contributor to the
+      # same OOM kills (issue #900). Disabling it means each `csc` invocation starts
+      # fresh and exits (releasing its memory) when done; the cost is ~1s extra startup
+      # per compile. Do NOT remove this to "speed up CI" -- see issue #900 before
+      # touching it.
+      UseSharedCompilation: "false"
+      # MSBUILDDISABLENODEREUSE=1: prevents MSBuild from leaving idle worker nodes
+      # resident between invocations (the MSBuild-process analogue of the VBCSCompiler
+      # problem above). Belt-and-suspenders alongside UseSharedCompilation=false -- keeps
+      # this job's per-build memory footprint from accumulating across its dozens of
+      # back-to-back builds (see the DOTNET_gcServer comment above). Do NOT remove this
+      # to "speed up CI" -- see issue #900.
+      MSBUILDDISABLENODEREUSE: "1"
     steps:
     - uses: actions/checkout@v5
     - uses: actions/setup-dotnet@v5
@@ -296,11 +330,57 @@ jobs:
   # Skipped (not failed) when the `changes` job found nothing gated -- `gate` below
   # treats a skip here as a pass, not a failure.
   meta-selftest:
-    needs: changes
+    # needs: [changes, mutants] -- this job used to declare `needs: changes` only, the
+    # same as `mutants`, so both jobs were scheduled concurrently. That self-inflicted
+    # co-tenancy was an independent contributor to the OOM kills documented in issue
+    # #900: this Gitea act_runner has capacity 2, so mutants+meta-selftest running
+    # together already consumes both runner slots, before counting any other
+    # workflow's job that might also be scheduled onto local-runner at the same time.
+    # Adding `mutants` here serializes meta-selftest to start only after mutants
+    # finishes, removing that specific co-tenancy at the cost of roughly 3 more
+    # minutes of total wall-clock -- the same tradeoff PR #887 already made for
+    # e2e-test.yml's matrix legs (see docs/ci-operations.md ~lines 199-221), because
+    # Gitea silently ignores `strategy.matrix.max-parallel` there just as it would
+    # ignore any other parallelism cap here. The `if:` below is unchanged -- it still
+    # reads only needs.changes.outputs.relevant, not needs.mutants.
+    needs: [changes, mutants]
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     outputs:
       selftest_count: ${{ steps.run.outputs.selftest_count }}
+    env:
+      # DOTNET_gcServer=0: use workstation GC instead of server GC. Server GC sizes its
+      # heap budget against the WHOLE container (here: act_runner's 4 CPU / 3.8GiB Docker
+      # VM), which is the primary driver of this job's OOM kills (issue #900) -- this job
+      # runs the mutation gate's own 6 selftest fixtures (see `python3
+      # test/mutants/gate_lib.py selftests`), always in full -- a much smaller scale than
+      # the mutants job's 30+ entries, and not every fixture even reaches a dotnet build
+      # (three of the six are pure manifest-validation checks -- empty red_tests, an
+      # overbroad assertion pattern, an out-of-scope patch -- that are rejected in
+      # test/mutants/run_mutant.py's evaluate_mutant() before any build runs at all), but
+      # the fixtures that do reach a build still build the same test project the mutants
+      # job builds, so server GC's higher per-build peak is still worth avoiding here.
+      # Workstation GC has a much lower peak; the cost is 10-30% slower compiles. Do NOT
+      # remove this to "speed up CI" without re-reading issue #900 -- removing it
+      # reintroduces the exact OOM-kill (csc exit 137) this workflow keeps failing on.
+      DOTNET_gcServer: "0"
+      # UseSharedCompilation=false: disable the resident VBCSCompiler build server. With
+      # it enabled, ONE compiler process stays resident across this job's builds (see the
+      # DOTNET_gcServer comment above -- 6 selftest fixtures, not every one of which
+      # reaches a build) and its heap high-water-mark accumulates across all of them
+      # instead of being released between builds -- a second, independent contributor to
+      # the same OOM kills (issue #900). Disabling it means each `csc` invocation starts
+      # fresh and exits (releasing its memory) when done; the cost is ~1s extra startup
+      # per compile. Do NOT remove this to "speed up CI" -- see issue #900 before
+      # touching it.
+      UseSharedCompilation: "false"
+      # MSBUILDDISABLENODEREUSE=1: prevents MSBuild from leaving idle worker nodes
+      # resident between invocations (the MSBuild-process analogue of the VBCSCompiler
+      # problem above). Belt-and-suspenders alongside UseSharedCompilation=false -- keeps
+      # this job's per-build memory footprint from accumulating across its builds (see
+      # the DOTNET_gcServer comment above -- 6 selftest fixtures). Do NOT remove this to
+      # "speed up CI" -- see issue #900.
+      MSBUILDDISABLENODEREUSE: "1"
     steps:
     - uses: actions/checkout@v5
     - uses: actions/setup-dotnet@v5
