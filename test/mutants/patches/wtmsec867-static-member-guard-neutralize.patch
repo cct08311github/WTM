@@ -1,0 +1,17 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
+index 08733557e..4cc17641d 100644
+--- a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
++++ b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
+@@ -158,7 +158,11 @@ namespace WalkingTec.Mvvm.Core
+                 }
+                 var member = members[0];
+ 
+-                if (IsStaticMember(member)) return false;
++                // MUTANT test/mutants wtmsec867-static-member-guard-neutralize: condition
++                // neutralized (compile-preserving `&& false`) so the static-member guard can
++                // never reject a path. See test/mutants/entries/
++                // wtmsec867-static-member-guard-neutralize.json for the mutant record.
++                if (IsStaticMember(member) && false) return false;
+                 if (IsBannedGatewayMember(member)) return false;
+ 
+                 tempType = member.GetMemberType();

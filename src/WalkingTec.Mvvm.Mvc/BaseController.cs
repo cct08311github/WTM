@@ -387,8 +387,20 @@ namespace WalkingTec.Mvvm.Mvc
 
         #region update viewmodel
         /// <summary>
-        /// Set viewmodel's properties to the matching items posted by user
+        /// Set viewmodel's properties to the matching items posted by user.
         /// </summary>
+        /// <remarks>
+        /// Issue #867: every key in <paramref name="vm"/>'s <c>FC</c> dictionary is
+        /// caller-supplied (copied verbatim from <c>Request.Form</c>/<c>Request.Query</c> by
+        /// <c>WTMContext.CreateVM</c>), and <see cref="PropertyHelper.SetPropertyValue"/> follows
+        /// dotted paths using only a getter to traverse each hop — a <c>get</c>-only property is
+        /// not protection, since the write lands on the live object the getter returns. Unless
+        /// <see cref="Configs.EnforceRequestBindingScope"/> is explicitly set to <c>false</c>,
+        /// each key is checked against <see cref="RequestBindingPolicy.IsPathAllowed(object, string, string)"/>
+        /// before being written; a rejected key is skipped (not written) and logged at Warning
+        /// level with the key sanitized via <see cref="LogSanitizer"/>. See the CHANGELOG's #867
+        /// entry for the exploit chain this closes.
+        /// </remarks>
         /// <param name="vm">ViewModel</param>
         /// <param name="prefix">prefix</param>
         /// <returns>true if success</returns>
@@ -398,8 +410,16 @@ namespace WalkingTec.Mvvm.Mvc
             try
             {
                 BaseVM bvm = vm as BaseVM;
+                bool enforceScope = ConfigInfo?.EnforceRequestBindingScope != false;
                 foreach (var item in bvm.FC.Keys)
                 {
+                    if (enforceScope && !RequestBindingPolicy.IsPathAllowed(vm, item, prefix))
+                    {
+                        Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseController")
+                            ?.LogWarning("RedoUpdateModel rejected out-of-scope binding key '{Key}' for VM type {VmType} (Configs.EnforceRequestBindingScope)",
+                                LogSanitizer.Sanitize(item), vm.GetType().Name);
+                        continue;
+                    }
                     PropertyHelper.SetPropertyValue(vm, item, bvm.FC[item], prefix, true);
                 }
                 return true;

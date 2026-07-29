@@ -734,5 +734,42 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region Request-binding scope enforcement (Issue #867)
+
+        /// <summary>
+        /// Security default-on kill switch for
+        /// <c>WalkingTec.Mvvm.Mvc.BaseController.RedoUpdateModel</c> /
+        /// <c>WalkingTec.Mvvm.Mvc.BaseApiController.RedoUpdateModel</c> — the reflection-based
+        /// binder that copies every caller-supplied form/query key onto a <c>BaseVM</c> for the
+        /// five <c>_FrameworkController</c> endpoints backing LayUI DataTable grids
+        /// (<c>Selector</c>, <c>GetPagingData</c>, <c>GetExportExcel</c>,
+        /// <c>GetExportExcelStream</c>, <c>DoImport</c>).
+        /// <para>
+        /// <b>Default: <c>true</c>.</b> When <c>true</c>, each key is checked with
+        /// <c>WalkingTec.Mvvm.Core.RequestBindingPolicy.IsPathAllowed</c> before being written:
+        /// a dotted path that traverses a member declared on <c>BaseVM</c>/<c>BaseSearcher</c>
+        /// that is itself a gateway into a larger object graph (<c>Wtm</c>, <c>ConfigInfo</c>,
+        /// <c>LoginUserInfo</c>, <c>DC</c>, …), any member declared on <c>WTMContext</c>, any
+        /// <c>static</c> member, or a path deeper than 3 segments is rejected and logged
+        /// (Warning level, key sanitized via <c>LogSanitizer</c>) instead of written. Without
+        /// this, one authenticated low-privilege caller's form field — e.g.
+        /// <c>ConfigInfo.IsQuickDebug=true</c> — reaches the process-wide
+        /// <c>IOptionsMonitor&lt;Configs&gt;.CurrentValue</c> singleton and flips a security
+        /// setting for every user of the running process until restart. See Issue #867 and the
+        /// CHANGELOG's #867 entry for the full exploit chain and the reachable-target survey this
+        /// allowlist is built from.
+        /// </para>
+        /// <para>
+        /// <b>Set to <c>false</c> only if a downstream <c>BaseVM</c>/<c>BaseSearcher</c>
+        /// subclass genuinely needs a deeper or gateway-crossing dotted-path binding this policy
+        /// would otherwise reject</b> — the framework's own designed binding surface
+        /// (<c>Searcher.*</c>, <c>Ids</c>, <c>Searcher.SortInfo.Property</c>) never needs one, so
+        /// this should stay <c>true</c> for the overwhelming majority of deployments.
+        /// </para>
+        /// </summary>
+        public bool EnforceRequestBindingScope { get; set; } = true;
+
+        #endregion
+
     }
 }
