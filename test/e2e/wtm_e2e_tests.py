@@ -2730,6 +2730,21 @@ def _tc_label(tc):
     return f"TC-{tc:02d}" if isinstance(tc, int) else str(tc)
 
 
+def _compute_stats(results):
+    """
+    (passed, failed, errors, skipped, total) 統計 — 從 run_tests() 抽出來，因為
+    issue #886 review round 5 的彙總報告 fallback 需要在 try 內外各算一次同一組
+    數字（正常路徑印出來之前，以及 try 失敗後改印到 stderr 之前），單一函式避免
+    兩處算法互相漂移。
+    """
+    passed = sum(1 for r in results if r["status"] == "PASS")
+    failed = sum(1 for r in results if r["status"] == "FAIL")
+    errors = sum(1 for r in results if r["status"] == "ERROR")
+    skipped = sum(1 for r in results if r["status"] == "SKIP")
+    total = len(results)
+    return passed, failed, errors, skipped, total
+
+
 TC_REGISTRY = {
     1: ("XSS 反射測試", tc_01_xss_reflected, "P0"),
     2: ("SQL Injection 測試", tc_02_sql_injection, "P0"),
@@ -3009,33 +3024,80 @@ async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
         except Exception:
             pass  # diagnostics only; the synthetic result above is already recorded
     # 彙總報告
-    print(f"\n{'='*60}")
-    print("測試報告彙總")
-    print(f"{'='*60}")
+    #
+    # issue #886 review round 5: this is the last unguarded place in this
+    # function that could lose the report. It runs on EVERY path — normal
+    # completion and the synthetic-ERROR abort path above both reach here
+    # with `results` fully built — including the all-green path, which the
+    # review flagged as the *most likely* one to actually execute (a suite
+    # that runs 36 TCs successfully prints a lot more output than one that
+    # aborts at browser.launch(), so there's simply more surface for a
+    # BrokenPipeError or a JUnit-XML disk-full to hit). Before this fix, a
+    # failure anywhere in this block — a print(), or `_write_junit_xml()`'s
+    # file I/O — escaped uncaught, meaning `return results` below never ran
+    # and `main()` never got its exit code, on what may have been a run
+    # where every single test actually passed.
+    #
+    # Design decision (review round 5's explicit ask — decide what an
+    # unprintable-but-successful run reports, don't let it fall out):
+    #   1. `results` — the data `main()`'s exit code depends on — is always
+    #      returned, unconditionally, regardless of whether anything below
+    #      could be printed. The exit code must never depend on a print
+    #      succeeding.
+    #   2. The one CI-critical line (`Total: N | PASS: n | FAIL: n |
+    #      ERROR: n | SKIP: n`, the exact string CLAUDE.md's convention
+    #      greps for) is attempted on stdout first. If that attempt — or
+    #      anything before it, the per-TC lines or the JUnit XML write —
+    #      fails, a SECOND attempt at that same line goes to stderr: CI job
+    #      logs interleave stdout and stderr into one stream, so this gives
+    #      the line a real chance to still surface even when stdout
+    #      specifically is what broke. Silence is the fallback of last
+    #      resort, not the first one.
+    #   3. If even the stderr attempt fails, nothing further is attempted —
+    #      a second failure while reporting the first would only obscure
+    #      both, and the exit code (point 1) remains the authoritative,
+    #      always-correct signal regardless.
+    # See test_summary_report_failure_on_green_run_preserves_result() for
+    # this exact scenario: a print failure on an otherwise fully green run.
+    try:
+        print(f"\n{'='*60}")
+        print("測試報告彙總")
+        print(f"{'='*60}")
 
-    passed = sum(1 for r in results if r["status"] == "PASS")
-    failed = sum(1 for r in results if r["status"] == "FAIL")
-    errors = sum(1 for r in results if r["status"] == "ERROR")
-    skipped = sum(1 for r in results if r["status"] == "SKIP")
-    total = len(results)
+        passed, failed, errors, skipped, total = _compute_stats(results)
 
-    for r in results:
-        tc = r["tc"]
-        name = TC_REGISTRY.get(tc, ("?", None, "?"))[0]
-        priority = TC_REGISTRY.get(tc, ("?", None, "?"))[2]
-        status = r["status"]
-        elapsed_str = f"{r.get('elapsed', 0):.1f}s" if "elapsed" in r else "-"
-        retry_str = f" (retried {r['retries']}x)" if r.get("retries", 0) > 0 else ""
-        error = f" — {r.get('error', '')}" if r.get("error") else ""
-        icon = {"PASS": "OK", "FAIL": "NG", "ERROR": "!!!", "SKIP": "--"}[status]
-        print(f"  [{icon}] {_tc_label(tc)} [{priority}] {name}{retry_str} ({elapsed_str}){error}")
+        for r in results:
+            tc = r["tc"]
+            name = TC_REGISTRY.get(tc, ("?", None, "?"))[0]
+            priority = TC_REGISTRY.get(tc, ("?", None, "?"))[2]
+            status = r["status"]
+            elapsed_str = f"{r.get('elapsed', 0):.1f}s" if "elapsed" in r else "-"
+            retry_str = f" (retried {r['retries']}x)" if r.get("retries", 0) > 0 else ""
+            error = f" — {r.get('error', '')}" if r.get("error") else ""
+            icon = {"PASS": "OK", "FAIL": "NG", "ERROR": "!!!", "SKIP": "--"}[status]
+            print(f"  [{icon}] {_tc_label(tc)} [{priority}] {name}{retry_str} ({elapsed_str}){error}")
 
-    print(f"\n  Total: {total} | PASS: {passed} | FAIL: {failed} | ERROR: {errors} | SKIP: {skipped}")
-    print(f"  截圖目錄: {SCREENSHOTS_DIR.resolve()}")
+        print(f"\n  Total: {total} | PASS: {passed} | FAIL: {failed} | ERROR: {errors} | SKIP: {skipped}")
+        print(f"  截圖目錄: {SCREENSHOTS_DIR.resolve()}")
 
-    if report_path:
-        _write_junit_xml(results, report_path, total, passed, failed, errors, skipped)
-        print(f"  JUnit XML: {Path(report_path).resolve()}")
+        if report_path:
+            _write_junit_xml(results, report_path, total, passed, failed, errors, skipped)
+            print(f"  JUnit XML: {Path(report_path).resolve()}")
+    except Exception as e:
+        passed, failed, errors, skipped, total = _compute_stats(results)
+        fallback_line = (
+            f"  Total: {total} | PASS: {passed} | FAIL: {failed} | "
+            f"ERROR: {errors} | SKIP: {skipped}"
+        )
+        try:
+            print(
+                f"[run_tests] 彙總報告輸出失敗（{type(e).__name__}: {e}），"
+                "改印到 stderr（見 issue #886 review round 5）：",
+                file=sys.stderr,
+            )
+            print(fallback_line, file=sys.stderr)
+        except Exception:
+            pass  # nothing more can be done; `results` below is still correct
 
     return results
 

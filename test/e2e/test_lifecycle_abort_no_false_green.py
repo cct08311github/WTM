@@ -1,24 +1,32 @@
 """
-Regression tests for issue #886 (PR #897) review rounds 3-4.
+Regression tests for issue #886 (PR #897) review rounds 3-5.
 
 What this guards against
 =========================
-run_tests() launches a browser, then runs every TC, then closes the browser —
-none of that lifecycle work sat inside a try/except until round 3, and even
-after round 3's fix, two escape hatches remained (found by review round 4's
-fault injection, closed in the same round):
+run_tests() launches a browser, then runs every TC, then closes the browser,
+then prints a summary report — none of that sat inside a try/except until
+round 3, and even after round 3's fix, three more escape hatches remained
+(found by fault injection in later review rounds, closed in the same round
+each was found):
 
-  1. The guard sat *inside* `async with async_playwright() as p:`, so the
-     context manager's own `__aexit__` (driver teardown) was not covered.
-  2. The abort handler printed its diagnostic BEFORE appending the synthetic
-     result — a `print()` failure (stdout closed -> BrokenPipeError) would
-     have skipped `results.append()` entirely, the "diagnostics before
+  1. (round 4) The guard sat *inside* `async with async_playwright() as p:`,
+     so the context manager's own `__aexit__` (driver teardown) was not
+     covered.
+  2. (round 4) The abort handler printed its diagnostic BEFORE appending the
+     synthetic result — a `print()` failure (stdout closed -> BrokenPipeError)
+     would have skipped `results.append()` entirely, the "diagnostics before
      accounting" mistake round 2's MEDIUM 3 fix was supposed to have
      eliminated for good.
+  3. (round 5) The summary-report section itself — printed AFTER the
+     browser-lifecycle guard, on every path including the all-green one —
+     was still unguarded. A failure there (print(), or `_write_junit_xml()`'s
+     file I/O) escaped uncaught, on what review round 5 flagged as the *most
+     likely* path to actually hit it: an otherwise fully successful run
+     (more output printed = more surface for a broken pipe or full disk).
 
 A guard against a false green that nothing tests is exactly the kind of
 decoration this PR spent rounds removing elsewhere in this file. This script
-is that test, in three parts:
+is that test, in four parts:
 
   test_launch_failure_no_false_green()
       Forces `chromium.launch()` to raise (the cheapest place — before any
@@ -44,6 +52,17 @@ is that test, in three parts:
       `results` regardless — proving accounting happens before, and does not
       depend on, the diagnostic print succeeding.
 
+  test_summary_report_failure_on_green_run_preserves_result()
+      Lets ONE fake TC run to a genuine PASS (no real browser/server needed —
+      a fully faked context/page and a no-op TC function), then forces the
+      summary-report print to fail from its very first line. Asserts:
+      `results` still comes back with the correct PASS entry, the exit-code
+      computation `main()` performs is still 0 (a real pass, not a false
+      abort-flavored one), and — this is the design decision review round 5
+      asked to be made deliberately, not left to fall out — the one
+      CI-critical "Total: ..." line still surfaces, via the stderr fallback,
+      even though stdout-based printing failed outright.
+
 Run directly (no demo server, no real browser needed — none of these ever
 get past the monkeypatched Playwright layer):
 
@@ -65,6 +84,8 @@ import wtm_e2e_tests as wtm
 LAUNCH_FAILURE_MESSAGE = "forced browser launch failure for #886 review round 3 verification"
 AEXIT_FAILURE_MESSAGE = "forced async_playwright exit failure"
 ABORT_PRINT_MARKER = "未預期的例外中止了測試迴圈"
+SUMMARY_PRINT_MARKER = "測試報告彙總"
+FAKE_GREEN_TC_NUM = 9001
 
 
 class _ForcedLaunchFailure(RuntimeError):
@@ -124,6 +145,72 @@ class _AexitFailsCM:
         raise _ForcedAexitFailure(AEXIT_FAILURE_MESSAGE)
 
 
+# ─── scenario 4: a genuinely successful run, summary print fails ───────────
+
+class _FakePage:
+    def set_default_timeout(self, ms):
+        pass
+
+    def on(self, event, handler):
+        pass
+
+
+class _FakeContext:
+    async def new_page(self):
+        return _FakePage()
+
+    async def close(self):
+        pass
+
+
+class _GreenRunBrowser:
+    async def new_context(self, **kwargs):
+        return _FakeContext()
+
+    async def close(self):
+        pass
+
+
+class _GreenRunChromium:
+    @staticmethod
+    async def launch(**kwargs):
+        return _GreenRunBrowser()
+
+
+class _GreenRunPlaywrightInstance:
+    chromium = _GreenRunChromium()
+
+
+class _GreenRunCM:
+    async def __aenter__(self):
+        return _GreenRunPlaywrightInstance()
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+async def _fake_instant_pass_tc(page, **_):
+    return  # no real browser interaction needed — an instant, genuine PASS
+
+
+@contextlib.contextmanager
+def _patched_tc_registry_with_fake_green_tc():
+    """Adds one fake, instantly-passing TC to the real TC_REGISTRY for the
+    duration of the `with` block, so run_tests() can produce a genuinely
+    successful `results` entry without touching a real browser or server."""
+    original = dict(wtm.TC_REGISTRY)
+    wtm.TC_REGISTRY[FAKE_GREEN_TC_NUM] = (
+        "fake instant-pass TC for #886 review round 5 verification",
+        _fake_instant_pass_tc,
+        "P0",
+    )
+    try:
+        yield
+    finally:
+        wtm.TC_REGISTRY.clear()
+        wtm.TC_REGISTRY.update(original)
+
+
 @contextlib.contextmanager
 def _patched_async_playwright(fake_cm_factory):
     original = pw_api.async_playwright
@@ -163,6 +250,14 @@ async def _run(tc_nums):
     with contextlib.redirect_stdout(captured):
         results = await wtm.run_tests(tc_nums=tc_nums, headless=True)
     return results, captured.getvalue()
+
+
+async def _run_capturing_both(tc_nums):
+    captured_out = io.StringIO()
+    captured_err = io.StringIO()
+    with contextlib.redirect_stdout(captured_out), contextlib.redirect_stderr(captured_err):
+        results = await wtm.run_tests(tc_nums=tc_nums, headless=True)
+    return results, captured_out.getvalue(), captured_err.getvalue()
 
 
 def test_launch_failure_no_false_green():
@@ -261,12 +356,87 @@ def test_abort_report_print_failure_does_not_lose_result():
     print("PASS\n")
 
 
+def test_summary_report_failure_on_green_run_preserves_result():
+    print("=== test_summary_report_failure_on_green_run_preserves_result ===")
+    escaped = None
+    results = None
+    output = ""
+    stderr_output = ""
+    try:
+        with _patched_tc_registry_with_fake_green_tc():
+            with _patched_async_playwright(_GreenRunCM):
+                # Fails on the summary section's very first print — the
+                # closest thing to "the whole section can't reach stdout".
+                with _print_that_raises_on_marker(
+                    SUMMARY_PRINT_MARKER, RuntimeError("forced summary-report print failure")
+                ):
+                    results, output, stderr_output = asyncio.run(
+                        _run_capturing_both([FAKE_GREEN_TC_NUM])
+                    )
+    except Exception as e:  # noqa: BLE001 — this IS the failure mode under test
+        escaped = e
+
+    assert escaped is None, (
+        f"SUMMARY_PRINT ESCAPED={type(escaped).__name__}: {escaped} "
+        f"RESULTS={results if results is not None else '[]'}"
+    )
+    print("summary-report print failure did not escape run_tests()")
+
+    # --- design decision, point 1: `results` — and therefore the exit code
+    # main() computes from it — is always correct, regardless of what could
+    # be printed. This is a REAL pass (one fake TC, no failures anywhere),
+    # not the abort scenarios above — the point of this test is that a
+    # print failure must not corrupt or lose data that was never wrong.
+    assert results is not None and len(results) == 1, f"expected exactly one result, got {results}"
+    fake_result = results[0]
+    assert fake_result["tc"] == FAKE_GREEN_TC_NUM, fake_result
+    assert fake_result["status"] == "PASS", (
+        f"RESULT CORRUPTED: expected a genuine PASS, got {fake_result} — a "
+        "summary-report failure must not change what actually happened"
+    )
+    print(f"Result preserved: {fake_result}")
+
+    failed = sum(1 for r in results if r["status"] in ("FAIL", "ERROR"))
+    assert failed == 0, (
+        f"main() would exit non-zero on a genuinely passing run — failed={failed}. "
+        "A print failure must never change the exit code."
+    )
+    print(f"main()'s exit-code check: failed={failed} -> sys.exit(0) (correct — a real pass)")
+
+    # --- design decision, point 2: the one CI-critical line still surfaces,
+    # via a stderr fallback, even though stdout-based printing failed
+    # outright. This is the deliberate choice review round 5 asked for —
+    # silence is the last resort, not the first one, and a pass that could
+    # not print its summary must not read as indistinguishable from a pass
+    # that printed nothing because nothing ran.
+    stdout_total_lines = [line for line in output.splitlines() if "Total:" in line]
+    assert stdout_total_lines == [], (
+        "test setup problem: the forced print failure didn't actually prevent "
+        f"the stdout Total line, this proof is invalid. stdout={output!r}"
+    )
+    stderr_total_lines = [line for line in stderr_output.splitlines() if "Total:" in line]
+    assert len(stderr_total_lines) == 1, (
+        "DESIGN DECISION VIOLATED: when the summary can't reach stdout, the "
+        "CI-critical Total line must still be attempted on stderr as a "
+        f"fallback — none was found. stderr={stderr_output!r}"
+    )
+    fallback_line = stderr_total_lines[0]
+    print(f"Fallback stderr line: {fallback_line!r}")
+    assert "PASS: 1" in fallback_line and "FAIL: 0" in fallback_line and "ERROR: 0" in fallback_line, (
+        f"fallback line has wrong counts for a 1-TC all-green run: {fallback_line!r}"
+    )
+    print("PASS\n")
+
+
 def main():
     test_launch_failure_no_false_green()
     test_aexit_failure_does_not_escape()
     test_abort_report_print_failure_does_not_lose_result()
+    test_summary_report_failure_on_green_run_preserves_result()
     print("ALL CHECKS PASSED — an aborted run cannot read as a CI-green pass, "
-          "and no lifecycle or diagnostic failure along that path can lose the result.")
+          "no lifecycle or diagnostic failure along that path can lose the "
+          "result, and a summary-report failure on a genuine pass neither "
+          "corrupts the result nor goes completely silent.")
 
 
 if __name__ == "__main__":
