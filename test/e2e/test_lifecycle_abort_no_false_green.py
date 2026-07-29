@@ -1,104 +1,174 @@
 """
-Regression test for issue #886 (PR #897) review round 3.
+Regression tests for issue #886 (PR #897) review rounds 3-4.
 
 What this guards against
 =========================
 run_tests() launches a browser, then runs every TC, then closes the browser —
-none of that lifecycle work sat inside a try/except until round 3. If any of
-it raises (browser crash, `context.close()` failing, etc. — see the lifecycle
-audit table in the PR), the exception used to escape run_tests() entirely,
-skipping the summary report and JUnit XML below it no matter how many TCs had
-already completed correctly.
+none of that lifecycle work sat inside a try/except until round 3, and even
+after round 3's fix, two escape hatches remained (found by review round 4's
+fault injection, closed in the same round):
 
-The fix wraps that lifecycle work in a try/except that appends a synthetic
-"SUITE-ABORT" ERROR result before falling through to the summary code — but a
-guard against a false green that nothing tests is exactly the kind of
-decoration this PR spent three rounds removing elsewhere in this file. This
-script is that test: it forces an abort as cheaply as possible (monkeypatching
-`playwright.async_api.async_playwright` so `chromium.launch()` raises before
-any real browser, page, or HTTP server is ever needed) and asserts the emitted
-summary line does NOT read as green under this repo's own documented CI
-convention — not a paraphrase of it.
+  1. The guard sat *inside* `async with async_playwright() as p:`, so the
+     context manager's own `__aexit__` (driver teardown) was not covered.
+  2. The abort handler printed its diagnostic BEFORE appending the synthetic
+     result — a `print()` failure (stdout closed -> BrokenPipeError) would
+     have skipped `results.append()` entirely, the "diagnostics before
+     accounting" mistake round 2's MEDIUM 3 fix was supposed to have
+     eliminated for good.
 
-That convention, verbatim from /CLAUDE.md's "CI red does not mean failed"
-section:
+A guard against a false green that nothing tests is exactly the kind of
+decoration this PR spent rounds removing elsewhere in this file. This script
+is that test, in three parts:
 
-    e2e -> `FAIL: 0` **and** `ERROR: 0` in the
-    `Total: N | PASS: n | FAIL: n | ERROR: n | SKIP: n` summary line
+  test_launch_failure_no_false_green()
+      Forces `chromium.launch()` to raise (the cheapest place — before any
+      real browser, page, or HTTP server is ever touched) and asserts the
+      emitted summary line does NOT read as green under this repo's own
+      documented CI convention, verbatim from /CLAUDE.md's "CI red does not
+      mean failed" section (not a paraphrase of it):
 
-So the check here is exactly that: does the summary line contain the literal
-substrings "FAIL: 0" and "ERROR: 0"? Before this fix, an abort at
-`browser.launch()` produced "Total: 0 | PASS: 0 | FAIL: 0 | ERROR: 0 | SKIP: 0"
-— both substrings present, i.e. a suite that never launched read as a perfect
-green by this repo's own rule. After the fix, "ERROR: 0" must not appear.
+          e2e -> `FAIL: 0` **and** `ERROR: 0` in the
+          `Total: N | PASS: n | FAIL: n | ERROR: n | SKIP: n` summary line
 
-Run directly (no demo server, no real browser needed — this never gets past
-the monkeypatched chromium.launch()):
+  test_aexit_failure_does_not_escape()
+      Lets `chromium.launch()` and `browser.close()` succeed (with `tc_nums`
+      empty so no real TC is attempted), then forces the *context manager's*
+      `__aexit__` to raise. Asserts run_tests() still returns normally with a
+      synthetic ERROR result, instead of the exception escaping past the
+      `try` the way review round 4 proved it did before this fix
+      (`async_exit ESCAPED=RuntimeError ... SUMMARY=[]`).
+
+  test_abort_report_print_failure_does_not_lose_result()
+      Forces both the launch failure AND the abort handler's own diagnostic
+      print to raise. Asserts the synthetic SUITE-ABORT result is still in
+      `results` regardless — proving accounting happens before, and does not
+      depend on, the diagnostic print succeeding.
+
+Run directly (no demo server, no real browser needed — none of these ever
+get past the monkeypatched Playwright layer):
 
     cd test/e2e && python test_lifecycle_abort_no_false_green.py
 
-Exits 0 and prints "ALL CHECKS PASSED" on success; asserts (non-zero exit,
-traceback) on any regression.
+Exits 0 and prints "ALL CHECKS PASSED" on success; a failed assertion prints
+its message and exits non-zero.
 """
 
 import asyncio
+import builtins
 import contextlib
 import io
-import sys
 
 import playwright.async_api as pw_api
 
 import wtm_e2e_tests as wtm
 
-FORCED_MESSAGE = "forced browser launch failure for #886 review round 3 verification"
+LAUNCH_FAILURE_MESSAGE = "forced browser launch failure for #886 review round 3 verification"
+AEXIT_FAILURE_MESSAGE = "forced async_playwright exit failure"
+ABORT_PRINT_MARKER = "未預期的例外中止了測試迴圈"
 
 
 class _ForcedLaunchFailure(RuntimeError):
     pass
 
 
-class _FakeChromium:
+class _ForcedAexitFailure(RuntimeError):
+    pass
+
+
+class _ForcedAbortPrintFailure(RuntimeError):
+    pass
+
+
+# ─── scenario 1: chromium.launch() raises (row 3 — cheapest to force) ──────
+
+class _LaunchFailsChromium:
     @staticmethod
     async def launch(**kwargs):
-        # This is "row 3" from the PR's lifecycle audit table: the cheapest
-        # place to force an abort, because it fires before run_tests() has
-        # created a single context/page or touched a real server.
-        raise _ForcedLaunchFailure(FORCED_MESSAGE)
+        raise _ForcedLaunchFailure(LAUNCH_FAILURE_MESSAGE)
 
 
-class _FakePlaywrightInstance:
-    chromium = _FakeChromium()
+class _LaunchFailsPlaywrightInstance:
+    chromium = _LaunchFailsChromium()
 
 
-class _FakeAsyncPlaywrightCM:
+class _LaunchFailsCM:
     async def __aenter__(self):
-        return _FakePlaywrightInstance()
+        return _LaunchFailsPlaywrightInstance()
 
     async def __aexit__(self, exc_type, exc, tb):
         return False  # never suppress — matches the real async_playwright()'s contract
 
 
-def _fake_async_playwright():
-    return _FakeAsyncPlaywrightCM()
+# ─── scenario 2: launch/close succeed, __aexit__ raises (row 12) ───────────
+
+class _FakeBrowser:
+    async def close(self):
+        pass  # tc_nums=[] below, so nothing ever opened a context on this browser
 
 
-async def _run_forced_abort():
+class _AexitFailsChromium:
+    @staticmethod
+    async def launch(**kwargs):
+        return _FakeBrowser()
+
+
+class _AexitFailsPlaywrightInstance:
+    chromium = _AexitFailsChromium()
+
+
+class _AexitFailsCM:
+    async def __aenter__(self):
+        return _AexitFailsPlaywrightInstance()
+
+    async def __aexit__(self, exc_type, exc, tb):
+        raise _ForcedAexitFailure(AEXIT_FAILURE_MESSAGE)
+
+
+@contextlib.contextmanager
+def _patched_async_playwright(fake_cm_factory):
+    original = pw_api.async_playwright
     # run_tests() does `from playwright.async_api import async_playwright`
     # *inside* the function body, resolved at call time — patching the module
     # attribute before calling it is enough, no need to touch run_tests() itself.
-    original = pw_api.async_playwright
-    pw_api.async_playwright = _fake_async_playwright
+    pw_api.async_playwright = fake_cm_factory
     try:
-        captured = io.StringIO()
-        with contextlib.redirect_stdout(captured):
-            results = await wtm.run_tests(tc_nums=[1, 2, 3], headless=True)
-        return results, captured.getvalue()
+        yield
     finally:
         pw_api.async_playwright = original
 
 
-def main():
-    results, output = asyncio.run(_run_forced_abort())
+@contextlib.contextmanager
+def _print_that_raises_on_marker(marker, exc):
+    """Delegates to the real print() for everything except a message containing
+    `marker`, which raises `exc` instead — targets exactly one diagnostic call
+    site without breaking every other print() in the process (including this
+    test's own reporting)."""
+    real_print = builtins.print
+
+    def fake_print(*args, **kwargs):
+        text = " ".join(str(a) for a in args)
+        if marker in text:
+            raise exc
+        return real_print(*args, **kwargs)
+
+    builtins.print = fake_print
+    try:
+        yield
+    finally:
+        builtins.print = real_print
+
+
+async def _run(tc_nums):
+    captured = io.StringIO()
+    with contextlib.redirect_stdout(captured):
+        results = await wtm.run_tests(tc_nums=tc_nums, headless=True)
+    return results, captured.getvalue()
+
+
+def test_launch_failure_no_false_green():
+    print("=== test_launch_failure_no_false_green ===")
+    with _patched_async_playwright(_LaunchFailsCM):
+        results, output = asyncio.run(_run([1, 2, 3]))
 
     summary_lines = [line for line in output.splitlines() if line.strip().startswith("Total:")]
     assert len(summary_lines) == 1, (
@@ -118,12 +188,11 @@ def main():
         f"still reads as passing under this repo's own CI convention: {summary_line!r}"
     )
 
-    # --- the synthetic result itself ---
     abort_entries = [r for r in results if r.get("tc") == "SUITE-ABORT"]
     assert len(abort_entries) == 1, f"expected exactly one SUITE-ABORT entry, got {abort_entries}"
     abort_entry = abort_entries[0]
     assert abort_entry["status"] == "ERROR", abort_entry
-    assert FORCED_MESSAGE in abort_entry["error"], (
+    assert LAUNCH_FAILURE_MESSAGE in abort_entry["error"], (
         f"synthetic entry doesn't mention what actually aborted: {abort_entry['error']!r}"
     )
     assert "3/3" in abort_entry["error"] or "[1, 2, 3]" in abort_entry["error"], (
@@ -135,8 +204,69 @@ def main():
     failed = sum(1 for r in results if r["status"] in ("FAIL", "ERROR"))
     assert failed > 0, "main() would exit 0 on an aborted run — sys.exit(1 if failed > 0 else 0)"
     print(f"main()'s exit-code check: failed={failed} -> sys.exit(1) (non-zero, correct)")
+    print("PASS\n")
 
-    print("\nALL CHECKS PASSED — an aborted run cannot read as a CI-green pass.")
+
+def test_aexit_failure_does_not_escape():
+    print("=== test_aexit_failure_does_not_escape ===")
+    escaped = None
+    results = None
+    try:
+        with _patched_async_playwright(_AexitFailsCM):
+            # tc_nums=[]: no real TC is attempted, isolating this test to
+            # exactly one thing — does __aexit__'s own exception get caught?
+            results, output = asyncio.run(_run([]))
+    except Exception as e:  # noqa: BLE001 — this IS the failure mode under test
+        escaped = e
+
+    assert escaped is None, (
+        f"async_exit ESCAPED={type(escaped).__name__}: {escaped} "
+        f"SUMMARY={results if results is not None else '[]'}"
+    )
+    print("async_exit did not escape run_tests()")
+
+    abort_entries = [r for r in results if r.get("tc") == "SUITE-ABORT"]
+    assert len(abort_entries) == 1, f"expected exactly one SUITE-ABORT entry, got {abort_entries}"
+    assert AEXIT_FAILURE_MESSAGE in abort_entries[0]["error"], abort_entries[0]
+    print(f"Synthetic result: {abort_entries[0]}")
+    print("PASS\n")
+
+
+def test_abort_report_print_failure_does_not_lose_result():
+    print("=== test_abort_report_print_failure_does_not_lose_result ===")
+    escaped = None
+    results = None
+    try:
+        with _patched_async_playwright(_LaunchFailsCM):
+            with _print_that_raises_on_marker(ABORT_PRINT_MARKER, _ForcedAbortPrintFailure(
+                "forced abort-report print failure"
+            )):
+                results, output = asyncio.run(_run([1, 2, 3]))
+    except Exception as e:  # noqa: BLE001 — this IS the failure mode under test
+        escaped = e
+
+    assert escaped is None, (
+        f"ABORT_PRINT ESCAPED={type(escaped).__name__}: {escaped} "
+        f"SUMMARY={results if results is not None else '[]'}"
+    )
+    print("abort-report print failure did not escape run_tests()")
+
+    abort_entries = [r for r in results if r.get("tc") == "SUITE-ABORT"]
+    assert len(abort_entries) == 1, (
+        "RESULT LOST: the synthetic ERROR entry is missing after a forced print "
+        f"failure — accounting depended on diagnostics succeeding. results={results}"
+    )
+    assert abort_entries[0]["status"] == "ERROR", abort_entries[0]
+    print(f"Synthetic result survived the print failure: {abort_entries[0]}")
+    print("PASS\n")
+
+
+def main():
+    test_launch_failure_no_false_green()
+    test_aexit_failure_does_not_escape()
+    test_abort_report_print_failure_does_not_lose_result()
+    print("ALL CHECKS PASSED — an aborted run cannot read as a CI-green pass, "
+          "and no lifecycle or diagnostic failure along that path can lose the result.")
 
 
 if __name__ == "__main__":

@@ -2791,8 +2791,15 @@ async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
     SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
     results = []
-    async with async_playwright() as p:
-        try:
+    try:
+        # issue #886 review round 4 (gap 1): the guard used to sit *inside*
+        # `async with async_playwright() as p:`, so the context manager's own
+        # __aexit__ (driver teardown) was not covered — an exception raised
+        # there escaped exactly like the calls in the lifecycle table did
+        # before round 3. This is row 12 from that table, the one flagged as
+        # "can't be wrapped line-by-line" — it can, by moving the guard to
+        # wrap the whole `async with` statement instead of just its body.
+        async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=headless,
                 slow_mo=slow_mo,
@@ -2952,47 +2959,55 @@ async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
                 await context.close()
 
             await browser.close()
-        except Exception as e:
-            # issue #886 review round 3 (MEDIUM): rows 4/5/10/11 from the
-            # lifecycle audit table (per-TC context/page setup, the unconditional
-            # `context.close()` after the retry loop, and `browser.close()` after
-            # the whole TC loop) were all unguarded — any of them raising here
-            # used to escape run_tests() entirely, skipping the summary report
-            # and JUnit XML below (`# 彙總報告`, outside this `async with` block)
-            # no matter how many TCs had already completed correctly.
-            #
-            # The obvious fix — catch here and fall through to the existing
-            # summary code — has a worse failure mode than the one it closes:
-            # if NOTHING ran yet (e.g. browser.launch() itself failed), `results`
-            # is still `[]`, and printing "Total: 0 | PASS: 0 | FAIL: 0 |
-            # ERROR: 0 | SKIP: 0" passes this repo's own CI convention (CLAUDE.md:
-            # judge e2e by `FAIL: 0` and `ERROR: 0` in that summary line) — a
-            # suite that never launched would read as a perfect green. That is
-            # exactly the "error state collapsing into a value the caller can't
-            # tell apart from success" defect class this whole PR exists to
-            # close, and it would have been introduced BY this fix. So: always
-            # append a synthetic ERROR result naming what aborted and how many
-            # TCs never ran, so `errors` is never zero here and `ERROR: 0` can't
-            # match — see test_lifecycle_abort_no_false_green.py, which forces
-            # exactly this abort and asserts against that literal string.
-            completed = {r["tc"] for r in results if isinstance(r.get("tc"), int)}
-            remaining = [t for t in tc_nums if t not in completed]
+    except Exception as e:
+        # issue #886 (rounds 3-4): rows 3-7/10/11 from the lifecycle audit table
+        # (browser launch, per-TC context/page setup, the unconditional
+        # `context.close()` after the retry loop, `browser.close()` after the
+        # whole TC loop) plus row 12 (`async with`'s own __aexit__, now covered
+        # by wrapping the whole statement above) were all unguarded — any of
+        # them raising used to escape run_tests() entirely, skipping the
+        # summary report and JUnit XML below (`# 彙總報告`, outside this
+        # try/except) no matter how many TCs had already completed correctly.
+        #
+        # The obvious fix — catch here and fall through to the existing summary
+        # code — has a worse failure mode than the one it closes: if NOTHING ran
+        # yet (e.g. browser.launch() itself failed), `results` is still `[]`,
+        # and printing "Total: 0 | PASS: 0 | FAIL: 0 | ERROR: 0 | SKIP: 0"
+        # passes this repo's own CI convention (CLAUDE.md: judge e2e by
+        # `FAIL: 0` and `ERROR: 0` in that summary line) — a suite that never
+        # launched would read as a perfect green. That's exactly the "error
+        # state collapsing into a value the caller can't distinguish from
+        # success" defect class this whole PR exists to close, and it would
+        # have been introduced BY this fix. So: always append a synthetic
+        # ERROR result naming what aborted and how many TCs never ran, so
+        # `errors` is never zero here and `ERROR: 0` can't match — see
+        # test_lifecycle_abort_no_false_green.py.
+        #
+        # issue #886 review round 4 (gap 2): the first version of this handler
+        # printed the abort diagnostic BEFORE appending that synthetic result —
+        # exactly the "diagnostics before accounting" mistake round 2's MEDIUM 3
+        # fix eliminated from the four pre-existing branches (SKIP/FAIL/RETRY/
+        # ERROR). A print() failure here (stdout closed -> BrokenPipeError) would
+        # have skipped results.append() entirely, losing the one thing this whole
+        # guard exists to guarantee. Accounting first, unconditionally; diagnostics
+        # best-effort after, wrapped so nothing there can undo the append above it.
+        completed = {r["tc"] for r in results if isinstance(r.get("tc"), int)}
+        remaining = [t for t in tc_nums if t not in completed]
+        results.append({
+            "tc": "SUITE-ABORT",
+            "status": "ERROR",
+            "error": (
+                f"測試迴圈提前中止（{type(e).__name__}: {e}）—— "
+                f"{len(remaining)}/{len(tc_nums)} 個 TC 未執行：{remaining}"
+            ),
+            "elapsed": 0,
+            "retries": 0,
+        })
+        try:
             print(f"\n[run_tests] 未預期的例外中止了測試迴圈：{type(e).__name__}: {e}")
-            try:
-                traceback.print_exc()
-            except Exception:
-                pass  # diagnostics only; the synthetic result below is what matters
-            results.append({
-                "tc": "SUITE-ABORT",
-                "status": "ERROR",
-                "error": (
-                    f"測試迴圈提前中止（{type(e).__name__}: {e}）—— "
-                    f"{len(remaining)}/{len(tc_nums)} 個 TC 未執行：{remaining}"
-                ),
-                "elapsed": 0,
-                "retries": 0,
-            })
-
+            traceback.print_exc()
+        except Exception:
+            pass  # diagnostics only; the synthetic result above is already recorded
     # 彙總報告
     print(f"\n{'='*60}")
     print("測試報告彙總")
