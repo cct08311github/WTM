@@ -12,10 +12,15 @@ namespace WalkingTec.Mvvm.WorkFlow.Models;
 /// </summary>
 /// <remarks>
 /// DIRECT descendant of <see cref="PersistPoco"/> and <see cref="ITenant"/> so that
-/// <c>DataContext.OnModelCreating</c> (DataContext.cs:164) auto-applies the
+/// <c>DataContext.OnModelCreating</c> (DataContext.cs:164) is INTENDED to auto-apply the
 /// <c>IsValid == true</c> (soft-delete) and <c>TenantCode == this.TenantCode</c>
-/// (tenant isolation) query filters.  Multi-level inheritance silently skips the filter —
-/// derive directly (spec §3 invariant #2).
+/// (tenant isolation) query filters. <strong>It currently does not (#899)</strong>: WorkFlow's
+/// entity types are registered via <c>ApplyWorkFlowModels()</c> from the consumer's own
+/// <c>DataContext.OnModelCreating</c>, called AFTER <c>base.OnModelCreating()</c> returns, by
+/// which point the filter-applying pass has already finished and cannot see them -- the same
+/// wiring-order bug #862 fixed for the ETL module. Do not rely on tenant isolation for this
+/// entity until #899 lands. Multi-level inheritance would ALSO silently skip the filter once
+/// #899 is fixed -- derive directly (spec §3 invariant #2).
 /// </remarks>
 [AuditChanges]
 public class ProcessDefinition : PersistPoco, ITenant
@@ -24,7 +29,13 @@ public class ProcessDefinition : PersistPoco, ITenant
     [StringLength(50)]
     public string? TenantCode { get; set; }
 
-    /// <summary>Unique business key within a tenant (e.g. "PurchaseApproval").</summary>
+    /// <summary>
+    /// Business key. The schema's unique index is <c>(TenantCode, Code)</c> (composite,
+    /// so two tenants can share a Code by design), but
+    /// <see cref="WalkingTec.Mvvm.WorkFlow.Definition.IWorkflowDefinitionStore.CreateDefinitionAsync"/>'s
+    /// duplicate check currently has no <c>TenantCode</c> predicate, so in practice a Code
+    /// already used by ANY tenant is rejected (#899). Example: "PurchaseApproval".
+    /// </summary>
     [Required]
     [StringLength(100)]
     public string Code { get; set; } = string.Empty;

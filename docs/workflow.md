@@ -12,7 +12,7 @@
 - **Three approval modes** — 串签 (sequential), 会签 (all/joint), 或签 (any-one), each dispatched by one generic `ApproveMode` enum on a single Approval node type.
 - **Race-safe concurrency** via a `GuardedTransition` CAS helper (modeled on `TokenService`) — no double-approvals, no lost-completions.
 - **Opt-in notifications** through the shared `IWtmWebhookSink` (DingTalk / WeCom / Feishu / Slack / Teams).
-- **RBAC + multi-tenant** by construction — all entities are DIRECT `PersistPoco / ITenant` descendants; DataContext auto-applies query filters.
+- **RBAC + multi-tenant** by construction — all entities are DIRECT `PersistPoco / ITenant` descendants. **This is the design intent, not the current state**: `DataContext`'s query filters do not currently reach WorkFlow's entity types because of a registration-order gap (#899) — do not rely on tenant isolation until it lands.
 - **Consumer-owned migrations** — the module ships zero migrations; consumers run `dotnet ef migrations add` against their own `DataContext`.
 
 ### Deferred (roadmap)
@@ -133,10 +133,12 @@ Fields must be declared in `fieldWhitelist` or the routing evaluator fails close
 protected override void OnModelCreating(ModelBuilder modelBuilder)
 {
     base.OnModelCreating(modelBuilder);
-    modelBuilder.ApplyEtlModels(this);    // if also using Etl -- pass `this` (#883, see docs/etl-module.md)
+    modelBuilder.ApplyEtlModels(this);    // if also using Etl -- pass `this`, see note below
     modelBuilder.ApplyWorkFlowModels();   // WorkFlow tables
 }
 ```
+
+If also using Etl, pass `this`: the parameterless `ApplyEtlModels()` overload is `[Obsolete]` -- a recompile emits that warning, but nothing throws at runtime. Registration still succeeds; the four ETL tables just silently lose tenant isolation because the obsolete overload has no way to reach the current context instance and bind the `ITenant` query filter. A NuGet-only upgrade that never recompiles won't even see the warning.
 
 **Step 2** — Generate the migration in your app project:
 
@@ -219,7 +221,7 @@ endpoints are byte-identical.
 | Endpoint | Method | Notes |
 |---|---|---|
 | `api/_workflow/designer/bootstrap` | GET | Antiforgery token, current user display, options echo |
-| `api/_workflow/designer/definitions` | GET | Paged head list with has-draft flag (tenant-filtered) |
+| `api/_workflow/designer/definitions` | GET | Paged head list with has-draft flag (intended to be tenant-filtered; not currently, #899) |
 | `api/_workflow/designer/definitions` | POST | Create head `{code,name,category}`; 409 on duplicate |
 | `api/_workflow/designer/definitions/{code}` | PUT | Update head metadata (Name/Category/IsEnabled) |
 | `api/_workflow/designer/definitions/{code}/graph` | GET | Current version GraphJson (verbatim) + draft info |
@@ -275,7 +277,7 @@ public class WfProcessDefinitionController : BaseController
 }
 ```
 
-The grid is tenant-scoped automatically (DataContext query filter on `TenantCode`). Searcher fields: `Code` (partial match), `Name` (partial match), `Category`, `IsEnabled`. Grid actions include a read-only detail dialog and a version-history dialog.
+The grid is intended to be tenant-scoped via the `DataContext` query filter on `TenantCode`, but that filter does not currently reach `ProcessDefinition` (#899) — treat the grid as unscoped until it lands. Searcher fields: `Code` (partial match), `Name` (partial match), `Category`, `IsEnabled`. Grid actions include a read-only detail dialog and a version-history dialog.
 
 In-grid editing is intentionally absent — definitions are published via the API/designer endpoint.
 

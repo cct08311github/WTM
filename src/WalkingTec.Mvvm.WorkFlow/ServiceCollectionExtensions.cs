@@ -533,12 +533,17 @@ public static class WorkFlowDbContextExtensions
     /// <summary>
     /// Called from the CONSUMER's <c>DataContext.OnModelCreating</c> (NOT from FrameworkContext)
     /// to register all WorkFlow tables, indexes, FK relationships, and per-provider RowVer mapping.
-    /// Mirrors <c>ApplyEtlModels()</c> (ServiceCollectionExtensions.cs:141).
+    /// Called the same way as <c>ApplyEtlModels(this)</c> in WalkingTec.Mvvm.Etl
+    /// (ServiceCollectionExtensions.cs:187) -- from the consumer's own DataContext.OnModelCreating --
+    /// but NOT the same tenant-isolation behavior: that overload applies its own <c>ITenant</c> query
+    /// filters, this method applies none.
     ///
-    /// <para><strong>Does NOT add HasQueryFilter</strong> — the tenant-isolation and soft-delete
-    /// filters are auto-applied by the consumer's <c>DataContext</c> for all entities that are
-    /// DIRECT descendants of <c>PersistPoco</c>/<c>BasePoco</c> and implement <c>ITenant</c>
-    /// (DataContext.cs:164).</para>
+    /// <para><strong>Does NOT add HasQueryFilter itself.</strong> This comment used to assert those
+    /// filters are auto-applied by the consumer's <c>DataContext</c> for every <c>ITenant</c> entity
+    /// that is a DIRECT descendant of <c>PersistPoco</c>/<c>BasePoco</c> (DataContext.cs:164) -- the
+    /// same auto-wiring assumption #862 disproved for ETL's identical zero-arg overload. Do not rely
+    /// on that claim for WorkFlow's own <c>ITenant</c> entities until #899 (which tracks re-verifying
+    /// and, if needed, fixing this the same way #862 fixed it for ETL) is resolved.</para>
     ///
     /// <para><strong>EF migrations — consumer owns them.</strong>
     /// <c>WalkingTec.Mvvm.WorkFlow</c> ships ZERO migrations (same as Etl).

@@ -14,7 +14,7 @@
 
 ### 1.1 What this is
 
-`WalkingTec.Mvvm.WorkFlow` is a greenfield sibling library (peer to `WalkingTec.Mvvm.Etl`) that adds a **Chinese-corporate approval/workflow engine** to WTM: 串签 / 会签 / 或签 / 加签 / 委托 / 撤回 / 回退 / 条件路由 / 抄送 / 超时, version-pinned definitions, sandboxed routing, race-safe transitions, multi-tenant + audited by construction, with an opt-in low-code designer.
+`WalkingTec.Mvvm.WorkFlow` is a greenfield sibling library (peer to `WalkingTec.Mvvm.Etl`) that adds a **Chinese-corporate approval/workflow engine** to WTM: 串签 / 会签 / 或签 / 加签 / 委托 / 撤回 / 回退 / 条件路由 / 抄送 / 超时, version-pinned definitions, sandboxed routing, race-safe transitions, audited by construction, with an opt-in low-code designer. **Multi-tenant is the design intent, not the current state**: the tenant query filter does not currently reach WorkFlow's entity types (#899 — see §1.2 and §8.2).
 
 ### 1.2 Backbone + grafts
 
@@ -26,7 +26,7 @@
 - **Honest auditability disclosure**: `[AuditChanges]`/ChangeLog does **not** capture engine `ExecuteUpdateAsync` writes (they bypass the EF change-tracker), so the immutable append-only `WorkflowEventLog` is the authoritative engine audit.
 
 **Grafted from Integration-first:**
-- Model the whole domain as **ordinary WTM Models** so BaseVM CRUD/Search, code-gen, RBAC, `[AuditChanges]`, tenant filters, and `IWtmWebhookSink` apply with near-zero net-new plumbing.
+- Model the whole domain as **ordinary WTM Models** so BaseVM CRUD/Search, code-gen, RBAC, `[AuditChanges]`, and `IWtmWebhookSink` apply with near-zero net-new plumbing. **Tenant filters were also assumed to come for free here — that assumption was wrong (#899, same registration-order gap #862 found for the ETL module): "ordinary WTM Model" alone does not make the filter apply when the type is registered via a bolt-on `ApplyXModels()` call after `base.OnModelCreating()`.**
 - The exact `AddWtmEtl`/`AddWtmEtlAlerts` DI split and the optional-`IWtmWebhookSink`-via-`GetService` null-safe pattern.
 
 ### 1.3 Weaknesses the judges raised — and how this spec fixes each
@@ -49,7 +49,7 @@
 ### 1.4 Non-negotiable invariants
 
 1. **Every state-changing operation routes through `GuardedTransition`** (guard-in-WHERE CAS, branch on rows-affected). No direct `SaveChanges`-based state flip for transitions.
-2. **Every entity is a DIRECT `: PersistPoco, ITenant` (or `: BasePoco, ITenant`) descendant.** A test asserts `HasQueryFilter` is present on each.
+2. **Every entity is a DIRECT `: PersistPoco, ITenant` (or `: BasePoco, ITenant`) descendant** (verified true in the shipped code). A test asserts `HasQueryFilter` is present on each — **that test does not currently prove tenant isolation in production**; see §8.2 and §10 (#899).
 3. **Definitions are immutable + version-pinned.** Instances FK the *version*, never the head. No `DoEdit` path on `ProcessDefinitionVersion`; `[BindNever]` on its write surface (mirrors #123).
 4. **Routing is whitelist + closed-enum + Expression-Tree only.** No Roslyn / DynamicLinq / string-eval. Fail-closed on no-match.
 5. **All timestamps via `Wtm.TimeProvider`**, never `DateTime.Now`.
@@ -179,10 +179,12 @@ public static class ServiceCollectionExtensions
 
 public static class WorkFlowDbContextExtensions
 {
-    /// Called from the CONSUMER's DataContext.OnModelCreating (NOT from FrameworkContext) — exactly
-    /// mirroring how ApplyEtlModels() works (ServiceCollectionExtensions.cs:141; consumer DataContext.cs:349).
+    /// Called from the CONSUMER's DataContext.OnModelCreating (NOT from FrameworkContext) — same
+    /// calling convention as ApplyEtlModels(this) in WalkingTec.Mvvm.Etl
+    /// (ServiceCollectionExtensions.cs:187; consumer DataContext.cs:354), but NOT the same
+    /// tenant-isolation behavior: that overload applies its own ITenant filters, this method
+    /// applies none (tracked gap: #899).
     /// Registers all WorkFlow entities with ToTable/HasIndex/HasOne/RowVer mapping.
-    /// Does NOT add HasQueryFilter — auto-applied by DataContext for ITenant/IPersistPoco.
     public static ModelBuilder ApplyWorkFlowModels(this ModelBuilder builder) { /* §11 */ return builder; }
 }
 ```
@@ -347,7 +349,7 @@ A `Condition` node has no human task; transitions instantly when reached. Ordere
 
 ### 5.9 抄送 (CC, notify-only) — *MVP*
 `Cc` node or `cc[]` on an approval node. **Structurally cannot block:** creates `CcRecord` rows and continues in the SAME transaction (no task, no wait). Recipients notified via `IWtmWebhookSink`. May mark-read/comment but CANNOT approve/reject. Triggers: `OnSubmit/OnNode/OnComplete`.
-- **Edge:** a CC recipient who is also a later approver — roles kept separate. "must-acknowledge-before-proceed" is NOT 抄送 → a separate `Ack` node (Wave 3). CC respects tenant-isolation + permission.
+- **Edge:** a CC recipient who is also a later approver — roles kept separate. "must-acknowledge-before-proceed" is NOT 抄送 → a separate `Ack` node (Wave 3). CC is DESIGNED to respect tenant-isolation + permission, but like every other WorkFlow entity, tenant-isolation is not currently wired (§8.2, #899) — permission (the `FunctionPrivilege` gate) is unaffected and still applies.
 
 ### 5.10 超时 (Timeout) — *Wave 5; schema PRESENT Sprint-1*
 > **Engine behavior for this mode is DEFERRED to Wave 5 and is NOT yet specified to implementation depth.** Open question: `AutoApprove` side-effect ordering vs the irreversibility warning (who fires first when both fire within the same GuardedTransition window?).
@@ -437,8 +439,8 @@ If `Oracle.EntityFrameworkCore` 10.x fails to translate a specific guarded `Exec
 - `ProcessDefinition` CRUD via `BaseCRUDVM<ProcessDefinition>`; inbox via `BasePagedListVM<ApprovalTask, ...>` filtered by `AssigneeITCode == Wtm.LoginUserInfo.ITCode + State==Pending`; `DelegationRule` via `BaseCRUDVM`. Definitions/inbox get list/search/sort/export/code-gen for free.
 - Approve/Reject/Withdraw/Return/AddApprover/Transfer are NOT CRUD — a thin `WorkflowActionVM : BaseVM` delegates to `IWorkflowEngine`. **Controllers never touch `DC` directly** (red line).
 
-### 8.2 Tenant isolation + soft-delete (free, but guarded)
-Every entity is a DIRECT `: PersistPoco/BasePoco, ITenant` descendant, so `DataContext.OnModelCreating` (`DataContext.cs:162`) auto-applies `IsValid==true` + `TenantCode==this.TenantCode` query filters. **A test asserts `HasQueryFilter` is present on each WorkFlow entity.**
+### 8.2 Tenant isolation + soft-delete (design intent — NOT currently wired, see #899)
+Every entity is a DIRECT `: PersistPoco/BasePoco, ITenant` descendant, and `DataContext.OnModelCreating` (`DataContext.cs:162`) auto-applies `IsValid==true` + `TenantCode==this.TenantCode` query filters to every entity type it can see at that point — **but WorkFlow's entity types are not among them**. `ApplyWorkFlowModels()` registers them from the consumer's own `DataContext.OnModelCreating`, called AFTER `base.OnModelCreating()` returns, by which point the Pass 2 filter loop has already finished iterating `modelBuilder.Model.GetEntityTypes()` and cannot retroactively see them — the same wiring-order bug #862 fixed for ETL. **A test asserts `HasQueryFilter` is present on each WorkFlow entity, but that test builds its own context that declares the entities' `DbSet`s directly and re-applies the filters by hand — it does not exercise production wiring and does not fail today.** Tracked in #899; do not rely on tenant isolation for WorkFlow entities until it lands.
 
 ### 8.3 RBAC — who-can-act
 Acting user via `Wtm.LoginUserInfo.ITCode`. Approver-eligibility = `ApprovalTask.AssigneeITCode` match PLUS a page-level `[ActionDescription]`/`FunctionPrivilege` gate on every controller action (the #194 hardening). `IApproverResolver` (role / user / `ManagerChain`) reads `FrameworkUserRole`/`FunctionPrivilege` via the `LoginUserInfo`/`LoadBasicInfoAsync` seams; closed `Result` contract with mandatory caps + cycle detection + admin fallback (W9).
@@ -525,7 +527,7 @@ public class WorkFlowOptions
 - **T-PROV-0 (Sprint-0 spike, build-failing gate):** CAS winner=1 / loser=0 proven on SQLite first; then extended to all 6 relational providers in Sprint-1.
 - **T-PROV (ProviderConformance, nightly/release):** CAS winner=1 / loser=0 on **SqlServer, PgSql, MySql, SQLite, Oracle, DaMeng** — build fails if any no-ops the guard. Memory excluded (unsupported; startup guard tested separately).
 
-**Invariant tests:** `HasQueryFilter` present on every entity (tenant-leak guard); `ProcessDefinitionVersion` has no `DoEdit` path + `ContentHash` matches `GraphJson`; routing evaluator rejects off-whitelist field + caps `In` at 100 (`AnalysisQueryEngine.Filters.cs:84`); canonical-JSON determinism; `DBTypeEnum.Memory` startup guard throws.
+**Invariant tests:** `HasQueryFilter` present on every entity (tenant-leak guard — **see #899: the existing test proves the filter expression is correct, not that production wiring applies it; it uses its own DbSet-declaring context and hand-applies the filters, so it stays green even when the real wiring is broken**); `ProcessDefinitionVersion` has no `DoEdit` path + `ContentHash` matches `GraphJson`; routing evaluator rejects off-whitelist field + caps `In` at 100 (`AnalysisQueryEngine.Filters.cs:84`); canonical-JSON determinism; `DBTypeEnum.Memory` startup guard throws.
 
 > CI note: **Any PR touching TokenService-adjacent transition logic or controllers MUST also run `WalkingTec.Mvvm.Mvc.Tests`** (the #119/#162 lesson). Read CI logs for `Test Run Successful` rather than trusting the Gitea conclusion (#11 caveat).
 
@@ -535,11 +537,11 @@ public class WorkFlowOptions
 
 ### How `ApplyWorkFlowModels` is called (HIGH-1 fix)
 
-**`ApplyWorkFlowModels` is called from the CONSUMER's own `DataContext.OnModelCreating`, NOT from the framework's `FrameworkContext`.** This is the exact pattern used by `ApplyEtlModels`:
-- Definition: `ServiceCollectionExtensions.cs:141` (`public static ModelBuilder ApplyEtlModels(this ModelBuilder builder)`)
-- Consumer call site: `demo/WalkingTec.Mvvm.Demo/DataContext.cs:349` (`modelBuilder.ApplyEtlModels();`)
+**`ApplyWorkFlowModels` is called from the CONSUMER's own `DataContext.OnModelCreating`, NOT from the framework's `FrameworkContext`** — the same calling convention `ApplyEtlModels` uses:
+- `ApplyEtlModels(this ModelBuilder builder, EmptyContext context)` (`ServiceCollectionExtensions.cs:187` in `WalkingTec.Mvvm.Etl`) — the parameterless overload at `:213` is `[Obsolete]`: it cannot bind the `ITenant` filter to the current context instance
+- Consumer call site: `demo/WalkingTec.Mvvm.Demo/DataContext.cs:354` (`modelBuilder.ApplyEtlModels(this);`)
 
-`FrameworkContext` is a framework-internal context (`DataContext.cs:36`). The tenant + soft-delete query filters applied by `DataContext.OnModelCreating` (`DataContext.cs:162`) are auto-wired for `ITenant`/`IPersistPoco` types that derive from root types — this works correctly for WorkFlow entities because consumers inherit from `DataContext`.
+**This is where the similarity ends.** `ApplyEtlModels(this)` applies four explicit `ITenant` query filters itself. `ApplyWorkFlowModels()` applies none — `FrameworkContext.OnModelCreating`'s Pass 2 filter loop (`DataContext.cs:162`) has already finished iterating `modelBuilder.Model.GetEntityTypes()` by the time `base.OnModelCreating()` returns and `ApplyWorkFlowModels()` runs, so it cannot retroactively see WorkFlow's entity types — the same wiring-order bug #862 fixed for ETL. Tracked as **#899**; do not rely on WorkFlow's `ITenant` entities being tenant-isolated until it lands.
 
 ### What `ApplyWorkFlowModels` declares
 
@@ -547,7 +549,7 @@ public class WorkFlowOptions
 - Indexes per §3.
 - FK relationships (`HasOne().WithMany()`, `OnDelete(Restrict)`).
 - **Per-provider `RowVer` mapping** (§7.2: `IsRowVersion()` on SqlServer; `UseXminAsConcurrencyToken()` on PgSql; `uint` with `IsConcurrencyToken()` on SQLite/MySql/Oracle/DaMeng — selected by `Database.ProviderName` at model-build).
-- Does NOT add `HasQueryFilter` — auto-applied by the consumer's `DataContext`.
+- Does NOT add `HasQueryFilter` itself, and — unlike what this section used to say — that is **not** made up for elsewhere: see "This is where the similarity ends" above and #899.
 
 ### EF migration — consumer owns it
 

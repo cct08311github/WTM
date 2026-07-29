@@ -23,16 +23,20 @@ namespace WalkingTec.Mvvm.WorkFlow.Definition;
 /// graph fetch.  The interface deliberately excludes any version update or delete
 /// operation — published versions are immutable once written (spec §3.2, T-DSN-14).</para>
 ///
-/// <para>Tenant isolation is automatic: all implementations apply the DataContext
-/// tenant query filter via LINQ queries scoped to the current <c>IDataContext</c>
-/// (the same filter applied by <see cref="ProcessDefinitionPublisher"/>).</para>
+/// <para><strong>Tenant isolation is NOT currently automatic (#899).</strong> The design intent
+/// is that implementations rely on the DataContext tenant query filter via LINQ queries scoped
+/// to the current <c>IDataContext</c>, but that filter does not currently reach WorkFlow's
+/// entity types (registration-order gap, same root cause #862 fixed for the ETL module).
+/// Do not assume queries here are tenant-scoped until #899 lands.</para>
 /// </summary>
 public interface IWorkflowDefinitionStore
 {
     // ── Head catalog ──────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Return a paged list of definition heads visible to the current tenant.
+    /// Return a paged list of definition heads. Intended to be scoped to the current tenant,
+    /// but the tenant filter does not currently reach <c>ProcessDefinition</c> (#899) -- treat
+    /// the list as global (all tenants) until it lands.
     ///
     /// <para>Each item includes: Code, Name, Category, IsEnabled, CurrentVersionNo
     /// (0 if never published), and a flag indicating whether an in-progress draft exists
@@ -60,7 +64,11 @@ public interface IWorkflowDefinitionStore
     /// <returns>
     /// <see cref="CreateDefinitionOutcome.Created"/> on success;
     /// <see cref="CreateDefinitionOutcome.DuplicateCode"/> when <paramref name="request.Code"/>
-    /// already exists in this tenant.
+    /// already exists. <strong>Currently checked globally, not per-tenant</strong>: the
+    /// duplicate check has no <c>TenantCode</c> predicate, so a code already used by a
+    /// DIFFERENT tenant is also rejected here, even though the underlying
+    /// <c>(TenantCode, Code)</c> composite unique index would permit reuse across tenants
+    /// (#899).
     /// </returns>
     Task<CreateDefinitionResult> CreateDefinitionAsync(
         CreateDefinitionRequest request,
@@ -71,12 +79,16 @@ public interface IWorkflowDefinitionStore
     /// <summary>
     /// Update mutable head metadata: Name, Category, and/or IsEnabled.
     /// </summary>
-    /// <param name="code">Definition code (unique within tenant).</param>
+    /// <param name="code">Definition code. Design intent is uniqueness within a tenant, but
+    /// duplicate-checking is currently global, not per-tenant -- see
+    /// <see cref="CreateDefinitionAsync"/>'s remarks (#899).</param>
     /// <param name="request">Fields to update.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>
-    /// <c>true</c> when the update succeeded; <c>false</c> when the definition was not found
-    /// (or soft-deleted) in the current tenant scope.
+    /// <c>true</c> when the update succeeded; <c>false</c> when the definition was not found.
+    /// <strong>Not currently tenant- or soft-delete-scoped</strong> (#899): a soft-deleted row,
+    /// or one belonging to a different tenant, is not distinguished from a genuinely missing
+    /// one until #899 lands.
     /// </returns>
     Task<bool> UpdateDefinitionMetadataAsync(
         string code,
@@ -89,8 +101,9 @@ public interface IWorkflowDefinitionStore
     /// Load the currently published version's graph JSON + metadata for a definition,
     /// plus stub draft info (always null until WF-21.3).
     ///
-    /// <para>Returns <c>null</c> when the definition does not exist in the current
-    /// tenant scope (404 mapping).</para>
+    /// <para>Returns <c>null</c> when the definition does not exist (404 mapping).
+    /// <strong>Not currently tenant-scoped</strong> (#899): a definition belonging to a
+    /// different tenant is found and returned exactly like one in the caller's own tenant.</para>
     ///
     /// <para>If the definition exists but has no published version yet,
     /// <see cref="DefinitionGraphEnvelope.GraphJson"/> is <c>null</c>.</para>
@@ -115,13 +128,17 @@ public interface IWorkflowDefinitionStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Return the verbatim GraphJson of one immutable version, tenant-scoped.
+    /// Return the verbatim GraphJson of one immutable version.
     ///
-    /// <para>Cross-tenant ID access behaves as 404 (tenant filter applied).</para>
+    /// <para>Intended to make cross-tenant ID access behave as 404 via the tenant filter, but
+    /// that filter does not currently reach this entity type (#899) — do not rely on this
+    /// until it lands.</para>
     /// </summary>
     /// <param name="versionId">PK of the <c>ProcessDefinitionVersion</c> row.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The version's graph envelope, or <c>null</c> when not found / cross-tenant.</returns>
+    /// <returns>The version's graph envelope, or <c>null</c> when not found. <strong>Not
+    /// currently <c>null</c> on cross-tenant access</strong> (#899) — see the remarks
+    /// above.</returns>
     Task<VersionGraphEnvelope?> GetVersionGraphAsync(
         Guid versionId,
         CancellationToken cancellationToken = default);
@@ -146,7 +163,8 @@ public interface IWorkflowDefinitionStore
     /// <para>Concurrency model:</para>
     /// <list type="bullet">
     ///   <item><c>create = true</c> (<c>If-None-Match:*</c>): insert a new draft row;
-    ///         definition must exist in tenant scope; no draft must already exist —
+    ///         definition must exist (<strong>not currently tenant-scoped, #899</strong>);
+    ///         no draft must already exist —
     ///         existing draft → <see cref="SaveDraftOutcome.Conflict"/>.</item>
     ///   <item><c>create = false</c> (<c>If-Match</c>): update an existing draft;
     ///         row must exist with matching <c>RowVersion</c>; row-gone → <see cref="SaveDraftOutcome.Conflict"/>
@@ -193,7 +211,8 @@ public interface IWorkflowDefinitionStore
     /// <param name="code">Definition code.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns><c>true</c> when the definition was found (draft may or may not have existed);
-    /// <c>false</c> when the definition does not exist in the current tenant scope.</returns>
+    /// <c>false</c> when the definition does not exist. <strong>Not currently
+    /// tenant-scoped</strong> (#899).</returns>
     Task<bool> DeleteDraftAsync(
         string code,
         CancellationToken cancellationToken = default);

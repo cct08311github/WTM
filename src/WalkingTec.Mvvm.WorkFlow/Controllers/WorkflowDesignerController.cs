@@ -213,7 +213,9 @@ public class WorkflowDesignerController : BaseController
     // ── GET /api/_workflow/designer/definitions ────────────────────────────────
 
     /// <summary>
-    /// Return a paged list of definition heads visible to the current tenant.
+    /// Return a paged list of definition heads. Intended to be scoped to the current tenant,
+    /// but the tenant filter does not currently reach <c>ProcessDefinition</c> (#899) -- the
+    /// list currently includes all tenants' definitions.
     /// </summary>
     /// <param name="page">1-based page number (default: 1).</param>
     /// <param name="pageSize">Items per page (default: 20; max 200).</param>
@@ -242,7 +244,8 @@ public class WorkflowDesignerController : BaseController
     /// <list type="bullet">
     ///   <item>201 Created — new head inserted; <c>Location</c> header set.</item>
     ///   <item>400 Bad Request — invalid code format or model-state error.</item>
-    ///   <item>409 Conflict — code already exists in this tenant.</item>
+    ///   <item>409 Conflict — code already exists. Currently checked globally, not
+    ///   per-tenant (#899): a code used by a different tenant is also rejected here.</item>
     /// </list>
     /// </para>
     /// </summary>
@@ -286,9 +289,11 @@ public class WorkflowDesignerController : BaseController
         var result = await _store!.CreateDefinitionAsync(request, tenantCode, createdBy, ct);
 
         if (result.Outcome == CreateDefinitionOutcome.DuplicateCode)
+            // #899: the duplicate check is currently global (no TenantCode predicate), so
+            // do not claim "in this tenant" here -- that would be inaccurate today.
             return Conflict(new CreateDefinitionResponseDto(
                 false, null, null,
-                $"A definition with code '{request.Code}' already exists in this tenant."));
+                $"A definition with code '{request.Code}' already exists."));
 
         // 201 Created with Location pointing at the graph endpoint.
         var location = Url.Action(
@@ -384,9 +389,11 @@ public class WorkflowDesignerController : BaseController
     // ── GET /api/_workflow/designer/versions/{id}/graph ────────────────────────
 
     /// <summary>
-    /// Return the verbatim GraphJson of one immutable version (tenant-scoped).
+    /// Return the verbatim GraphJson of one immutable version.
     ///
-    /// <para>Cross-tenant ID access behaves as 404 (DataContext tenant filter applied).</para>
+    /// <para>Intended to make cross-tenant ID access behave as 404 via the DataContext tenant
+    /// filter, but that filter does not currently reach this entity type (#899) — do not rely
+    /// on this until it lands.</para>
     /// </summary>
     [HttpGet("versions/{id:guid}/graph")]
     [ActionDescription("GetVersionGraph")]

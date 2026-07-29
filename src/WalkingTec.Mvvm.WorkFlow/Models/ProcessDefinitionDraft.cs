@@ -22,10 +22,14 @@
 //     Id, TenantCode, DefinitionId, GraphJson, BaseContentHash,
 //     RowVersion, LastSavedBy, LastSavedAt, IsValid, CreateTime, UpdateTime.
 //
-// HasQueryFilter invariant: DIRECT `: PersistPoco, ITenant` descendant so that
-// DataContext.OnModelCreating (DataContext.cs:164) auto-applies the soft-delete
-// (IsValid == true) and tenant-isolation (TenantCode == this.TenantCode) query
-// filters. Multi-level inheritance silently skips the filter — derive directly.
+// HasQueryFilter invariant (design intent -- NOT currently wired, #899): DIRECT
+// `: PersistPoco, ITenant` descendant so that DataContext.OnModelCreating
+// (DataContext.cs:164) is intended to auto-apply the soft-delete (IsValid == true) and
+// tenant-isolation (TenantCode == this.TenantCode) query filters. It currently does not --
+// WorkFlow's entity types are registered via ApplyWorkFlowModels() after
+// base.OnModelCreating() returns, too late for DataContext's filter-applying pass to see
+// them (same wiring-order bug #862 fixed for ETL). Multi-level inheritance would ALSO
+// silently skip the filter once #899 is fixed — derive directly.
 
 using System;
 using System.ComponentModel.DataAnnotations;
@@ -53,10 +57,12 @@ namespace WalkingTec.Mvvm.WorkFlow.Models;
 /// Transported in the <c>If-Match</c> / <c>ETag</c> HTTP headers — never in the raw
 /// JSON body — so the body stays a pure graph document (spec §3.2 / R2 verdict).</para>
 ///
-/// <para><strong>HasQueryFilter invariant:</strong>
+/// <para><strong>HasQueryFilter invariant (design intent -- NOT currently wired, #899):</strong>
 /// DIRECT descendant of <see cref="PersistPoco"/> and <see cref="ITenant"/> so that
-/// <c>DataContext.OnModelCreating</c> auto-applies soft-delete + tenant query filters.
-/// Multi-level inheritance silently skips the filter; derive directly (spec §3.2 / T-DSN-6).
+/// <c>DataContext.OnModelCreating</c> is intended to auto-apply soft-delete + tenant query
+/// filters. It currently does not -- same registration-order gap as
+/// <see cref="ProcessDefinition"/>. Multi-level inheritance would ALSO silently skip the
+/// filter once #899 is fixed; derive directly (spec §3.2 / T-DSN-6).
 /// </para>
 ///
 /// <para><strong>Post-publish resurrection guard:</strong>

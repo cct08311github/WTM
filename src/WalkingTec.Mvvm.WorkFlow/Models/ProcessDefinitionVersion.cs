@@ -26,16 +26,21 @@ namespace WalkingTec.Mvvm.WorkFlow.Models;
 /// <c>IsValid</c> is shadowed with <c>[BindNever]</c> to block model-binding from
 /// flipping it (low-risk but now guarded).  Because <c>ProcessDefinitionVersion</c>
 /// is a <c>PersistPoco</c>, <c>BaseCRUDVM.DoDelete</c> would soft-delete it by
-/// casting to <c>IPersistPoco</c> and setting <c>IsValid = false</c>, hiding the
-/// version from the <c>IsValid == true</c> query filter and orphaning any in-flight
-/// <c>ProcessInstance</c> pinned via <c>DefinitionVersionId</c> (data loss).
+/// casting to <c>IPersistPoco</c> and setting <c>IsValid = false</c>, which is INTENDED to
+/// hide the version from the <c>IsValid == true</c> query filter but currently does not
+/// (#899 -- the filter is not wired up for this entity type at all), and orphaning any
+/// in-flight <c>ProcessInstance</c> pinned via <c>DefinitionVersionId</c> (data loss --
+/// this part is unaffected by #899, since it's an FK integrity problem, not a filter one).
 /// DO NOT scaffold a delete-capable CRUD VM for this entity (read + publish only).
 /// If a delete VM is ever added, override <c>DoDelete</c>/<c>DoDeleteAsync</c>
 /// to throw <see cref="NotSupportedException"/> before that path goes live.</para>
 /// </summary>
 /// <remarks>
 /// DIRECT descendant of <see cref="PersistPoco"/> and <see cref="ITenant"/> so that
-/// <c>DataContext.OnModelCreating</c> auto-applies soft-delete + tenant query filters.
+/// <c>DataContext.OnModelCreating</c> is INTENDED to auto-apply soft-delete + tenant query
+/// filters. <strong>It currently does not (#899)</strong> -- same registration-order gap as
+/// <see cref="ProcessDefinition"/>. Do not rely on tenant isolation for this entity until
+/// #899 lands.
 /// </remarks>
 [AuditChanges]
 public class ProcessDefinitionVersion : PersistPoco, ITenant
@@ -48,7 +53,8 @@ public class ProcessDefinitionVersion : PersistPoco, ITenant
     /// Shadows <c>PersistPoco.IsValid</c> to block model-binding from flipping it.
     /// <c>ProcessDefinitionVersion</c> must never be soft-deleted — the published graph
     /// snapshot is immutable once written, and in-flight instances depend on it via FK.
-    /// The default <c>true</c> preserves the standard <c>IsValid == true</c> query filter.
+    /// The default <c>true</c> is intended to preserve the standard <c>IsValid == true</c>
+    /// query filter, but that filter is not currently wired up for this entity type (#899).
     /// DO NOT scaffold a delete-capable VM for this entity; if one is ever added, override
     /// <c>DoDelete</c>/<c>DoDeleteAsync</c> to throw <see cref="NotSupportedException"/>.
     /// </summary>

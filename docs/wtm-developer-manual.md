@@ -4732,7 +4732,7 @@ appsettings.Production.json   ← 生產環境覆蓋（連線字串、JWT Key）
 | **撤回/回退/抄送** | 撤回(WithdrawPolicy)、回退發起人(ReturnToInitiator)、抄送(CC，非阻塞) |
 | **Opt-in 通知** | `AddWtmWorkFlowNotifications()` 複用 `IWtmWebhookSink`；post-commit best-effort，通知失敗不回滾 |
 | **雙軌稽核** | `[AuditChanges]`（VM CRUD）+ append-only `WorkflowEventLog`（引擎轉換，`ExecuteUpdateAsync` bypass 了 EF change tracker） |
-| **RBAC + 多租戶** | 所有 Entity 直接繼承 `PersistPoco, ITenant`，DataContext query filter 自動套用 |
+| **RBAC + 多租戶** | 所有 Entity 直接繼承 `PersistPoco, ITenant`，但 `DataContext` 的 `ITenant` query filter 目前**不會**自動套用到 WorkFlow 型別（`ApplyWorkFlowModels()` 在 `base.OnModelCreating()` 之後才註冊，Pass 2 過濾器迴圈看不到）——追蹤於 #899，修好前勿依賴租戶隔離 |
 | **零內建 migration** | 消費者自行 `ApplyWorkFlowModels()` + `dotnet ef migrations add`，與 Etl 模組相同模式 |
 
 ### 18.2 三種審批模式
@@ -4776,10 +4776,12 @@ WorkFlow 套件**零內建 migration**，需自行在應用程式的 `DataContex
 protected override void OnModelCreating(ModelBuilder modelBuilder)
 {
     base.OnModelCreating(modelBuilder);
-    modelBuilder.ApplyEtlModels(this);   // 若同時使用 Etl -- 務必傳入 this（#883，見 8.2 節）
+    modelBuilder.ApplyEtlModels(this);   // 若同時使用 Etl —— 務必傳 this，否則 ETL 表悄悄失去 ITenant 過濾
     modelBuilder.ApplyWorkFlowModels();  // WorkFlow 9 張資料表
 }
 ```
+
+若同時使用 ETL，`ApplyEtlModels()` 不帶參數的舊多載已標記 `[Obsolete]`：重新編譯會看到警告，但執行期不會拋錯——註冊照常成功，只是綁不上 `ITenant` 過濾器，四張 ETL 表會悄悄失去租戶隔離。
 
 產生 migration：
 
@@ -4826,7 +4828,7 @@ dotnet ef migrations add WorkFlowInitialCreate \
 
 ### 18.8 ProcessDefinition Admin Grid
 
-`ProcessDefinitionListVM` 提供租戶範圍的流程定義列表（唯讀）。在區域 Controller 使用：
+`ProcessDefinitionListVM` 提供流程定義列表（唯讀）——設計上應是租戶範圍，但如 §18.1 所述，`ITenant` query filter 目前不會套用到 WorkFlow 型別（#899），所以這份列表目前是**跨租戶**的，修好前勿當成租戶隔離的清單使用。在區域 Controller 使用：
 
 ```csharp
 [ActionDescription("流程定義管理")]

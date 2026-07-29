@@ -51,10 +51,12 @@ protected override void OnModelCreating(ModelBuilder modelBuilder)
 > against source — a NuGet-only upgrade never sees it, which is exactly how this stayed live
 > after #862 shipped.
 
-此方法建立兩張表：
+此方法建立四張表：
 
-- `EtlJobDefinitions` — Job 定義（含唯一索引 `Name`、索引 `Status`）
+- `EtlJobDefinitions` — Job 定義（含唯一索引 `Name`、索引 `Status`、`TenantCode`）
 - `EtlRunLogs` — 執行記錄（含索引 `JobId`、`StartedAt`，FK → `EtlJobDefinitions`）
+- `EtlDeadLetterRows` — 失敗列隔離區（ETL-004）
+- `EtlLineageRecords` — 資料血緣紀錄（ETL-005）
 
 ### 4. 設定連線字串
 

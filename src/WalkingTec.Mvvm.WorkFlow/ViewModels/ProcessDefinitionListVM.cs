@@ -35,10 +35,11 @@ public class ProcessDefinitionSearcher : BaseSearcher
 /// published via the API/designer endpoint
 /// (<c>POST /api/_workflow/definitions/{id}/publish</c>).</para>
 ///
-/// <para>Tenant-isolation is automatic: <see cref="ProcessDefinition"/> is a
-/// DIRECT <c>: PersistPoco, ITenant</c> descendant, so <c>DataContext</c> applies the
-/// <c>TenantCode == this.TenantCode</c> query filter before this VM's
-/// <see cref="GetSearchQuery"/> runs.</para>
+/// <para><strong>Tenant-isolation is NOT currently automatic (#899).</strong>
+/// <see cref="ProcessDefinition"/> is a DIRECT <c>: PersistPoco, ITenant</c> descendant, so
+/// <c>DataContext</c> is intended to apply the <c>TenantCode == this.TenantCode</c> query
+/// filter before this VM's <see cref="GetSearchQuery"/> runs, but that filter does not
+/// currently reach <see cref="ProcessDefinition"/> -- do not rely on this until #899 lands.</para>
 /// </summary>
 public class ProcessDefinitionListVM : BasePagedListVM<ProcessDefinition, ProcessDefinitionSearcher>
 {
@@ -82,8 +83,10 @@ public class ProcessDefinitionListVM : BasePagedListVM<ProcessDefinition, Proces
     }
 
     /// <summary>
-    /// Returns tenant-scoped definitions filtered by the searcher criteria.
-    /// Tenant isolation is automatically applied by the DataContext query filter.
+    /// Returns definitions filtered by the searcher criteria.
+    /// Intended to be tenant-scoped via the DataContext query filter, but that filter does not
+    /// currently reach <see cref="ProcessDefinition"/> (#899) -- treat results as unscoped
+    /// until it lands.
     /// </summary>
     public override IOrderedQueryable<ProcessDefinition> GetSearchQuery()
     {
