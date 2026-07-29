@@ -1,11 +1,11 @@
 """
-Regression tests for issue #886 (PR #897) review rounds 3-5.
+Regression tests for issue #886 (PR #897) review rounds 3-6.
 
 What this guards against
 =========================
 run_tests() launches a browser, then runs every TC, then closes the browser,
 then prints a summary report — none of that sat inside a try/except until
-round 3, and even after round 3's fix, three more escape hatches remained
+round 3, and even after round 3's fix, four more escape hatches remained
 (found by fault injection in later review rounds, closed in the same round
 each was found):
 
@@ -23,10 +23,15 @@ each was found):
      file I/O) escaped uncaught, on what review round 5 flagged as the *most
      likely* path to actually hit it: an otherwise fully successful run
      (more output printed = more surface for a broken pipe or full disk).
+  4. (round 6) Round 5's own fallback fired on the wrong condition: "the
+     report block raised" instead of "the summary line was never emitted".
+     A `_write_junit_xml()` failure *after* the stdout "Total:" line had
+     already printed successfully still tripped the stderr fallback,
+     duplicating that line instead of rescuing anything.
 
 A guard against a false green that nothing tests is exactly the kind of
 decoration this PR spent rounds removing elsewhere in this file. This script
-is that test, in four parts:
+is that test, in five parts:
 
   test_launch_failure_no_false_green()
       Forces `chromium.launch()` to raise (the cheapest place — before any
@@ -62,6 +67,16 @@ is that test, in four parts:
       asked to be made deliberately, not left to fall out — the one
       CI-critical "Total: ..." line still surfaces, via the stderr fallback,
       even though stdout-based printing failed outright.
+
+  test_junit_failure_after_stdout_summary_no_duplicate()
+      Lets the same fake TC run to a genuine PASS and the stdout "Total:"
+      line print successfully, then forces `_write_junit_xml()` — which
+      runs *after* that line — to raise. Asserts: no exception escapes;
+      `results` and the exit-code computation are still correct; and,
+      the specific round-6 finding, exactly ONE "Total: ..." line exists
+      across stdout and stderr combined — not the stdout original plus a
+      duplicate stderr fallback that should never have fired, since the
+      summary line was never actually missing.
 
 Run directly (no demo server, no real browser needed — none of these ever
 get past the monkeypatched Playwright layer):
@@ -252,11 +267,11 @@ async def _run(tc_nums):
     return results, captured.getvalue()
 
 
-async def _run_capturing_both(tc_nums):
+async def _run_capturing_both(tc_nums, report_path=None):
     captured_out = io.StringIO()
     captured_err = io.StringIO()
     with contextlib.redirect_stdout(captured_out), contextlib.redirect_stderr(captured_err):
-        results = await wtm.run_tests(tc_nums=tc_nums, headless=True)
+        results = await wtm.run_tests(tc_nums=tc_nums, headless=True, report_path=report_path)
     return results, captured_out.getvalue(), captured_err.getvalue()
 
 
@@ -428,15 +443,95 @@ def test_summary_report_failure_on_green_run_preserves_result():
     print("PASS\n")
 
 
+# ─── scenario 5: stdout summary succeeds, JUnit write fails after it ───────
+
+def _junit_write_that_raises(*args, **kwargs):
+    raise RuntimeError("forced JUnit XML write failure for #886 review round 6 verification")
+
+
+@contextlib.contextmanager
+def _patched_write_junit_xml():
+    original = wtm._write_junit_xml
+    wtm._write_junit_xml = _junit_write_that_raises
+    try:
+        yield
+    finally:
+        wtm._write_junit_xml = original
+
+
+def test_junit_failure_after_stdout_summary_no_duplicate():
+    """issue #886 review round 6: the stdout "Total:" line succeeding and
+    `_write_junit_xml()` failing right after it used to both (a) still trip
+    the except block's unconditional stderr fallback, producing a DUPLICATE
+    "Total:" line on stderr even though stdout's copy was fine, and (b) do so
+    for the wrong reason — "the report block raised" instead of "the summary
+    was never emitted". This is the path that was previously untested, which
+    is how it survived: rounds 1-4 exercised abort-before-any-output and
+    round 5 exercised print-fails-immediately, but nothing exercised
+    succeeds-then-fails-later until this scenario."""
+    print("=== test_junit_failure_after_stdout_summary_no_duplicate ===")
+    escaped = None
+    results = None
+    output = ""
+    stderr_output = ""
+    try:
+        with _patched_tc_registry_with_fake_green_tc():
+            with _patched_async_playwright(_GreenRunCM):
+                with _patched_write_junit_xml():
+                    results, output, stderr_output = asyncio.run(
+                        _run_capturing_both(
+                            [FAKE_GREEN_TC_NUM],
+                            report_path="/tmp/wtm886_review_round6_junit_report.xml",
+                        )
+                    )
+    except Exception as e:  # noqa: BLE001 — this IS the failure mode under test
+        escaped = e
+
+    assert escaped is None, (
+        f"JUNIT_FAILURE ESCAPED={type(escaped).__name__}: {escaped} "
+        f"RESULTS={results if results is not None else '[]'}"
+    )
+    print("JUnit write failure (after a successful stdout summary) did not escape run_tests()")
+
+    # --- results/exit code are correct — a real pass, unaffected by a
+    # failure in a downstream artifact (the JUnit file) ---
+    assert results is not None and len(results) == 1, f"expected exactly one result, got {results}"
+    assert results[0]["tc"] == FAKE_GREEN_TC_NUM and results[0]["status"] == "PASS", results[0]
+    failed = sum(1 for r in results if r["status"] in ("FAIL", "ERROR"))
+    assert failed == 0, f"main() would exit non-zero on a genuinely passing run — failed={failed}"
+    print(f"Result preserved: {results[0]}; main()'s exit-code check: failed={failed} -> sys.exit(0)")
+
+    # --- the actual defect this round found: exactly ONE "Total:" line
+    # across stdout+stderr combined, not two ---
+    stdout_total_lines = [line for line in output.splitlines() if "Total:" in line]
+    stderr_total_lines = [line for line in stderr_output.splitlines() if "Total:" in line]
+    print(f"STDOUT_TOTAL {stdout_total_lines}")
+    print(f"STDERR_TOTAL {stderr_total_lines}")
+    assert len(stdout_total_lines) == 1, (
+        "test setup problem: expected exactly one stdout Total line (the JUnit "
+        f"failure happens after it prints) — got {stdout_total_lines}"
+    )
+    all_total_lines = stdout_total_lines + stderr_total_lines
+    assert len(all_total_lines) == 1, (
+        "DUPLICATE SUMMARY: the stdout Total line already succeeded, so the "
+        "stderr fallback must not fire — got "
+        f"{len(all_total_lines)} Total lines across both streams combined: {all_total_lines}"
+    )
+    assert "PASS: 1" in all_total_lines[0] and "FAIL: 0" in all_total_lines[0], all_total_lines[0]
+    print("PASS\n")
+
+
 def main():
     test_launch_failure_no_false_green()
     test_aexit_failure_does_not_escape()
     test_abort_report_print_failure_does_not_lose_result()
     test_summary_report_failure_on_green_run_preserves_result()
+    test_junit_failure_after_stdout_summary_no_duplicate()
     print("ALL CHECKS PASSED — an aborted run cannot read as a CI-green pass, "
           "no lifecycle or diagnostic failure along that path can lose the "
-          "result, and a summary-report failure on a genuine pass neither "
-          "corrupts the result nor goes completely silent.")
+          "result, a summary-report failure on a genuine pass neither "
+          "corrupts the result nor goes completely silent, and a failure "
+          "after the summary already printed does not duplicate it.")
 
 
 if __name__ == "__main__":

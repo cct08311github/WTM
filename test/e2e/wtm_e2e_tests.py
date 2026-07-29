@@ -3059,6 +3059,18 @@ async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
     #      always-correct signal regardless.
     # See test_summary_report_failure_on_green_run_preserves_result() for
     # this exact scenario: a print failure on an otherwise fully green run.
+    #
+    # issue #886 review round 6: the except block below used to fall back
+    # unconditionally on ANY exception in this try — including one raised
+    # by `_write_junit_xml()` AFTER the stdout "Total:" line had already
+    # printed successfully. That fires the stderr fallback on the wrong
+    # condition: "the report block raised" is not the same thing as "the
+    # summary line was never emitted", and only the second is the one the
+    # fallback exists for. Fault injection proved the bug: stdout AND
+    # stderr both ended up with an identical "Total: ..." line. Fixed by
+    # tracking whether the stdout line actually printed and gating the
+    # fallback on that, not on whether *anything* in the block raised.
+    summary_line_printed = False
     try:
         print(f"\n{'='*60}")
         print("測試報告彙總")
@@ -3078,26 +3090,43 @@ async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
             print(f"  [{icon}] {_tc_label(tc)} [{priority}] {name}{retry_str} ({elapsed_str}){error}")
 
         print(f"\n  Total: {total} | PASS: {passed} | FAIL: {failed} | ERROR: {errors} | SKIP: {skipped}")
+        summary_line_printed = True  # the one CI-critical line reached stdout — anything
+        # that fails past this point (the screenshot-dir line, the JUnit write) is a
+        # separate, lower-stakes failure and must not re-trigger the stderr fallback.
         print(f"  截圖目錄: {SCREENSHOTS_DIR.resolve()}")
 
         if report_path:
             _write_junit_xml(results, report_path, total, passed, failed, errors, skipped)
             print(f"  JUnit XML: {Path(report_path).resolve()}")
     except Exception as e:
-        passed, failed, errors, skipped, total = _compute_stats(results)
-        fallback_line = (
-            f"  Total: {total} | PASS: {passed} | FAIL: {failed} | "
-            f"ERROR: {errors} | SKIP: {skipped}"
-        )
-        try:
-            print(
-                f"[run_tests] 彙總報告輸出失敗（{type(e).__name__}: {e}），"
-                "改印到 stderr（見 issue #886 review round 5）：",
-                file=sys.stderr,
+        if summary_line_printed:
+            # The CI-critical line is already on stdout — falling back here would
+            # only duplicate it, not rescue anything. Note the later failure once,
+            # to stderr, without re-emitting "Total: ...".
+            try:
+                print(
+                    f"[run_tests] 彙總報告在 Total 行印出後仍發生例外"
+                    f"（{type(e).__name__}: {e}），略過 stderr 備援以避免重複輸出"
+                    "（見 issue #886 review round 6）",
+                    file=sys.stderr,
+                )
+            except Exception:
+                pass  # diagnostics only; the line is already out, nothing to rescue
+        else:
+            passed, failed, errors, skipped, total = _compute_stats(results)
+            fallback_line = (
+                f"  Total: {total} | PASS: {passed} | FAIL: {failed} | "
+                f"ERROR: {errors} | SKIP: {skipped}"
             )
-            print(fallback_line, file=sys.stderr)
-        except Exception:
-            pass  # nothing more can be done; `results` below is still correct
+            try:
+                print(
+                    f"[run_tests] 彙總報告輸出失敗（{type(e).__name__}: {e}），"
+                    "改印到 stderr（見 issue #886 review round 5）：",
+                    file=sys.stderr,
+                )
+                print(fallback_line, file=sys.stderr)
+            except Exception:
+                pass  # nothing more can be done; `results` below is still correct
 
     return results
 
