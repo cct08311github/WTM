@@ -501,8 +501,10 @@ async def tc_04_analysis_mode_page(page, **_):
     except Exception:
         # issue #886 review: this wait is swallowed and the assert below can still
         # PASS if the panel shows up late, so capture the moment of the timeout —
-        # otherwise a silently-slow panel leaves no trace at all.
-        await page.screenshot(path=sc(4, "03-analysis-panel-open"), full_page=True)
+        # otherwise a silently-slow panel leaves no trace at all. Round 2: use the
+        # non-throwing helper — a capture failure here must not replace this
+        # swallowed timeout with a different, unintended exception.
+        await _screenshot_on_failure(page, 4, "03-analysis-panel-open", full_page=True)
 
     # 確認面板已顯示
     # 面板 ID 格式: analysis-panel-{gridId}，gridId = wtTable_{UniqueId}
@@ -1335,6 +1337,9 @@ async def tc_24_analysis_full_flow(page, **_):
     - 面板開啟成功
     - 查詢後 analysis-result-section 顯示
     - 有 canvas（ECharts 圖表）或 table
+
+    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
+    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
     """
     print("[TC-24] 開始執行...")
 
@@ -1360,8 +1365,9 @@ async def tc_24_analysis_full_flow(page, **_):
         await page.wait_for_selector(".layui-table-tool", state="attached", timeout=3000)
     except Exception:
         # issue #886 review: TC-24 has no assert on this path — a swallowed timeout
-        # here is otherwise completely invisible, so capture it.
-        await page.screenshot(path=sc(24, "01-student-grid"), full_page=True)
+        # here is otherwise completely invisible, so capture it. Round 2: non-throwing
+        # helper — a capture failure must not replace the swallowed timeout.
+        await _screenshot_on_failure(page, 24, "01-student-grid", full_page=True)
 
     # Step 1: 開啟分析面板
     analysis_btn = page.locator("button:has-text('分析模式')")
@@ -1390,8 +1396,9 @@ async def tc_24_analysis_full_flow(page, **_):
             try:
                 await page.wait_for_selector(".analysis-field-pool", state="visible", timeout=5000)
             except Exception:
-                # issue #886 review: no assert follows this on the swallow path — capture it.
-                await page.screenshot(path=sc(24, "02-panel-open"))
+                # issue #886 review: no assert follows this on the swallow path — capture
+                # it. Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+                await _screenshot_on_failure(page, 24, "02-panel-open")
 
             # Step 2: 確認欄位載入
             pills = page.locator(".analysis-pill")
@@ -1436,8 +1443,9 @@ async def tc_24_analysis_full_flow(page, **_):
                         try:
                             await page.wait_for_selector(".analysis-result-section, canvas, .analysis-result-section table", state="visible", timeout=5000)
                         except Exception:
-                            # issue #886 review: no assert follows this on the swallow path — capture it.
-                            await page.screenshot(path=sc(24, "06-query-result"))
+                            # issue #886 review: no assert follows this on the swallow path — capture
+                            # it. Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+                            await _screenshot_on_failure(page, 24, "06-query-result")
 
                         # 確認結果區顯示
                         result_section = page.locator(".analysis-result-section")
@@ -1474,7 +1482,7 @@ async def tc_24_analysis_full_flow(page, **_):
         data = json.loads(await resp.text())
         print(f"  API rows: {len(data.get('rows', []))}")
 
-    print("[TC-24] PASS -- Analysis 完整流程驗證通過")
+    print("[TC-24] PASS -- Analysis 完整流程檢查完成")
 
 
 # ─── TC-25: Grid 分頁功能 ───────────────────────────────────────────────────
@@ -1516,7 +1524,8 @@ async def tc_25_grid_paging(page, **_):
         await page.wait_for_selector(".layui-table-body tr[data-index]", state="attached", timeout=3000)
     except Exception:
         # issue #886 review: TC-25 has no assert on this path — capture the swallow.
-        await page.screenshot(path=sc(25, "01-grid-initial"))
+        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await _screenshot_on_failure(page, 25, "01-grid-initial")
 
     # 確認分頁元件存在
     pager = page.locator(".layui-table-page")
@@ -1573,6 +1582,9 @@ async def tc_26_crud_flow(page, **_):
     - Create form 有所有必要欄位
     - Edit form 載入正確
     - Delete 有確認訊息
+
+    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
+    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
     """
     print("[TC-26] 開始執行...")
 
@@ -1624,7 +1636,8 @@ async def tc_26_crud_flow(page, **_):
         await page.wait_for_selector(".layui-table-body tr[data-index]", state="visible", timeout=3000)
     except Exception:
         # issue #886 review: TC-26 has no assert on this path — capture the swallow.
-        await page.screenshot(path=sc(26, "03-student-list"))
+        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await _screenshot_on_failure(page, 26, "03-student-list")
 
     # Step 4: 搜尋面板
     search_panel = page.locator(".layui-form[id^='wtForm_']")
@@ -1635,7 +1648,7 @@ async def tc_26_crud_flow(page, **_):
     search_btn = page.locator("button:has-text('搜索'), button:has-text('Search')")
     print(f"  搜尋按鈕: {await search_btn.count()}")
 
-    print("[TC-26] PASS -- CRUD 流程驗證通過")
+    print("[TC-26] PASS -- CRUD 流程檢查完成")
 
 
 # ─── TC-27: 使用者管理頁面 ──────────────────────────────────────────────────
@@ -1652,6 +1665,9 @@ async def tc_27_user_management(page, **_):
     預期結果：
     - /_Admin/FrameworkUser/Index 可存取
     - 顯示使用者 grid
+
+    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
+    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
     """
     print("[TC-27] 開始執行...")
 
@@ -1666,7 +1682,8 @@ async def tc_27_user_management(page, **_):
     except Exception:
         # issue #886 review: TC-27 has no assert on this path (table_count==0 still
         # PASSes below) — capture the swallow, it's the only trace we'd otherwise have.
-        await page.screenshot(path=sc(27, "01-user-list"))
+        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await _screenshot_on_failure(page, 27, "01-user-list")
 
     # 確認 grid 存在
     table = page.locator(".layui-table-body")
@@ -1691,7 +1708,7 @@ async def tc_27_user_management(page, **_):
     search = page.locator(".layui-form")
     print(f"  搜尋面板: {await search.count()}")
 
-    print("[TC-27] PASS -- 使用者管理頁面驗證通過")
+    print("[TC-27] PASS -- 使用者管理頁面檢查完成")
 
 
 # ─── TC-28: 角色管理 + 權限設定 ─────────────────────────────────────────────
@@ -1704,7 +1721,10 @@ async def tc_28_role_management(page, **_):
 
     預期結果：
     - 角色列表可存取
-    - 截圖 grid
+    - grid 可載入
+
+    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
+    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
     """
     print("[TC-28] 開始執行...")
 
@@ -1716,7 +1736,8 @@ async def tc_28_role_management(page, **_):
         await page.wait_for_selector(".layui-table-body", state="visible", timeout=3000)
     except Exception:
         # issue #886 review: TC-28 has no assert anywhere — capture the swallow.
-        await page.screenshot(path=sc(28, "01-role-list"))
+        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await _screenshot_on_failure(page, 28, "01-role-list")
 
     # 確認 grid
     table = page.locator(".layui-table-body")
@@ -1738,7 +1759,8 @@ async def tc_28_role_management(page, **_):
         await page.wait_for_selector(".layui-table-body, .layui-form", state="visible", timeout=3000)
     except Exception:
         # issue #886 review: TC-28 has no assert anywhere — capture the swallow.
-        await page.screenshot(path=sc(28, "02-data-privilege"))
+        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await _screenshot_on_failure(page, 28, "02-data-privilege")
 
     # FrameworkMenu
     await page.goto(f"{BASE_URL}/_Admin/FrameworkMenu/Index")
@@ -1747,14 +1769,15 @@ async def tc_28_role_management(page, **_):
         await page.wait_for_selector(".layui-table-body, .layui-nav", state="visible", timeout=3000)
     except Exception:
         # issue #886 review: TC-28 has no assert anywhere — capture the swallow.
-        await page.screenshot(path=sc(28, "03-menu-list"))
+        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await _screenshot_on_failure(page, 28, "03-menu-list")
 
     menu_table = page.locator(".layui-table-body")
     if await menu_table.count() > 0:
         menu_rows = page.locator(".layui-table-body tr[data-index]")
         print(f"  選單項目數: {await menu_rows.count()}")
 
-    print("[TC-28] PASS -- 角色管理驗證通過")
+    print("[TC-28] PASS -- 角色管理檢查完成")
 
 
 # ─── TC-29: ETL 管理頁面 ────────────────────────────────────────────────────
@@ -1772,6 +1795,9 @@ async def tc_29_etl_management(page, **_):
     - /_EtlJob/Index 可存取
     - /_EtlRunLog/Index 可存取
     - 各頁面有搜尋面板和 grid
+
+    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
+    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
     """
     print("[TC-29] 開始執行...")
 
@@ -1784,7 +1810,8 @@ async def tc_29_etl_management(page, **_):
         await page.wait_for_selector(".layui-table-body, input[name='Searcher.Name']", state="visible", timeout=3000)
     except Exception:
         # issue #886 review: TC-29 has no assert anywhere — capture the swallow.
-        await page.screenshot(path=sc(29, "01-etl-job-list"))
+        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await _screenshot_on_failure(page, 29, "01-etl-job-list")
 
     # 確認搜尋面板欄位
     name_input = page.locator("input[name='Searcher.Name']")
@@ -1806,7 +1833,8 @@ async def tc_29_etl_management(page, **_):
         await page.wait_for_selector("select[name='Searcher.Result'], .layui-table-body", state="visible", timeout=3000)
     except Exception:
         # issue #886 review: TC-29 has no assert anywhere — capture the swallow.
-        await page.screenshot(path=sc(29, "02-etl-runlog"))
+        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await _screenshot_on_failure(page, 29, "02-etl-runlog")
 
     # Run Log 搜尋面板
     result_select = page.locator("select[name='Searcher.Result']")
@@ -1814,7 +1842,7 @@ async def tc_29_etl_management(page, **_):
     print(f"  RunLog 搜尋: Result={await result_select.count()}, "
           f"Trigger={await trigger_select.count()}")
 
-    print("[TC-29] PASS -- ETL 管理頁面驗證通過")
+    print("[TC-29] PASS -- ETL 管理頁面檢查完成")
 
 
 # ─── TC-30: 匯入功能流程 ────────────────────────────────────────────────────
@@ -1837,6 +1865,9 @@ async def tc_30_import_flow(page, **_):
     - /Student/Import 頁面可存取
     - 下載範本按鈕存在
     - 上傳控制項存在
+
+    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
+    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
     """
     print("[TC-30] 開始執行...")
 
@@ -1886,7 +1917,7 @@ async def tc_30_import_flow(page, **_):
     )
     print(f"  Import 頁面 HTTP: {template_response.status}")
 
-    print("[TC-30] PASS -- 匯入功能流程驗證通過")
+    print("[TC-30] PASS -- 匯入功能流程檢查完成")
 
 
 # ─── TC-31: WorkFlow 設計器完整創作流程 (T-DSN-18 e2e smoke) ─────────────────
@@ -2601,20 +2632,35 @@ async def tc_36_tenant_switch(page, **_):
 # 任何成本。TC-21/TC-22 例外（#886 review 後修正）：這兩個 TC 的判定完全來自 DOM/
 # 佈局 assert，截圖本身不是任何斷言的依據，因此改為 opt-in（WTM_E2E_VISUAL_
 # SNAPSHOTS=1），不再無條件拍照——見 VISUAL_SNAPSHOTS 常數旁的說明。
+#
+# #886 review round 2（MEDIUM）：那 12 處 except 分支曾經直接呼叫
+# page.screenshot()——如果截圖本身拋錯（崩潰的瀏覽器正是最可能發生這種事的時候），
+# 那個新例外會**取代**原本被 swallow 的 wait 例外、逃出 except 分支，把一個「等待
+# 逾時但無傷大雅」的分支變成未預期的 ERROR/retry，等於截圖失敗反而改變了判定。
+# 所以這 12 處、以及 run_tests() 既有的失敗路徑，全部改用下面這個保證不拋出的
+# _screenshot_on_failure()，不再各自 inline 呼叫 page.screenshot()。
 
-async def _screenshot_on_failure(page, tc_num, label):
+async def _screenshot_on_failure(page, tc_num, label, full_page=False):
     """
-    失敗時截圖。best-effort，但失敗要留痕跡、不能靜默吞掉。
+    最佳努力截圖，保證不拋出——呼叫端（不論是 run_tests() 的失敗處理，還是 tc_
+    函式自己 swallow 掉一個 wait 之後想順手拍照）都不必再包一層 try。
 
     某些失敗形態（例如 #885 觀測到的 Chromium "Target crashed"）代表瀏覽器行程本身
     已經死亡，這裡的 page.screenshot() 幾乎必然也會失敗——這種情況下沒有任何辦法
     生出一張截圖，但至少要在 CI log 留一行訊息說明「這個 TC 沒有截圖，因為連截圖
     本身都失敗了」，而不是讓截圖目錄悄悄少一個檔案、事後看起來像是忘記拍。
+
+    #886 review round 2：連這行診斷 print 本身都可能拋出（stdout 已關閉時 print()
+    會拋 BrokenPipeError）——整段包在最外層 try，任何例外一律吞掉；印不出診斷就
+    真的什麼都不做，但絕不能讓「想順手留個痕跡」反過來把呼叫端的控制流打斷。
     """
     try:
-        await page.screenshot(path=sc(tc_num, label))
+        await page.screenshot(path=sc(tc_num, label), full_page=full_page)
     except Exception as e:
-        print(f"[TC-{tc_num:02d}] 無法擷取失敗截圖（label={label}）：{type(e).__name__}: {e}")
+        try:
+            print(f"[TC-{tc_num:02d}] 無法擷取失敗截圖（label={label}）：{type(e).__name__}: {e}")
+        except Exception:
+            pass
 
 
 async def _log_console_errors(page, tc_num):
@@ -2693,7 +2739,7 @@ TC_REGISTRY = {
     19: ("Analysis 不明 VM 型別 → 404", tc_19_analysis_unknown_vm, "P1"),
     20: ("Analysis 不合法欄位 → 400", tc_20_analysis_invalid_field, "P1"),
     21: ("登入頁視覺驗收", tc_21_login_visual, "P2"),
-    22: ("首頁 Dashboard 截圖", tc_22_dashboard, "P2"),
+    22: ("首頁 Dashboard 版面驗證", tc_22_dashboard, "P2"),
     23: ("Analysis Meta API (#516)", tc_23_analysis_meta_api, "P1"),
     24: ("Analysis 完整查詢流程", tc_24_analysis_full_flow, "P1"),
     25: ("Grid 分頁功能", tc_25_grid_paging, "P2"),
@@ -2819,18 +2865,54 @@ async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
                             await _log_console_errors(page, tc_num)
                         except Exception:
                             pass  # diagnostics only; the retry must proceed regardless
-                        # Create fresh context for retry to avoid state leakage
-                        await context.close()
-                        context = await browser.new_context(
-                            viewport={"width": 1280, "height": 800},
-                            ignore_https_errors=True,
-                        )
-                        page = await context.new_page()
-                        page.set_default_timeout(TIMEOUT)
-                        # Re-attach console capture for retry attempt
-                        console_capture = _ConsoleCapture()
-                        page.on("console", console_capture)
-                        page._captured_console = console_capture.messages
+
+                        # Create fresh context for retry to avoid state leakage.
+                        # issue #886 review round 2 (MEDIUM): this rebuild used to be
+                        # unguarded — if context.close()/new_context()/new_page()/
+                        # page.on() itself throws, that exception escaped this
+                        # `except Exception as e:` block entirely, past the `for attempt`
+                        # loop and past `async with async_playwright()`, aborting
+                        # run_tests() for every *remaining* TC, not just this one — the
+                        # one accounting path that could still lose a result (or the
+                        # whole rest of the run) even after round 1's fix. A retry that
+                        # can't get a fresh browser context isn't a retryable condition
+                        # anymore; record it as this TC's final ERROR outcome instead of
+                        # letting it destroy the run.
+                        try:
+                            await context.close()
+                            context = await browser.new_context(
+                                viewport={"width": 1280, "height": 800},
+                                ignore_https_errors=True,
+                            )
+                            page = await context.new_page()
+                            page.set_default_timeout(TIMEOUT)
+                            # Re-attach console capture for retry attempt
+                            console_capture = _ConsoleCapture()
+                            page.on("console", console_capture)
+                            page._captured_console = console_capture.messages
+                        except Exception as rebuild_err:
+                            elapsed = (datetime.now() - start).total_seconds()
+                            results.append({
+                                "tc": tc_num,
+                                "status": "ERROR",
+                                "error": f"重試前重建 context 失敗：{type(rebuild_err).__name__}: {rebuild_err}",
+                                "elapsed": elapsed,
+                                "retries": retry_count,
+                            })
+                            last_error = None
+                            try:
+                                print(f"[TC-{tc_num:02d}] ERROR: 重試前重建 context 失敗：{rebuild_err}")
+                            except Exception:
+                                pass  # diagnostics only; the result above is already recorded
+                            # No extra cleanup here: the unconditional `await
+                            # context.close()` right after this retry loop (same
+                            # cleanup every PASS/FAIL/ERROR/SKIP path already goes
+                            # through) will run next regardless of which of the
+                            # try block's four awaits above failed — closing
+                            # whatever `context` currently references. Duplicating
+                            # that call here would only add a second close attempt
+                            # on possibly-already-closed state for no benefit.
+                            break
                         continue
 
                     # Non-retryable error or retries exhausted.
