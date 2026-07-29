@@ -1,8 +1,8 @@
 diff --git a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
-index 63c4fbd86..e50f3bd7e 100644
+index 03a63e932..1e7a648e2 100644
 --- a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
 +++ b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
-@@ -196,7 +196,10 @@ namespace WalkingTec.Mvvm.Core
+@@ -248,7 +248,10 @@ namespace WalkingTec.Mvvm.Core
                  if (IsStaticMember(member)) return false;
  
                  var memberType = member.GetMemberType();
