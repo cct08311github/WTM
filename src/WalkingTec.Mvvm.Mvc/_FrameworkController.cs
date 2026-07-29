@@ -1852,11 +1852,23 @@ namespace WalkingTec.Mvvm.Mvc
             // BaseVM-typed sub-property) on the caller-named VM on EVERY request to this
             // endpoint, including when the flag is off and before the deny decision. This
             // matches the fix already applied to GetExportExcel/GetExportExcelStream/
-            // GetExcelTemplate. An unresolvable name still denies via Forbid() here (unchanged
-            // from before this fix), not BadRequest — GetDeletePreview's caller-facing contract
-            // is unaffected.
+            // GetExcelTemplate.
+            //
+            // The unresolvable-name and CanPreviewDelete-denies cases are kept as two separate
+            // returns (not merged into one Forbid()) specifically to preserve the pre-existing
+            // wire contract: base behaviour was BadRequest for an unresolvable/unregistered VM
+            // name (Wtm.CreateVM's string overload throws ArgumentException, caught below) and
+            // Forbid() only for an actual policy/flag denial. An earlier version of this fix
+            // merged both into Forbid() and claimed the contract was unchanged in this very
+            // comment — it was not: under cookie auth Forbid() wire up as a 302 redirect, not
+            // the 400 an unresolvable name produced before. See
+            // FrameworkControllerRbacHooksTest.GetDeletePreview_UnknownVmName_ReturnsBadRequestNotForbid.
             var previewVmType = Wtm.TryResolveVmType(_DONOT_USE_VMNAME);
-            if (previewVmType == null || !CanPreviewDelete(previewVmType))
+            if (previewVmType == null)
+            {
+                return BadRequest(MvcProgram._localizer?["Sys.InvalidVM"] ?? "Invalid Vm Name");
+            }
+            if (!CanPreviewDelete(previewVmType))
             {
                 return Forbid();
             }
