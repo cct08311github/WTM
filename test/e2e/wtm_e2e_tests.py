@@ -20,6 +20,8 @@ WTM Demo E2E Test Suite — TC-01 ~ TC-36
                       （預設 "0"／未設定＝baseline，行為與現行預設一致）。
                       由 e2e-test.yml 的 "killswitch" matrix leg 設定；
                       本地手動測試 kill-switch 時也可自行 export。
+  WTM_E2E_VISUAL_SNAPSHOTS  "1" 才會產生 TC-21/TC-22 的人工複核用視覺快照
+                      （預設 "0"，見下方截圖政策第 2 點；issue #886 review）。
 
 執行：
   python wtm_e2e_tests.py                       # 全部執行
@@ -34,7 +36,7 @@ WTM Demo E2E Test Suite — TC-01 ~ TC-36
 TC_REGISTRY 增減而變動（見 #681），CI log 判讀請認 "FAIL: 0" 與 "ERROR: 0"
 這兩個欄位是否為 0，不要硬編一個固定的 N。
 
-截圖政策（issue #886）：
+截圖政策（issue #886，2026-07-29 review 後修正）：
   tc_ 函式本身不再逐步無條件拍照——失敗時的截圖統一由 run_tests() 的例外處理路徑
   透過 _screenshot_on_failure() 補拍一張「失敗當下」的頁面狀態，寫入
   screenshots/TC-{N}/TC-{N}-{FAIL|ERROR|RETRY-n}.png。新增 tc_ 函式時不要為了
@@ -42,11 +44,16 @@ TC_REGISTRY 增減而變動（見 #681），CI log 判讀請認 "FAIL: 0" 與 "E
   乘上三條 CI matrix leg 是白付的（CI 的 screenshot artifact 上傳因 #11 長年
   continue-on-error，平常沒有人下載查看）。仍然合理的例外：
     1. 已經寫在 except 分支、只在特定子步驟逾時/失敗時才觸發的截圖（例如
-       login()、TC-04、TC-24 的個別 timeout 分支）——這些本來就是條件式的，
-       成功執行不會被呼叫到，維持原樣。
-    2. TC-21（登入頁視覺驗收）與 TC-22（首頁 Dashboard 完整截圖）——這兩個 TC
-       的截圖本身就是測試的產出物（給人工複核的視覺快照），不是除錯用的步驟
-       紀錄，維持無條件拍照。
+       login()、TC-04、TC-24 的個別 timeout 分支，以及 #886 review 後移回
+       except 分支的 TC-04/24/25/26/27/28/29 共 12 處——這些 TC 在這條路徑
+       上沒有任何 assert 保護，swallow 掉的例外若不順手拍照就完全無跡可尋，
+       見各自 except 分支旁的行內註解）——這些本來就是條件式的，成功執行
+       不會被呼叫到，維持原樣、不受下面第 2 點的 opt-in flag 控制。
+    2. TC-21（登入頁視覺驗收）與 TC-22（首頁 Dashboard 版面驗證）——這兩個 TC
+       的判定完全來自 DOM/佈局 assert，截圖本身不是任何斷言的依據，且 CI 的
+       screenshot artifact 上傳本來就不可靠（#11）。因此改為 opt-in：預設不拍，
+       設 WTM_E2E_VISUAL_SNAPSHOTS=1 才會產生，給人工複核視覺版面用（TC-22
+       逾時分支本身的診斷截圖不受此 flag 控制，理由同第 1 點）。
 """
 
 import asyncio
@@ -71,6 +78,14 @@ HEADLESS = os.environ.get("WTM_E2E_HEADLESS", "true").lower() not in ("false", "
 # Issue #681: mirrors the demo process's own WTM_E2E_KILLSWITCH env var (read by
 # _Layout.cshtml) so tc_33/34/35 know which assertions are valid for THIS run.
 KILLSWITCH_EXPECTED = os.environ.get("WTM_E2E_KILLSWITCH", "0").strip() == "1"
+# Issue #886 review (MEDIUM): TC-21/TC-22's screenshots were exempted from the
+# failure-only policy on the theory that "producing the image is the test's
+# purpose" — but no assertion in either TC actually consumes the image (TC-21's
+# verdict comes from the DOM asserts, TC-22's from the layout asserts), and CI
+# can't reliably hand them back anyway (`actions/upload-artifact@v4` vs Gitea's
+# GHES API, #11, continue-on-error). So they don't get an unconditional-by-default
+# pass; they're opt-in for a human doing a manual visual check.
+VISUAL_SNAPSHOTS = os.environ.get("WTM_E2E_VISUAL_SNAPSHOTS", "0").strip() == "1"
 
 # WTM Analysis Mode 已知 VM 型別（demo 中 [EnableAnalysis] 標記的 ListVM）
 STUDENT_LIST_VM = "WalkingTec.Mvvm.Demo.ViewModels.StudentVMs.StudentListVM"
@@ -484,7 +499,10 @@ async def tc_04_analysis_mode_page(page, **_):
     try:
         await page.wait_for_selector("[id^='analysis-panel-']", state="visible", timeout=5000)
     except Exception:
-        pass  # fallback: panel may already be visible
+        # issue #886 review: this wait is swallowed and the assert below can still
+        # PASS if the panel shows up late, so capture the moment of the timeout —
+        # otherwise a silently-slow panel leaves no trace at all.
+        await page.screenshot(path=sc(4, "03-analysis-panel-open"), full_page=True)
 
     # 確認面板已顯示
     # 面板 ID 格式: analysis-panel-{gridId}，gridId = wtTable_{UniqueId}
@@ -1088,23 +1106,28 @@ async def tc_21_login_visual(page, **_):
     優先度: P2
     預估執行: 5s
 
-    截圖登入頁面完整 UI，確認：
+    確認登入頁面完整 UI：
     - 背景圖存在（app-login-back-{1-5} class）
     - 驗證碼圖片存在
-    - 桌面 + 手機響應式截圖
+    - 桌面 + 手機響應式版面
 
     預期結果：
     - 登入表單正確顯示
     - 背景 class 為 app-login-back-{1-5}
     - 驗證碼圖片 #verify_code_img 存在
+
+    issue #886 review：本 TC 的判定完全來自下面的 DOM assert，不依賴任何截圖 ——
+    桌面/手機兩張快照預設不拍（VISUAL_SNAPSHOTS 預設 off），設環境變數
+    WTM_E2E_VISUAL_SNAPSHOTS=1 才會產生，給人工複核視覺版面用。
     """
     print("[TC-21] 開始執行...")
 
-    # 桌面截圖 1280x800
+    # 桌面 1280x800
     await page.set_viewport_size({"width": 1280, "height": 800})
     await page.goto(f"{BASE_URL}/Login/Login")
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(21, "01-desktop-1280x800"), full_page=True)
+    if VISUAL_SNAPSHOTS:
+        await page.screenshot(path=sc(21, "01-desktop-1280x800"), full_page=True)
 
     # 確認背景 class
     bg_div = page.locator("div.loginBody")
@@ -1132,28 +1155,31 @@ async def tc_21_login_visual(page, **_):
     logo = page.locator("header.login-header img")
     logo_count = await logo.count()
     print(f"  Logo img 數量: {logo_count}")
-    await page.screenshot(path=sc(21, "02-desktop-elements"))
+    if VISUAL_SNAPSHOTS:
+        await page.screenshot(path=sc(21, "02-desktop-elements"))
 
-    # 手機截圖 375x812
+    # 手機 375x812
     await page.set_viewport_size({"width": 375, "height": 812})
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path=sc(21, "03-mobile-375x812"), full_page=True)
+    if VISUAL_SNAPSHOTS:
+        await page.screenshot(path=sc(21, "03-mobile-375x812"), full_page=True)
 
     # 還原視窗大小
     await page.set_viewport_size({"width": 1280, "height": 800})
 
-    print("[TC-21] PASS -- 登入頁視覺驗收完成")
+    print("[TC-21] PASS -- 登入頁表單驗證通過"
+          + ("（視覺快照已產生）" if VISUAL_SNAPSHOTS else ""))
 
 
-# ─── TC-22: 首頁 Dashboard 完整截圖 ─────────────────────────────────────────
+# ─── TC-22: 首頁 Dashboard 版面驗證 ─────────────────────────────────────────
 
 async def tc_22_dashboard(page, **_):
     """
-    TC-22: 首頁 Dashboard 完整截圖
+    TC-22: 首頁 Dashboard 版面驗證
     優先度: P2
     預估執行: 8s
 
-    登入後截圖完整首頁，確認：
+    登入後確認完整首頁版面：
     - 側邊選單存在
     - 頂部 header 存在
     - FrontPage 中的 layui-card 區塊存在
@@ -1162,6 +1188,10 @@ async def tc_22_dashboard(page, **_):
     - .layui-layout-admin 存在
     - .layui-side-menu 存在
     - .layui-header 存在
+
+    issue #886 review：判定完全來自下面的佈局 assert，不依賴任何截圖。逾時分支
+    的截圖（sidebar 未如期出現）維持無條件拍照 —— 那是失敗診斷，不是視覺驗收；
+    其餘三張完整版面快照預設不拍，設 WTM_E2E_VISUAL_SNAPSHOTS=1 才會產生。
     """
     print("[TC-22] 開始執行...")
 
@@ -1171,8 +1201,10 @@ async def tc_22_dashboard(page, **_):
         # sidebar 出現代表 dashboard iframe 已完整 render
         await page.wait_for_selector(".layui-side-menu", state="visible", timeout=5000)
     except Exception:
+        # 失敗診斷，不受 VISUAL_SNAPSHOTS 控制 —— 這是 sidebar 逾時未出現的證據。
         await page.screenshot(path=sc(22, "01-dashboard-layout-timeout"), full_page=True)
-    await page.screenshot(path=sc(22, "01-dashboard-full"), full_page=True)
+    if VISUAL_SNAPSHOTS:
+        await page.screenshot(path=sc(22, "01-dashboard-full"), full_page=True)
 
     # 確認主要佈局元素
     layout = page.locator(".layui-layout-admin")
@@ -1198,7 +1230,8 @@ async def tc_22_dashboard(page, **_):
         item_text = await menu_items.nth(i).locator("a > cite").first.text_content()
         print(f"    選單 {i}: {item_text}")
 
-    await page.screenshot(path=sc(22, "02-sidebar-menu"))
+    if VISUAL_SNAPSHOTS:
+        await page.screenshot(path=sc(22, "02-sidebar-menu"))
 
     # 確認使用者名稱顯示
     user_cite = page.locator(".layui-layout-right .layui-nav-item cite")
@@ -1206,12 +1239,13 @@ async def tc_22_dashboard(page, **_):
         user_name = await user_cite.first.text_content()
         print(f"  登入使用者: {user_name}")
 
-    # 截圖 body 區域（FrontPage 內容透過 iframe 載入）
+    # body 區域（FrontPage 內容透過 iframe 載入）
     body = page.locator("#LAY_app_body")
-    if await body.count() > 0:
+    if await body.count() > 0 and VISUAL_SNAPSHOTS:
         await page.screenshot(path=sc(22, "03-main-body"))
 
-    print("[TC-22] PASS -- Dashboard 截圖完成")
+    print("[TC-22] PASS -- Dashboard 佈局驗證通過"
+          + ("（視覺快照已產生）" if VISUAL_SNAPSHOTS else ""))
 
 
 # ─── TC-23: Analysis Meta API 驗證（#516 修復） ─────────────────────────────
@@ -1284,11 +1318,11 @@ async def tc_23_analysis_meta_api(page, **_):
     print("[TC-23] PASS -- Meta API 驗證完成（含 #516 allowedValues）")
 
 
-# ─── TC-24: Analysis 完整查詢流程截圖 ────────────────────────────────────────
+# ─── TC-24: Analysis 完整查詢流程 ────────────────────────────────────────────
 
 async def tc_24_analysis_full_flow(page, **_):
     """
-    TC-24: Analysis 完整查詢流程截圖
+    TC-24: Analysis 完整查詢流程
     優先度: P1
     預估執行: 15s
 
@@ -1325,7 +1359,9 @@ async def tc_24_analysis_full_flow(page, **_):
     try:
         await page.wait_for_selector(".layui-table-tool", state="attached", timeout=3000)
     except Exception:
-        pass  # graceful: toolbar may not be present in this demo config
+        # issue #886 review: TC-24 has no assert on this path — a swallowed timeout
+        # here is otherwise completely invisible, so capture it.
+        await page.screenshot(path=sc(24, "01-student-grid"), full_page=True)
 
     # Step 1: 開啟分析面板
     analysis_btn = page.locator("button:has-text('分析模式')")
@@ -1354,7 +1390,8 @@ async def tc_24_analysis_full_flow(page, **_):
             try:
                 await page.wait_for_selector(".analysis-field-pool", state="visible", timeout=5000)
             except Exception:
-                pass  # fallback if timing varies
+                # issue #886 review: no assert follows this on the swallow path — capture it.
+                await page.screenshot(path=sc(24, "02-panel-open"))
 
             # Step 2: 確認欄位載入
             pills = page.locator(".analysis-pill")
@@ -1399,7 +1436,8 @@ async def tc_24_analysis_full_flow(page, **_):
                         try:
                             await page.wait_for_selector(".analysis-result-section, canvas, .analysis-result-section table", state="visible", timeout=5000)
                         except Exception:
-                            pass
+                            # issue #886 review: no assert follows this on the swallow path — capture it.
+                            await page.screenshot(path=sc(24, "06-query-result"))
 
                         # 確認結果區顯示
                         result_section = page.locator(".analysis-result-section")
@@ -1436,7 +1474,7 @@ async def tc_24_analysis_full_flow(page, **_):
         data = json.loads(await resp.text())
         print(f"  API rows: {len(data.get('rows', []))}")
 
-    print("[TC-24] PASS -- Analysis 完整流程截圖完成")
+    print("[TC-24] PASS -- Analysis 完整流程驗證通過")
 
 
 # ─── TC-25: Grid 分頁功能 ───────────────────────────────────────────────────
@@ -1477,7 +1515,8 @@ async def tc_25_grid_paging(page, **_):
     try:
         await page.wait_for_selector(".layui-table-body tr[data-index]", state="attached", timeout=3000)
     except Exception:
-        pass
+        # issue #886 review: TC-25 has no assert on this path — capture the swallow.
+        await page.screenshot(path=sc(25, "01-grid-initial"))
 
     # 確認分頁元件存在
     pager = page.locator(".layui-table-page")
@@ -1521,7 +1560,7 @@ async def tc_25_grid_paging(page, **_):
 
 async def tc_26_crud_flow(page, **_):
     """
-    TC-26: Student CRUD 完整流程截圖
+    TC-26: Student CRUD 完整流程
     優先度: P1
     預估執行: 15s
 
@@ -1584,7 +1623,8 @@ async def tc_26_crud_flow(page, **_):
     try:
         await page.wait_for_selector(".layui-table-body tr[data-index]", state="visible", timeout=3000)
     except Exception:
-        pass
+        # issue #886 review: TC-26 has no assert on this path — capture the swallow.
+        await page.screenshot(path=sc(26, "03-student-list"))
 
     # Step 4: 搜尋面板
     search_panel = page.locator(".layui-form[id^='wtForm_']")
@@ -1595,10 +1635,10 @@ async def tc_26_crud_flow(page, **_):
     search_btn = page.locator("button:has-text('搜索'), button:has-text('Search')")
     print(f"  搜尋按鈕: {await search_btn.count()}")
 
-    print("[TC-26] PASS -- CRUD 流程截圖完成")
+    print("[TC-26] PASS -- CRUD 流程驗證通過")
 
 
-# ─── TC-27: 使用者管理頁面完整截圖 ──────────────────────────────────────────
+# ─── TC-27: 使用者管理頁面 ──────────────────────────────────────────────────
 
 async def tc_27_user_management(page, **_):
     """
@@ -1624,7 +1664,9 @@ async def tc_27_user_management(page, **_):
     try:
         await page.wait_for_selector(".layui-table-body", state="visible", timeout=3000)
     except Exception:
-        pass
+        # issue #886 review: TC-27 has no assert on this path (table_count==0 still
+        # PASSes below) — capture the swallow, it's the only trace we'd otherwise have.
+        await page.screenshot(path=sc(27, "01-user-list"))
 
     # 確認 grid 存在
     table = page.locator(".layui-table-body")
@@ -1649,7 +1691,7 @@ async def tc_27_user_management(page, **_):
     search = page.locator(".layui-form")
     print(f"  搜尋面板: {await search.count()}")
 
-    print("[TC-27] PASS -- 使用者管理頁面截圖完成")
+    print("[TC-27] PASS -- 使用者管理頁面驗證通過")
 
 
 # ─── TC-28: 角色管理 + 權限設定 ─────────────────────────────────────────────
@@ -1673,7 +1715,8 @@ async def tc_28_role_management(page, **_):
     try:
         await page.wait_for_selector(".layui-table-body", state="visible", timeout=3000)
     except Exception:
-        pass
+        # issue #886 review: TC-28 has no assert anywhere — capture the swallow.
+        await page.screenshot(path=sc(28, "01-role-list"))
 
     # 確認 grid
     table = page.locator(".layui-table-body")
@@ -1694,7 +1737,8 @@ async def tc_28_role_management(page, **_):
     try:
         await page.wait_for_selector(".layui-table-body, .layui-form", state="visible", timeout=3000)
     except Exception:
-        pass
+        # issue #886 review: TC-28 has no assert anywhere — capture the swallow.
+        await page.screenshot(path=sc(28, "02-data-privilege"))
 
     # FrameworkMenu
     await page.goto(f"{BASE_URL}/_Admin/FrameworkMenu/Index")
@@ -1702,14 +1746,15 @@ async def tc_28_role_management(page, **_):
     try:
         await page.wait_for_selector(".layui-table-body, .layui-nav", state="visible", timeout=3000)
     except Exception:
-        pass
+        # issue #886 review: TC-28 has no assert anywhere — capture the swallow.
+        await page.screenshot(path=sc(28, "03-menu-list"))
 
     menu_table = page.locator(".layui-table-body")
     if await menu_table.count() > 0:
         menu_rows = page.locator(".layui-table-body tr[data-index]")
         print(f"  選單項目數: {await menu_rows.count()}")
 
-    print("[TC-28] PASS -- 角色管理截圖完成")
+    print("[TC-28] PASS -- 角色管理驗證通過")
 
 
 # ─── TC-29: ETL 管理頁面 ────────────────────────────────────────────────────
@@ -1738,7 +1783,8 @@ async def tc_29_etl_management(page, **_):
     try:
         await page.wait_for_selector(".layui-table-body, input[name='Searcher.Name']", state="visible", timeout=3000)
     except Exception:
-        pass
+        # issue #886 review: TC-29 has no assert anywhere — capture the swallow.
+        await page.screenshot(path=sc(29, "01-etl-job-list"))
 
     # 確認搜尋面板欄位
     name_input = page.locator("input[name='Searcher.Name']")
@@ -1759,7 +1805,8 @@ async def tc_29_etl_management(page, **_):
     try:
         await page.wait_for_selector("select[name='Searcher.Result'], .layui-table-body", state="visible", timeout=3000)
     except Exception:
-        pass
+        # issue #886 review: TC-29 has no assert anywhere — capture the swallow.
+        await page.screenshot(path=sc(29, "02-etl-runlog"))
 
     # Run Log 搜尋面板
     result_select = page.locator("select[name='Searcher.Result']")
@@ -1767,14 +1814,14 @@ async def tc_29_etl_management(page, **_):
     print(f"  RunLog 搜尋: Result={await result_select.count()}, "
           f"Trigger={await trigger_select.count()}")
 
-    print("[TC-29] PASS -- ETL 管理頁面截圖完成")
+    print("[TC-29] PASS -- ETL 管理頁面驗證通過")
 
 
 # ─── TC-30: 匯入功能流程 ────────────────────────────────────────────────────
 
 async def tc_30_import_flow(page, **_):
     """
-    TC-30: Student 匯入功能流程截圖
+    TC-30: Student 匯入功能流程
     優先度: P2
     預估執行: 8s
 
@@ -1839,7 +1886,7 @@ async def tc_30_import_flow(page, **_):
     )
     print(f"  Import 頁面 HTTP: {template_response.status}")
 
-    print("[TC-30] PASS -- 匯入功能流程截圖完成")
+    print("[TC-30] PASS -- 匯入功能流程驗證通過")
 
 
 # ─── TC-31: WorkFlow 設計器完整創作流程 (T-DSN-18 e2e smoke) ─────────────────
@@ -2548,9 +2595,12 @@ async def tc_36_tenant_switch(page, **_):
 # 現在的政策：TC 主流程（happy path）不再逐步拍照，只靠這裡的 _screenshot_on_failure
 # 在 run_tests() 的例外處理路徑上，對「這次失敗/重試當下」的頁面狀態拍一張。已經
 # 位在 except 分支裡、只在特定子步驟逾時才觸發的截圖（例如 login()、TC-04、TC-24
-# 的個別 timeout 分支）維持原樣不動——它們本來就是條件式的，成功執行不會付出任何
-# 成本。TC-21（登入頁視覺驗收）與 TC-22（首頁 Dashboard 完整截圖）例外：這兩個 TC
-# 的截圖本身就是測試的產出物（視覺驗收快照），不是除錯用的步驟紀錄，維持無條件拍照。
+# 的個別 timeout 分支，以及 #886 review 後移回 except 分支的 TC-04/24/25/26/27/
+# 28/29 共 12 處——這些 TC 在該路徑上沒有任何 assert 保護，swallow 掉的例外若不
+# 順手拍照就完全無跡可尋）維持原樣不動——它們本來就是條件式的，成功執行不會付出
+# 任何成本。TC-21/TC-22 例外（#886 review 後修正）：這兩個 TC 的判定完全來自 DOM/
+# 佈局 assert，截圖本身不是任何斷言的依據，因此改為 opt-in（WTM_E2E_VISUAL_
+# SNAPSHOTS=1），不再無條件拍照——見 VISUAL_SNAPSHOTS 常數旁的說明。
 
 async def _screenshot_on_failure(page, tc_num, label):
     """
@@ -2589,6 +2639,14 @@ def _is_retryable_error(exc: Exception) -> bool:
     """
     判斷錯誤是否應重試。
     只對 timeout 和 navigation 錯誤重試，不對 assertion 失敗重試。
+
+    issue #886 review：這裡曾經多一條 `isinstance(exc, asyncio.CancelledError)`
+    分支，但呼叫端只把這個函式用在 `except Exception as e:` 抓到的 `e` 上——Python
+    3.8 起 `asyncio.CancelledError` 改繼承 `BaseException`、不是 `Exception`，那個
+    分支永遠不可能被觸發，是死碼。已移除；`asyncio.CancelledError` 若真的發生會
+    直接從 run_tests() 的 try/except 穿出去（未捕捉），這是既有行為，不是本次改動
+    引入的——真要處理它需要另外多一層 `except (Exception, asyncio.CancelledError)`
+    或改用 `except BaseException`，那是設計取捨，留給 #898 一併評估。
     """
     exc_str = str(exc).lower()
     exc_type = type(exc).__name__.lower()
@@ -2598,9 +2656,6 @@ def _is_retryable_error(exc: Exception) -> bool:
         return True
     # Navigation errors
     if any(kw in exc_str for kw in ["navigation", "net::err_", "failed to fetch", "aborted"]):
-        return True
-    # asyncio.CancelledError
-    if isinstance(exc, asyncio.CancelledError):
         return True
     return False
 
@@ -2721,19 +2776,29 @@ async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
                 except TestSkipped as e:
                     # Real skip (#681): no scenario to test in this environment.
                     # Distinct status — must NOT be counted as PASS or FAIL.
+                    # Accounting first, diagnostics best-effort after (issue #886
+                    # review, MEDIUM): a print() can raise BrokenPipeError if stdout
+                    # is closed, and that must never cost us the result record.
                     elapsed = (datetime.now() - start).total_seconds()
-                    print(f"[TC-{tc_num:02d}] SKIP: {e}")
                     results.append({"tc": tc_num, "status": "SKIP", "error": str(e), "elapsed": elapsed, "retries": retry_count})
                     last_error = None
+                    try:
+                        print(f"[TC-{tc_num:02d}] SKIP: {e}")
+                    except Exception:
+                        pass  # diagnostics only; the result above is already recorded
                     break
                 except AssertionError as e:
-                    # Assertion failures: no retry, mark as FAIL immediately
+                    # Assertion failures: no retry, mark as FAIL immediately.
+                    # Accounting first, diagnostics best-effort after — see note above.
                     elapsed = (datetime.now() - start).total_seconds()
-                    print(f"[TC-{tc_num:02d}] FAIL: {e}")
-                    await _screenshot_on_failure(page, tc_num, "FAIL")
-                    await _log_console_errors(page, tc_num)
                     results.append({"tc": tc_num, "status": "FAIL", "error": str(e), "elapsed": elapsed, "retries": retry_count})
                     last_error = None
+                    try:
+                        print(f"[TC-{tc_num:02d}] FAIL: {e}")
+                        await _screenshot_on_failure(page, tc_num, "FAIL")
+                        await _log_console_errors(page, tc_num)
+                    except Exception:
+                        pass  # diagnostics only; the result above is already recorded
                     break
                 except Exception as e:
                     elapsed = (datetime.now() - start).total_seconds()
@@ -2742,9 +2807,18 @@ async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
 
                     if is_retryable and attempt < MAX_RETRIES:
                         retry_count += 1
-                        print(f"[TC-{tc_num:02d}] {error_str} — retry {retry_count}/{MAX_RETRIES}")
-                        await _screenshot_on_failure(page, tc_num, f"RETRY-{retry_count}")
-                        await _log_console_errors(page, tc_num)
+                        # No results.append() on this path — it's a retry, not a
+                        # final outcome. But everything below MUST still run (the
+                        # continue is what keeps the retry loop alive), so wrap the
+                        # diagnostics: a BrokenPipeError from print() here must not
+                        # escape the except block and abort run_tests() entirely
+                        # (issue #886 review, MEDIUM).
+                        try:
+                            print(f"[TC-{tc_num:02d}] {error_str} — retry {retry_count}/{MAX_RETRIES}")
+                            await _screenshot_on_failure(page, tc_num, f"RETRY-{retry_count}")
+                            await _log_console_errors(page, tc_num)
+                        except Exception:
+                            pass  # diagnostics only; the retry must proceed regardless
                         # Create fresh context for retry to avoid state leakage
                         await context.close()
                         context = await browser.new_context(
@@ -2759,15 +2833,19 @@ async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
                         page._captured_console = console_capture.messages
                         continue
 
-                    # Non-retryable error or retries exhausted
-                    print(f"[TC-{tc_num:02d}] ERROR: {error_str}")
-                    if is_retryable:
-                        print(f"  (retries exhausted after {MAX_RETRIES})")
-                    traceback.print_exc()
-                    await _screenshot_on_failure(page, tc_num, "ERROR")
-                    await _log_console_errors(page, tc_num)
+                    # Non-retryable error or retries exhausted.
+                    # Accounting first, diagnostics best-effort after — see note above.
                     results.append({"tc": tc_num, "status": "ERROR", "error": error_str, "elapsed": elapsed, "retries": retry_count})
                     last_error = None
+                    try:
+                        print(f"[TC-{tc_num:02d}] ERROR: {error_str}")
+                        if is_retryable:
+                            print(f"  (retries exhausted after {MAX_RETRIES})")
+                        traceback.print_exc()
+                        await _screenshot_on_failure(page, tc_num, "ERROR")
+                        await _log_console_errors(page, tc_num)
+                    except Exception:
+                        pass  # diagnostics only; the result above is already recorded
                     break
             else:
                 # Loop completed without break (shouldn't happen, but safety net)
