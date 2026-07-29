@@ -34,7 +34,7 @@ grep -rniE 'EnforceTenantFileScope|EnforceVmExportAuthorization|EnforceFileAcces
 
 | # | 修好了什麼 | 機制 | Fixed in |
 |---|---|---|---|
-| 1 | **任何已認證的呼叫者，只要知道 GUID，就能讀取或刪除任何租戶的檔案** | `FileUploadOptions.EnforceTenantFileScope` 預設由 `false` 改為 `true`。`WtmFileProvider` 因此讓 `FileAttachment` 的 `ITenant` global query filter 生效，不再呼叫 `IgnoreQueryFilters()`。**你複製走的 `FileApiController` 也是呼叫套件的 `WtmFileProvider` 來解析檔案的，所以它一併被修好** | **10.19.0**（#859） |
+| 1 | **任何已認證的呼叫者，只要知道 GUID，就能讀取或刪除任何租戶的檔案** | `FileUploadOptions.EnforceTenantFileScope` 預設由 `false` 改為 `true`。`WtmFileProvider` 因此讓 `FileAttachment` 的 `ITenant` global query filter 生效，不再呼叫 `IgnoreQueryFilters()`。**你複製走的 `FileApiController` 有部分一併被修好** —— `GetFile`／`GetUserPhoto`／`DownloadFile` 確實是呼叫套件的 `WtmFileProvider` 解析檔案，因此隨升級一起修好；**但 `GetFileInfo` 不是**（見下方「第 1 項涵蓋不到的地方」） | **10.19.0**（#859） |
 | 2 | inline 編輯可寫入任意 `FileAttachment` 外鍵 | `/_Framework/UpdateModelProperty` 依 EF relationship metadata 拒絕任何 principal 為 `FileAttachment` 的 FK。無旗標、預設生效 | **10.19.0**（#824 的一個 sink） |
 | 3 | `IsFilePublic=true` 現在會在啟動時告警 | 非 Development 環境下發出 `LogCritical`，指名被開放的路由 | **10.19.0**（#859） |
 
@@ -43,6 +43,34 @@ grep -rniE 'EnforceTenantFileScope|EnforceVmExportAuthorization|EnforceFileAcces
 這是**預設行為變更**。單租戶部署零影響（兩邊 `TenantCode` 都是 `null`）。
 
 **多租戶部署請先確認**：若你的記錄合法引用了多租戶啟用前（或經 main host）上傳的 `TenantCode = NULL` 舊檔，升級後這些檔案將無法解析。這是刻意的 —— 放寬它會重開 #815 關掉的同一個 primitive。需要保留舊行為者可設 `FileUploadOptions.EnforceTenantFileScope = false` 明確 opt out，但那會恢復跨租戶讀取。
+
+### 第 1 項涵蓋不到的地方 —— `GetFileInfo`
+
+升級**不會**修好你複製走的 `GetFileInfo`。它不經過 `WtmFileProvider`：
+
+```csharp
+[Public]
+public IActionResult GetFileInfo([FromServices] WtmFileProvider fp, string id, string csName = null)
+{
+    FileAttachment rv = new FileAttachment();
+    using (var dc = Wtm.CreateDC(cskey: csName))
+    {
+        rv = dc.Set<FileAttachment>().CheckID(id).FirstOrDefault();
+    }
+    return Ok(rv);          // ← 整個 entity
+}
+```
+
+`EnforceTenantFileScope` 這個旗標只控制 `WtmFileProvider.GetFile` 要不要呼叫 `IgnoreQueryFilters()`。這裡直接查 `dc.Set<FileAttachment>()`，那個旗標碰不到它 —— **升級到 10.19.0 對這個 action 沒有任何作用**。
+
+它的曝險與跨租戶無關（`dc.Set<>()` 本來就吃 `ITenant` global filter），而是**未認證**：
+
+- `[Public]` 讓 `PrivilegeFilter` 提前 return，跳過身分檢查
+- `return Ok(rv)` 回傳的是**整個** `FileAttachment` entity，包含 `Path`、`ExtraInfo`、`HandlerInfo`，以及 —— 若你的 `SaveMode` 是 `database` —— **`byte[] FileData`，也就是檔案內容本身**
+
+因此在單租戶部署（`TenantCode` 兩邊都是 `null`，filter 恆成立）上，任何知道 GUID 的**匿名**呼叫者可取得完整檔案內容。多租戶部署則限縮在「與呼叫者 DC 同租戶」的檔案。
+
+→ **這一條屬於第三類（你必須改自己複製走的程式碼），修法見 3a。** 列在這裡是因為第 1 項的敘述容易讓人以為升級就夠了。
 
 ### 第 2 項的相容性
 
@@ -77,7 +105,7 @@ inline grid cell 編輯無法上傳檔案、只能手打 GUID，因此合法用�
 | `GetFileName` / `GetFile` / `GetFileInfo` / `GetUserPhoto` / `DownloadFile` 標記 `[Public]`（`IAllowAnonymous`）→ **未認證讀取** | 移除這五個 `[Public]` |
 | `DeletedFile` 呼叫非 tenant-scoped 的 `DeleteFile`，且是 **HTTP GET** | 改用 `DeleteFileTenantScoped`，並改為 `[HttpPost]` |
 | 八個 action 的 `csName` 直通 `Wtm.CreateDC(cskey:)`，**零驗證** | 每一處加上 `WTMContext.IsKnownConnectionKey` 驗證 |
-| `GetFileInfo` 直接查 `dc.Set<FileAttachment>()` 並回傳整個 entity | 改走 `WtmFileProvider`，只回傳呼叫端需要的欄位 |
+| `GetFileInfo` 直接查 `dc.Set<FileAttachment>()` 並 `Ok(rv)` 回傳**整個 entity** —— 含 `Path`／`ExtraInfo`／`HandlerInfo`，且 `SaveMode=database` 時含 **`byte[] FileData`（檔案內容本身）**。**升級碰不到這一條**：它不經過 `WtmFileProvider`，`EnforceTenantFileScope` 對它無效 | 改走 `WtmFileProvider`，只回傳呼叫端需要的欄位 |
 
 **canonical 修法**：`git diff 50d26c7b5^ 50d26c7b5 -- demo/` 對照你的副本。
 
@@ -110,10 +138,21 @@ curl -i -X POST https://<your-host>/_Admin/FrameworkMenu/Create \
 | 6 | `GetPagingData`／`GetEmptyData`／`Selector` **完全沒有** per-VM 閘門。#796 修的是 Excel 匯出，`GetPagingData` 是同一份資料的 JSON 版 | #812 |
 | 7 | `[EnableAnalysis]` 的 `AllowedRoles` 無初值 → `CheckAccess` 首行即放行；`_DashboardController`／`_DashboardDesignerController` 的三個端點連 `CheckAccess` 都沒呼叫 | #842 |
 | 8 | Dashboard viewer 可覆寫持久化 widget 的 query 結構（`listVmType`／dimensions／measures／filters） | #831 |
-| 9 | 背景 job 的列級 DataPrivilege **fail-open** —— 無 `LoginUserInfo` 時直接回傳未過濾查詢 | #843 |
-| 10 | 多租戶 ETL job 重啟後不會被排程；`EtlRunLog` 沒有實作 `ITenant`，因此不受 global filter 保護；三個 ETL controller 缺角色閘門 | #832、#841 |
+| 9 | 多租戶 ETL job 重啟後不會被排程（背景排程器的 `CreateDC` 只認 `LoginUserInfo.CurrentTenant`，背景執行恆為 null） | #832 |
+| 10 | `RedoUpdateModel` 對呼叫者提供的每個 form／query key 以原始反射寫入 VM，無 allowlist、無 dotted-path 限制 —— 可經 dotted path 觸及 DI singleton，**一個 form 欄位即造成 process-wide 組態變更** | #867 |
+| 11 | `EtlSchedulerService` 多處 `IgnoreQueryFilters()` 位於 HTTP 共用路徑，controller 只檢查角色不比對租戶 —— **跨租戶 IDOR**（tenant A 的 ETLAdmin 可操作／預覽 tenant B 的 job） | #883 |
 
 第 5 項對已認證使用者的影響最廣。**目前沒有可用的緩解措施** —— 把旗標設為 `true` 會讓對應端點對所有人回 403。
+
+第 11 項目前被另一個缺陷（#876：整個 `WalkingTec.Mvvm.Etl` 組件的 controller 從未接到 WTM 三個全域 filter，`Wtm` 恆為 null，所有角色守衛對**所有**呼叫者 fail-closed）意外遮住 —— ETL 管理 UI 透過瀏覽器目前是壞的，而不是「有保護且可用」。**這不是緩解措施**：#876 一修好，#883 立即可觸發。兩者必須一起修，不可分開發布。
+
+### 本節在 2026-07-29 的更正（原草稿有兩列已過時）
+
+| 原第 9 項 | 背景 job 的列級 DataPrivilege fail-open（#843） | **已修**，10.20.0 起預設 fail-closed，逃生口是呼叫端明寫 `declaredSystemQuery: true`。詳見 `docs/production-readiness.md` |
+|---|---|---|
+| 原第 10 項 | `EtlRunLog` 未實作 `ITenant`；三個 ETL controller 缺角色閘門（#841） | **已修**（`EtlRunLog`／`EtlLineageRecord` 各補 `TenantCode` 欄位＋遷移腳本，三個 controller 補上與既有兩個相同的 Admin／ETLAdmin 守衛）。同批修掉的根因是 `ApplyEtlModels()` 在 `base.OnModelCreating()` **之後**才註冊 ETL 型別，導致 `ITenant` 過濾器**從未生效過** —— 若你的 `DataContext` 仍呼叫舊的無參數多載，你不會拿到這個修復，見第二類 |
+
+原第 10 項只有「多租戶 ETL job 重啟後不會被排程」（#832）仍成立，已保留為新的第 9 項。
 
 ---
 
@@ -130,6 +169,9 @@ curl -i -X POST https://<your-host>/_Admin/FrameworkMenu/Create \
 - [x] **四條速判命令實跑過** —— 在本 repo（已修）回傳預期的 0／已修值，並用 `git archive` 取出 `679e4358b^` 與 `50d26c7b5^` 的檔案重跑，確認在**受影響的樹**上分別回 1 個 `[Public]`（速判 C）與 Route + 7 個 `[Public]`（速判 B）。命令在兩種狀態下的行為都正確。
 - [x] **兩條 `git diff` 命令實跑過** —— `demo/` 得 11 檔／478+／165−，`Vue3Demo/ClientApp/` 得 5 檔／201+／95−，皆可用作對照。
 - [ ] `curl` 驗證命令實跑過 —— **尚未**，需要一個實際部署的 host。發布前必須在真實環境確認回傳 401/403 且無新列。
-- [ ] 與 `docs/production-readiness.md` 逐條比對無矛盾（衝突時以它為準）
+- [x] 與 `docs/production-readiness.md` 逐條比對無矛盾（衝突時以它為準）—— 比對實跑過，發現並已就地更正：
+  - **一處過度宣稱**：第一類第 1 項原稿聲稱「複製走的 `FileApiController` 也是呼叫套件的 `WtmFileProvider`，所以它一併被修好」。實查 `50d26c7b5^` 的模板：`GetFile`／`GetUserPhoto`／`DownloadFile` 確實經 `fp.GetFile(...)`，但 `GetFileInfo` 直接查 `dc.Set<FileAttachment>()` 並 `Ok(rv)` 整個 entity，`EnforceTenantFileScope` 對它無效——已收斂為「有部分」並新增獨立段落說明 `GetFileInfo` 的曝險（含 `SaveMode=database` 時 `byte[] FileData` 外洩，已對照 `FileAttachment.cs`／`WtmDataBaseFileHandler.cs` 確認屬實）。
+  - **兩列已過時**：第四類原第 9 項（#843 背景 DataPrivilege fail-open）與原第 10 項（#841 ETL 租戶／角色閘門，與 #832 混列）——查 API 確認 #843／#841 皆已 `closed`，已依 `docs/production-readiness.md:68` 更正、拆分，只保留仍開的 #832 留在「仍未修」清單，並新增第 11 項（#883，經查證與 #876 的遮蔽關係屬實，PR #882 待合併同時修兩票）。
+  - 比對過程另外發現公告本身教下游寫法的四處文件仍呼叫已棄用的 `ApplyEtlModels()` 零參數多載（不套用 `ITenant` 過濾器），與本文無直接關係但屬同一批交叉檢查的副產品，已獨立立案 #893，不在本 PR 範圍內處理。
 - [ ] 發布通道已裁決（Gitea issue／GitHub Security Advisory／兩者）
 - [ ] 決定是否為第一類第 1 項的相容性影響（NULL-tenant 舊檔）提供一個一次性稽核指令，讓下游升級前能自查有沒有中招
