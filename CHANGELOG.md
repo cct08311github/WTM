@@ -1593,6 +1593,7 @@ dotnet ef migrations add WorkFlowWave3 \
       modelBuilder.ApplyWorkFlowModels();  // WorkFlow tables
   }
   ```
+  > **Correction (2026-07-30):** the snippet above reflects 10.9.0, before #862. `modelBuilder.ApplyEtlModels();` is now the `[Obsolete]` zero-argument overload -- it registers the ETL tables but can never bind the `ITenant` query filter, so ETL entities silently lose tenant isolation. Use `modelBuilder.ApplyEtlModels(this);` instead; see `docs/etl-module.md` for the current example and #862/#893 for why.
 
 - **Safe defaults** (opt-in overrides required to restore prior implicit behavior):
   - `InitiatorAutoApprove = false` (default): the initiator is never auto-skipped as a first approver. Set `options.InitiatorAutoApprove = true` to restore prior draft behavior (explicit opt-in, constitutes a compliance bypass — document it).

@@ -1,10 +1,10 @@
 # CI Operations
 
 > **適用版本**：10.5.1+
-> **最後更新**：2026-06-21
+> **最後更新**：2026-07-30
 > **CI 平台**：Gitea Actions（self-hosted at `mac-mini.tailde842d.ts.net`）。**至少三個已註冊 runner**（見下方「Runner 拓撲」，2026-07-29／#885 更正——原記錄的兩個之外還有一個先前沒記到的 `azure-overflow-runner`）：WTM 的 `ubuntu-latest` jobs 主要跑在本機 Docker `act_runner`（`local-runner`），但也可能被 Gitea 排到 `azure-overflow-runner`；另有一個 Homebrew runner 服務其他專案。
 
-本文件涵蓋 WTM CI 工作流總覽、Gitea Actions 與 GitHub Actions 的四大已知不相容點，以及排錯 SOP。完整修復脈絡見 [Issue #11](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/issues/11) / [PR #12](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/pulls/12)。
+本文件涵蓋 WTM CI 工作流總覽、Gitea Actions 與 GitHub Actions 的五大已知不相容點，以及排錯 SOP。完整修復脈絡見 [Issue #11](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/issues/11) / [PR #12](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/pulls/12)。
 
 ---
 
@@ -17,11 +17,11 @@
 | `.github/workflows/integration-test.yml` | push + PR（含 SQL Server container） | `integration-test` |
 | `.github/workflows/publish-nuget.yml` | `push` tag `v*` + `workflow_dispatch` | NuGet pack→Gitea registry **＋ GitHub mirror sync（清洗 + go-forward push）＋ 建立 GitHub Release＋推 GitHub Packages**（見「Runner 拓撲與發版」） |
 
-Gitea Actions 直接讀 `.github/workflows/*.yml` — 語法與 GitHub Actions 相容、不必搬到 `.gitea/`。但有些 action 版本（特別是 v4+ artifact action）不支援 Gitea 的 GHES API，見下方四大不相容點。
+Gitea Actions 直接讀 `.github/workflows/*.yml` — 語法與 GitHub Actions 相容、不必搬到 `.gitea/`。但有些 action 版本（特別是 v4+ artifact action）不支援 Gitea 的 GHES API，見下方五大不相容點。
 
 ---
 
-## 四大已知不相容點
+## 五大已知不相容點
 
 ### 1. `actions/upload-artifact@v4` 在 Gitea 拋 `GHESNotSupportedError`
 
@@ -129,6 +129,23 @@ grep -nE "❌  Failure - Main " <job-log>
 這才是真正失敗的 step。`conclusion` 欄位**不可靠**作為單一信號。
 
 GitHub Actions 的 API 不是這個行為（GitHub 各 step 各自獨立 conclusion）。
+
+### 5. `actions/checkout@v5` 在 `pull_request` 事件只 checkout PR 自己的 head，不是 base+head 的 merge
+
+**事實**：job log 的 checkout step 印出：
+```
+[command]/usr/bin/git checkout --progress --force refs/remotes/pull/<N>/head
+```
+Gitea 對 `pull_request` 事件 checkout 的是 **PR 分支自己的快照**（`refs/remotes/pull/N/head`）。**這跟 GitHub Actions 相反**：GitHub 對同一事件 checkout 的是 base 與 head 的 merge 結果，PR 分支落後 base 多少個 commit 都無所謂，CI 永遠看得到 base 上最新的內容。Gitea 不會——PR 分支比 base 舊多少，CI 就看不到 base 上比它新的東西。
+
+**後果**（反直覺，值得記住）：
+- merge 一個修法進 `dotnet10` 之後，**既有** PR 的 CI 不會自動看到它。
+- 重新跑 checks、或 close/reopen PR **都沒用**——跑的還是同一個 `refs/remotes/pull/N/head`，Gitea 不會重新產生它。
+- 唯一解法：對 PR 自己的分支 push 新 commit（rebase 或 merge base 進去），讓 Gitea 重新產生 `refs/remotes/pull/N/head`。
+
+**排查問句**：PR 紅在一個「base 上明明已經修好」的斷言時，先問「這支 PR 的分支點，在 base 那次修法合併之前還是之後開的？」——之前，就是本項陷阱，不是新 regression。
+
+**案例（#906）**：#882 合併後 `docs/production-readiness.md` 已把 #876 從「未修」節移除，`dotnet10` 上 `ProductionReadinessBaselineDriftTests863` 三支測試全綠；但開在 #882 之前的 PR #881、#904 仍各自紅在同一斷言（`Expected:<0>. Actual:<1>. ... lists #876 as unfixed`），因為它們的 checkout 停在合併前的快照——需要各自 rebase/merge 最新 `dotnet10` 並 push 才會變綠，不是在 `dotnet10` 上再改一次文件能解決的。
 
 ---
 
@@ -258,7 +275,7 @@ grep -nE "Test Run Successful\.|Failed!|Total tests:" /tmp/job.log
 
 ### 4. 確認是 infrastructure 還是 code regression
 
-對照本文「四大已知不相容點」逐一比對 — 若 failure pattern 是其中之一 → infrastructure 問題，不是你的 PR 引入的 regression。
+對照本文「五大已知不相容點」逐一比對 — 若 failure pattern 是其中之一 → infrastructure 問題，不是你的 PR 引入的 regression。
 
 若不是其中之一 → 看 test output 找真正的 code regression。
 
@@ -272,14 +289,16 @@ grep -nE "Test Run Successful\.|Failed!|Total tests:" /tmp/job.log
 
 ```bash
 # 1. restore + build
-$HOME/.dotnet/dotnet restore ci.slnf
-$HOME/.dotnet/dotnet build ci.slnf --no-restore -c Release
+$HOME/.dotnet/dotnet restore core.slnf
+$HOME/.dotnet/dotnet build core.slnf --no-restore -c Release
 
 # 2. test with coverage
-$HOME/.dotnet/dotnet test WalkingTec.Mvvm.sln -c Release \
-  --no-build \
+$HOME/.dotnet/dotnet test core.slnf \
+  -m:1 \
+  --no-build -c Release \
+  --verbosity normal \
   --filter "TestCategory!=Integration" \
-  --logger "trx;LogFileName=test-results.trx" \
+  --logger "trx" \
   --collect:"XPlat Code Coverage" \
   --settings coverlet.runsettings \
   --results-directory ./TestResults
@@ -291,6 +310,10 @@ reportgenerator \
   -targetdir:"TestResults/CoverageReport" \
   -reporttypes:"Html;lcov;Cobertura;Badges"
 ```
+
+> **為什麼 `-m:1`？**（#902）`core.slnf` 涵蓋 7 個測試專案；MSBuild 預設 `-maxcpucount`（4）會同時起 4 個 testhost，在 CI runner 的 4 CPU / 3.8GiB Docker VM 上把彼此 OOM kill（Api.Test、Core.Test、Etl.Test 都中過）。本機資源通常比這寬裕，拿掉 `-m:1` 未必會在本機重現 OOM，但這代表你測不出 CI 實際會發生的行為——本機 reproduce 要忠實，保留 `-m:1`。
+>
+> **為什麼 `--logger "trx"` 不指定 `LogFileName`？**（#902）7 個專案若共用同一個固定檔名，只有最後一個的 TRX 會留下（其餘被 `WARNING: Overwriting results file` 蓋掉）；拿掉固定檔名讓 VSTest 自動命名，每個專案的 TRX 才都保留。
 
 ### 本機跑 e2e
 
@@ -309,9 +332,12 @@ python wtm_e2e_tests.py --headless --report results/junit.xml
 ### 本機跑 integration-test（需要 SQL Server）
 
 ```bash
-# 啟 SQL Server container（同 CI image）
+# 啟 SQL Server container（同 CI image；#767：mcr.microsoft.com/mssql/server 沒有
+# linux/arm64 build，在 Apple Silicon 上跑 QEMU x64 模擬會直接 crash，改用有原生
+# arm64 image 的 azure-sql-edge——同一顆 TDS-相容引擎，本專案的整合測試只做
+# 純 EF Core CRUD，沒用到 full-text search/CLR/temporal tables 等 edge 不支援的功能）
 docker run -e "ACCEPT_EULA=Y" -e "MSSQL_SA_PASSWORD=YourStr0ng!Pass" \
-  -p 1433:1433 -d mcr.microsoft.com/mssql/server:2022-latest
+  -p 1433:1433 -d mcr.microsoft.com/azure-sql-edge:latest
 
 sleep 15  # 等 SQL Server 冷啟動
 
@@ -319,7 +345,7 @@ export WTM_TEST_MSSQL="Server=localhost,1433;Database=WtmIntegrationTest;User Id
 $HOME/.dotnet/dotnet test test/WalkingTec.Mvvm.Integration.Test \
   -c Release --filter "TestCategory=Integration"
 
-docker stop $(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest")
+docker stop $(docker ps -q --filter "ancestor=mcr.microsoft.com/azure-sql-edge:latest")
 ```
 
 ---
