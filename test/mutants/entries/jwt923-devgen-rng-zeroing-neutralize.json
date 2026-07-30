@@ -1,0 +1,22 @@
+{
+  "id": "jwt923-devgen-rng-zeroing-neutralize",
+  "kind": "security",
+  "description": "Issue #931 item 6 (cross-vendor review of #923): every OTHER test in this file that exercises the Development ephemeral-key path (AddWtmAuthentication_DevelopmentEphemeralKey_IsWiredIntoBothConfigsObjectGraphs, the two code-delegate tests, etc.) only asserts that SOME 32+-byte key was generated and wired consistently into both the config.Get<Configs>() snapshot and IOptionsMonitor<Configs> -- none of them binds to the key actually being unpredictable. Replacing FrameworkServiceExtension.AddWtmAuthentication's `RandomNumberGenerator.GetBytes(32)` (a CSPRNG call) with `new byte[32]` (a deterministic, all-zero, entirely predictable array) would satisfy every one of those tests: the resulting Base64 string is still 32+ raw bytes, still not one of JwtOption.KnownPublicKeys, still gets wired into both object graphs identically -- but every process, every restart, every deployment would generate the IDENTICAL signing key, which is exactly as forgeable as a hardcoded one once it leaks (and 'the same base64 string every time this exact code path runs' is trivially guessable without any leak at all). This mutant reintroduces exactly that: `Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))` becomes `Convert.ToBase64String(new byte[32])`. The red test calls AddWtmAuthentication.CurrentValue.JwtOptions.SecurityKey from two INDEPENDENT ServiceCollection instances (no shared state) and asserts the two generated keys differ from each other and from the all-zero constant's own Base64 form -- under the mutant both independent calls produce the identical all-zero-derived string, failing both AreNotEqual assertions.",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs",
+  "target_symbol": "AddWtmAuthentication -- the `var generatedKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));` line inside the Development ephemeral-key branch, which must call the CSPRNG, not construct a zero-filled array",
+  "patch": "patches/jwt923-devgen-rng-zeroing-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Security.JwtAuthenticationStartupGateTests923.AddWtmAuthentication_DevelopmentEphemeralKey_IsNotConstant_AndDiffersAcrossIndependentCalls",
+  "red_tests": [
+    "WalkingTec.Mvvm.Core.Test.Security.JwtAuthenticationStartupGateTests923.AddWtmAuthentication_DevelopmentEphemeralKey_IsNotConstant_AndDiffersAcrossIndependentCalls"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Core.Test.Security.JwtAuthenticationStartupGateTests923.AddWtmAuthentication_DevelopmentEphemeralKey_IsNotConstant_AndDiffersAcrossIndependentCalls": "Assert\\.AreNotEqual failed\\."
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Verified for real via `python3 test/mutants/run_mutant.py --mutant jwt923-devgen-rng-zeroing-neutralize` against the committed tree on this branch: '--- VERDICT: KILLED --- all designated red tests failed with their expected assertion message: 'WalkingTec.Mvvm.Core.Test.Security.JwtAuthenticationStartupGateTests923.AddWtmAuthentication_DevelopmentEphemeralKey_IsNotConstant_AndDiffersAcrossIndependentCalls'. MUTANT jwt923-devgen-rng-zeroing-neutralize VERDICT: KILLED. GATE: PASS.' -- confirms run_mutant.py's own regex match against the red_expected_assertion_patterns entry (`Assert\\.AreNotEqual failed\\.`) succeeded against the real MSTest failure text produced when both independent GenerateOnce() calls resolve to the same all-zero-derived Base64 string under the mutant.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Security.JwtAuthenticationStartupGateTests923.AddWtmAuthentication_DevelopmentEphemeralKey_IsWiredIntoBothConfigsObjectGraphs",
+  "green_tests": [
+    "WalkingTec.Mvvm.Core.Test.Security.JwtAuthenticationStartupGateTests923.AddWtmAuthentication_DevelopmentEphemeralKey_IsWiredIntoBothConfigsObjectGraphs"
+  ]
+}

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -42,6 +43,22 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Fixtures
         /// <summary>The SQLite shared in-memory connection string — unique per fixture to isolate tests.</summary>
         public string DbConnectionString { get; }
 
+        /// <summary>
+        /// The random 256-bit signing key generated for this fixture instance — never a fixed
+        /// literal. #931 item 2: this fixture used to hardcode
+        /// <c>"WTM_Test_Key_AtLeast_32_Characters!!"</c>, which is exactly the demo-key defect
+        /// class #923 fixed elsewhere — <c>test/</c> is not excluded from the public GitHub
+        /// mirror sync (<c>.sync/github-excludes.txt</c>), so that literal was exactly as
+        /// public as a demo <c>appsettings.json</c> value, and is now permanently in
+        /// <c>JwtOption.KnownPublicKeys</c> regardless. Exposed here so dependent test files
+        /// that need to build their OWN <c>TokenValidationParameters</c> against tokens this
+        /// fixture's <see cref="TokenService"/> issues (e.g.
+        /// <c>JwtClaimsValidationTests</c>) read THIS value instead of duplicating a second
+        /// hardcoded literal that would immediately be just as public.
+        /// </summary>
+        public string GeneratedSecurityKey { get; } =
+            Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+
         public TokenTestFixture()
         {
             var dbName = $"TokenTest_{Guid.NewGuid():N}";
@@ -68,7 +85,7 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Fixtures
 
             // Build minimal Configs with JWT options
             var configs = new Configs();
-            configs.JwtOptions.SecurityKey = "WTM_Test_Key_AtLeast_32_Characters!!";
+            configs.JwtOptions.SecurityKey = GeneratedSecurityKey;
             configs.JwtOptions.Issuer = "WTM_Test";
             configs.JwtOptions.Audience = "WTM_Test";
             configs.JwtOptions.Expires = 3600;

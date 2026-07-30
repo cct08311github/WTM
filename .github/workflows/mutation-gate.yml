@@ -126,6 +126,51 @@ jobs:
     # wrapper to get backwards.
     - name: "Guard: never source a gitea-token file (#924)"
       run: python3 scripts/check-gitea-token-not-sourced.py
+    # #931 (cross-vendor review of #923's own JWT weak-key fix): #923 fixed the demo
+    # appsettings.json values that shipped a padded/known-weak SecurityKey, but the same
+    # review found four more fixed 32+-byte SecurityKey literals still in the tree -- three
+    # of them added BY #923's own commits -- plus a repo-wide sweep for the same pattern
+    # (this repo's own security posture: a confirmed issue class gets a full-codebase sweep,
+    # not just the reported instances) found three more pre-existing ones. `test/` is NOT
+    # excluded from the public GitHub mirror sync (.sync/github-excludes.txt), so a
+    # test-fixture literal is exactly as public as a demo config value once it lands on
+    # dotnet10. This step lives in `changes` for the identical reason the gitea-token guard
+    # above does: no path filter on either trigger means it is guaranteed to run even for a
+    # docs-only PR, which is exactly the shape most likely to reintroduce a stray literal
+    # unreviewed.
+    #
+    # The scan itself lives in scripts/check-jwt-key-literal-blocklisted.py, not inline
+    # here, because it cross-checks matches against JwtOption.KnownPublicKeys' own
+    # `baseKeys` array (extracted directly from JwtOptions.cs at scan time -- deliberately
+    # not a second, hand-maintained Python copy of the same list, see issue #855 defect 5).
+    # See that script's own docstring for the full rule, its exit codes (0 clean / 1
+    # violation / 2 scanner error -- distinct so a scanner failure can never read as a clean
+    # tree), and what it deliberately does not catch (a literal assigned to an intermediate
+    # variable and used indirectly). Its exit code becomes this step's exit code directly.
+    - name: "Guard: no unblocklisted fixed JWT signing-key literal >= 32 bytes (#931)"
+      run: python3 scripts/check-jwt-key-literal-blocklisted.py
+    # #931 follow-up: two mutant entry files were committed containing an invalid JSON
+    # escape (`\'`, a bash single-quote-escaping idiom pasted verbatim from console
+    # output instead of being reduced to the one character it represents). run_mutant.py's
+    # discover_entries() correctly refused to proceed -- reporting zero mutants run rather
+    # than a false pass (#855 defect 4's own protection) -- but it aborts on the FIRST
+    # broken file, so a CI run only ever names one problem at a time; a contributor fixes
+    # it, reruns, and discovers the next one a full CI round later. This step lives here,
+    # not only inside `mutants`/`meta-selftest` where discover_entries() runs for real,
+    # because `changes` has no path filter and always runs, and because failing here (cheap,
+    # no dotnet build) is strictly better than failing inside the expensive jobs downstream
+    # for the identical reason.
+    #
+    # The scan itself lives in scripts/check-mutant-entries-parse.py, not inline here,
+    # because it mirrors discover_entries()'s exact four checks (parses as JSON, has a
+    # non-empty 'id', 'id' matches the filename, 'kind' is valid) while collecting every
+    # failing file instead of stopping at the first -- see that script's own docstring for
+    # the concrete incident that motivated it, its exit codes, and its stated scope (it does
+    # NOT replicate run_mutant.py's patch/test-execution validation, which needs an actual
+    # dotnet build and belongs downstream). Its exit code becomes this step's exit code
+    # directly.
+    - name: "Guard: every mutant entry file parses and validates (#931)"
+      run: python3 scripts/check-mutant-entries-parse.py
     - name: Determine whether a gated path changed
       id: check
       shell: bash

@@ -1,0 +1,13 @@
+diff --git a/src/WalkingTec.Mvvm.Core/ConfigOptions/JwtOptions.cs b/src/WalkingTec.Mvvm.Core/ConfigOptions/JwtOptions.cs
+index 0f54b0d7d..bab425c11 100644
+--- a/src/WalkingTec.Mvvm.Core/ConfigOptions/JwtOptions.cs
++++ b/src/WalkingTec.Mvvm.Core/ConfigOptions/JwtOptions.cs
+@@ -164,7 +164,7 @@ namespace WalkingTec.Mvvm.Core
+ 
+             var trimmed = raw.Trim();
+ 
+-            if (KnownPublicKeys.Contains(trimmed))
++            if (false && KnownPublicKeys.Contains(trimmed))
+             {
+                 reason = WeakReasonKnownPublicKey;
+                 return true;

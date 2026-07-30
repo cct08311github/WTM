@@ -8,6 +8,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -696,13 +697,141 @@ namespace WalkingTec.Mvvm.Mvc
 
             var jwtOptions = conf.JwtOptions;
 
-            if (jwtOptions.IsDefaultOrWeakKey())
+            // Issue #923 (P0): JwtOption.SecurityKey's setter silently pads any value
+            // shorter than 32 chars with 'x' (JwtOptions.cs — unchanged by this fix), so
+            // demo-shipped keys like "super" and the developer manual's 42-byte placeholder
+            // both passed the OLD guard here, which only recognized the literal well-known
+            // default. Anyone who can read this repository (including its public GitHub
+            // mirror, cct08311github/WTM) could therefore forge an HMAC-SHA256 access token
+            // for any ITCode. IsWeakSigningKey() is the real invariant: too short (< 32
+            // UTF-8 bytes = 256 bits, the IDX10720 minimum SymmetricSignatureProvider
+            // enforces for HmacSha256) OR one of JwtOption.KnownPublicKeys — evaluated
+            // against the RAW, pre-padding value, independent of length.
+            if (jwtOptions.IsWeakSigningKey(out var weakKeyReason))
             {
-                throw new InvalidOperationException(
-                    "[WTM Security] JWT SecurityKey is still the well-known default value shipped in source code. " +
-                    "Anyone who can read the WTM repository can forge tokens for any user. " +
-                    "Set a strong random key (≥32 chars) in your configuration (e.g. JwtOptions:SecurityKey). " +
-                    "Generate one with: openssl rand -base64 32");
+                // #923 design table row (d): a too-short-but-not-publicly-known key is
+                // rejected in EVERY environment, including Development — unlike an unset or
+                // publicly known key, which gets the ephemeral-key carve-out below. Setting a
+                // short key is a deliberate (if mistaken) choice ("I picked this and believed
+                // it was supported"); that false belief must surface on the developer's own
+                // machine, not first in production. Exact comparison against the fixed
+                // WeakReasonTooShort constant (not a substring match) is intentional and
+                // relies on IsWeakSigningKey() never interpolating per-call text into reason.
+                bool isTooShortButNotPubliclyKnown =
+                    weakKeyReason == JwtOption.WeakReasonTooShort;
+                bool eligibleForDevelopmentCarveOut =
+                    !isTooShortButNotPubliclyKnown && IsDevelopmentEnvironment(services);
+
+                if (!eligibleForDevelopmentCarveOut)
+                {
+                    throw new InvalidOperationException(
+                        $"[WTM Security] JwtOptions.SecurityKey is not usable: {weakKeyReason} " +
+                        "Anyone who can read the WTM repository (including its public GitHub mirror) " +
+                        "can forge access tokens for any user with a known, unset, or too-short key. " +
+                        "Set a strong, unique key (>= 32 bytes) in your configuration " +
+                        "(JwtOptions:SecurityKey). Generate one with: openssl rand -base64 32 " +
+                        (isTooShortButNotPubliclyKnown
+                            ? "(A too-short custom key is rejected in every environment, including " +
+                              "Development — there is no supported short-key configuration.)"
+                            : "(This check is skipped only in the Development environment, detected via " +
+                              "IWebHostEnvironment when one is registered, or the ASPNETCORE_ENVIRONMENT / " +
+                              "DOTNET_ENVIRONMENT variables otherwise; if neither is available this fails " +
+                              "closed as non-Development.)"));
+                }
+
+                // Development, and NOT the too-short case handled above: never sign with a
+                // publicly known key, but do not block local development either. The random
+                // 256-bit key below is generated ONCE, here — deliberately OUTSIDE the
+                // PostConfigure delegate a few lines down. PostConfigure can run again on
+                // every IOptionsMonitor<Configs> reload (e.g. an appsettings.json file-watch
+                // triggering a rebind); computing a fresh key INSIDE that delegate would
+                // silently invalidate every access token already issued each time it re-ran.
+                var generatedKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+                jwtOptions.SecurityKey = generatedKey;
+                // Console.Error, not ILogger: this runs during ConfigureServices, before the
+                // DI container is built, so no ILogger can be resolved here yet — matches the
+                // existing Console.Error.WriteLine precedent a few lines above in
+                // AddWtmContext's own connection-init warning. Do not "fix" this into an
+                // ILogger call; there is nothing to resolve it from at this point.
+                Console.Error.WriteLine(
+                    $"[WTM Security] Warning: JwtOptions.SecurityKey is unset or a publicly known " +
+                    $"value ({weakKeyReason}) — generated a random, process-lifetime-only signing " +
+                    "key because the Development environment was detected. Every previously issued " +
+                    "access token is now invalid, and every token issued this run becomes invalid on " +
+                    "the next restart. Set a real JwtOptions:SecurityKey before deploying outside " +
+                    "Development.");
+
+                // TokenService (and anything else that resolves JwtOption via
+                // IOptionsMonitor<Configs>) reads a SEPARATE object graph from the `conf`
+                // snapshot above: AddWtmAuthentication uses config.Get<Configs>(), while
+                // TokenService's constructor uses IOptionsMonitor<Configs>.CurrentValue —
+                // two independently-bound Configs instances. Without this PostConfigure, the
+                // JwtBearer handler configured below would validate incoming tokens with
+                // `generatedKey` while TokenService signed new ones with whatever
+                // IOptionsMonitor<Configs> resolves on its own (the unset/weak raw default),
+                // producing a "signed with A, validated with B" app that rejects every token
+                // it issues. Configure/PostConfigure ordering is independent of REGISTRATION
+                // order in the DI container (all Configure actions run before all
+                // PostConfigure actions, regardless of which was added to IServiceCollection
+                // first), so this is correct even though AddWtmContext's own
+                // services.Configure<Configs>(config) is typically called after
+                // AddWtmAuthentication in Startup.ConfigureServices.
+                //
+                // The overwrite is conditional, not unconditional: a host that also registers
+                // its own services.Configure<Configs>(o => o.JwtOptions.SecurityKey = "...")
+                // code delegate (e.g. reading a real value from a secret manager) has that
+                // value applied to THIS SAME instance before PostConfigure runs, since ALL
+                // Configure actions run before ANY PostConfigure action — re-checking
+                // IsWeakSigningKey() here lets that real key stand instead of being silently
+                // clobbered by the ephemeral one on every restart. See the #753-family
+                // follow-up for the residual gap this narrows but does not close: the LOCAL
+                // `jwtOptions` captured above (used for the JwtBearer handler's own
+                // IssuerSigningKey a few lines down) still cannot see that same code delegate
+                // — config.Get<Configs>() cannot observe it — so a Development host relying
+                // entirely on a code delegate (no key in raw IConfiguration at all) ends up
+                // signing new tokens through TokenService with its real key while the JwtBearer
+                // handler still validates against the generated one, and every login fails.
+                // Fixing that fully means changing what AddWtmAuthentication reads from, which
+                // is the #753-family split-brain itself and out of scope here.
+                //
+                // #931 item 3: the substitution must NOT fire for WeakReasonTooShort. Scenario:
+                // this branch already ran (raw config's key was unset, so the ephemeral path
+                // started), then a host ALSO registers services.Configure<Configs>(o =>
+                // o.JwtOptions.SecurityKey = "short") — a too-short custom key, via a code
+                // delegate evaluated after this one. By the time PostConfigure runs, the merged
+                // Configs holds that short key, and IsWeakSigningKey() is still true — but for
+                // reason WeakReasonTooShort, not "unset/known-public". The design's row (d) says
+                // a too-short custom key is rejected in EVERY environment, Development included,
+                // with NO ephemeral fallback; substituting the generated key here would silently
+                // launder exactly that case into a booting app, defeating row (d) via a second
+                // Configure source. Leaving the short key in place instead means IOptionsMonitor
+                // <Configs> resolves to it unchanged — TokenService's own constructor guard
+                // (#931 item 5) then rejects it at first use, so the rule still surfaces as a
+                // failure, just at first sign/validate rather than at this exact statement.
+                services.PostConfigure<Configs>(c =>
+                {
+                    if (c.JwtOptions.IsWeakSigningKey(out var postConfigureReason)
+                        && postConfigureReason != JwtOption.WeakReasonTooShort)
+                    {
+                        c.JwtOptions.SecurityKey = generatedKey;
+                    }
+                });
+            }
+            else if (jwtOptions.HasLowCharacterDiversity)
+            {
+                // Warn-only (#923): the key is long enough and not a known public value, but
+                // has fewer than 8 distinct characters — the fingerprint of an operator
+                // manually padding a short key to satisfy the length check rather than using
+                // a genuinely random one. Never gates startup: this is a heuristic (a real
+                // 40-character English sentence also triggers it), and per this repo's
+                // Compatibility > Security priority ordering, a heuristic false positive must
+                // never stop production from booting.
+                // Console.Error, not ILogger, for the same reason as the weak-key warning above.
+                Console.Error.WriteLine(
+                    "[WTM Security] Warning: JwtOptions.SecurityKey has fewer than 8 distinct " +
+                    "characters. This often indicates a short key manually padded to meet the " +
+                    "length requirement rather than a genuinely random key. Consider generating " +
+                    "one with: openssl rand -base64 32");
             }
 
             var cookieOptions = conf.CookieOptions;
@@ -723,7 +852,9 @@ namespace WalkingTec.Mvvm.Mvc
                              ValidAudience = jwtOptions.Audience,
 
                              ValidateIssuerSigningKey = true,
-                             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.SecurityKey)),
+                             // #931 item 1: EffectiveSecurityKey (padded HMAC material), not
+                             // SecurityKey (the raw, unpadded, round-trippable value).
+                             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.EffectiveSecurityKey)),
                              LifetimeValidator = ValidateJwtLifetime,
                              ValidateLifetime = true
                          };
@@ -787,6 +918,51 @@ namespace WalkingTec.Mvvm.Mvc
                         options.AccessDeniedPath = cookieOptions.AccessDeniedPath;
                     });
             return services;
+        }
+
+        /// <summary>
+        /// Issue #923: determines whether the host is running in the Development
+        /// environment, for the JWT weak-key startup gate's Development-only ephemeral-key
+        /// carve-out in <see cref="AddWtmAuthentication"/>.
+        /// </summary>
+        /// <remarks>
+        /// Checked in this order:
+        /// <list type="number">
+        /// <item>An <see cref="IWebHostEnvironment"/> already registered in
+        /// <paramref name="services"/>. The ASP.NET Core generic host registers this as a
+        /// singleton INSTANCE before <c>Startup.ConfigureServices</c> runs — regardless of
+        /// whether the environment came from <c>ASPNETCORE_ENVIRONMENT</c>,
+        /// <c>DOTNET_ENVIRONMENT</c>, a <c>--environment</c> command-line switch, or a
+        /// launchSettings.json profile, they all funnel into this ONE resolved value — so it
+        /// is found here via <c>ImplementationInstance</c> without building a temporary
+        /// <see cref="IServiceProvider"/>.</item>
+        /// <item>The <c>ASPNETCORE_ENVIRONMENT</c> / <c>DOTNET_ENVIRONMENT</c> environment
+        /// variables directly, for hosts that never register <see cref="IWebHostEnvironment"/>
+        /// at all (a bare <see cref="IServiceCollection"/> console/worker host calling
+        /// <c>AddWtmAuthentication</c> without going through <c>ConfigureWebHostDefaults</c>).</item>
+        /// </list>
+        /// If NEITHER is available, this fails CLOSED — returns <c>false</c> (treat as
+        /// non-Development) — because the two misdetection directions are not symmetric: a
+        /// Production host misdetected as non-Development just gets a normal "set your key"
+        /// startup failure (annoying, loud, safe); a Production host misdetected as
+        /// Development would silently sign with a random ephemeral key that changes on every
+        /// restart (an availability problem, not a breach, per the design's own carve-out —
+        /// but still never the right default when the environment genuinely cannot be
+        /// determined).
+        /// </remarks>
+        private static bool IsDevelopmentEnvironment(IServiceCollection services)
+        {
+            var hostEnv = services
+                .FirstOrDefault(d => d.ServiceType == typeof(IWebHostEnvironment))
+                ?.ImplementationInstance as IWebHostEnvironment;
+            if (hostEnv != null)
+            {
+                return hostEnv.IsDevelopment();
+            }
+
+            var envName = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
+                ?? Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+            return string.Equals(envName, Environments.Development, StringComparison.OrdinalIgnoreCase);
         }
 
         public static IServiceCollection AddWtmHttpClient(this IServiceCollection services, IConfiguration config)

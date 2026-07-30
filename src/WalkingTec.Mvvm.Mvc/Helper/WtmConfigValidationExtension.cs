@@ -30,8 +30,18 @@ namespace WalkingTec.Mvvm.Mvc
         /// When all three properties are still at their shipped defaults the app is not
         /// using JWT and the JWT validators are skipped to avoid false-positives.
         /// </summary>
+        /// <remarks>
+        /// Issue #923: deliberately uses <see cref="JwtOption.IsFactoryDefaultKey"/>, NOT
+        /// <see cref="JwtOption.IsWeakSigningKey"/>. This predicate only answers "has the
+        /// operator touched SecurityKey at all" — widening it to the weak-key check would
+        /// make a demo key like <c>"super"</c> (which is non-default, so activation should
+        /// be considered true) evaluate to <c>IsJwtActive == false</c> whenever Issuer/
+        /// Audience are still localhost, which would SKIP the SecurityKey validator below —
+        /// the exact case it exists to catch. See
+        /// <c>WtmConfigValidationTests.AddWtmConfigValidation_demo_security_key_super_with_localhost_issuer_audience_throws_on_start</c>.
+        /// </remarks>
         private static bool IsJwtActive(JwtOption jwt) =>
-            !jwt.IsDefaultOrWeakKey()          // SecurityKey was changed to something non-default
+            !jwt.IsFactoryDefaultKey()          // SecurityKey was changed to something non-default
             || jwt.Issuer   != "http://localhost"
             || jwt.Audience != "http://localhost";
 
@@ -65,8 +75,10 @@ namespace WalkingTec.Mvvm.Mvc
                 {
                     var jwt = c.JwtOptions;
                     if (!IsJwtActive(jwt)) return true;  // JWT not in use; skip
-                    return !jwt.IsDefaultOrWeakKey();
-                }, "WTM JWT configuration error: 'JwtOptions.SecurityKey' is still the well-known default key shipped with WTM. Set a strong, unique key in appsettings.json (minimum 32 characters).")
+                    // Issue #923: the actual security invariant — too short, unset, or a
+                    // publicly known demo/placeholder key — not just "is it the CLR default".
+                    return !jwt.IsWeakSigningKey(out _);
+                }, "WTM JWT configuration error: 'JwtOptions.SecurityKey' is unset, too short, or a publicly known placeholder value shipped with WTM. Set a strong, unique key (>= 32 bytes) in appsettings.json. Generate one with: openssl rand -base64 32")
                 .Validate(c =>
                 {
                     var jwt = c.JwtOptions;

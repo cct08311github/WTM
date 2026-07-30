@@ -1,0 +1,13 @@
+diff --git a/src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs b/src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs
+index 93dfd73af..1f348290e 100644
+--- a/src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs
++++ b/src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs
+@@ -720,7 +720,7 @@ namespace WalkingTec.Mvvm.Mvc
+                 bool isTooShortButNotPubliclyKnown =
+                     weakKeyReason == JwtOption.WeakReasonTooShort;
+                 bool eligibleForDevelopmentCarveOut =
+-                    !isTooShortButNotPubliclyKnown && IsDevelopmentEnvironment(services);
++                    !isTooShortButNotPubliclyKnown && true;
+ 
+                 if (!eligibleForDevelopmentCarveOut)
+                 {

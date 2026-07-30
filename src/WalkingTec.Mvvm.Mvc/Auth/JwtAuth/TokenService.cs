@@ -28,6 +28,32 @@ namespace WalkingTec.Mvvm.Mvc.Auth
         public TokenService(IOptionsMonitor<Configs> configs, IServiceProvider sp, TimeProvider? timeProvider = null)
         {
             _jwtOptions = configs.CurrentValue.JwtOptions;
+
+            // #931 item 5: FrameworkServiceExtension.AddWtmAuthentication's startup guard only
+            // runs for hosts that call it. A console/ETL host — the exact scenario
+            // JwtOption.SecurityKey's padding exists to support, per its own doc comment — can
+            // construct TokenService directly (or resolve it via DI) without ever calling
+            // AddWtmAuthentication, and would otherwise sign every token with whatever
+            // JwtOptions.SecurityKey happens to resolve to: unset, a demo/blocklisted value, or
+            // a too-short custom one. Enforce the same invariant at this sink too, not only at
+            // the one opt-in entry point. Checked once, in the constructor (not per-sign):
+            // TokenService is registered AddScoped, so a new instance — and therefore a fresh
+            // check — is constructed per DI scope; a per-sign check would only re-verify a
+            // _jwtOptions reference that is itself a fixed snapshot captured right here and
+            // never re-read from IOptionsMonitor for the lifetime of this instance, so it would
+            // not catch anything the constructor check does not already catch, while running on
+            // every token issuance instead of once. No Development carve-out here — TokenService
+            // has no IWebHostEnvironment and no way to determine the hosting environment; the
+            // ephemeral-key convenience is a policy decision AddWtmAuthentication makes with
+            // that information, not something this lower-level signing sink replicates blind.
+            if (_jwtOptions.IsWeakSigningKey(out var weakKeyReason))
+            {
+                throw new InvalidOperationException(
+                    $"[WTM Security] Cannot construct TokenService: JwtOptions.SecurityKey is not usable: {weakKeyReason} " +
+                    "Set a strong, unique key (>= 32 bytes) in your configuration (JwtOptions:SecurityKey). " +
+                    "Generate one with: openssl rand -base64 32");
+            }
+
             _sp = sp;
             _timeProvider = timeProvider ?? TimeProvider.System;
         }
@@ -217,8 +243,10 @@ namespace WalkingTec.Mvvm.Mvc.Auth
 
         private string GenerateAccessToken(LoginUserInfo info)
         {
+            // #931 item 1: EffectiveSecurityKey (padded HMAC material), not SecurityKey (the
+            // raw, unpadded, round-trippable value).
             var creds = new SigningCredentials(
-                new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtOptions.SecurityKey)),
+                new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtOptions.EffectiveSecurityKey)),
                 SecurityAlgorithms.HmacSha256);
             List<Claim> claims = [new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N")), new(AuthConstants.JwtClaimTypes.Subject, info.ITCode)];
             if (!string.IsNullOrEmpty(info.Name))

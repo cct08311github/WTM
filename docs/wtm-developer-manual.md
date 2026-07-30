@@ -4620,8 +4620,10 @@ public class Order : BasePoco
     "Audience": "WTM",
     "Expires": 900,
     "RefreshExpires": 604800,
-    "SecurityKey": "your-256-bit-secret-key-here-min-32-chars!",
     "LoginPath": "/Login/Login"
+    // SecurityKey deliberately omitted (issue #923): any placeholder value printed in this
+    // manual is public documentation, so it is rejected the same as a demo-shipped key.
+    // Generate your own with: openssl rand -base64 32
   },
   "CorsOptions": {
     "EnableAll": false,
@@ -4656,7 +4658,7 @@ public class Order : BasePoco
 | `FileUploadOptions.SaveFileMode` | `"Local"` | 檔案儲存方式（Local / Database） |
 | `JwtOptions.Expires` | `3600` | Access Token 有效期（秒） |
 | `JwtOptions.RefreshExpires` | `604800` | Refresh Token 有效期（秒，預設 7 天） |
-| `JwtOptions.SecurityKey` | — | JWT 簽名金鑰（至少 32 字元，**必須修改**） |
+| `JwtOptions.SecurityKey` | — | JWT 簽名金鑰。**未設定、任何本文件／demo 出現過的值、或短於 32 bytes 皆視為弱金鑰**——非 Development 環境會拒絕啟動（#923）；用 `openssl rand -base64 32` 產生真正隨機值 |
 | `CookieOptions.SecurePolicy` | `"SameAsRequest"` | Cookie `Secure` flag 策略（`SameAsRequest` / `Always` / `None`；production 建議 `Always`，詳見 §10.8） |
 | `CookieOptions.Expires` | `3600` | Cookie 驗證有效期（秒） |
 | `CookieOptions.LoginPath` | `"/Login/Login"` | 未登入時重導向的登入路徑 |
@@ -4704,7 +4706,7 @@ appsettings.Production.json   ← 生產環境覆蓋（連線字串、JWT Key）
 | 項目 | 原因 |
 |------|------|
 | `Connections[].Value` | 使用正式資料庫連線 |
-| `JwtOptions.SecurityKey` | 換成高強度隨機金鑰 |
+| `JwtOptions.SecurityKey` | 換成高強度隨機金鑰——非 Development 環境未設定或用已知/過短金鑰會直接拒絕啟動（#923，見 §17.3） |
 | `IsQuickDebug` | 設為 `false`（啟用完整權限檢查） |
 | `CookiePre` | 如有多站部署，確保不同前綴 |
 
@@ -5507,7 +5509,7 @@ public class Employee : PersistPoco
 | 項目 | 動作 |
 |------|------|
 | `IsQuickDebug` | 設為 `false` |
-| `JwtOptions.SecurityKey` | 替換為高強度隨機金鑰（≥32 字元） |
+| `JwtOptions.SecurityKey` | 替換為高強度隨機金鑰（≥32 bytes；非 Development 環境未設定/已知/過短會拒絕啟動，#923） |
 | 連線字串 | 使用正式 DB，不用 SQLite/Memory |
 | HTTPS | 啟用 HTTPS + HSTS |
 | 檔案上傳 | 設定合理的 `UploadLimit` |

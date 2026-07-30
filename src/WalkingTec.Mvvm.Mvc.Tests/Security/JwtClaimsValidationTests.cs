@@ -24,7 +24,12 @@ namespace WalkingTec.Mvvm.Mvc.Tests.Security
     public class JwtClaimsValidationTests
     {
         private readonly TokenTestFixture _fixture = new();
-        private const string TestSecurityKey = "WTM_Test_Key_AtLeast_32_Characters!!";
+
+        // #931 item 2: was a second hardcoded copy of the SAME literal TokenTestFixture used
+        // to hardcode ("WTM_Test_Key_AtLeast_32_Characters!!") — now reads the fixture's own
+        // randomly-generated key instead, since this file needs to build TokenValidationParameters
+        // against tokens THAT fixture's TokenService actually signs.
+        private string TestSecurityKey => _fixture.GeneratedSecurityKey;
         private const string TestIssuer = "WTM_Test";
         private const string TestAudience = "WTM_Test";
 

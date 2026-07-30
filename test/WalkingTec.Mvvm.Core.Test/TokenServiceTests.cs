@@ -11,6 +11,7 @@ using Microsoft.IdentityModel.Tokens;
 using Moq;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Auth;
+using WalkingTec.Mvvm.Core.Test.Security;
 using WalkingTec.Mvvm.Mvc.Auth;
 
 namespace WalkingTec.Mvvm.Core.Test
@@ -34,7 +35,7 @@ namespace WalkingTec.Mvvm.Core.Test
                 Issuer = "test_issuer",
                 Audience = "test_audience",
                 Expires = 3600,
-                SecurityKey = "wtm_very_secret_key_1234567890123" // 32+ chars
+                SecurityKey = JwtTestKeys.StrongCustomKey // #931 item 2: was a fixed literal, publicly readable via test/'s mirror sync
             };
 
             var configs = new Configs { JwtOptions = _jwtOption };
@@ -137,6 +138,66 @@ namespace WalkingTec.Mvvm.Core.Test
             
             // Check Name claim
             principal.HasClaim(c => c.Type == AuthConstants.JwtClaimTypes.Name && c.Value == "Test Name").Should().BeTrue();
+        }
+
+        // ─── #931 item 5: TokenService must enforce the weak-key invariant at the sink ────────
+        //
+        // FrameworkServiceExtension.AddWtmAuthentication's startup guard only runs for hosts
+        // that call it. A console/ETL host — the exact scenario JwtOption.SecurityKey's
+        // padding exists to support — can construct TokenService directly (or resolve it via
+        // DI) without ever calling AddWtmAuthentication, and would otherwise sign every token
+        // with whatever JwtOptions.SecurityKey happens to resolve to.
+        // src/WalkingTec.Mvvm.Mvc.Tests/Fixtures/TokenTestFixture.cs is exactly that shape
+        // (constructs TokenService directly, never calls AddWtmAuthentication).
+
+        private static Mock<IOptionsMonitor<Configs>> MakeConfigsMock(string securityKey)
+        {
+            var jwtOption = new JwtOption
+            {
+                Issuer = "test_issuer",
+                Audience = "test_audience",
+                Expires = 3600,
+                SecurityKey = securityKey
+            };
+            var configs = new Configs { JwtOptions = jwtOption };
+            var mock = new Mock<IOptionsMonitor<Configs>>();
+            mock.Setup(x => x.CurrentValue).Returns(configs);
+            return mock;
+        }
+
+        [Microsoft.VisualStudio.TestTools.UnitTesting.TestMethod]
+        public void Constructor_DemoKeySuper_Throws()
+        {
+            var configsMock = MakeConfigsMock("super");
+            var spMock = new Mock<IServiceProvider>();
+
+            Microsoft.VisualStudio.TestTools.UnitTesting.Assert.ThrowsException<InvalidOperationException>(
+                () => new TokenService(configsMock.Object, spMock.Object),
+                "#931 item 5: TokenService must reject a publicly known demo key at construction " +
+                "time, not just sign tokens with it — this is the console/ETL host scenario " +
+                "AddWtmAuthentication's own guard cannot reach.");
+        }
+
+        [Microsoft.VisualStudio.TestTools.UnitTesting.TestMethod]
+        public void Constructor_ShortCustomKey_Throws()
+        {
+            var configsMock = MakeConfigsMock("tooShort123"); // < 32 bytes, not blocklisted
+            var spMock = new Mock<IServiceProvider>();
+
+            Microsoft.VisualStudio.TestTools.UnitTesting.Assert.ThrowsException<InvalidOperationException>(
+                () => new TokenService(configsMock.Object, spMock.Object),
+                "#931 item 5: TokenService must reject a too-short custom key at construction " +
+                "time too, for the same reason.");
+        }
+
+        [Microsoft.VisualStudio.TestTools.UnitTesting.TestMethod]
+        public void Constructor_StrongKey_DoesNotThrow()
+        {
+            // Positive control: the guard must not reject a genuinely strong key.
+            var configsMock = MakeConfigsMock(JwtTestKeys.StrongCustomKey);
+            var spMock = new Mock<IServiceProvider>();
+
+            _ = new TokenService(configsMock.Object, spMock.Object); // must not throw
         }
     }
 }

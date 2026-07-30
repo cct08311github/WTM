@@ -56,11 +56,33 @@ namespace WalkingTec.Mvvm.Core
                     {
                         // Validate JWT signature — never trust an unverified token (#765)
                         var jwtOpts = ConfigInfo.JwtOptions;
+
+                        // Issue #923: this is an independent _remotetoken validation path in
+                        // WalkingTec.Mvvm.Core, decoupled from the Mvc-layer startup guard in
+                        // FrameworkServiceExtension.AddWtmAuthentication (Core cannot assume a
+                        // host even calls that method). Validating a token's signature against
+                        // a key that is itself publicly known or too short — see
+                        // JwtOption.IsWeakSigningKey — proves nothing: anyone could have forged
+                        // a signature that verifies against that same key, so "signature
+                        // verified" carries no trust here. Fail closed rather than proceed to
+                        // ValidateToken with a key that cannot distinguish a forged token from
+                        // a real one.
+                        if (jwtOpts.IsWeakSigningKey(out var weakKeyReason))
+                        {
+                            WtmDiagnosticLogger?.LogWarning(
+                                "_remotetoken rejected: JwtOptions.SecurityKey is not usable ({Reason}) " +
+                                "so no remote token signature can be trusted.", weakKeyReason);
+                            return null!;
+                        }
+
                         var handler = new JwtSecurityTokenHandler();
                         var validationParams = new TokenValidationParameters
                         {
                             ValidateIssuerSigningKey = true,
-                            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOpts.SecurityKey)),
+                            // #931 item 1: read EffectiveSecurityKey (the padded HMAC material), never
+                            // SecurityKey directly — SecurityKey is the raw, unpadded, round-trippable
+                            // value now; using it here for a key under 32 bytes would throw IDX10720.
+                            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOpts.EffectiveSecurityKey)),
                             ValidateIssuer = true,
                             ValidIssuer = jwtOpts.Issuer,
                             ValidateAudience = true,
@@ -307,11 +329,28 @@ namespace WalkingTec.Mvvm.Core
                 {
                     // Validate JWT signature — never trust an unverified token (#765)
                     var jwtOpts = ConfigInfo.JwtOptions;
+
+                    // Issue #923: mirrors the guard in the sync LoginUserInfo getter's
+                    // Remote-token branch above, exactly — see that copy's comment for the
+                    // full rationale. Both paths must stay identical: a signature that
+                    // verifies against a publicly known or too-short key proves nothing,
+                    // because anyone could have forged one that also verifies.
+                    if (jwtOpts.IsWeakSigningKey(out var weakKeyReason))
+                    {
+                        WtmDiagnosticLogger?.LogWarning(
+                            "_remotetoken rejected: JwtOptions.SecurityKey is not usable ({Reason}) " +
+                            "so no remote token signature can be trusted.", weakKeyReason);
+                        return;
+                    }
+
                     var handler = new JwtSecurityTokenHandler();
                     var validationParams = new TokenValidationParameters
                     {
                         ValidateIssuerSigningKey = true,
-                        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOpts.SecurityKey)),
+                        // #931 item 1: EffectiveSecurityKey (padded HMAC material), not SecurityKey
+                        // (now the raw, unpadded, round-trippable value) — see the sync getter's
+                        // identical comment above.
+                        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOpts.EffectiveSecurityKey)),
                         ValidateIssuer = true,
                         ValidIssuer = jwtOpts.Issuer,
                         ValidateAudience = true,

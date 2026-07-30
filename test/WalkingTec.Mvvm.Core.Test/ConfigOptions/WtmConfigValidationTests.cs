@@ -167,7 +167,7 @@ namespace WalkingTec.Mvvm.Core.Test.ConfigOptions
         public async Task AddWtmConfigValidation_all_jwt_at_defaults_passes_on_start()
         {
             // JwtOptions section present but all values at factory defaults.
-            // IsJwtActive: !IsDefaultOrWeakKey()=false, Issuer=="http://localhost"=false,
+            // IsJwtActive: !IsFactoryDefaultKey()=false, Issuer=="http://localhost"=false,
             // Audience=="http://localhost"=false → IsJwtActive=false → validators skip → PASS.
             var config = new Dictionary<string, string?>(_validConnectionConfig)
             {
@@ -177,6 +177,33 @@ namespace WalkingTec.Mvvm.Core.Test.ConfigOptions
             };
             using var host = await BuildAndStartHostAsync(config);
             await host.StopAsync();
+        }
+
+        /// <summary>
+        /// Issue #923 coherence regression: a demo-shipped key ("super") combined with
+        /// Issuer/Audience still at their localhost defaults must still throw.
+        /// <c>IsJwtActive</c> uses <see cref="JwtOption.IsFactoryDefaultKey"/> (unchanged,
+        /// narrow "is it literally the CLR default" semantics) specifically so that "super"
+        /// — which is NOT the factory default — still evaluates IsJwtActive=true, letting
+        /// the SecurityKey validator (which uses the real
+        /// <see cref="JwtOption.IsWeakSigningKey"/> invariant) run and reject it. A version
+        /// of <c>IsJwtActive</c> that widened its own SecurityKey check to
+        /// <c>IsWeakSigningKey</c> would make THIS scenario evaluate IsJwtActive=false
+        /// (since Issuer/Audience are still localhost) and the SecurityKey validator would
+        /// be skipped — this test would then pass for the wrong reason (skipped, not
+        /// rejected). See WtmConfigValidationExtension.IsJwtActive's remarks.
+        /// </summary>
+        [TestMethod]
+        public async Task AddWtmConfigValidation_demo_security_key_super_with_localhost_issuer_audience_throws_on_start()
+        {
+            var config = new Dictionary<string, string?>(_validConnectionConfig)
+            {
+                ["JwtOptions:SecurityKey"] = "super",
+                ["JwtOptions:Issuer"]      = "http://localhost",
+                ["JwtOptions:Audience"]    = "http://localhost",
+            };
+            await Assert.ThrowsExceptionAsync<OptionsValidationException>(
+                () => BuildAndStartHostAsync(config));
         }
 
         // ── Tests: opt-out ───────────────────────────────────────────────────────────

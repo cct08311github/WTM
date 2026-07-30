@@ -1,0 +1,24 @@
+{
+  "id": "jwt923-weak-key-length-guard-neutralize",
+  "kind": "security",
+  "description": "Issue #923 (P0): independent of WHERE the length check reads its input from (see the sibling mutant jwt923-rawkey-padding-bypass-reintroduce, which attacks the data source instead), this mutant neutralizes the length THRESHOLD itself -- JwtOption.IsWeakSigningKey's `if (Encoding.UTF8.GetByteCount(trimmed) < 32)` becomes `if (Encoding.UTF8.GetByteCount(trimmed) < 0)`, a condition that can never be true since GetByteCount never returns a negative value. With this guard neutralized, any custom key that is NOT one of JwtOption.KnownPublicKeys (so the blocklist check does not independently catch it) passes IsWeakSigningKey regardless of how short it is -- reintroducing the P0 defect's practical effect (a too-short custom key silently accepted and padded with 'x' at signing time, exactly IDX10720's 256-bit floor violated) via a different code path than the raw-vs-padded mutant. Same two red tests as the raw-key mutant (IsWeakSigningKey_short_custom_key_reason_is_WeakReasonTooShort, IsWeakSigningKey_31_byte_custom_key_reason_is_WeakReasonTooShort) -- confirmed empirically to fail identically under both mutants (both defeat the same observable invariant, 'raw key length is correctly enforced', from different lines), which is expected and not a defect in either mutant: they are independent guards a real regression could weaken separately, and a shared detection test proving BOTH are still load-bearing is stronger evidence than requiring artificially disjoint test sets. The green positive control (IsWeakSigningKey_exactly_32_byte_custom_key_returns_false) is unaffected since a key that is already exactly 32 bytes was never going to trip the length check either way.",
+  "target_file": "src/WalkingTec.Mvvm.Core/ConfigOptions/JwtOptions.cs",
+  "target_symbol": "JwtOption.IsWeakSigningKey -- the `Encoding.UTF8.GetByteCount(trimmed) < 32` length-floor comparison",
+  "patch": "patches/jwt923-weak-key-length-guard-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.JwtOptionTests.IsWeakSigningKey_short_custom_key_reason_is_WeakReasonTooShort|FullyQualifiedName=WalkingTec.Mvvm.Core.Test.JwtOptionTests.IsWeakSigningKey_31_byte_custom_key_reason_is_WeakReasonTooShort",
+  "red_tests": [
+    "WalkingTec.Mvvm.Core.Test.JwtOptionTests.IsWeakSigningKey_short_custom_key_reason_is_WeakReasonTooShort",
+    "WalkingTec.Mvvm.Core.Test.JwtOptionTests.IsWeakSigningKey_31_byte_custom_key_reason_is_WeakReasonTooShort"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Core.Test.JwtOptionTests.IsWeakSigningKey_short_custom_key_reason_is_WeakReasonTooShort": "Expected:<JwtOptions\\.SecurityKey is shorter than the 32-byte \\(256-bit\\) minimum.*>\\. Actual:<\\(null\\)>",
+    "WalkingTec.Mvvm.Core.Test.JwtOptionTests.IsWeakSigningKey_31_byte_custom_key_reason_is_WeakReasonTooShort": "Expected:<JwtOptions\\.SecurityKey is shorter than the 32-byte \\(256-bit\\) minimum.*>\\. Actual:<\\(null\\)>"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured verbatim via manual dry run against the committed baseline (stale demo.db under bin/ removed first; patch applied via `git apply`, `dotnet build` confirmed 0 errors, `dotnet test --filter FullyQualifiedName~JwtOptionTests.IsWeakSigningKey` run, then patch reverted via `git apply -R`): IsWeakSigningKey_short_custom_key_reason_is_WeakReasonTooShort -- 'Assert.AreEqual failed. Expected:<JwtOptions.SecurityKey is shorter than the 32-byte (256-bit) minimum required for HMAC-SHA256 signing.>. Actual:<(null)>. '; IsWeakSigningKey_31_byte_custom_key_reason_is_WeakReasonTooShort -- identical shape. Byte-for-byte identical failure output to the jwt923-rawkey-padding-bypass-reintroduce dry run, confirming both guards independently gate the same invariant. Confirmed via `python3 test/mutants/run_mutant.py --mutant jwt923-weak-key-length-guard-neutralize`: 'VERDICT: KILLED' / 'GATE: PASS'.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.JwtOptionTests.IsWeakSigningKey_exactly_32_byte_custom_key_returns_false",
+  "green_tests": [
+    "WalkingTec.Mvvm.Core.Test.JwtOptionTests.IsWeakSigningKey_exactly_32_byte_custom_key_returns_false"
+  ]
+}

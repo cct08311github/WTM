@@ -1,0 +1,13 @@
+diff --git a/src/WalkingTec.Mvvm.Core/ConfigOptions/JwtOptions.cs b/src/WalkingTec.Mvvm.Core/ConfigOptions/JwtOptions.cs
+index 0f54b0d7d..bfc66adb0 100644
+--- a/src/WalkingTec.Mvvm.Core/ConfigOptions/JwtOptions.cs
++++ b/src/WalkingTec.Mvvm.Core/ConfigOptions/JwtOptions.cs
+@@ -170,7 +170,7 @@ namespace WalkingTec.Mvvm.Core
+                 return true;
+             }
+ 
+-            if (Encoding.UTF8.GetByteCount(trimmed) < 32)
++            if (Encoding.UTF8.GetByteCount(trimmed) < 0)
+             {
+                 reason = WeakReasonTooShort;
+                 return true;

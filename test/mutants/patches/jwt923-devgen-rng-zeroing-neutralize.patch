@@ -1,0 +1,13 @@
+diff --git a/src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs b/src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs
+index 0000000..0000000 100644
+--- a/src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs
++++ b/src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs
+@@ -746,7 +746,7 @@
+                 // every IOptionsMonitor<Configs> reload (e.g. an appsettings.json file-watch
+                 // triggering a rebind); computing a fresh key INSIDE that delegate would
+                 // silently invalidate every access token already issued each time it re-ran.
+-                var generatedKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
++                var generatedKey = Convert.ToBase64String(new byte[32]);
+                 jwtOptions.SecurityKey = generatedKey;
+                 // Console.Error, not ILogger: this runs during ConfigureServices, before the
+                 // DI container is built, so no ILogger can be resolved here yet — matches the

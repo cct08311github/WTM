@@ -1,0 +1,13 @@
+diff --git a/src/WalkingTec.Mvvm.Core/ConfigOptions/JwtOptions.cs b/src/WalkingTec.Mvvm.Core/ConfigOptions/JwtOptions.cs
+index 0000000..0000000 100644
+--- a/src/WalkingTec.Mvvm.Core/ConfigOptions/JwtOptions.cs
++++ b/src/WalkingTec.Mvvm.Core/ConfigOptions/JwtOptions.cs
+@@ -225,7 +225,7 @@
+         /// </remarks>
+         public bool IsWeakSigningKey(out string? reason)
+         {
+-            var raw = SecurityKey;
++            var raw = EffectiveSecurityKey;
+             if (string.IsNullOrWhiteSpace(raw))
+             {
+                 reason = WeakReasonUnset;

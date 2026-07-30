@@ -54,7 +54,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
                     Issuer = "test",
                     Audience = "test",
                     Expires = 3600,
-                    SecurityKey = "atomic_rotation_secret_key_32chars!!"
+                    SecurityKey = JwtTestKeys.StrongCustomKey // #931 item 2: was a fixed literal, publicly readable via test/'s mirror sync
                 }
             });
             _service = new TokenService(configs.Object, _sp);

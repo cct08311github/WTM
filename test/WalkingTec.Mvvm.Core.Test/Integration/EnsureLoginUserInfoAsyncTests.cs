@@ -23,6 +23,7 @@ using WalkingTec.Mvvm.Core.Implement;
 using WalkingTec.Mvvm.Core.Services;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
 using WalkingTec.Mvvm.Core.Support.Json;
+using WalkingTec.Mvvm.Core.Test.Security;
 using WalkingTec.Mvvm.Test.Mock;
 
 namespace WalkingTec.Mvvm.Core.Test.Integration
@@ -521,6 +522,12 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
 
         /// <summary>
         /// Helper: build a signed JWT using the given key/issuer/audience/subject/tenant.
+        /// Pads <paramref name="securityKey"/> to at least 32 chars with 'x' if shorter — like
+        /// <see cref="JwtOption.EffectiveSecurityKey"/> (#931 item 1) — but deliberately does
+        /// NOT truncate a longer key, since EffectiveSecurityKey never truncates either; a
+        /// 44-char shared test key (JwtTestKeys.StrongCustomKey) must sign with its FULL
+        /// length here or this would sign with different bytes than WTMContext.User.cs
+        /// validates with.
         /// </summary>
         private static string BuildJwt(
             string securityKey,
@@ -529,7 +536,8 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
             string userCode,
             string? tenantCode = null)
         {
-            var keyBytes = Encoding.UTF8.GetBytes(securityKey.PadRight(32, 'x')[..32]);
+            var effectiveKey = securityKey.Length < 32 ? securityKey.PadRight(32, 'x') : securityKey;
+            var keyBytes = Encoding.UTF8.GetBytes(effectiveKey);
             var signingKey = new SymmetricSecurityKey(keyBytes);
             var credentials = new SigningCredentials(signingKey, SecurityAlgorithms.HmacSha256);
 
@@ -550,6 +558,26 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
             return new JwtSecurityTokenHandler().WriteToken(token);
         }
 
+        /// <summary>
+        /// #931 item 6: decode a JWT segment's Base64url text into its real bytes, so a
+        /// tampering test can flip a bit in the DECODED signature rather than risk flipping
+        /// only an unused padding bit in the Base64 STRING (see the tampered-signature test's
+        /// own comment for why that distinction matters).
+        /// </summary>
+        private static byte[] Base64UrlDecode(string input)
+        {
+            var s = input.Replace('-', '+').Replace('_', '/');
+            switch (s.Length % 4)
+            {
+                case 2: s += "=="; break;
+                case 3: s += "="; break;
+            }
+            return Convert.FromBase64String(s);
+        }
+
+        private static string Base64UrlEncode(byte[] bytes) =>
+            Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
         [TestMethod]
         [Description(
             "Branch 2 / HasMainHost==false: a valid signed JWT in _remotetoken must " +
@@ -560,7 +588,14 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
             // Arrange — build a Configs with NO "mainhost" domain so HasMainHost==false.
             const string issuer = "https://test.issuer";
             const string audience = "https://test.audience";
-            const string rawKey = "myTestSecretKey12345678";   // will be padded to 32
+            // #923: must be >= 32 UTF-8 bytes on its own (raw, pre-padding) — WTMContext.User.cs's
+            // _remotetoken JWT validation path now fails closed on JwtOption.IsWeakSigningKey()
+            // BEFORE ever attempting signature validation, so a short "will be padded to 32" key
+            // like the pre-#923 24-byte version here would make this test pass for the wrong
+            // reason (rejected as a weak key, not because the JWT is genuinely valid/invalid).
+            // #931 item 2: also must not be a fixed literal — the original 32-byte replacement
+            // was itself publicly readable via test/'s mirror sync, so this now generates fresh.
+            var rawKey = JwtTestKeys.StrongCustomKey;
             const string userCode = "jwt_user";
 
             var configs = new Configs
@@ -621,7 +656,13 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
             // Arrange — same config as the valid-JWT test
             const string issuer = "https://test.issuer";
             const string audience = "https://test.audience";
-            const string rawKey = "myTestSecretKey12345678";
+            // #923: must be >= 32 UTF-8 bytes — see the identical comment on the valid-JWT test
+            // above. Without this, WTMContext.User.cs's weak-key fail-closed guard would reject
+            // the token before signature validation ever ran, and this test would pass for the
+            // wrong reason (masking whether tamper detection itself still works).
+            // #931 item 2: also must not be a fixed literal — see the identical comment on the
+            // valid-JWT test above.
+            var rawKey = JwtTestKeys.StrongCustomKey;
             const string userCode = "tamper_victim";
 
             var configs = new Configs
@@ -638,10 +679,29 @@ namespace WalkingTec.Mvvm.Core.Test.Integration
             configs.JwtOptions.Issuer = issuer;
             configs.JwtOptions.Audience = audience;
 
-            // Build a valid token then tamper with the last character of the signature.
+            // Build a valid token, then tamper with the signature by decoding it, flipping one
+            // bit in its FIRST byte, and re-encoding.
+            //
+            // #931 item 6: the original approach flipped the last Base64url CHARACTER of the
+            // signature string ('A' <-> 'B'). Base64 encodes 3 bytes into 4 characters, so the
+            // last character of a run can cover only the low, sometimes-unused bits of the
+            // final byte depending on alignment — when that character started as 'A' (all
+            // zero bits in its covered range), flipping it to 'B' can land entirely within
+            // padding bits that decode back to the SAME byte value, leaving the decoded
+            // signature bytes UNCHANGED even though the STRING changed. A test built that way
+            // risks proving "the decoder rejects a non-canonical Base64 string" rather than
+            // "the signature check rejects a different signature". Decoding first and flipping
+            // a bit in the FIRST byte (always fully "real", never a padding artifact) avoids
+            // that, and the assertion below proves the decoded bytes actually differ before
+            // the tampered token is ever used.
             var validToken = BuildJwt(configs.JwtOptions.SecurityKey, issuer, audience, userCode);
             var parts = validToken.Split('.');
-            var tamperedSignature = parts[2][..^1] + (parts[2][^1] == 'A' ? 'B' : 'A');
+            var signatureBytes = Base64UrlDecode(parts[2]);
+            var tamperedBytes = (byte[])signatureBytes.Clone();
+            tamperedBytes[0] ^= 0x01;
+            CollectionAssert.AreNotEqual(signatureBytes, tamperedBytes,
+                "test precondition: tampering must actually change the decoded signature bytes");
+            var tamperedSignature = Base64UrlEncode(tamperedBytes);
             var tamperedToken = string.Join('.', parts[0], parts[1], tamperedSignature);
 
             var httpCtx = MakeRemoteTokenHttpContext(tamperedToken);

@@ -232,7 +232,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
                     Issuer = "test",
                     Audience = "test",
                     Expires = 3600,
-                    SecurityKey = "denylist_test_secret_key_32chars!!"
+                    SecurityKey = JwtTestKeys.StrongCustomKey // #931 item 2: was a fixed literal, publicly readable via test/'s mirror sync
                 }
             });
 
@@ -293,7 +293,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
                     Issuer = "test",
                     Audience = "test",
                     Expires = 3600,
-                    SecurityKey = "denylist_test_secret_key_32chars!!"
+                    SecurityKey = JwtTestKeys.StrongCustomKey // #931 item 2: was a fixed literal, publicly readable via test/'s mirror sync
                 }
             });
 
