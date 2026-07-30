@@ -93,6 +93,39 @@ jobs:
     - uses: actions/checkout@v5
       with:
         fetch-depth: 0
+    # #924: `source`/`.` applied directly to a bare-token file makes the shell execute the
+    # token as a command; the resulting "command not found: <token>" prints the plaintext
+    # token to stdout/CI logs. That is how a token leaked on 2026-07-11. Every site that
+    # reads ~/.gitea-token must extract it with scripts/resolve-gitea-token.py (or the
+    # equivalent `grep -oE '[a-f0-9]{40}'` for one-off interactive troubleshooting) instead
+    # of sourcing it.
+    #
+    # This step lives in `changes`, not ci-build.yml's release-tooling-test job, on
+    # purpose: ci-build.yml's trigger carries `paths-ignore: docs/**, **/*.md, .claude/**,
+    # .gitea/**` on both push and pull_request (accepted policy #670 -- a docs-only PR gets
+    # no ci-build statuses at all), and three of the six sites this issue fixed live under
+    # docs/. `changes` is this repo's one job with NO path filter at all on either trigger
+    # (see the `on:` block above and this job's own header comment) -- it is guaranteed to
+    # run for a docs-only PR, which is exactly the shape most likely to reintroduce this.
+    # Placed before "Determine whether a gated path changed" so a guard failure exits
+    # before that step sets `relevant`/`total_entries`; with those outputs empty,
+    # `mutants`/`meta-selftest` (gated on `needs.changes.outputs.relevant == 'true'`)
+    # correctly skip instead of running an expensive build the run has already failed.
+    # `gate`'s own is_ok() check treats a `changes` job failure as FAIL, not skipped, so
+    # this still fails the required check (see that job's summary step).
+    #
+    # The scan itself lives in scripts/check-gitea-token-not-sourced.py, not inline here,
+    # because the rule needs to strip backtick-delimited inline code spans before matching
+    # (so prose that documents/warns about the forbidden command in backticks is exempt,
+    # uniformly, without a maintained per-file path exclusion list) -- expressing that in a
+    # single `git grep` ERE isn't practical. See that script's own docstring for the full
+    # rule, its exit codes (0 clean / 1 violation / 2 scanner error -- distinct so a scanner
+    # failure can never read as a clean tree), and what it deliberately does not catch
+    # (dynamic indirection: a path built at runtime, an alias, string concatenation). Its
+    # exit code becomes this step's exit code directly -- no `if cmd; then fail; fi` shell
+    # wrapper to get backwards.
+    - name: "Guard: never source a gitea-token file (#924)"
+      run: python3 scripts/check-gitea-token-not-sourced.py
     - name: Determine whether a gated path changed
       id: check
       shell: bash

@@ -246,7 +246,7 @@ layout 穩定）之外，其餘四種失敗的根因是資源競爭本身，逐�
 ### 1. 取得 workflow run ID
 
 ```bash
-source $HOME/.gitea-token
+GITEA_TOKEN=$(grep -oE '[a-f0-9]{40}' "$HOME/.gitea-token")   # never `source` it -- see docs/gitea-packages.md
 curl -s -H "Authorization: token $GITEA_TOKEN" \
   "https://$GITEA_HOST/api/v1/repos/chiu0831/WTM/actions/runs?head_sha=<sha>&limit=5" \
   | python3 -c "import sys,json; d=json.load(sys.stdin); [print(r['id'], r['name']) for r in d['workflow_runs']]"

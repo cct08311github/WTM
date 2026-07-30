@@ -5,9 +5,11 @@
 # Usage:
 #   ./scripts/publish-to-gitea.sh [--suffix <pre-release>] [--dry-run]
 #
-# Token source (first match wins):
+# Token source (first match wins), resolved by scripts/resolve-gitea-token.py:
 #   1. GITEA_TOKEN env var
-#   2. source ~/.gitea-token  (must contain: export GITEA_TOKEN='...')
+#   2. ~/.gitea-token -- a single 40-char lowercase-hex token, bare or as
+#      `[export] GITEA_TOKEN=...`. Never sourced (see docs/ci-operations.md
+#      for why); see resolve-gitea-token.py for the exact validation rules.
 
 set -euo pipefail
 
@@ -62,16 +64,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Resolve token
-if [[ -z "${GITEA_TOKEN:-}" ]]; then
-  if [[ -f "$HOME/.gitea-token" ]]; then
-    # shellcheck source=/dev/null
-    source "$HOME/.gitea-token"
+# Resolve token via scripts/resolve-gitea-token.py: env var first, then
+# ~/.gitea-token, parsed (never `source`d -- see docs/ci-operations.md for
+# why) and validated as exactly one 40-character lowercase-hex token. Uses an
+# `if`/`else` around the assignment, not `cmd || true`, so a real read/parse
+# error (exit 2) is distinguished from "not configured yet" (exit 1) instead
+# of being swallowed as the same "not set" outcome.
+if GITEA_TOKEN="$(python3 "$(dirname "$0")/resolve-gitea-token.py")"; then
+  :
+else
+  RESOLVE_STATUS=$?
+  if [[ "$RESOLVE_STATUS" -eq 1 ]]; then
+    echo "ERROR: GITEA_TOKEN is not set." >&2
+    echo "  Set it as an env var, or put a 40-character lowercase-hex token in ~/.gitea-token" >&2
   fi
-fi
-if [[ -z "${GITEA_TOKEN:-}" ]]; then
-  echo "ERROR: GITEA_TOKEN is not set." >&2
-  echo "  Set it as an env var, or create ~/.gitea-token with: export GITEA_TOKEN='your-token'" >&2
+  # exit 2 (malformed env var or file): resolve-gitea-token.py already printed
+  # the specific reason to stderr.
   exit 1
 fi
 

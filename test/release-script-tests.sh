@@ -13,6 +13,9 @@ FAKE_BIN="$TMP_DIR/bin"
 mkdir -p "$TEST_REPO/scripts" "$FAKE_BIN"
 cp "$SCRIPT_UNDER_TEST" "$TEST_REPO/scripts/release-gitea-package.sh"
 chmod +x "$TEST_REPO/scripts/release-gitea-package.sh"
+# The script resolves its token via a co-located resolve-gitea-token.py (#924); it must
+# ship alongside the copy under test the same way it ships alongside the real script.
+cp "$ROOT_DIR/scripts/resolve-gitea-token.py" "$TEST_REPO/scripts/resolve-gitea-token.py"
 
 cat > "$TEST_REPO/version.props" <<'EOF'
 <Project>
@@ -97,5 +100,27 @@ if [[ -s "$FAKE_GIT_LOG" || -s "$FAKE_CURL_LOG" ]]; then
   echo "dry-run version bump unexpectedly executed git/curl actions" >&2
   exit 1
 fi
+
+# #924 review finding 6: the cases above always ran with GITEA_TOKEN set in the
+# environment (line 64), so the ~/.gitea-token file-fallback path scripts/
+# resolve-gitea-token.py implements had no coverage. Exercise it directly, with
+# GITEA_TOKEN unset and GITEA_TOKEN_FILE pointed at fabricated fixture files --
+# never the real ~/.gitea-token.
+# shellcheck source=test/lib/token-file-fixtures.sh
+source "$ROOT_DIR/test/lib/token-file-fixtures.sh"
+
+run_with_token_file() {
+  local file="$1"
+  (
+    cd "$TEST_REPO"
+    unset GITEA_TOKEN
+    GITEA_TOKEN_FILE="$file" ./scripts/release-gitea-package.sh --dry-run 10.5.1
+  )
+}
+# shellcheck disable=SC2034 # read by assert_token_success_case in the sourced lib
+SUCCESS_MARKER='[dry-run] Would trigger Gitea Packages publish for 10.5.1'
+
+echo "[case] GITEA_TOKEN file-fallback matrix (release-gitea-package.sh)"
+run_gitea_token_file_matrix "$TMP_DIR/token-cases-release"
 
 echo "release-script-tests: PASS"

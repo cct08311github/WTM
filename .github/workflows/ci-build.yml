@@ -39,9 +39,14 @@ jobs:
     steps:
     - uses: actions/checkout@v5
     - name: Validate release script syntax
-      run: bash -n scripts/release-gitea-package.sh
+      run: |
+        bash -n scripts/release-gitea-package.sh
+        bash -n scripts/publish-to-gitea.sh
+        python3 -m py_compile scripts/resolve-gitea-token.py scripts/check-gitea-token-not-sourced.py
     - name: Run release script smoke tests
       run: bash test/release-script-tests.sh
+    - name: Run publish-to-gitea smoke tests
+      run: bash test/publish-to-gitea-tests.sh
   build-and-test:
     runs-on: ubuntu-latest
     steps:

@@ -150,7 +150,10 @@ Release 組態下，最終 package version 直接等於 `VersionPrefix`。
 Token 來源（依序）：
 
 1. `GITEA_TOKEN` 環境變數
-2. `source ~/.gitea-token`（檔案內含 `export GITEA_TOKEN='...'`）
+2. `~/.gitea-token` 檔案 — 用 `grep -oE '[a-f0-9]{40}' ~/.gitea-token` 擷取 40 碼
+   hex token，**絕不 `source`**（不論檔案內容是純 token 一行，還是
+   `export GITEA_TOKEN='...'` 格式，都能正確擷取；`source` 會讓 shell 把 token
+   當指令執行，`command not found: <token>` 會把明文 token 印到終端機/CI log）
 
 需 `write:package` scope。dry-run 輸出 token 已 mask。
 
@@ -197,7 +200,7 @@ NuGet package version 應視為不可變。若已發過：
 可能是 `PAT_TOKEN` secret 已過期或 scope 不足。改用 workflow_dispatch 重跑：
 
 ```bash
-source ~/.gitea-token
+GITEA_TOKEN=$(grep -oE '[a-f0-9]{40}' "$HOME/.gitea-token")   # never `source` it
 curl -X POST -H "Authorization: token $GITEA_TOKEN" -H "Content-Type: application/json" \
   -d '{"ref":"refs/tags/v<VERSION>","inputs":{}}' \
   "https://mac-mini.tailde842d.ts.net/api/v1/repos/chiu0831/WTM/actions/workflows/publish-nuget.yml/dispatches"

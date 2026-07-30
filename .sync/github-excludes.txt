@@ -36,10 +36,19 @@ docs/release-adoption-ledger.md
 
 # Internal helper scripts (private-registry release tooling — also carry the
 # internal hostname/token names; excluded outright rather than relying on
-# sanitize, since they're maintainer-only tooling with no GitHub-side use)
+# sanitize, since they're maintainer-only tooling with no GitHub-side use).
+# scripts/check-gitea-token-not-sourced.py is deliberately NOT in this list:
+# .github/workflows/mutation-gate.yml's `changes` job calls it unconditionally
+# (no `github.repository !=` gate, unlike release-tooling-test below), because
+# that job must post a status on every push/PR including on this mirror — see
+# that job's own header comment. Excluding the script would break the job here
+# with a missing-file error on the next sync.
 scripts/publish-to-gitea.sh
 scripts/release-gitea-package.sh
+scripts/resolve-gitea-token.py
 test/release-script-tests.sh
+test/publish-to-gitea-tests.sh
+test/lib/token-file-fixtures.sh
 
 # Historical sprint planning / specs (kept for maintainer history only)
 docs/archive/

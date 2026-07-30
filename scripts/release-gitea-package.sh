@@ -22,7 +22,8 @@ Notes:
   - If suffix is omitted, a stable release is published.
   - If suffix is provided, a pre-release is published as <version>-<suffix>.
   - --dry-run prints the actions without changing files or triggering workflows.
-  - Requires GITEA_TOKEN env var or export in ~/.gitea-token.
+  - Requires GITEA_TOKEN env var, or a ~/.gitea-token file containing a single
+    40-char lowercase-hex token (see scripts/resolve-gitea-token.py).
 EOF
 }
 
@@ -71,15 +72,21 @@ if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   exit 1
 fi
 
-# Resolve Gitea token: prefer env var, then ~/.gitea-token file
-if [[ -z "${GITEA_TOKEN:-}" ]]; then
-  if [[ -f "$HOME/.gitea-token" ]]; then
-    # shellcheck source=/dev/null
-    source "$HOME/.gitea-token"
+# Resolve Gitea token via scripts/resolve-gitea-token.py: env var first, then
+# ~/.gitea-token, parsed (never `source`d -- see docs/ci-operations.md for
+# why) and validated as exactly one 40-character lowercase-hex token. Uses an
+# `if`/`else` around the assignment, not `cmd || true`, so a real read/parse
+# error (exit 2) is distinguished from "not configured yet" (exit 1) instead
+# of being swallowed as the same "not set" outcome.
+if GITEA_TOKEN="$(python3 "$(dirname "$0")/resolve-gitea-token.py")"; then
+  :
+else
+  RESOLVE_STATUS=$?
+  if [[ "$RESOLVE_STATUS" -eq 1 ]]; then
+    echo "GITEA_TOKEN is not set. Set it as env var or put a 40-character lowercase-hex token in ~/.gitea-token" >&2
   fi
-fi
-if [[ -z "${GITEA_TOKEN:-}" ]]; then
-  echo "GITEA_TOKEN is not set. Set it as env var or put 'export GITEA_TOKEN=...' in ~/.gitea-token" >&2
+  # exit 2 (malformed env var or file): resolve-gitea-token.py already printed
+  # the specific reason to stderr.
   exit 1
 fi
 
