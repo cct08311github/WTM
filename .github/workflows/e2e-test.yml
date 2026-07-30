@@ -74,7 +74,34 @@ env:
 jobs:
   e2e-baseline:
     name: e2e (baseline)
-    runs-on: ubuntu-latest
+    # Pinned to azure-overflow-runner via its ubuntu-24.04 label (#910).
+    # local-runner labels: ubuntu-latest / ubuntu-22.04 / ubuntu-20.04.
+    # azure-overflow-runner labels: ubuntu-latest / ubuntu-24.04 / ubuntu-22.04.
+    # ubuntu-24.04 is the existing azure-only label, so no new label is needed;
+    # ubuntu-latest or ubuntu-22.04 would keep the current random assignment
+    # between local and azure.
+    #
+    # docker.gitea.com/runner-images:ubuntu-latest and :ubuntu-24.04 share the
+    # same digest (sha256:58ea92624c7c09582e05594d95488331045053d3a3f34cf09649f2a32313a614)
+    # and are pre-baked on the VM, so this is zero image change and no extra
+    # pull — the job's environment is identical to what it gets today when it
+    # randomly lands on azure.
+    #
+    # Why: not speed, predictability. Measured over 14 days, azure averages
+    # ~14.3 min/round vs local's ~13.7 (close), but local's max hit 2374s
+    # (baseline) and 8602s (island) because local-runner is capacity=2 inside
+    # a 4 CPU / 4GiB Colima VM with two job containers competing, whereas
+    # azure-overflow-runner is capacity=1 with 15GiB and runs one job at a
+    # time, alone.
+    #
+    # Controller dependency: ~/.config/ci-runner-controller/controller.py's
+    # START condition is `waiting_jobs > 0 and (local_busy or
+    # azure_only_waiting > 0)`. The azure_only_waiting term was added
+    # 2026-07-30 specifically so an azure-only-pinned job wakes the VM even
+    # when the local runner is idle. If these three lines are later reverted
+    # to ubuntu-latest, that controller term simply has no users — it does
+    # not break.
+    runs-on: ubuntu-24.04
     env:
       WTM_E2E_KILLSWITCH: "0"
       UIOptions__UseSelectIslandRender: "false"
@@ -171,7 +198,7 @@ jobs:
     # semantics — every leg still gets a chance to run and report), but stops once the
     # run itself is cancelled.
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       # Issue #681: second leg exercises the #627 legacy-script-rehydration kill-switch
       # (docs/csp-hardening.md). WTM_E2E_KILLSWITCH=1 is read by _Layout.cshtml to emit the
@@ -273,7 +300,7 @@ jobs:
     needs: e2e-killswitch
     # !cancelled(), not always() — same reasoning as e2e-killswitch above.
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       # Issue #837: third leg exercises the #470 island-render opt-in
       # (WtmUIOptions.UseSelectIslandRender, default OFF — demo's own appsettings.json
