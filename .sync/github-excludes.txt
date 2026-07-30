@@ -28,6 +28,11 @@ docs/workflow-wave4-design.md
 # references the private registry + GITEA_USERNAME/PAT and links to the excluded
 # gitea-packages.md). Public users install from public package sources instead.
 docs/getting-started.md
+# Downstream-deployment adoption ledger (#919): names a specific third-party
+# downstream's production system, cites its file/line locations and unfixed
+# security gaps. Deployment specifics about a real downstream must not leave
+# the private Gitea.
+docs/release-adoption-ledger.md
 
 # Internal helper scripts (private-registry release tooling — also carry the
 # internal hostname/token names; excluded outright rather than relying on

@@ -7,6 +7,8 @@
 
 答案不是單純 yes/no — 取決於你的使用場景與風險承受度。本文件提供一個誠實的自評框架，協助你做出決定。
 
+> **「已修」與「已保護」是兩件事。** 本文件（以及 `CHANGELOG.md`）衡量的是**框架自己修了什麼**；它不回答、也無法回答「你的 production 有沒有真的採用」。repo pin（下游套件版本宣告）、staging sign-off（驗證環境跑過的版本）、production deployment（實際服務流量的版本）是三個可能相差好幾個世代、且沒有任何自動化機制可以互相對帳的層級。已知最完整的下游採用個案（BMS）目前這三層之間有明顯落差，且其 production 版本沒有即時查詢方式可以確認。**目前確切版本數字、逐項修復對該下游的可達性分類與證據、以及所有查證方法與已知的不確定之處，一律以 [`docs/release-adoption-ledger.md`](./release-adoption-ledger.md)（#919）為準——本文件刻意不重複那些數字，避免兩份文件各自過期而互相矛盾。**
+
 > **本次重評的背景**：2026-05 到 2026-07 之間，本 fork 經歷了 WorkFlow 引擎 tx-safety 戰役（10.9–10.12）、LayUI 2.13.8 islandification 與 CSP 硬化（10.13–10.14）、以及一輪由「最終徹底優化規格書」驅動的 **26-issue 優化批次**（Phase 0–2，見下方 § 2026-07 優化批次）。上一版評估凍結在 10.5.1，已落後約 30 個 release，故整份重寫。核心結論不變：**WTM 是誠實的中型 CRUD 框架，甜蜜點是內網/SMB/中小型多租戶後台；不是高流量 SaaS 或合規敏感場景的首選。** 但「地基」比上一版明顯更穩。
 
 ---
@@ -210,6 +212,7 @@ NPOI 2.7.6（也包含最新 2.8.0）transitive 拉 vulnerable `System.Security.
 
 ## 相關文件
 
+- [`docs/release-adoption-ledger.md`](./release-adoption-ledger.md) — **「已修」與「已保護」的落差追蹤**：已知下游（BMS）的 repo pin／staging／production 三層版本現況、每項近期安全修復對該下游的可達性分類與證據、production 採用延遲／可達風險下降／rollback 次數這組新 KPI
 - [`docs/dependency-management.md`](./dependency-management.md) — 套件版本政策、NU1510 雙意義警告、NPOI security pin 詳解
 - [`docs/csp-hardening.md`](./csp-hardening.md) — #470/#627 CSP 硬化 roadmap 與 kill-switch 分級啟用
 - [`docs/ci-operations.md`](./ci-operations.md) — Gitea Actions 已知不相容與排錯
