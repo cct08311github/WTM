@@ -1,0 +1,44 @@
+diff --git a/src/WalkingTec.Mvvm.Core/BasePagedListVM.cs b/src/WalkingTec.Mvvm.Core/BasePagedListVM.cs
+--- a/src/WalkingTec.Mvvm.Core/BasePagedListVM.cs
++++ b/src/WalkingTec.Mvvm.Core/BasePagedListVM.cs
+@@ -369,16 +369,12 @@
+         /// <returns>搜索语句</returns>
+         public virtual IOrderedQueryable<TModel> GetBatchQuery()
+         {
++            var baseQuery = GetSearchQuery();
+             if (ReplaceWhere == null)
+             {
+                 Expression? peid = null;
+                 if (string.IsNullOrEmpty(SelectorValueField) == false && SelectorValueField.ToLower() != "id")
+                 {
+-                    // Guard: a form-bound SelectorValueField that names a non-existent
+-                    // property would make GetSingleProperty return null, causing the
+-                    // Expression.Property call to throw ArgumentNullException at runtime
+-                    // (issue #106). When the property is not found, leave peid as null so
+-                    // the query falls back to the default id-based Contains predicate.
+                     var selectorProp = typeof(TModel).GetSingleProperty(SelectorValueField);
+                     if (selectorProp != null)
+                     {
+@@ -387,18 +383,14 @@
+                     }
+                 }
+                 List<string?> tmpIds = [.. Ids.Cast<string?>()];
+-                // #947: GetAuthorizedIdsQuery replaces the prior WhereReplaceModifier-based
+-                // rebuild, which deleted every Where node in GetSearchQuery() — DataPrivilege
+-                // included — before reconstructing with only the Ids restriction. See that
+-                // method's XML doc for exactly which Where shapes the blank-Searcher swap
+-                // does and does not suppress — it is narrower than "current UI search
+-                // criteria is ignored" (corrected #953 review finding).
+-                var newQuery = GetAuthorizedIdsQuery(tmpIds, peid) as IOrderedQueryable<TModel>;
++                var mod = new WhereReplaceModifier<TModel>(tmpIds.GetContainIdExpression<TModel>(peid));
++                var newExp = mod.Modify(baseQuery.Expression);
++                var newQuery = baseQuery.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
+                 return newQuery!;
+             }
+             else
+             {
+-                return GetSearchQuery();
++                return baseQuery;
+             }
+         }
+ 

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Linq.Expressions;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Web;
@@ -413,7 +412,6 @@ namespace WalkingTec.Mvvm.Mvc
                 listVM.NeedPage = false;
                 listVM.SearcherMode = ListVMSearchModeEnum.Batch;
                 Type modelType = listVM.ModelType;
-                var para = Expression.Parameter(modelType);
                 var idproperty = modelType.GetSingleProperty(_DONOT_USE_VFIELD);
                 // Guard: an attacker-supplied _DONOT_USE_VFIELD that names a
                 // non-existent property would cause GetSingleProperty to return
@@ -423,8 +421,26 @@ namespace WalkingTec.Mvvm.Mvc
                 // fall through to return the PartialView with empty SelectData ("[]").
                 if (idproperty != null)
                 {
-                    var pro = Expression.Property(para, idproperty);
-                    listVM.ReplaceWhere = listVM.Ids.GetContainIdExpression(modelType, Expression.Parameter(modelType), pro);
+                    // #947/#953: SearcherMode is already Batch (above) and ReplaceWhere is
+                    // never set here, so GetDataJson() -> DoSearch() -> GetBatchQuery() takes
+                    // GetBatchQuery()'s default (ReplaceWhere == null) branch — which keeps
+                    // every Where node GetSearchQuery() applies unconditionally, row-level
+                    // DataPrivilege via DPWhere included, instead of deleting all of them the
+                    // way the prior SearcherMode.Batch + (this method's own) ReplaceWhere
+                    // assignment did (WhereReplaceModifier). See GetBatchQuery/
+                    // GetAuthorizedIdsQuery in BasePagedListVM.cs for exactly which Where
+                    // shapes that default branch does and does not suppress — narrower than
+                    // "current UI search criteria is ignored" (#953 review).
+                    //
+                    // Routing through the normal DoSearch() pipeline here — rather than a
+                    // separate call that bypasses it, as an earlier version of this fix did —
+                    // also keeps GetSearchCommand()-backed ListVMs (raw SQL/stored-procedure
+                    // sources, e.g. ActionLogListVM) and Searcher.SortInfo working exactly as
+                    // before #947 (#953 review finding F2).
+                    //
+                    // GetBatchQuery() reads SelectorValueField (not an Expression built here)
+                    // to know which property Ids is matched against.
+                    listVM.SelectorValueField = _DONOT_USE_VFIELD;
                     string selectData = SanitizeSelectorJson((listVM as IBasePagedListVM<TopBasePoco, BaseSearcher>).GetDataJson());
                     ViewBag.SelectData = selectData;
                     listVM.IsSearched = false;

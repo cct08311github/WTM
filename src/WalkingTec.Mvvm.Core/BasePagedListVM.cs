@@ -356,12 +356,19 @@ namespace WalkingTec.Mvvm.Core
         }
 
         /// <summary>
-        /// 设定批量模式下的搜索语句，继承的类应重载这个函数来指定自己批量模式的搜索语句，如果不指定则默认使用Ids.Contains(x.Id)来代替搜索语句中的Where条件
+        /// 设定批量模式下的搜索语句，继承的类应重载这个函数来指定自己批量模式的搜索语句。
+        /// 如果不指定，默认行为是：呼叫 <see cref="GetSearchQuery"/>（暂时换上一个空白、未绑定
+        /// 的 Searcher，因此以 Searcher 值为条件才会加上的 Where——即透过 CheckContain /
+        /// CheckEqual / CheckWhere 等 guard-then-add helper 加的——不会被加入），再把
+        /// Ids.Contains(x.Id)（或指定字段）以 AND 方式叠加上去。这与旧行为（#947 之前）不同：
+        /// 旧行为是「用 Ids.Contains(x.Id) 整个取代查询语句中所有 Where 条件」，会连同列级
+        /// DataPrivilege 一起删除；现在改为「保留 GetSearchQuery() 会加上的每一个 Where
+        /// 节点，只另外 AND 上 Ids 限制」，参见 <see cref="GetAuthorizedIdsQuery"/> 的完整说明
+        /// （含它未必能压下的第三类 Where 形状）。
         /// </summary>
         /// <returns>搜索语句</returns>
         public virtual IOrderedQueryable<TModel> GetBatchQuery()
         {
-            var baseQuery = GetSearchQuery();
             if (ReplaceWhere == null)
             {
                 Expression? peid = null;
@@ -380,15 +387,103 @@ namespace WalkingTec.Mvvm.Core
                     }
                 }
                 List<string?> tmpIds = [.. Ids.Cast<string?>()];
-                var mod = new WhereReplaceModifier<TModel>(tmpIds.GetContainIdExpression<TModel>(peid));
-                var newExp = mod.Modify(baseQuery.Expression);
-                var newQuery = baseQuery.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
+                // #947: GetAuthorizedIdsQuery replaces the prior WhereReplaceModifier-based
+                // rebuild, which deleted every Where node in GetSearchQuery() — DataPrivilege
+                // included — before reconstructing with only the Ids restriction. See that
+                // method's XML doc for exactly which Where shapes the blank-Searcher swap
+                // does and does not suppress — it is narrower than "current UI search
+                // criteria is ignored" (corrected #953 review finding).
+                var newQuery = GetAuthorizedIdsQuery(tmpIds, peid) as IOrderedQueryable<TModel>;
                 return newQuery!;
             }
             else
             {
-                return baseQuery;
+                return GetSearchQuery();
             }
+        }
+
+        /// <summary>
+        /// #947: builds the query behind <see cref="GetBatchQuery"/>'s default (no explicit
+        /// <see cref="ReplaceWhere"/>) branch. Calls <see cref="GetSearchQuery"/> with a
+        /// freshly constructed, unbound <typeparamref name="TSearcher"/> temporarily swapped
+        /// into <see cref="Searcher"/>, then ANDs an Ids restriction on top as an ordinary
+        /// Where. Nothing is ever deleted from the expression tree — unlike the
+        /// WhereReplaceModifier-based rebuild this replaced, which deleted every Where node
+        /// in GetSearchQuery() (DataPrivilege via DPWhere included) before reconstructing
+        /// with only the Ids restriction.
+        /// <para>
+        /// <b>What the blank Searcher actually suppresses — the true invariant, corrected
+        /// from an earlier, overbroad claim ("the current UI search criteria is ignored")
+        /// that a #953 adversarial review disproved with a runnable reproduction for two
+        /// in-tree shapes:</b>
+        /// </para>
+        /// <list type="bullet">
+        /// <item>A predicate added through a guard-then-add helper (<c>CheckContain</c> /
+        /// <c>CheckEqual</c> / <c>CheckWhere</c> and similar — each checks the Searcher's
+        /// bound value for null/empty <i>before</i> calling <c>.Where(...)</c>) is genuinely
+        /// suppressed: the guard sees the blank Searcher's default value and never adds the
+        /// Where node at all.</item>
+        /// <item>A predicate that does not read <see cref="Searcher"/> at all — row-level
+        /// DataPrivilege via <c>DPWhere</c>, or a hardcoded business-rule filter the entity
+        /// author wrote unconditionally — is unaffected either way and survives untouched.
+        /// This is the property #947's fix depends on.</item>
+        /// <item><b>A predicate that reads <see cref="Searcher"/> directly inside a LINQ
+        /// lambda, not through a guard helper, is NOT reliably suppressed</b> — the outcome
+        /// depends on WHEN the lambda reads <see cref="Searcher"/>, which this method does
+        /// not control:
+        /// <list type="bullet">
+        /// <item><i>Eager</i> (plain C# statements inside <see cref="GetSearchQuery"/>
+        /// itself, e.g. <c>var id = Searcher.ParentId; if (id == null) return emptyList;</c>,
+        /// as in the demo tree's <c>CityChildrenDetailListVM</c>) — reads the BLANK
+        /// Searcher, since it runs while the swap is in effect. If the branch taken returns
+        /// an empty/degenerate query, the Ids restriction is ANDed onto that empty query:
+        /// zero rows, always, regardless of the real Searcher's value or the requested
+        /// Ids.</item>
+        /// <item><i>Lazy</i> (a closure inside a <c>.Where(x => Searcher.Field ==
+        /// x.Field)</c> LINQ predicate, as in the demo tree's <c>MajorDetailListVM</c>) —
+        /// <see cref="Searcher"/> is read at query EXECUTION time (when the caller
+        /// enumerates/materializes the query), which happens AFTER this method's
+        /// <c>finally</c> below has already restored the REAL, request-bound Searcher. The
+        /// blank swap is a no-op for this shape: the live UI search criteria is applied
+        /// anyway, exactly as it was before #947.</item>
+        /// </list>
+        /// Both failure modes were verified with a runnable, standalone reproduction (not by
+        /// reasoning alone) and are pinned by
+        /// <c>test/WalkingTec.Mvvm.Core.Test/VM/BlankSearcherShapeTests953.cs</c> against
+        /// fixture ListVMs mirroring each demo shape. <b>Neither is a security regression —
+        /// both fail closed (wrong/missing rows, never extra ones)</b> — but both are
+        /// silent, previously-undocumented compatibility changes from pre-#947 behaviour for
+        /// any ListVM shaped this way. Closing this class of gap structurally — e.g. tagging
+        /// <c>DPWhere</c>'s own <c>Where</c> node so <c>WhereReplaceModifier</c> can skip
+        /// exactly that node instead of using a blank Searcher at all — is a design change,
+        /// tracked separately rather than folded into this fix.
+        /// </para>
+        /// The original Searcher is restored before returning, including on the exception
+        /// path.
+        /// </summary>
+        /// <param name="ids">the Ids to restrict to</param>
+        /// <param name="peid">
+        /// a property-access expression (e.g. <c>x =&gt; x.Code</c>'s body) identifying which
+        /// property of <typeparamref name="TModel"/> <paramref name="ids"/> is matched
+        /// against; <see langword="null"/> matches against the primary key (ID).
+        /// </param>
+        private IQueryable<TModel> GetAuthorizedIdsQuery(List<string?> ids, Expression? peid)
+        {
+            var savedSearcher = Searcher;
+            var blankSearcher = (TSearcher)typeof(TSearcher).GetConstructor(Type.EmptyTypes)!.Invoke(null);
+            blankSearcher.CopyContext(this);
+            IOrderedQueryable<TModel> baseQuery;
+            try
+            {
+                Searcher = blankSearcher;
+                baseQuery = GetSearchQuery();
+            }
+            finally
+            {
+                Searcher = savedSearcher;
+            }
+            var idsExpr = ids.GetContainIdExpression<TModel>(peid);
+            return baseQuery.Where(idsExpr);
         }
 
         /// <summary>

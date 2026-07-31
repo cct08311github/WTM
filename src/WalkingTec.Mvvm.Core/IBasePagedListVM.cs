@@ -149,6 +149,7 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         /// <returns></returns>
         IOrderedQueryable<T> GetSearchQuery();
+
         /// <summary>
         /// DoSearch
         /// </summary>

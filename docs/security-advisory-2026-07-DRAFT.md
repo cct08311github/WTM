@@ -141,16 +141,13 @@ curl -i -X POST https://<your-host>/_Admin/FrameworkMenu/Create \
 | 7 | `[EnableAnalysis]` 的 `AllowedRoles` 無初值 → `CheckAccess` 首行即放行；`_DashboardController`／`_DashboardDesignerController` 的三個端點連 `CheckAccess` 都沒呼叫 | #842 |
 | 8 | Dashboard viewer 可覆寫持久化 widget 的 query 結構（`listVmType`／dimensions／measures／filters） | #831 |
 | 9 | 套件消費者拿不到 NPOI vulnerable transitive 的 override：`dotnet pack` 時 .NET 10 SDK 的 package-reference pruning（這條 override 本身會觸發 NU1510「framework already provides this package」，正是 pruning 的判準）把 `System.Security.Cryptography.Xml` pin 從封裝出的 nuspec 依賴清單整條移除。本 repo 自己的弱點掃描只跑在 solution 層級（override 在那裡仍生效），對這個落差結構性看不見 | #934 |
-| 10 | `Selector` 的 `Ids`（Batch）路徑：`GetBatchQuery()` 用 `WhereReplaceModifier` 把 `GetSearchQuery()` 產生的整棵 `Where` 表達式樹砍掉、只留 `Ids.Contains(...)` —— 列級 DataPrivilege 的 `Where` 子句是用同一機制掛上去的，一併被砍 | #947 |
-| 11 | Dashboard 設計器 `POST /_dashboard-designer/preview` 把呼叫者送來的整個 `WidgetDefinition`（含 `Source.RestOptions`）當「server-side 權威設定」直接餵進資料抓取管線 —— `AllowPrivateNetwork`／`AllowHttp`「只能在伺服器端開啟」的保證在這個端點不成立，呼叫者自己就是那個伺服器端 | #948 |
+| 10 | Dashboard 設計器 `POST /_dashboard-designer/preview` 把呼叫者送來的整個 `WidgetDefinition`（含 `Source.RestOptions`）當「server-side 權威設定」直接餵進資料抓取管線 —— `AllowPrivateNetwork`／`AllowHttp`「只能在伺服器端開啟」的保證在這個端點不成立，呼叫者自己就是那個伺服器端 | #948 |
 
 第 5 項對已認證使用者的影響最廣。**目前沒有可用的緩解措施** —— 把旗標設為 `true` 會讓對應端點對所有人回 403。
 
 第 9 項（#934）：**升級套件不會把這個 override 帶給你**。NuGet 的依賴解析只讀已發布的 nuspec，`dotnet pack` 階段被砍掉的那一行不會出現在你專案的相依圖裡，你會照樣拉到 NPOI 自己宣告的 `System.Security.Cryptography.Xml` 8.0.2（GHSA-37gx-xxp4-5rgx、GHSA-w3x6-4m5h-cxqf，兩個 HIGH）。受影響對象：**每一個從 registry 安裝這個套件、而非直接建置本 repo solution 的下游**——已有下游在數月前獨立發現並自行 workaround（在自己的專案裡重複同一條 override）。本次未修：修法要嘛是下游在自己的 `.csproj` 也釘一次同一個 override（見 `docs/dependency-management.md` Scenario B 的做法），要嘛是本 repo 改變 pack 設定讓 override 不被裁剪，兩者目前都還沒做。
 
-第 10 項（#947）：`Selector` 是 `[AllRights]`，不是逐 VM 授權（`AllowUnauthenticatedSelector=true` 時甚至不需要認證）。**任何已認證呼叫者**對任意可解析的 VM 名稱帶上 `Ids` 參數，就能繞過該 VM 自己 `GetSearchQuery()` 掛的列級 DataPrivilege 限制，讀到本不在自己 DataPrivilege 範圍內的列——只要那些列的 id 猜得到或列舉得到。本次未修，沒有組態可關。
-
-第 11 項（#948）：`_DashboardDesignerController` 同樣是 `[AllRights]`，無逐 widget 授權。**任何已認證呼叫者**可呼叫 `preview`，帶一個 `Source.RestOptions.AllowPrivateNetwork=true`／`AllowHttp=true`、`Url` 指向內網位址（雲端 metadata endpoint、`127.0.0.1`、內部服務）的 widget 定義，讓伺服器代替呼叫者對該位址發出請求並把回應內容原樣回傳——傳統 SSRF。本次未修。
+第 10 項（#948）：`_DashboardDesignerController` 同樣是 `[AllRights]`，無逐 widget 授權。**任何已認證呼叫者**可呼叫 `preview`，帶一個 `Source.RestOptions.AllowPrivateNetwork=true`／`AllowHttp=true`、`Url` 指向內網位址（雲端 metadata endpoint、`127.0.0.1`、內部服務）的 widget 定義，讓伺服器代替呼叫者對該位址發出請求並把回應內容原樣回傳——傳統 SSRF。本次未修。
 
 ### 本節在 2026-07-29 的更正（原草稿有兩列已過時，另有一列與現行程式碼不符）
 
@@ -165,14 +162,15 @@ curl -i -X POST https://<your-host>/_Admin/FrameworkMenu/Create \
 | 原第 9 項 | `RedoUpdateModel` 無 allowlist 反射寫入，可經 dotted path 觸及 DI singleton（#867） | **已修**，10.21.0：新增 `RequestBindingPolicy` 正向 allowlist（依 dotted-path 每一 hop **解析到的型別**判斷，不是宣告類別或屬性名稱），`Configs.EnforceRequestBindingScope` 預設 `true`。**已知殘留、不影響此判定**：型別 denylist 結構上無法窮舉未來可能新增的 gateway 型別，追蹤於 #889——已修的是本公告點名的那個具體攻擊面（`ConfigInfo.IsQuickDebug`／`IsFilePublic`／`GlobaInfo.AllAccessUrls` 三個落地點透過 `RedoUpdateModel` 可達），不是「未來永遠不會有新的 gateway 型別」的承諾。 |
 |---|---|---|
 | 原第 10 項 | `EtlSchedulerService` 多處 `IgnoreQueryFilters()` 在 HTTP 共用路徑上造成跨租戶 IDOR（#883），先前被遮蔽它的 #876（Etl controller 從未接到 `Wtm`）一併列在同一段 | **兩者皆已修**，同一 PR、同一版本 10.21.0：#876 修好 `Wtm` 注入（新增 `WtmControllerActivator`），#883 修好八個 HTTP 入口的租戶所有權檢查（`LoadJobDefinitionForCallerAsync`／`EnsureCallerOwnsJobAsync`）——同一提交同時修，沒有「#876 一修好、#883 立刻可觸發」的視窗。 |
+| 原第 10 項（本輪新發現當下的編號，見下段） | `Selector` 的 `Ids`（Batch）路徑：`GetBatchQuery()` 用 `WhereReplaceModifier` 把 `GetSearchQuery()` 產生的整棵 `Where` 表達式樹砍掉、只留 `Ids.Contains(...)` —— 列級 DataPrivilege 的 `Where` 子句是用同一機制掛上去的，一併被砍（#947） | **已修**，同一版本 10.21.0：`BasePagedListVM` 新增 `GetAuthorizedIdsQuery`，`GetBatchQuery()` 的預設分支改為「暫時換上空白 Searcher 呼叫 `GetSearchQuery()`（讓以 Searcher 值為條件才會加上的 `Where` 不會被加入），再把 `Ids` 限制以 AND 疊加」，不再刪除任何既有 `Where` 節點——列級 DataPrivilege（`DPWhere` 加的 `Where`）因此原封不動留在查詢裡。同一次修法連帶關掉 `GetExportExcel`／`GetExportExcelStream`（`CheckExport` 路徑）等其餘同機制呼叫點，詳見 `docs/production-readiness.md` 的 #947 條目（含完整窮舉表與命令）。**已知殘留、不影響此判定範圍**：空白 Searcher 只能壓下透過 `CheckContain`/`CheckEqual`/`CheckWhere` 等 guard-then-add helper 加的 `Where`；一個不經這些 helper、直接在 `.Where(x => Searcher.Field == x.Field)` 這種 lambda 裡讀 `Searcher` 的寫法不受保護——兩種失效形狀皆已於本 repo demo 樹中找到對應範例（`MajorDetailListVM`／`CityChildrenDetailListVM`）並實測確認，兩者皆為 fail-closed（少資料或無資料，不會多洩漏），屬相容性殘留而非本項安全判定的例外，詳見 `docs/production-readiness.md` 同條目。 |
 
-新增仍未修（本輪新發現，非 #836 窮舉表涵蓋範圍——見下方「這份公告不宣稱什麼」）：**#934**（`dotnet pack` 的 nuspec pruning 使 `System.Security.Cryptography.Xml` override 對套件消費者失效）、**#947**（`Selector` 的 `Ids` 路徑繞過列級 DataPrivilege）、**#948**（Dashboard 設計器 `preview` 端點 SSRF）。三者皆為本次版本**未修**，理由見上方各自段落。
+新增仍未修（本輪新發現，非 #836 窮舉表涵蓋範圍——見下方「這份公告不宣稱什麼」）：**#934**（`dotnet pack` 的 nuspec pruning 使 `System.Security.Cryptography.Xml` override 對套件消費者失效）、**#948**（Dashboard 設計器 `preview` 端點 SSRF）。兩者皆為本次版本**未修**，理由見上方各自段落。#947（`Selector` 的 `Ids` 路徑繞過列級 DataPrivilege）已於同一 10.21.0 週期修復，見上表。
 
 ---
 
 ## 這份公告不宣稱什麼
 
-- **不宣稱清單完整。** 依據是 #836 的 entrypoint→sink 窮舉表，而該表自己指出：以 entrypoint 為 key 的表看不見「sink 實體有沒有實作 `ITenant`」與「路徑有沒有繞過 global query filter」這兩個維度 —— #883（已於 10.21.0 修復）當初就是這樣被漏掉的；#934／#947／#948（見第四類第 9–11 項，皆未修）同樣不在該表的維度內，是後續各自獨立審查才找到的。而第一類第 1 項（本公告最嚴重的一條）是在十七輪審查之後才被找到的。
+- **不宣稱清單完整。** 依據是 #836 的 entrypoint→sink 窮舉表，而該表自己指出：以 entrypoint 為 key 的表看不見「sink 實體有沒有實作 `ITenant`」與「路徑有沒有繞過 global query filter」這兩個維度 —— #883／#947（皆已於 10.21.0 修復）當初就是這樣被漏掉的；#934／#948（見第四類第 9–10 項，皆未修）同樣不在該表的維度內，是後續各自獨立審查才找到的。而第一類第 1 項（本公告最嚴重的一條）是在十七輪審查之後才被找到的。
 - **不宣稱這些是新缺陷。** 多數可追溯到 2020–2026 的既有設計。2026-07 的工作是**發現**它們，不是造成它們。
 - **不宣稱升級就足夠。** 只有第一類是。第二、三類需要你動手，第四類目前無解。
 
@@ -189,4 +187,5 @@ curl -i -X POST https://<your-host>/_Admin/FrameworkMenu/Create \
   - **兩列已過時、一列與現行程式碼不符**：第四類原第 9 項（#843 背景 DataPrivilege fail-open）與原第 10 項（#841 ETL 租戶／角色閘門，與 #832 混列）——查 API 確認 #843／#841 皆已 `closed`，已依 `docs/production-readiness.md:68` 更正、拆分；新增第 10 項（#883，經查證與 #876 的遮蔽關係屬實，PR #882 待合併同時修兩票）。原第 9 項描述的 #832 症狀（重啟後不排程、觸發後靜默 return）經查 `EtlSchedulerService.cs`／`EtlQuartzJob.cs` 已隨 #841／#862 的 `IgnoreQueryFilters()` 一併解決，與現行程式碼不符，已移出「仍未修」清單（#832 issue 本身保留 open，留言記錄發現、範圍留給 issue owner 裁決）；連帶更正了 `docs/production-readiness.md:153` 對 #832 的過時描述，消除該檔案內部的自我矛盾。
   - 比對過程另外發現公告本身教下游寫法的四處文件仍呼叫已棄用的 `ApplyEtlModels()` 零參數多載（不套用 `ITenant` 過濾器），與本文無直接關係但屬同一批交叉檢查的副產品，已獨立立案 #893，不在本 PR 範圍內處理。
   - **2026-07-31（#927 release-prep 觸發的第三輪）**：`version.props` 在標題撰寫後又經 #859／#843／#883 三次 bump 到 10.21.0（10.19.0／10.20.0 皆未曾實際發版、無對應 tag），全文 12 處版本標籤由 10.19.0／10.20.0 改為實際即將發版的 10.21.0，逐列核對其宣稱的修法皆已在樹上（見本次 PR diff，未發現宣稱但未合併的項目）。同一輪順帶發現第四類原第 9／10 項（#867、#883／#876）已在同一 10.21.0 週期修好，卻仍留在「仍未修」清單——已移出並記錄於上方「本節在 2026-07-31 的更正」，同批新增 #934／#947／#948 三項本次確認仍未修的缺陷。
+  - **2026-07-31（#947 修復落地，同一 10.21.0 週期，同日第四輪）**：本表新增 #934／#947／#948 之後，#947（`Selector` 的 `Ids` 路徑繞過列級 DataPrivilege）在同一版本週期內修好（`GetBatchQuery()` 改用 `GetAuthorizedIdsQuery` 空白 Searcher + AND，不再刪除既有 `Where` 節點）——與 #843／#841／#867／#883 走的是同一種「先誠實列為未修、修好後移表更正」流程，不是本公告從一開始就宣稱過度。已從第四類移除、移入上方「2026-07-31 的更正」表；第四類第 11 項（#948）改編號為第 10 項，「這份公告不宣稱什麼」一節的交叉引用同步更正。**已知殘留、如實揭露而非隱藏**：修法本身依賴一個「空白 Searcher 能壓下所有以 Searcher 值為條件的 `Where`」的假設，adversarial review（PR #953）證明該假設對兩種形狀不成立（`.Where(x => Searcher.Field == x.Field)` 這種不經 guard-then-add helper、直接在 lambda 裡讀 Searcher 的寫法）——兩者皆為 fail-closed（該列消失或整批清空，不會多洩漏），不影響本項「已修」的判定，但列為 `docs/production-readiness.md` 同條目的已知相容性限制，未來如需徹底關閉需要另一輪設計變更（在 `DPWhere` 掛的 `Where` 節點上加標記，讓 `WhereReplaceModifier` 能選擇性跳過），本次不做。
 - [ ] 決定是否為第一類第 1 項的相容性影響（NULL-tenant 舊檔）提供一個一次性稽核指令，讓下游升級前能自查有沒有中招
