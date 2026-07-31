@@ -2255,7 +2255,7 @@ regression tests across the six PRs);
 ### Documentation
 
 - 11 `IgnoreQueryFilters()` call sites now carry rationale comments per
-  `.claude/rules/architecture.md` (#20, #21).
+  `.claude/rules/dotnet-conventions.md` (#20, #21).
 
 ## [10.5.1] - 2026-05-13
 

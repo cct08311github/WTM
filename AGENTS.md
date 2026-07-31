@@ -1,7 +1,8 @@
 # AGENTS.md
 
 This file provides guidance to Codex when working with this repository.
-All detailed rules live in `.claude/rules/` — this file is the entry point.
+Detailed engineering rules live in `.claude/rules/`; broader design and ops
+docs live in `docs/` — this file is the entry point.
 
 ## Project Mission
 
@@ -31,13 +32,14 @@ Active branch: `dotnet10`. Origin: Gitea (`mac-mini.tailde842d.ts.net/chiu0831/W
 Four projects: `Core` (VMs, DataContext, Models, Analysis, WTMContext), `Mvc` (Controllers, startup, API),
 `TagHelpers.LayUI` (UI), `Etl` (data pipeline). Four VM types all extend `BaseVM`.
 WTMContext uses focused `IWtm*Service` interfaces. Startup: `AddWtmContext` → `UseWtmContext` → `UseWtmStaticFiles`.
-Full detail → `.claude/rules/architecture.md`.
+Full detail → `docs/system-architecture.md`.
 
 ## Security Summary
 
 Passwords (PBKDF2 + legacy MD5 migration), JWT (access/refresh rotation + `jti` replay guard),
 Analysis Mode (field whitelist before Expression Tree), file upload (path-traversal guard),
-dynamic ops (blocklist + type validation). Full detail → `.claude/rules/architecture.md` § Security.
+dynamic ops (blocklist + type validation). Related invariants → `.claude/rules/security-invariants.md`;
+broader security posture → `docs/production-readiness.md` § 安全姿態.
 
 ## Quick Commands
 
@@ -53,7 +55,10 @@ dotnet test test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj \
 > First-time setup: `dotnet restore` requires the Gitea NuGet source configured —
 > see `README.md` § Quick Start step 1, or `docs/gitea-packages.md`.
 
-Full command reference → `.claude/rules/tools-commands.md`
+No single consolidated command reference exists. The daily-loop commands are above;
+full local build/test/e2e/vulnerability-scan reproduction is in `docs/ci-operations.md`
+§ 本機 reproduce CI 流程; the package-upgrade/vulnerability-scan loop is in
+`docs/dependency-management.md`.
 
 ## CI Status Caveat
 
@@ -77,7 +82,7 @@ Detail + workaround SOP → `docs/ci-operations.md`. Tracking: Issue #11.
 
 These are one-liners kept as documented steps rather than command files:
 
-- **Full test suite:** `dotnet test WalkingTec.Mvvm.sln -c Release` then `cd test/WalkingTec.Mvvm.Js.Tests && npm test` (see `.claude/rules/tools-commands.md` § Test)
+- **Full test suite:** `dotnet test WalkingTec.Mvvm.sln -c Release` then `cd test/WalkingTec.Mvvm.Js.Tests && npm test` (see `.claude/rules/testing.md` § "JS and e2e")
 - **Nullable-annotation scan:** `grep -rln "#nullable disable" src/` and review `<Nullable>` project settings (new code must never commit `#nullable disable`)
 
 ## Key Files
@@ -96,14 +101,39 @@ These are one-liners kept as documented steps rather than command files:
 
 ## Detailed Rules (`.claude/rules/`)
 
+Each file below is auto-loaded by Claude Code via its own `paths:` frontmatter
+when you touch a matching file; Codex and other agents should read the whole
+directory up front since it has no equivalent auto-load mechanism.
+
 | File | Covers |
 |------|--------|
-| `workflow.md` | Branch strategy, commit message format, PR checklist, Issue references |
-| `architecture.md` | Full architecture, WTMContext services, Analysis Mode, DataContext, compatibility |
-| `dotnet-conventions.md` | Code style, nullable policy, EF Core conventions |
-| `testing.md` | Test projects, mock patterns, JS test conventions |
-| `tools-commands.md` | Build, test, pack, vulnerability scan, pre-PR checklist |
-| `dependency-management.md` | Upgrade policy, .NET version strategy, package versioning |
-| `known-quirks.md` | TestFrameworkContext, Serilog, EF Core API changes, reflection pitfalls |
+| `dotnet-conventions.md` | Nullable policy, async, EF Core conventions, hot-path reflection caching, logging |
+| `testing.md` | Test projects, mock patterns, EF InMemory limits, JS/e2e test conventions |
+| `dependency-management.md` | Central Package Management, NU1510 vs NU1903, upgrade policy |
+| `release-changelog.md` | Commit scopes, CHANGELOG.md sections, release flow |
+| `security-invariants.md` | `src/`-wide invariants: dialog trust boundary, ordering-is-the-boundary, tenant scope, SSRF hardening |
 
 Always consult the relevant rule file before making changes in that area.
+
+### Known gaps (#921)
+
+These four filenames were cited from this document for a long time before
+anyone noticed no file existed at the path — do not assume the content
+below lives somewhere else in full; in most cases it simply doesn't exist
+yet:
+
+- **`architecture.md`** — never created. The closest existing coverage is
+  `docs/system-architecture.md` (layering, `WTMContext`, Analysis Mode,
+  `DataContext`); it does not attempt the "compatibility" angle the old
+  citation implied.
+- **`known-quirks.md`** — never created. No file anywhere documents
+  `TestFrameworkContext`, Serilog specifics, or EF Core API-change
+  pitfalls as a dedicated collection; that knowledge is undocumented.
+- **`workflow.md`** — never created. Branch strategy / commit message
+  format / PR checklist / Issue-reference conventions are the operator's
+  own Gitea workflow, not repo content, so there is nothing to redirect
+  to here; `release-changelog.md`'s commit-scope list is the only
+  in-repo overlap.
+- **`tools-commands.md`** — never created. Commands are scattered across
+  the Quick Commands section above, `docs/ci-operations.md`, and
+  `docs/dependency-management.md`; no single reference file exists.

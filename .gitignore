@@ -1,6 +1,16 @@
 # wtm custom
 .worktrees/
-.claude/
+# Issue #921: rule files under .claude/rules/ are cited as authoritative by
+# AGENTS.md and CLAUDE.md, so they must actually be in the repo. A trailing-
+# slash `.claude/` pattern blocks git from recursing into the directory at
+# all, so re-including a nested path needs the directory excluded via `*`
+# (not `/`) plus an explicit re-include of each level. Excluded from the
+# public GitHub mirror separately via .sync/github-excludes.txt (which
+# deletes .claude/ from the push tree, independent of this ignore).
+.claude/*
+!.claude/rules/
+.claude/rules/*
+!.claude/rules/*.md
 .playwright-mcp/
 demo/**/*.db
 tc*.png

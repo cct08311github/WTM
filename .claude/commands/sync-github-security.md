@@ -316,7 +316,7 @@ For alerts that cannot be fixed (upstream-blocked transitive, by-design CodeQL f
 | #<n> | <package> | <CVE> | <severity> | <manifest scope> | first_patched: None（<why blocked>）→ <unblock condition> |
 ```
 
-This lives in a tracked repo doc (public-mirror-safe) — NOT in `.claude/rules/` (local-only, gitignored) and NOT in a repo `MEMORY.md` (does not exist).
+This lives in a tracked repo doc (public-mirror-safe) — NOT in `.claude/rules/` (Gitea-only, excluded from the GitHub mirror by `.sync/github-excludes.txt`) and NOT in a repo `MEMORY.md` (does not exist).
 
 ---
 
