@@ -25,15 +25,27 @@ namespace WalkingTec.Mvvm.Core.Dashboard;
 /// <remarks>
 /// Security model:
 /// <list type="bullet">
-///   <item>HTTPS by default; plain HTTP requires <see cref="RestWidgetDataSourceOptions.AllowHttp"/>
-///         set server-side in <see cref="WidgetSourceDefinition.RestOptions"/>.</item>
+///   <item>HTTPS and public (non-private-range) IPs by default. Reaching a plain
+///         <c>http://</c> URL, or an IP in a private/loopback/link-local/CGNAT/multicast
+///         range, now ALWAYS requires a registered <see cref="IDashboardEgressPolicy"/> to
+///         approve that specific resolved destination (issue #948) —
+///         <see cref="RestWidgetDataSourceOptions.AllowHttp"/> and
+///         <see cref="RestWidgetDataSourceOptions.AllowPrivateNetwork"/> are no longer
+///         sufficient on their own, because both live inside the widget definition that
+///         <c>_DashboardController.Create</c>/<c>Update</c> and
+///         <c>_DashboardDesignerController.Preview</c> accept directly from the caller —
+///         see <see cref="IDashboardEgressPolicy"/>'s own XML doc for the full rationale.</item>
 ///   <item>SSRF guard: resolved URL host must not map to private, loopback,
 ///         link-local (incl. cloud IMDS), CGNAT (100.64/10), or multicast IPs unless
-///         <see cref="RestWidgetDataSourceOptions.AllowPrivateNetwork"/> is set server-side.</item>
+///         <see cref="IDashboardEgressPolicy.IsAllowedAsync"/> approves the specific
+///         resolved IP.</item>
 ///   <item>DNS pinning via <c>SocketsHttpHandler.ConnectCallback</c>: the IP validated at
 ///         connect time by <see cref="PinnedConnectAsync"/> is the IP that the socket actually
 ///         connects to, eliminating DNS rebinding / TOCTOU windows. TLS SNI and server-certificate
-///         validation use the original hostname URI (not an IP rewrite), so HTTPS works correctly.</item>
+///         validation use the original hostname URI (not an IP rewrite), so HTTPS works correctly.
+///         The egress policy (when registered) is consulted again at this authoritative,
+///         connect-time check — not just at the earlier fast pre-check — using the SAME
+///         freshly-resolved IP the socket is about to connect to.</item>
 ///   <item>Redirects disabled: the named HttpClient <see cref="HttpClientName"/> is registered
 ///         with <c>AllowAutoRedirect=false</c> — 302 redirects cannot bypass the SSRF guard.</item>
 ///   <item>Response body capped at <see cref="RestWidgetDataSourceOptions.MaxResponseBytes"/>
@@ -47,6 +59,7 @@ public class RestWidgetDataSource : IWidgetDataSource
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IMemoryCache _cache;
+    private readonly IDashboardEgressPolicy? _egressPolicy;
 
     // Shared options for case-insensitive JSON deserialization (avoids per-call allocation).
     private static readonly JsonSerializerOptions _caseInsensitiveOptions =
@@ -60,10 +73,14 @@ public class RestWidgetDataSource : IWidgetDataSource
     public const long MaxResponseBytesHardLimit = 10 * 1024 * 1024;
 
     /// <summary>
-    /// <see cref="HttpRequestOptions"/> key used to pass the per-request
-    /// <c>AllowPrivateNetwork</c> policy to <see cref="PinnedConnectAsync"/>.
+    /// <see cref="HttpRequestOptions"/> key used to pass the resolved
+    /// <see cref="IDashboardEgressPolicy"/> instance (may be <c>null</c>) to
+    /// <see cref="PinnedConnectAsync"/>, so the authoritative connect-time check can
+    /// consult the same policy the fast pre-check used (issue #948). This carries the
+    /// policy reference itself, not a caller-controlled boolean — see that interface's
+    /// XML doc for why a boolean was insufficient.
     /// </summary>
-    internal const string AllowPrivateNetworkOptionKey = "WtmRestWidget.AllowPrivateNetwork";
+    internal const string EgressPolicyOptionKey = "WtmRestWidget.EgressPolicy";
 
     private const int TimeoutSecondsMin = 1;
     private const int TimeoutSecondsMax = 60;
@@ -73,10 +90,20 @@ public class RestWidgetDataSource : IWidgetDataSource
     public string Name => "rest";
     public WidgetDataSourceKind Kind => WidgetDataSourceKind.Rest;
 
-    public RestWidgetDataSource(IHttpClientFactory httpClientFactory, IMemoryCache cache)
+    /// <param name="httpClientFactory">Used to create the named <see cref="HttpClientName"/> client.</param>
+    /// <param name="cache">Backs the per-widget response cache (see <see cref="RestWidgetDataSourceOptions.CacheTtlSeconds"/>).</param>
+    /// <param name="egressPolicy">
+    /// Optional host-owned egress policy (issue #948). Resolved via DI as an ordinary
+    /// nullable constructor parameter — <c>null</c> when the host has not registered
+    /// one (<c>services.AddWtmDashboardEgressPolicy&lt;T&gt;()</c>), which is the default
+    /// and means every private-network/plain-HTTP destination is rejected. See
+    /// <see cref="IDashboardEgressPolicy"/>.
+    /// </param>
+    public RestWidgetDataSource(IHttpClientFactory httpClientFactory, IMemoryCache cache, IDashboardEgressPolicy? egressPolicy = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        _egressPolicy = egressPolicy;
     }
 
     public async Task<WidgetDataResult> GetDataAsync(WidgetDataRequest request, CancellationToken ct = default)
@@ -88,7 +115,7 @@ public class RestWidgetDataSource : IWidgetDataSource
         // messages before we even attempt the TCP connection.
         // The authoritative TOCTOU-safe check happens again at actual connect time
         // inside PinnedConnectAsync via SocketsHttpHandler.ConnectCallback.
-        await ValidateUrlAsync(options, ct).ConfigureAwait(false);
+        await ValidateUrlAsync(options, ct, _egressPolicy).ConfigureAwait(false);
 
         var cacheKey = BuildCacheKey(options);
         if (options.CacheTtlSeconds > 0 && _cache.TryGetValue(cacheKey, out WidgetDataResult? cached) && cached != null)
@@ -159,16 +186,28 @@ public class RestWidgetDataSource : IWidgetDataSource
     // ── URL validation + SSRF guard (fast-fail pre-check) ───────────────
 
     /// <summary>
-    /// Fast-fail pre-check: validates URL scheme and resolves the host to verify
-    /// no resolved IP is in a blocked range. Throws <see cref="InvalidOperationException"/>
-    /// with a descriptive message on failure.
+    /// Fast-fail pre-check: validates URL scheme and resolves the host to verify at
+    /// least one resolved IP is either public (over HTTPS) or explicitly approved by
+    /// <paramref name="egressPolicy"/> for that specific resolved IP (issue #948).
+    /// Throws <see cref="InvalidOperationException"/> with a descriptive message on
+    /// failure.
     /// </summary>
     /// <remarks>
     /// This is a best-effort early check. The authoritative TOCTOU-safe enforcement
-    /// happens at actual connect time in <see cref="PinnedConnectAsync"/>.
+    /// happens at actual connect time in <see cref="PinnedConnectAsync"/>, which consults
+    /// the SAME <paramref name="egressPolicy"/> (threaded through via
+    /// <see cref="EgressPolicyOptionKey"/>) against a freshly-resolved IP, not whatever
+    /// this pre-check happened to see. Both layers now share exactly the same
+    /// "is any candidate connectable" decision — <see cref="SelectConnectableIpAsync"/> —
+    /// so there is no separate ALL-must-pass-vs-ANY-must-pass semantic to keep in sync by
+    /// hand (issue #955 review finding F7: an earlier version of this method rejected the
+    /// whole DNS answer set if ANY resolved IP was unapproved, while the connect-time
+    /// layer only ever needed ONE approved candidate — a legitimate multi-A-record host
+    /// where the policy approves only one specific IP would fail here but would have
+    /// connected fine downstream).
     /// </remarks>
     internal static async Task ValidateUrlAsync(
-        RestWidgetDataSourceOptions options, CancellationToken ct = default)
+        RestWidgetDataSourceOptions options, CancellationToken ct = default, IDashboardEgressPolicy? egressPolicy = null)
     {
         if (string.IsNullOrWhiteSpace(options.Url))
         {
@@ -178,19 +217,15 @@ public class RestWidgetDataSource : IWidgetDataSource
         {
             throw new InvalidOperationException("REST widget: Url is not a well-formed absolute URI: " + options.Url);
         }
+
+        bool isPlainHttp;
         if (uri.Scheme == Uri.UriSchemeHttps)
         {
-            // always allowed
+            isPlainHttp = false;
         }
         else if (uri.Scheme == Uri.UriSchemeHttp)
         {
-            if (!options.AllowHttp)
-            {
-                throw new InvalidOperationException(
-                    "REST widget: http:// URLs are rejected by default. " +
-                    "Set AllowHttp=true in the server-side RestOptions to permit plain HTTP " +
-                    "(typically for internal endpoints).");
-            }
+            isPlainHttp = true;
         }
         else
         {
@@ -198,30 +233,50 @@ public class RestWidgetDataSource : IWidgetDataSource
                 "REST widget: only http / https URL schemes are supported. Got: " + uri.Scheme);
         }
 
-        // S5: Port allowlist — blocks probing of Redis/ES/DB ports even when
-        // AllowPrivateNetwork=true. -1 means the URI uses the default port for
-        // its scheme (443 for https, 80 for http) which is always permitted.
+        // S5: Port allowlist — blocks probing of Redis/ES/DB ports for any caller that
+        // leaves AllowedPorts at its default or narrows it. Unlike AllowPrivateNetwork/
+        // AllowHttp, this is NOT gated behind the egress policy below — it is a hard
+        // block regardless of what any policy would approve. That is only meaningful
+        // because AllowedPorts, like AllowPrivateNetwork/AllowHttp, lives on the same
+        // caller-controlled RestOptions object: a caller who could simply send
+        // "allowedPorts": null would turn this block off entirely, which is why
+        // ValidateWidgetConfigs (JsonFileDashboardService/EfCoreDashboardService) now
+        // rejects a null/empty AllowedPorts from the caller at write time (issue #955
+        // review finding F5) — this check only holds because that one does. -1 means the
+        // URI uses the default port for its scheme (443 for https, 80 for http), which is
+        // always permitted.
         if (options.AllowedPorts is { Length: > 0 } allowedPorts && uri.Port != -1)
         {
             if (!Array.Exists(allowedPorts, p => p == uri.Port))
             {
                 throw new InvalidOperationException(
                     $"REST widget: port {uri.Port} is not in the AllowedPorts list. " +
-                    "Configure AllowedPorts in the server-side RestOptions to permit additional ports.");
+                    "Configure AllowedPorts on the widget's RestOptions to permit additional ports.");
             }
         }
+        var resolvedPort = uri.Port != -1 ? uri.Port : (isPlainHttp ? 80 : 443);
 
-        if (options.AllowPrivateNetwork)
-        {
-            // Private network explicitly allowed — skip SSRF IP pre-check.
-            return;
-        }
-
-        // Resolve host and check every returned IP.
+        // #948: no fast path to skip DNS resolution anymore — a caller-supplied
+        // AllowPrivateNetwork=true (or AllowHttp=true) no longer bypasses the check by
+        // itself; every resolved IP must be either public-over-HTTPS by default, or
+        // individually approved by egressPolicy below.
         IPAddress[] ips;
         if (IPAddress.TryParse(uri.Host, out var literalIp))
         {
             ips = new[] { literalIp };
+        }
+        else if (isPlainHttp && egressPolicy == null)
+        {
+            // No policy registered at all: a plain-http:// hostname can never be approved
+            // (no candidate IP would ever pass), so resolving DNS just to prove that would
+            // be pure overhead (and would turn an otherwise network-independent rejection
+            // into one that depends on DNS actually working). Reject immediately —
+            // identical failure mode to the https/private-IP path below when egressPolicy
+            // is null and every resolved IP is blocked.
+            throw new InvalidOperationException(
+                "REST widget: http:// URLs are rejected by default. Register an " +
+                "IDashboardEgressPolicy (services.AddWtmDashboardEgressPolicy<T>()) that " +
+                "approves this specific destination to permit plain HTTP.");
         }
         else
         {
@@ -236,15 +291,27 @@ public class RestWidgetDataSource : IWidgetDataSource
             }
         }
 
-        foreach (var ip in ips)
+        // Delegate the actual accept/reject decision to the SAME function PinnedConnectAsync
+        // uses at connect time — see this method's own remarks for why that (not two
+        // hand-synchronized implementations) is what makes the ANY-one-candidate-suffices
+        // semantics actually match between the two layers.
+        var approvedIp = await SelectConnectableIpAsync(ips, uri, resolvedPort, isPlainHttp, egressPolicy, ct)
+            .ConfigureAwait(false);
+        if (approvedIp == null)
         {
-            if (IsBlockedIp(ip))
-            {
-                throw new InvalidOperationException(
-                    $"REST widget: URL host '{uri.Host}' resolves to a blocked IP range ({ip}). " +
-                    "Set AllowPrivateNetwork=true in the server-side RestOptions to permit " +
-                    "internal endpoints (SSRF mitigation).");
-            }
+            var anyPrivate = Array.Exists(ips, IsBlockedIp);
+            throw new InvalidOperationException(
+                $"REST widget: URL host '{uri.Host}' resolves to {ips.Length} destination(s), " +
+                "none of which are reachable — every candidate is blocked by the default-safe " +
+                "egress policy" +
+                (anyPrivate ? " (at least one resolves to a private/blocked IP range)" : "") +
+                (isPlainHttp ? " (plain HTTP)" : "") +
+                (egressPolicy == null
+                    ? ". No IDashboardEgressPolicy is registered."
+                    : ", and the registered IDashboardEgressPolicy did not approve any of them.") +
+                " Register an IDashboardEgressPolicy (services.AddWtmDashboardEgressPolicy<T>()) " +
+                "that approves the specific resolved destination to permit it — " +
+                "AllowPrivateNetwork/AllowHttp on RestOptions no longer grant access by themselves.");
         }
     }
 
@@ -341,23 +408,27 @@ public class RestWidgetDataSource : IWidgetDataSource
     /// The request URI is kept as the original hostname so that TLS SNI and
     /// server-certificate validation use the correct hostname — HTTPS works correctly.
     /// This callback resolves DNS, selects an allowed IP via
-    /// <see cref="SelectConnectableIp"/>, and opens the socket directly to that IP.
+    /// <see cref="SelectConnectableIpAsync"/>, and opens the socket directly to that IP.
     /// </para>
     /// <para>
-    /// The per-request <c>AllowPrivateNetwork</c> policy is read from
-    /// <see cref="HttpRequestMessage.Options"/> using <see cref="AllowPrivateNetworkOptionKey"/>.
+    /// The <see cref="IDashboardEgressPolicy"/> resolved for this request (may be
+    /// <c>null</c>) is read from <see cref="HttpRequestMessage.Options"/> using
+    /// <see cref="EgressPolicyOptionKey"/> — see that constant's XML doc for why the
+    /// policy reference itself is threaded through rather than a boolean (#948).
     /// </para>
     /// </remarks>
     internal static async ValueTask<Stream> PinnedConnectAsync(
         SocketsHttpConnectionContext context, CancellationToken ct)
     {
-        // Read the per-request AllowPrivateNetwork policy injected by FetchJsonAsync.
+        // Read the per-request egress policy injected by FetchJsonAsync.
         context.InitialRequestMessage.Options.TryGetValue(
-            new HttpRequestOptionsKey<bool>(AllowPrivateNetworkOptionKey),
-            out var allowPrivateNetwork);
+            new HttpRequestOptionsKey<IDashboardEgressPolicy?>(EgressPolicyOptionKey),
+            out var egressPolicy);
 
         var host = context.DnsEndPoint.Host;
         var port = context.DnsEndPoint.Port;
+        var requestUri = context.InitialRequestMessage.RequestUri;
+        var isPlainHttp = string.Equals(requestUri?.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase);
 
         // Resolve the host to candidate IPs (literal IPs resolve instantly from OS).
         IPAddress[] candidates;
@@ -370,13 +441,16 @@ public class RestWidgetDataSource : IWidgetDataSource
             candidates = await Dns.GetHostAddressesAsync(host, ct).ConfigureAwait(false);
         }
 
-        var chosen = SelectConnectableIp(candidates, allowPrivateNetwork);
+        var chosen = await SelectConnectableIpAsync(
+            candidates, requestUri ?? new Uri($"{(isPlainHttp ? "http" : "https")}://{host}:{port}/"),
+            port, isPlainHttp, egressPolicy, ct).ConfigureAwait(false);
         if (chosen == null)
         {
-            // All resolved IPs are in blocked ranges. Throw a generic message
-            // so no host/IP details leak through the 502 response.
+            // All resolved IPs are in blocked ranges (and none was approved by
+            // egressPolicy, if one is registered). Throw a generic message so no
+            // host/IP details leak through the 502 response.
             throw new InvalidOperationException(
-                "REST widget: connection refused — target resolved to a blocked IP range.");
+                "REST widget: connection refused — target resolved to a blocked destination.");
         }
 
         var socket = new Socket(chosen.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
@@ -403,11 +477,65 @@ public class RestWidgetDataSource : IWidgetDataSource
     /// The first connectable <see cref="IPAddress"/>, or <c>null</c> if all
     /// candidates are blocked.
     /// </returns>
+    /// <remarks>
+    /// #948: kept as a pure, synchronous, IP-only primitive — used internally by
+    /// <see cref="SelectConnectableIpAsync"/> as the fast path for the common
+    /// public-IP-over-HTTPS case (no policy round-trip needed). Production code no
+    /// longer calls this directly with a caller-controlled <paramref name="allowPrivateNetwork"/>
+    /// value; see <see cref="IDashboardEgressPolicy"/> for why a boolean is no longer
+    /// sufficient for that decision.
+    /// </remarks>
     internal static IPAddress? SelectConnectableIp(IPAddress[] candidates, bool allowPrivateNetwork)
     {
         foreach (var ip in candidates)
         {
             if (allowPrivateNetwork || !IsBlockedIp(ip))
+            {
+                return ip;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// #948: async, policy-aware IP selection used by <see cref="PinnedConnectAsync"/>.
+    /// First tries the SSRF-safe fast path — the first candidate that is both a public IP
+    /// and not plain-HTTP needs no policy call at all (delegates to
+    /// <see cref="SelectConnectableIp"/> with <c>allowPrivateNetwork: false</c>). Only when
+    /// that fast path finds nothing (every candidate is private and/or the scheme is plain
+    /// HTTP) does it fall through to asking <paramref name="egressPolicy"/>, once per
+    /// candidate IP, in order.
+    /// </summary>
+    /// <returns>The first connectable/approved <see cref="IPAddress"/>, or <c>null</c> if none is.</returns>
+    internal static async ValueTask<IPAddress?> SelectConnectableIpAsync(
+        IPAddress[] candidates, Uri requestUri, int port, bool isPlainHttp,
+        IDashboardEgressPolicy? egressPolicy, CancellationToken ct)
+    {
+        if (!isPlainHttp)
+        {
+            var fast = SelectConnectableIp(candidates, allowPrivateNetwork: false);
+            if (fast != null)
+            {
+                return fast;
+            }
+        }
+
+        if (egressPolicy == null)
+        {
+            return null;
+        }
+
+        foreach (var ip in candidates)
+        {
+            var destination = new DashboardEgressDestination
+            {
+                RequestUri = requestUri,
+                ResolvedAddress = ip,
+                Port = port,
+                IsPrivateNetwork = IsBlockedIp(ip),
+                IsPlainHttp = isPlainHttp,
+            };
+            if (await egressPolicy.IsAllowedAsync(destination, ct).ConfigureAwait(false))
             {
                 return ip;
             }
@@ -458,12 +586,14 @@ public class RestWidgetDataSource : IWidgetDataSource
             req.Content = new StringContent(options.Body, Encoding.UTF8, "application/json");
         }
 
-        // Pass the per-request AllowPrivateNetwork policy to PinnedConnectAsync via
-        // HttpRequestMessage.Options. The ConnectCallback reads this key to decide
-        // whether to permit private-range IPs at actual connect time.
+        // #948: pass the resolved IDashboardEgressPolicy (may be null) to PinnedConnectAsync
+        // via HttpRequestMessage.Options. The ConnectCallback consults it — at actual
+        // connect time, against a freshly-resolved IP — to decide whether to permit a
+        // private-range and/or plain-HTTP destination. options.AllowPrivateNetwork/AllowHttp
+        // are deliberately NOT read here — see IDashboardEgressPolicy's XML doc.
         req.Options.Set(
-            new HttpRequestOptionsKey<bool>(AllowPrivateNetworkOptionKey),
-            options.AllowPrivateNetwork);
+            new HttpRequestOptionsKey<IDashboardEgressPolicy?>(EgressPolicyOptionKey),
+            _egressPolicy);
 
         // Note: the request URI is kept as the original hostname URL.
         // TLS SNI and server-certificate validation derive from the URI host (hostname),

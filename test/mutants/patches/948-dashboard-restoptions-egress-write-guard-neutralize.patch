@@ -1,0 +1,19 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Dashboard/JsonFileDashboardService.cs b/src/WalkingTec.Mvvm.Core/Dashboard/JsonFileDashboardService.cs
+index 38d0ff7b5..ba8c143d6 100644
+--- a/src/WalkingTec.Mvvm.Core/Dashboard/JsonFileDashboardService.cs
++++ b/src/WalkingTec.Mvvm.Core/Dashboard/JsonFileDashboardService.cs
+@@ -299,7 +299,13 @@ public class JsonFileDashboardService : IDashboardService
+                 // RestWidgetDataSource's IDashboardEgressPolicy seam — this check exists
+                 // to catch (and make visible) the attempt at write time, not because the
+                 // runtime would otherwise be unsafe without it.
+-                if (src.RestOptions != null && (src.RestOptions.AllowPrivateNetwork || src.RestOptions.AllowHttp))
++                // MUTANT test/mutants 948-dashboard-restoptions-egress-write-guard-neutralize:
++                // `false &&` short-circuits this condition to always-false at runtime (never a
++                // compile-time constant, since src.RestOptions is a runtime property access, so
++                // no CS0162 unreachable-code warning), silently restoring the pre-#948 behaviour
++                // of accepting a caller-supplied AllowPrivateNetwork/AllowHttp=true. See
++                // test/mutants/entries/948-dashboard-restoptions-egress-write-guard-neutralize.json.
++                if (false && src.RestOptions != null && (src.RestOptions.AllowPrivateNetwork || src.RestOptions.AllowHttp))
+                     return $"Widget '{widgetId}': 資料源 Kind 為 'rest' 時，不可在小工具定義中設定 " +
+                            $"AllowPrivateNetwork 或 AllowHttp（這些欄位由伺服器端 IDashboardEgressPolicy 決定，" +
+                            $"呼叫端無法自行授予私有網路或明文 HTTP 存取權限）。";

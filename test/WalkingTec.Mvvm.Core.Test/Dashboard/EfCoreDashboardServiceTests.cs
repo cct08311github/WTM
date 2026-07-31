@@ -2,6 +2,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
@@ -292,6 +294,181 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
 
             Func<Task> act = () => svc.CreateAsync(def);
             await act.Should().ThrowAsync<ArgumentException>();
+        }
+
+        // ── #948: caller-supplied AllowPrivateNetwork/AllowHttp is rejected at write time ──
+        // Mirrors DashboardWidgetConfigValidationTests in DashboardReliabilityTests.cs (the
+        // JsonFileDashboardService equivalent) — kept in sync deliberately, same as the
+        // production ValidateWidgetConfigs copies themselves.
+
+        private static DashboardDefinition RestWidgetDashboard(RestWidgetDataSourceOptions restOptions, string title = "SSRF Test") =>
+            new()
+            {
+                Title = title,
+                Owner = "alice",
+                Widgets = new Dictionary<string, WidgetDefinition>
+                {
+                    ["w1"] = new WidgetDefinition
+                    {
+                        Type = "chart",
+                        Source = new WidgetSourceDefinition { Kind = "rest", RestOptions = restOptions }
+                    }
+                }
+            };
+
+        [TestMethod]
+        public async Task Create_rejects_rest_widget_with_AllowPrivateNetwork_true()
+        {
+            var svc = BuildService();
+            var def = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "https://10.0.0.1/internal-api",
+                AllowPrivateNetwork = true
+            });
+
+            Func<Task> act = () => svc.CreateAsync(def);
+            (await act.Should().ThrowAsync<ArgumentException>()).Which.Message.Should().Contain("AllowPrivateNetwork");
+        }
+
+        [TestMethod]
+        public async Task Create_rejects_rest_widget_with_AllowHttp_true()
+        {
+            var svc = BuildService();
+            var def = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "http://8.8.8.8/data",
+                AllowHttp = true
+            });
+
+            Func<Task> act = () => svc.CreateAsync(def);
+            (await act.Should().ThrowAsync<ArgumentException>()).Which.Message.Should().Contain("AllowHttp");
+        }
+
+        [TestMethod]
+        public async Task Update_rejects_rest_widget_with_AllowPrivateNetwork_true()
+        {
+            var svc = BuildService();
+            var def = RestWidgetDashboard(new RestWidgetDataSourceOptions { Url = "https://8.8.8.8/data" });
+            var id = await svc.CreateAsync(def);
+
+            def.Id = id;
+            def.Widgets["w1"].Source.RestOptions = new RestWidgetDataSourceOptions
+            {
+                Url = "https://169.254.169.254/latest/meta-data/",
+                AllowPrivateNetwork = true
+            };
+
+            Func<Task> act = () => svc.UpdateAsync(def);
+            (await act.Should().ThrowAsync<ArgumentException>()).Which.Message.Should().Contain("AllowPrivateNetwork");
+        }
+
+        /// <summary>
+        /// Positive control (per issue #948's test plan): a legitimately configured public
+        /// HTTPS destination, with neither security-sensitive flag set, must still be
+        /// accepted.
+        /// </summary>
+        [TestMethod]
+        public async Task Create_accepts_rest_widget_with_public_https_destination_and_no_security_flags()
+        {
+            var svc = BuildService();
+            var def = RestWidgetDashboard(new RestWidgetDataSourceOptions { Url = "https://8.8.8.8/public-api" });
+
+            var id = await svc.CreateAsync(def);
+            id.Should().NotBeNullOrEmpty("a legitimately public HTTPS REST widget must still be accepted");
+        }
+
+        // ── #955 review finding F5: AllowedPorts null/empty is rejected at write time ──
+        // AllowedPorts lives on the same caller-controlled RestOptions object as
+        // AllowPrivateNetwork/AllowHttp; sending "allowedPorts": null turns off
+        // RestWidgetDataSource's port allowlist entirely without touching either boolean.
+
+        [TestMethod]
+        public async Task Create_rejects_rest_widget_with_null_AllowedPorts()
+        {
+            var svc = BuildService();
+            var def = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8/data",
+                AllowedPorts = null
+            });
+
+            Func<Task> act = () => svc.CreateAsync(def);
+            (await act.Should().ThrowAsync<ArgumentException>()).Which.Message.Should().Contain("AllowedPorts");
+        }
+
+        [TestMethod]
+        public async Task Create_rejects_rest_widget_with_empty_AllowedPorts()
+        {
+            var svc = BuildService();
+            var def = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8/data",
+                AllowedPorts = Array.Empty<int>()
+            });
+
+            Func<Task> act = () => svc.CreateAsync(def);
+            (await act.Should().ThrowAsync<ArgumentException>()).Which.Message.Should().Contain("AllowedPorts");
+        }
+
+        [TestMethod]
+        public async Task Create_accepts_rest_widget_with_default_AllowedPorts()
+        {
+            // Omitting AllowedPorts entirely leaves RestWidgetDataSourceOptions' own
+            // non-null default ({80,443,8080,8443}) in place — must not be rejected.
+            var svc = BuildService();
+            var def = RestWidgetDashboard(new RestWidgetDataSourceOptions { Url = "https://8.8.8.8/data" });
+
+            var id = await svc.CreateAsync(def);
+            id.Should().NotBeNullOrEmpty();
+        }
+
+        // ── #955 review finding F6: legacy request-supplied "options" channel ────────
+        // Mirrors JsonFileDashboardServiceTests — a "rest" widget with no persisted
+        // RestOptions must no longer honour a caller-supplied "options" parameter at all.
+
+        private class UnreachableRestDataSource : IWidgetDataSource
+        {
+            public string Name => "rest";
+            public WidgetDataSourceKind Kind => WidgetDataSourceKind.Rest;
+            public bool WasCalled { get; private set; }
+
+            public Task<WidgetDataResult> GetDataAsync(WidgetDataRequest request, CancellationToken ct = default)
+            {
+                WasCalled = true;
+                return Task.FromResult(new WidgetDataResult { Value = "should never be reached" });
+            }
+        }
+
+        [TestMethod]
+        public async Task GetWidgetDataAsync_rejects_request_supplied_options_for_rest_widget_without_persisted_RestOptions()
+        {
+            var stubRest = new UnreachableRestDataSource();
+            var svc = BuildService(dataSources: new IWidgetDataSource[] { stubRest });
+
+            var def = new DashboardDefinition
+            {
+                Title = "Legacy REST Widget",
+                Owner = "alice",
+                Widgets = new Dictionary<string, WidgetDefinition>
+                {
+                    ["w1"] = new WidgetDefinition
+                    {
+                        Type = "chart",
+                        Source = new WidgetSourceDefinition { Kind = "rest" } // no RestOptions persisted
+                    }
+                }
+            };
+            await svc.CreateAsync(def);
+
+            var requestFilters = new Dictionary<string, string>
+            {
+                ["options"] = JsonSerializer.Serialize(new RestWidgetDataSourceOptions { Url = "https://8.8.8.8/data" })
+            };
+
+            Func<Task> act = () => svc.GetWidgetDataAsync(def.Id, "w1", requestFilters);
+            await act.Should().ThrowAsync<InvalidOperationException>();
+            stubRest.WasCalled.Should().BeFalse(
+                "the request must be rejected before ever reaching the underlying data source");
         }
 
         // ── Listing + access control ──────────────────────────────────────────

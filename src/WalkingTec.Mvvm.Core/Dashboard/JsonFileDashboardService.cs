@@ -34,10 +34,6 @@ public class JsonFileDashboardService : IDashboardService
     private readonly ConcurrentDictionary<string, (DashboardDefinition Def, DateTimeOffset Stamp)>
         _defCache = new();
 
-    // Shared options for the legacy REST-options JSON strip path (case-insensitive field matching).
-    private static readonly JsonSerializerOptions _caseInsensitiveOptions =
-        new() { PropertyNameCaseInsensitive = true };
-
     public JsonFileDashboardService(
         IOptions<DashboardOptions> options,
         IEnumerable<IWidgetDataSource> dataSources,
@@ -281,6 +277,41 @@ public class JsonFileDashboardService : IDashboardService
             {
                 if (src.RestOptions != null && string.IsNullOrWhiteSpace(src.RestOptions.Url))
                     return $"Widget '{widgetId}': 資料源 Kind 為 'rest' 且設有 RestOptions 時，必須指定 Url。";
+
+                // #948: reject (not silently strip) a caller-supplied RestOptions that
+                // requests AllowPrivateNetwork/AllowHttp. WidgetDefinition — and therefore
+                // Source.RestOptions — is bound straight from the request body on all
+                // three write paths (_DashboardController.Create/Update,
+                // _DashboardDesignerController.Preview via CreateAsync), so a widget
+                // definition is caller data, never a trusted server-side setting.
+                // Rejecting (400, logged by the caller as an ArgumentException) rather
+                // than silently stripping is deliberate: stripping is friendlier to a
+                // legitimate caller who has no reason to ever set these fields, but it
+                // also erases the only signal that an attempted privilege escalation
+                // happened — a silently-corrected request looks identical to a normal
+                // one in the caller's response and never reaches a log line an operator
+                // would search for. The actual runtime enforcement of "no private
+                // network / no plain HTTP without approval" lives one layer down, in
+                // RestWidgetDataSource's IDashboardEgressPolicy seam — this check exists
+                // to catch (and make visible) the attempt at write time, not because the
+                // runtime would otherwise be unsafe without it.
+                if (src.RestOptions != null && (src.RestOptions.AllowPrivateNetwork || src.RestOptions.AllowHttp))
+                    return $"Widget '{widgetId}': 資料源 Kind 為 'rest' 時，不可在小工具定義中設定 " +
+                           $"AllowPrivateNetwork 或 AllowHttp（這些欄位由伺服器端 IDashboardEgressPolicy 決定，" +
+                           $"呼叫端無法自行授予私有網路或明文 HTTP 存取權限）。";
+
+                // #955 review finding F5: AllowedPorts lives on the same caller-controlled
+                // RestOptions object as AllowPrivateNetwork/AllowHttp above. Without this
+                // check, a caller who cannot set AllowPrivateNetwork/AllowHttp directly
+                // could still turn off RestWidgetDataSource's port allowlist entirely by
+                // simply sending "allowedPorts": null (or an empty array) — the guard in
+                // RestWidgetDataSource.ValidateUrlAsync only fires when AllowedPorts is
+                // non-null and non-empty. Reject (not silently reset to the default) for
+                // the same reason AllowPrivateNetwork/AllowHttp are rejected rather than
+                // stripped above.
+                if (src.RestOptions != null && (src.RestOptions.AllowedPorts == null || src.RestOptions.AllowedPorts.Length == 0))
+                    return $"Widget '{widgetId}': 資料源 Kind 為 'rest' 時，AllowedPorts 不可為 null 或空陣列" +
+                           $"（這會關閉連接埠允許清單，讓呼叫端能探測任意連接埠）。請指定至少一個允許的連接埠。";
             }
         }
 
@@ -553,39 +584,67 @@ public class JsonFileDashboardService : IDashboardService
                 parameters["filters"] = JsonSerializer.Serialize(filterConditions);
             }
 
-            // SSRF hardening (issue #101): for REST widgets, the server-side RestOptions are
-            // authoritative. When present, they completely replace any request-supplied "options"
-            // parameter so that a caller cannot override security-sensitive fields such as
-            // AllowPrivateNetwork or AllowHttp. When RestOptions is absent (legacy widget), fall
-            // through but strip AllowPrivateNetwork/AllowHttp from any request-supplied JSON.
+            // SSRF hardening (issue #101, corrected #948): for REST widgets, the widget
+            // definition's own RestOptions (persisted on the dashboard) is authoritative
+            // over the "options" parameter attached to THIS data-fetch request — i.e. this
+            // block only decides which of the two OPTIONS BLOBS wins, definition vs a
+            // per-request override. It does NOT, by itself, mean the resulting
+            // AllowPrivateNetwork/AllowHttp values are safe to honour: widgetSource.RestOptions
+            // is populated from whatever DashboardDefinition/WidgetDefinition the caller
+            // originally POSTed/PUT through _DashboardController.Create/Update or
+            // _DashboardDesignerController.Preview — it is caller data, not a trusted
+            // server-side setting (an earlier version of this comment, and of
+            // WidgetDefinition.RestOptions's own doc, claimed otherwise; both were wrong
+            // for this reason — issue #948). Two independent layers now guard against
+            // that: ValidateWidgetConfigs (above, at Create/Update/Preview's shared
+            // CreateAsync/UpdateAsync write path) rejects a RestOptions that requests
+            // AllowPrivateNetwork/AllowHttp before it can ever be persisted, and
+            // RestWidgetDataSource itself no longer honours either field without a
+            // host-registered IDashboardEgressPolicy approving the specific resolved
+            // destination.
             if (string.Equals(sourceName, "rest", StringComparison.OrdinalIgnoreCase))
             {
                 if (widgetSource.RestOptions != null)
                 {
-                    // Authoritative server-side options — overwrite whatever the request sent.
+                    // Wins over any request-supplied "options" — see the block comment above
+                    // for what this does and does not guarantee.
                     parameters["options"] = JsonSerializer.Serialize(widgetSource.RestOptions);
                 }
                 else if (parameters.TryGetValue("options", out var requestOptionsJson)
                          && !string.IsNullOrWhiteSpace(requestOptionsJson))
                 {
-                    // Legacy widget: caller-supplied options. Strip the two security-sensitive flags
-                    // so that a request can never enable private-network access or plain HTTP.
-                    try
-                    {
-                        var requestOpts = JsonSerializer.Deserialize<RestWidgetDataSourceOptions>(
-                            requestOptionsJson,
-                            _caseInsensitiveOptions);
-                        if (requestOpts != null)
-                        {
-                            requestOpts.AllowPrivateNetwork = false;
-                            requestOpts.AllowHttp = false;
-                            parameters["options"] = JsonSerializer.Serialize(requestOpts);
-                        }
-                    }
-                    catch (JsonException)
-                    {
-                        // Malformed JSON — leave as-is; RestWidgetDataSource.ParseOptions will reject it.
-                    }
+                    // #955 review finding F6: this branch used to strip only
+                    // AllowPrivateNetwork/AllowHttp from a caller-supplied "options" blob and
+                    // forward everything else (Url, Method, Headers, Body) unmodified. That
+                    // was a genuinely hard cap before #948, because ValidateUrlAsync treated
+                    // the (forced-false) flags as authoritative — this channel could only ever
+                    // reach a public HTTPS destination, no matter what Url the caller chose.
+                    // Since #948, RestWidgetDataSource no longer reads those two flags at all;
+                    // the only remaining gate is the registered IDashboardEgressPolicy, which
+                    // is evaluated purely against the resolved destination — it has no way to
+                    // know THIS request came from an unprivileged, request-supplied "options"
+                    // blob rather than from a host-approved persisted widget. So once any host
+                    // registers a policy approving ANY private-network/plain-HTTP destination
+                    // (for its own legitimate "rest" widgets elsewhere), this channel — which
+                    // only requires CanAccess (viewer-level), not CanEdit, see
+                    // _DashboardController.GetWidgetData/PostWidgetData — could reach that SAME
+                    // destination using the caller's OWN Url/Method/Headers/Body, not the ones
+                    // the host actually approved. There is no persisted RestOptions.Url to
+                    // compare a request-supplied Url against for this widget (that is exactly
+                    // what "RestOptions == null" means), so "restrict to the same host" is not
+                    // available here — reject the request-supplied "options" blob outright
+                    // instead. This is a net narrowing versus pre-#948 behaviour (previously:
+                    // public HTTPS only; now: not honoured at all for a widget with no
+                    // persisted RestOptions) rather than a widening, and the shipped dashboard
+                    // UI never exercises this path — framework_dashboard.js's widget-data fetch
+                    // only ever appends FilterBar values as query parameters, never an
+                    // "options" JSON blob — so this channel was reachable only via a direct,
+                    // undocumented HTTP call to this endpoint.
+                    throw new InvalidOperationException(
+                        $"Widget {widgetId} has no persisted RestOptions; a caller-supplied " +
+                        "'options' parameter is no longer accepted for REST widgets without " +
+                        "persisted RestOptions (issue #955 finding F6). Configure the widget's " +
+                        "Source.RestOptions on the dashboard definition instead.");
                 }
             }
         }

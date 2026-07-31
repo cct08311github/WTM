@@ -310,6 +310,147 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             ex.Message.Should().Contain("Url");
         }
 
+        // ── #948: caller-supplied AllowPrivateNetwork/AllowHttp is rejected at write time ──
+        // Deletion of the guard block in JsonFileDashboardService.ValidateWidgetConfigs
+        // (the "if (src.RestOptions != null && (src.RestOptions.AllowPrivateNetwork ||
+        // src.RestOptions.AllowHttp)) return ..." check) turns every test in this group red
+        // — see test/mutants/entries/948-dashboard-restoptions-egress-write-guard-neutralize.json.
+
+        private static DashboardDefinition RestWidgetDashboard(RestWidgetDataSourceOptions restOptions, string title = "SSRF Test") =>
+            new()
+            {
+                Title = title,
+                Widgets = new Dictionary<string, WidgetDefinition>
+                {
+                    {
+                        "w1", new WidgetDefinition
+                        {
+                            Type = "chart",
+                            Source = new WidgetSourceDefinition { Kind = "rest", RestOptions = restOptions }
+                        }
+                    }
+                }
+            };
+
+        [TestMethod]
+        public async Task CreateAsync_rejects_rest_widget_with_AllowPrivateNetwork_true()
+        {
+            var svc = CreateService();
+            var dashboard = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "https://10.0.0.1/internal-api",
+                AllowPrivateNetwork = true
+            });
+
+            var ex = await Assert.ThrowsExceptionAsync<ArgumentException>(
+                () => svc.CreateAsync(dashboard));
+            ex.Message.Should().Contain("AllowPrivateNetwork");
+        }
+
+        [TestMethod]
+        public async Task CreateAsync_rejects_rest_widget_with_AllowHttp_true()
+        {
+            var svc = CreateService();
+            var dashboard = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "http://8.8.8.8/data",
+                AllowHttp = true
+            });
+
+            var ex = await Assert.ThrowsExceptionAsync<ArgumentException>(
+                () => svc.CreateAsync(dashboard));
+            ex.Message.Should().Contain("AllowHttp");
+        }
+
+        [TestMethod]
+        public async Task UpdateAsync_rejects_rest_widget_with_AllowPrivateNetwork_true()
+        {
+            var svc = CreateService();
+            // Start from a legitimately valid, public-destination dashboard.
+            var dashboard = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8/data"
+            });
+            var id = await svc.CreateAsync(dashboard);
+
+            // Caller tries to escalate through Update.
+            dashboard.Id = id;
+            dashboard.Widgets["w1"].Source.RestOptions = new RestWidgetDataSourceOptions
+            {
+                Url = "https://169.254.169.254/latest/meta-data/",
+                AllowPrivateNetwork = true
+            };
+
+            var ex = await Assert.ThrowsExceptionAsync<ArgumentException>(
+                () => svc.UpdateAsync(dashboard));
+            ex.Message.Should().Contain("AllowPrivateNetwork");
+        }
+
+        /// <summary>
+        /// Positive control (per issue #948's test plan): a legitimately configured public
+        /// HTTPS destination, with neither security-sensitive flag set, must still be
+        /// accepted — proving the new guard does not block every "rest" widget.
+        /// </summary>
+        [TestMethod]
+        public async Task CreateAsync_accepts_rest_widget_with_public_https_destination_and_no_security_flags()
+        {
+            var svc = CreateService();
+            var dashboard = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8/public-api"
+            });
+
+            var id = await svc.CreateAsync(dashboard);
+            id.Should().NotBeNullOrEmpty("a legitimately public HTTPS REST widget must still be accepted");
+        }
+
+        // ── #955 review finding F5: AllowedPorts null/empty is rejected at write time ──
+        // AllowedPorts lives on the same caller-controlled RestOptions object as
+        // AllowPrivateNetwork/AllowHttp; sending "allowedPorts": null turns off
+        // RestWidgetDataSource's port allowlist entirely without touching either boolean.
+        // Deleting the new AllowedPorts guard in JsonFileDashboardService.ValidateWidgetConfigs
+        // turns the first two tests below red.
+
+        [TestMethod]
+        public async Task CreateAsync_rejects_rest_widget_with_null_AllowedPorts()
+        {
+            var svc = CreateService();
+            var dashboard = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8/data",
+                AllowedPorts = null
+            });
+
+            var ex = await Assert.ThrowsExceptionAsync<ArgumentException>(() => svc.CreateAsync(dashboard));
+            ex.Message.Should().Contain("AllowedPorts");
+        }
+
+        [TestMethod]
+        public async Task CreateAsync_rejects_rest_widget_with_empty_AllowedPorts()
+        {
+            var svc = CreateService();
+            var dashboard = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8/data",
+                AllowedPorts = Array.Empty<int>()
+            });
+
+            var ex = await Assert.ThrowsExceptionAsync<ArgumentException>(() => svc.CreateAsync(dashboard));
+            ex.Message.Should().Contain("AllowedPorts");
+        }
+
+        [TestMethod]
+        public async Task CreateAsync_accepts_rest_widget_with_default_AllowedPorts()
+        {
+            // Omitting AllowedPorts entirely leaves RestWidgetDataSourceOptions' own
+            // non-null default ({80,443,8080,8443}) in place — must not be rejected.
+            var svc = CreateService();
+            var dashboard = RestWidgetDashboard(new RestWidgetDataSourceOptions { Url = "https://8.8.8.8/data" });
+
+            var id = await svc.CreateAsync(dashboard);
+            id.Should().NotBeNullOrEmpty();
+        }
+
         [TestMethod]
         public async Task CreateAsync_succeeds_with_no_widgets()
         {

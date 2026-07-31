@@ -210,6 +210,53 @@ namespace WalkingTec.Mvvm.Core.Dashboard
             return services;
         }
 
+        /// <summary>
+        /// Issue #948: registers a host-owned <see cref="IDashboardEgressPolicy"/> that
+        /// <see cref="RestWidgetDataSource"/> consults whenever a REST widget's resolved
+        /// destination would otherwise be blocked by the SSRF-safe default (private
+        /// network, or plain HTTP). Nothing is registered by default — without calling
+        /// this, every such destination is rejected, for every widget, regardless of what
+        /// its <c>RestOptions.AllowPrivateNetwork</c>/<c>AllowHttp</c> ask for. See
+        /// <see cref="IDashboardEgressPolicy"/> for the full rationale.
+        /// </summary>
+        /// <remarks>
+        /// <b>Registered as a Singleton — this is required, not a stylistic choice.</b>
+        /// <see cref="IDashboardService"/> (the only consumer, via its
+        /// <c>IEnumerable&lt;IWidgetDataSource&gt;</c> constructor dependency, which pulls
+        /// in <see cref="RestWidgetDataSource"/>) is itself registered Singleton by
+        /// <see cref="AddWtmDashboard"/>, and that <c>IEnumerable&lt;IWidgetDataSource&gt;</c>
+        /// is resolved exactly once, at the moment the singleton <c>IDashboardService</c> is
+        /// first constructed — so <see cref="RestWidgetDataSource"/>'s own <c>Transient</c>
+        /// registration is effectively moot here; it is built once, from the root container.
+        /// An earlier version of this method registered the policy <c>Scoped</c>, which is a
+        /// captive-dependency error: with ASP.NET Core's default DI validation
+        /// (<c>ValidateScopes</c>/<c>ValidateOnBuild</c>, on by default in
+        /// <c>Host.CreateDefaultBuilder</c> under the Development environment) the app fails
+        /// to start outright (<c>"Cannot consume scoped service ... from singleton ..."</c>);
+        /// with validation off (typically Production) it silently becomes exactly the captive
+        /// dependency the validator would have caught — one <typeparamref name="T"/> instance
+        /// resolved once from the root provider and held for the process lifetime, including
+        /// by the background <c>DashboardAlertHostedService</c>/<c>DashboardSnapshotJob</c>
+        /// singletons that share the same <c>_dataSources</c>. Implementations MUST therefore
+        /// be thread-safe and must not depend on scoped services (a <c>DbContext</c> resolved
+        /// through DI, <c>IHttpContextAccessor</c>-derived per-request state, etc.) — a policy
+        /// that needs a database should hold an <c>IDbContextFactory&lt;T&gt;</c> (itself
+        /// singleton-safe) and create a short-lived context per <see cref="IDashboardEgressPolicy.IsAllowedAsync"/>
+        /// call, or use <c>IServiceScopeFactory.CreateScope()</c> internally.
+        /// </remarks>
+        /// <example>
+        /// <code>
+        /// services.AddWtmDashboard();
+        /// services.AddWtmDashboardEgressPolicy&lt;MyInternalHostAllowlistPolicy&gt;();
+        /// </code>
+        /// </example>
+        public static IServiceCollection AddWtmDashboardEgressPolicy<T>(this IServiceCollection services)
+            where T : class, IDashboardEgressPolicy
+        {
+            services.AddSingleton<IDashboardEgressPolicy, T>();
+            return services;
+        }
+
         public static IServiceCollection AddWidgetDataSourcesFromAssembly(this IServiceCollection services, Assembly assembly)
         {
             var types = assembly.GetTypes()

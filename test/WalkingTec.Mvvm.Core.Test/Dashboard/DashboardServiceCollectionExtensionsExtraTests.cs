@@ -148,5 +148,94 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             var provider = services.BuildServiceProvider();
             Assert.AreEqual(0, provider.GetServices<IWidgetDataSource>().Count());
         }
+
+        // ── #948 review finding F1: AddWtmDashboardEgressPolicy<T> DI lifetime ────
+        // A registration helper whose lifetime is wrong is invisible until someone boots
+        // the app — RestWidgetDataSource is Transient, but it is only ever constructed
+        // once, at root-container scope, as part of building the Singleton
+        // IDashboardService's IEnumerable<IWidgetDataSource> constructor dependency. A
+        // Scoped IDashboardEgressPolicy is therefore a captive-dependency error: ASP.NET
+        // Core's own DI validation (ValidateScopes/ValidateOnBuild — on by default under
+        // Host.CreateDefaultBuilder in Development, see demo/WalkingTec.Mvvm.Demo/Program.cs)
+        // makes the host fail to start outright. Deleting "AddSingleton" and reverting to
+        // "AddScoped" in AddWtmDashboardEgressPolicy<T> (DashboardServiceCollectionExtensions.cs)
+        // turns this test red with exactly that AggregateException.
+
+        [TestMethod]
+        public void AddWtmDashboardEgressPolicy_BuildsCleanly_WithScopeAndBuildValidationEnabled()
+        {
+            var services = new ServiceCollection();
+            services.AddWtmDashboard();
+            services.AddWtmDashboardEgressPolicy<DiLifetimeProbeEgressPolicy>();
+
+            // This is exactly the validation ASP.NET Core's Host.CreateDefaultBuilder turns
+            // on by default under the Development environment — a captive-dependency /
+            // scoped-from-singleton registration throws here, at Build() time, not later.
+            using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+            {
+                ValidateScopes = true,
+                ValidateOnBuild = true
+            });
+
+            // Resolving from within a real scope (not the root provider) is the shape a
+            // request actually uses — must succeed, not just "Build() didn't throw".
+            using var scope = provider.CreateScope();
+            var dashboardService = scope.ServiceProvider.GetRequiredService<IDashboardService>();
+            Assert.IsNotNull(dashboardService);
+
+            var resolvedPolicy = scope.ServiceProvider.GetRequiredService<IDashboardEgressPolicy>();
+            Assert.IsInstanceOfType(resolvedPolicy, typeof(DiLifetimeProbeEgressPolicy));
+        }
+
+        [TestMethod]
+        public void AddWtmDashboardEgressPolicy_RegistersSingleton_SameInstanceAcrossScopes()
+        {
+            var services = new ServiceCollection();
+            services.AddWtmDashboard();
+            services.AddWtmDashboardEgressPolicy<DiLifetimeProbeEgressPolicy>();
+            using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+            {
+                ValidateScopes = true,
+                ValidateOnBuild = true
+            });
+
+            using var scope1 = provider.CreateScope();
+            using var scope2 = provider.CreateScope();
+            var a = scope1.ServiceProvider.GetRequiredService<IDashboardEgressPolicy>();
+            var b = scope2.ServiceProvider.GetRequiredService<IDashboardEgressPolicy>();
+
+            Assert.AreSame(a, b, "AddWtmDashboardEgressPolicy<T> must register Singleton — " +
+                "one instance shared across scopes/requests, not one per scope.");
+        }
+
+        private sealed class DiLifetimeProbeEgressPolicy : IDashboardEgressPolicy
+        {
+            public Task<bool> IsAllowedAsync(DashboardEgressDestination destination, CancellationToken ct = default)
+                => Task.FromResult(false);
+        }
+
+        // ── #948 review finding F2: the built-in ConfiguredAllowlistDashboardEgressPolicy
+        // must also register cleanly under the same DI validation as any custom policy —
+        // it is registered through the exact same AddWtmDashboardEgressPolicy<T>() helper.
+
+        [TestMethod]
+        public void AddWtmDashboardEgressPolicy_WithBuiltInAllowlistPolicy_BuildsCleanly_WithScopeAndBuildValidationEnabled()
+        {
+            var services = new ServiceCollection();
+            services.AddWtmDashboard();
+            services.Configure<DashboardEgressAllowlistOptions>(opt =>
+                opt.Entries.Add(new DashboardEgressAllowlistEntry { Host = "10.1.2.3", Ports = new[] { 8080 } }));
+            services.AddWtmDashboardEgressPolicy<ConfiguredAllowlistDashboardEgressPolicy>();
+
+            using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+            {
+                ValidateScopes = true,
+                ValidateOnBuild = true
+            });
+
+            using var scope = provider.CreateScope();
+            var dashboardService = scope.ServiceProvider.GetRequiredService<IDashboardService>();
+            Assert.IsNotNull(dashboardService);
+        }
     }
 }

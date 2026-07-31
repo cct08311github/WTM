@@ -12,9 +12,12 @@ namespace WalkingTec.Mvvm.Core.Dashboard;
 public class RestWidgetDataSourceOptions
 {
     /// <summary>
-    /// Target URL. <c>https://</c> required by default; set
-    /// <see cref="AllowHttp"/> = <c>true</c> to permit <c>http://</c>.
+    /// Target URL. <c>https://</c> required by default.
     /// </summary>
+    /// <remarks>
+    /// Issue #948 correction: setting <see cref="AllowHttp"/> = <c>true</c> is no longer,
+    /// by itself, sufficient to permit <c>http://</c> — see that property's own remarks.
+    /// </remarks>
     public string Url { get; set; } = string.Empty;
 
     /// <summary>
@@ -66,23 +69,52 @@ public class RestWidgetDataSourceOptions
     /// SSRF mitigation: when <c>false</c> (default), URLs resolving to
     /// private IP ranges (RFC 1918), loopback, link-local (including AWS
     /// IMDS 169.254.169.254), IPv6 ULA, or multicast are rejected.
-    /// Opt in to <c>true</c> only for intentional internal-network widgets.
     /// </summary>
+    /// <remarks>
+    /// <b>Issue #948: setting this to <c>true</c> is no longer sufficient by itself to
+    /// permit private-network egress.</b> This field lives inside the widget
+    /// <em>definition</em> that <c>_DashboardController.Create</c>/<c>Update</c> and
+    /// <c>_DashboardDesignerController.Preview</c> all accept directly from the caller —
+    /// it is caller data on every write path this framework ships, not a trusted
+    /// server-side setting. <see cref="RestWidgetDataSource"/> now requires a
+    /// host-registered <see cref="IDashboardEgressPolicy"/> to explicitly approve the
+    /// specific resolved destination (see that interface's XML doc). The field is kept
+    /// deserializable for JSON back-compat with already-persisted widget JSON — it is not
+    /// itself read by <see cref="RestWidgetDataSource"/> as a grant, and (issue #955
+    /// review correction) <see cref="DashboardEgressDestination"/> carries no widget,
+    /// dashboard, or tenant identifier a policy could use to look this field's originating
+    /// widget back up even if it wanted to — an earlier version of this remark claimed
+    /// otherwise; that capability does not exist.
+    /// </remarks>
     public bool AllowPrivateNetwork { get; set; } = false;
 
     /// <summary>
     /// When <c>false</c> (default) only <c>https://</c> URLs are allowed.
-    /// Set <c>true</c> for plain-HTTP endpoints (typically internal-only,
-    /// combined with <see cref="AllowPrivateNetwork"/>).
     /// </summary>
+    /// <remarks>
+    /// <b>Issue #948: setting this to <c>true</c> is no longer sufficient by itself to
+    /// permit plain-HTTP egress</b> — same rationale as <see cref="AllowPrivateNetwork"/>;
+    /// a registered <see cref="IDashboardEgressPolicy"/> must approve the specific
+    /// resolved destination.
+    /// </remarks>
     public bool AllowHttp { get; set; } = false;
 
     /// <summary>
     /// Port allowlist for SSRF mitigation. When non-null and non-empty, only
     /// the listed destination ports are allowed. Default: {80, 443, 8080, 8443}.
-    /// Set to <c>null</c> or empty to disable port restriction (not recommended
-    /// unless <see cref="AllowPrivateNetwork"/> is also <c>true</c> for intentional
-    /// internal-network scanning use-cases).
     /// </summary>
+    /// <remarks>
+    /// Issue #955 review correction: a <c>null</c> or empty value disables port
+    /// restriction entirely — this is the same "caller can just turn the guard off"
+    /// shape as <see cref="AllowPrivateNetwork"/>/<see cref="AllowHttp"/>, since this
+    /// field lives on the same caller-controlled object. Unlike those two fields, there
+    /// is no host-owned policy override for ports — <c>JsonFileDashboardService</c> and
+    /// <c>EfCoreDashboardService</c>'s <c>ValidateWidgetConfigs</c> reject a "rest"
+    /// widget definition whose <see cref="AllowedPorts"/> is <c>null</c> or empty at
+    /// write time, so a caller cannot disable this check at all (an earlier version of
+    /// this doc recommended <c>null</c>/empty "for intentional internal-network scanning
+    /// use-cases", which described a capability the caller-data threat model this
+    /// interface now assumes cannot safely be caller-controlled).
+    /// </remarks>
     public int[]? AllowedPorts { get; set; } = new[] { 80, 443, 8080, 8443 };
 }

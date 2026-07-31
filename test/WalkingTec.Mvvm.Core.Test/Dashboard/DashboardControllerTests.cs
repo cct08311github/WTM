@@ -681,5 +681,85 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
                 It.IsAny<CancellationToken>()), Times.Once,
                 "PostWidgetData must forward tenantId to GetWidgetDataAsync");
         }
+
+        // ── #948: DashboardOptions.EnableEditing global kill switch ────────────
+        // Deleting the "if (!_options.EnableEditing) return Forbid();" guard in
+        // _DashboardController.Create/Update/Delete turns each corresponding test below
+        // red (CreateAsync/UpdateAsync/DeleteAsync would then be reached — the mocked
+        // service call would be verified but the assertion on the result type would fail
+        // because a 200/Ok result would come back instead of Forbid).
+
+        private _DashboardController ControllerWithEditingDisabled()
+        {
+            var opts = Options.Create(new DashboardOptions { EnableEditing = false });
+            var ctrl = new _DashboardController(_service.Object, opts, Enumerable.Empty<IWidgetDataSource>())
+            {
+                Wtm = MockWtmContext.CreateWtmContext()
+            };
+            ctrl.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
+            return ctrl;
+        }
+
+        [TestMethod]
+        public async Task Create_returns_403_when_EnableEditing_is_false()
+        {
+            var ctrl = ControllerWithEditingDisabled();
+            SetUserOn(ctrl, "bob");
+
+            var result = await ctrl.Create(new DashboardDefinition()) as ForbidResult;
+
+            result.Should().NotBeNull();
+            _service.Verify(x => x.CreateAsync(It.IsAny<DashboardDefinition>()), Times.Never,
+                "the service must never be reached when editing is globally disabled");
+        }
+
+        [TestMethod]
+        public async Task Update_returns_403_when_EnableEditing_is_false()
+        {
+            var ctrl = ControllerWithEditingDisabled();
+            SetUserOn(ctrl, "bob");
+            var update = new DashboardDefinition { Id = "id1" };
+
+            var result = await ctrl.Update("id1", update) as ForbidResult;
+
+            result.Should().NotBeNull();
+            _service.Verify(x => x.GetAsync(It.IsAny<string>(), It.IsAny<string?>()), Times.Never,
+                "the service must never be reached when editing is globally disabled");
+        }
+
+        [TestMethod]
+        public async Task Delete_returns_403_when_EnableEditing_is_false()
+        {
+            var ctrl = ControllerWithEditingDisabled();
+            SetUserOn(ctrl, "bob");
+
+            var result = await ctrl.Delete("id1") as ForbidResult;
+
+            result.Should().NotBeNull();
+            _service.Verify(x => x.GetAsync(It.IsAny<string>(), It.IsAny<string?>()), Times.Never,
+                "the service must never be reached when editing is globally disabled");
+        }
+
+        [TestMethod]
+        public async Task Create_succeeds_when_EnableEditing_is_true_default()
+        {
+            // Pinning test: the default (true) must leave existing behaviour unchanged.
+            SetUser("bob");
+            _service.Setup(x => x.CreateAsync(It.IsAny<DashboardDefinition>())).ReturnsAsync("new-id");
+
+            var result = await _controller.Create(new DashboardDefinition()) as OkObjectResult;
+
+            result.Should().NotBeNull();
+        }
+
+        private static void SetUserOn(_DashboardController ctrl, string userId, params string[] roles)
+        {
+            ctrl.Wtm.LoginUserInfo = new LoginUserInfo { ITCode = userId };
+            ctrl.Wtm.LoginUserInfo.Roles = new List<SimpleRole>();
+            foreach (var r in roles)
+            {
+                ctrl.Wtm.LoginUserInfo.Roles.Add(new SimpleRole { RoleCode = r });
+            }
+        }
     }
 }

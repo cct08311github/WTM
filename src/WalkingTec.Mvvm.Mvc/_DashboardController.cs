@@ -86,8 +86,13 @@ namespace WalkingTec.Mvvm.Mvc
         [ProducesResponseType(typeof(string), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
         public async Task<IActionResult> Create([FromBody] DashboardDefinition dashboard)
         {
+            // #948: global editing kill switch — checked before anything else touches
+            // the request, same as the ownership/role checks below decide per-resource.
+            if (!_options.EnableEditing) return Forbid();
+
             if (dashboard == null) return BadRequest();
 
             var widgetTypeError = ValidateWidgetTypes(dashboard, _options);
@@ -118,6 +123,9 @@ namespace WalkingTec.Mvvm.Mvc
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         public async Task<IActionResult> Update(string id, [FromBody] DashboardDefinition dashboard)
         {
+            // #948: global editing kill switch.
+            if (!_options.EnableEditing) return Forbid();
+
             if (dashboard == null || dashboard.Id != id) return BadRequest();
 
             var widgetTypeError = ValidateWidgetTypes(dashboard, _options);
@@ -156,6 +164,9 @@ namespace WalkingTec.Mvvm.Mvc
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         public async Task<IActionResult> Delete(string id)
         {
+            // #948: global editing kill switch.
+            if (!_options.EnableEditing) return Forbid();
+
             var tenantId = GetTenantId();
             var existing = await _dashboardService.GetAsync(id, tenantId);
             if (existing == null) return NotFound();

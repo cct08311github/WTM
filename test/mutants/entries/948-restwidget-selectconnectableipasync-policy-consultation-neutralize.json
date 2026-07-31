@@ -1,0 +1,26 @@
+{
+  "id": "948-restwidget-selectconnectableipasync-policy-consultation-neutralize",
+  "kind": "security",
+  "description": "Issue #948 (review round PR #955, finding F3): neutralizes the egress-policy consultation inside RestWidgetDataSource.SelectConnectableIpAsync's per-candidate foreach loop by prefixing the approval condition with a compile-preserving 'false &&' -- the right-hand `await egressPolicy.IsAllowedAsync(...)` is never evaluated (short-circuited), so the policy is silently never actually consulted, even though the surrounding null-check ('if (egressPolicy == null) return null;') is untouched and still passes. This is the connect-time, TOCTOU-safe layer that PinnedConnectAsync's SocketsHttpHandler.ConnectCallback actually uses -- ValidateUrlAsync (the fast pre-check) now calls this same method directly, so this mutant also covers that caller. red_tests cover both directions: an approving policy that should grant access to a private-network candidate and to a plain-HTTP candidate (both regress to null instead of the expected IP), and a denying policy's call-count assertion (drops from every-candidate-tried to zero calls, since the await is never reached). green_test is the sibling positive control that exercises the SAME method's fast path (a public IP candidate mixed with a private one, no policy needed) -- it never reaches the mutated line at all, so it must stay green.",
+  "target_file": "src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs",
+  "target_symbol": "RestWidgetDataSource.SelectConnectableIpAsync(IPAddress[], Uri, int, bool, IDashboardEgressPolicy?, CancellationToken) -- the per-candidate egressPolicy.IsAllowedAsync(...) consultation inside the foreach loop, line ~538",
+  "patch": "patches/948-restwidget-selectconnectableipasync-policy-consultation-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.RestWidgetDataSourceTests.SelectConnectableIpAsync_AllPrivateCandidates_ApprovingPolicy_ReturnsFirstApproved|FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.RestWidgetDataSourceTests.SelectConnectableIpAsync_AllPrivateCandidates_DenyingPolicy_ReturnsNull_TriesEveryCandidate|FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.RestWidgetDataSourceTests.SelectConnectableIpAsync_PlainHttp_PublicCandidate_ApprovingPolicy_ReturnsIt",
+  "red_tests": [
+    "WalkingTec.Mvvm.Core.Test.Dashboard.RestWidgetDataSourceTests.SelectConnectableIpAsync_AllPrivateCandidates_ApprovingPolicy_ReturnsFirstApproved",
+    "WalkingTec.Mvvm.Core.Test.Dashboard.RestWidgetDataSourceTests.SelectConnectableIpAsync_AllPrivateCandidates_DenyingPolicy_ReturnsNull_TriesEveryCandidate",
+    "WalkingTec.Mvvm.Core.Test.Dashboard.RestWidgetDataSourceTests.SelectConnectableIpAsync_PlainHttp_PublicCandidate_ApprovingPolicy_ReturnsIt"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Core.Test.Dashboard.RestWidgetDataSourceTests.SelectConnectableIpAsync_AllPrivateCandidates_ApprovingPolicy_ReturnsFirstApproved": "Assert\\.AreEqual failed\\. Expected:<10\\.0\\.0\\.1>\\. Actual:<\\(null\\)>",
+    "WalkingTec.Mvvm.Core.Test.Dashboard.RestWidgetDataSourceTests.SelectConnectableIpAsync_AllPrivateCandidates_DenyingPolicy_ReturnsNull_TriesEveryCandidate": "Assert\\.AreEqual failed\\. Expected:<2>\\. Actual:<0>",
+    "WalkingTec.Mvvm.Core.Test.Dashboard.RestWidgetDataSourceTests.SelectConnectableIpAsync_PlainHttp_PublicCandidate_ApprovingPolicy_ReturnsIt": "Assert\\.AreEqual failed\\. Expected:<8\\.8\\.8\\.8>\\. Actual:<\\(null\\)>"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against this branch's working tree (stale demo.db under bin/ removed first) with the mutant patch applied via `dotnet test ... --filter <red_test_filter>`: 'Assert.AreEqual failed. Expected:<10.0.0.1>. Actual:<(null)>.', 'Assert.AreEqual failed. Expected:<2>. Actual:<0>. a denying policy must be asked about every candidate before giving up', and 'Assert.AreEqual failed. Expected:<8.8.8.8>. Actual:<(null)>.' -- all three declared red_tests failed with exactly these messages; no other test in the same filter's TRX went red.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.RestWidgetDataSourceTests.SelectConnectableIpAsync_MixedPrivateAndPublicCandidates_NoPolicy_ReturnsPublicIp_ZeroPolicyCalls",
+  "green_tests": [
+    "WalkingTec.Mvvm.Core.Test.Dashboard.RestWidgetDataSourceTests.SelectConnectableIpAsync_MixedPrivateAndPublicCandidates_NoPolicy_ReturnsPublicIp_ZeroPolicyCalls"
+  ]
+}

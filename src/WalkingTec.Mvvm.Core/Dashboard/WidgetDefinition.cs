@@ -75,12 +75,31 @@ public class WidgetSourceDefinition
     public List<FilterConfig>? Filters { get; set; }
 
     /// <summary>
-    /// Server-side REST widget options. When set, these options are authoritative and
-    /// completely override any <c>options</c> parameter supplied by the HTTP request.
-    /// Security-sensitive fields (<see cref="RestWidgetDataSourceOptions.AllowPrivateNetwork"/>
-    /// and <see cref="RestWidgetDataSourceOptions.AllowHttp"/>) can only be enabled here —
-    /// they are always forced to their safe defaults when options originate from the request.
+    /// REST widget options for this widget. When set, these options are authoritative
+    /// and completely override any <c>options</c> parameter supplied on a
+    /// <c>GetWidgetData</c> request (the query/body parameter used when
+    /// <em>fetching</em> data for an already-persisted widget) — see
+    /// <c>JsonFileDashboardService.GetWidgetDataAsync</c> /
+    /// <c>EfCoreDashboardService.GetWidgetDataAsync</c>.
     /// </summary>
+    /// <remarks>
+    /// <b>Corrected (issue #948): this is NOT a caller-proof channel for
+    /// <see cref="RestWidgetDataSourceOptions.AllowPrivateNetwork"/> /
+    /// <see cref="RestWidgetDataSourceOptions.AllowHttp"/>.</b> An earlier version of
+    /// this doc comment claimed those two fields "can only be enabled here" and are
+    /// therefore safe from caller control — that was true only for the
+    /// <c>GetWidgetData</c> request-parameter channel this summary describes above; it
+    /// was false for this property itself, because <see cref="WidgetDefinition"/> (the
+    /// containing type) is exactly what <c>_DashboardController.Create</c>,
+    /// <c>_DashboardController.Update</c>, and <c>_DashboardDesignerController.Preview</c>
+    /// all bind straight from the HTTP request body. Setting <c>RestOptions</c> here IS
+    /// caller data on every write path this framework ships. The two security-sensitive
+    /// fields are now validated (rejected) at write time by
+    /// <c>JsonFileDashboardService</c>/<c>EfCoreDashboardService</c>'s
+    /// <c>ValidateWidgetConfigs</c>, and — belt and suspenders — <see cref="RestWidgetDataSource"/>
+    /// no longer honours them by themselves at fetch time either; see
+    /// <see cref="IDashboardEgressPolicy"/> for the real, host-owned control.
+    /// </remarks>
     public RestWidgetDataSourceOptions? RestOptions { get; set; }
 }
 

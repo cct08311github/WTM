@@ -141,13 +141,12 @@ curl -i -X POST https://<your-host>/_Admin/FrameworkMenu/Create \
 | 7 | `[EnableAnalysis]` 的 `AllowedRoles` 無初值 → `CheckAccess` 首行即放行；`_DashboardController`／`_DashboardDesignerController` 的三個端點連 `CheckAccess` 都沒呼叫 | #842 |
 | 8 | Dashboard viewer 可覆寫持久化 widget 的 query 結構（`listVmType`／dimensions／measures／filters） | #831 |
 | 9 | 套件消費者拿不到 NPOI vulnerable transitive 的 override：`dotnet pack` 時 .NET 10 SDK 的 package-reference pruning（這條 override 本身會觸發 NU1510「framework already provides this package」，正是 pruning 的判準）把 `System.Security.Cryptography.Xml` pin 從封裝出的 nuspec 依賴清單整條移除。本 repo 自己的弱點掃描只跑在 solution 層級（override 在那裡仍生效），對這個落差結構性看不見 | #934 |
-| 10 | Dashboard 設計器 `POST /_dashboard-designer/preview` 把呼叫者送來的整個 `WidgetDefinition`（含 `Source.RestOptions`）當「server-side 權威設定」直接餵進資料抓取管線 —— `AllowPrivateNetwork`／`AllowHttp`「只能在伺服器端開啟」的保證在這個端點不成立，呼叫者自己就是那個伺服器端 | #948 |
 
 第 5 項對已認證使用者的影響最廣。**目前沒有可用的緩解措施** —— 把旗標設為 `true` 會讓對應端點對所有人回 403。
 
 第 9 項（#934）：**升級套件不會把這個 override 帶給你**。NuGet 的依賴解析只讀已發布的 nuspec，`dotnet pack` 階段被砍掉的那一行不會出現在你專案的相依圖裡，你會照樣拉到 NPOI 自己宣告的 `System.Security.Cryptography.Xml` 8.0.2（GHSA-37gx-xxp4-5rgx、GHSA-w3x6-4m5h-cxqf，兩個 HIGH）。受影響對象：**每一個從 registry 安裝這個套件、而非直接建置本 repo solution 的下游**——已有下游在數月前獨立發現並自行 workaround（在自己的專案裡重複同一條 override）。本次未修：修法要嘛是下游在自己的 `.csproj` 也釘一次同一個 override（見 `docs/dependency-management.md` Scenario B 的做法），要嘛是本 repo 改變 pack 設定讓 override 不被裁剪，兩者目前都還沒做。
 
-第 10 項（#948）：`_DashboardDesignerController` 同樣是 `[AllRights]`，無逐 widget 授權。**任何已認證呼叫者**可呼叫 `preview`，帶一個 `Source.RestOptions.AllowPrivateNetwork=true`／`AllowHttp=true`、`Url` 指向內網位址（雲端 metadata endpoint、`127.0.0.1`、內部服務）的 widget 定義，讓伺服器代替呼叫者對該位址發出請求並把回應內容原樣回傳——傳統 SSRF。本次未修。
+（原第 10 項——`Selector` 的 `Ids` 路徑繞過列級 DataPrivilege，#947——已於 #953 移出，見上方「本節在 2026-07-31 的更正」表；原第 11 項、經 #953 renumber 後的原第 10 項——Dashboard 設計器 `preview` 端點 SSRF，#948——已於本文件同一天稍晚的版本移出，見下方「本節在 2026-07-31 的更正（第二次）」。兩者皆不在此就地編輯歷史敘述，理由與本節既有的更正慣例相同。）
 
 ### 本節在 2026-07-29 的更正（原草稿有兩列已過時，另有一列與現行程式碼不符）
 
@@ -166,11 +165,20 @@ curl -i -X POST https://<your-host>/_Admin/FrameworkMenu/Create \
 
 新增仍未修（本輪新發現，非 #836 窮舉表涵蓋範圍——見下方「這份公告不宣稱什麼」）：**#934**（`dotnet pack` 的 nuspec pruning 使 `System.Security.Cryptography.Xml` override 對套件消費者失效）、**#948**（Dashboard 設計器 `preview` 端點 SSRF）。兩者皆為本次版本**未修**，理由見上方各自段落。#947（`Selector` 的 `Ids` 路徑繞過列級 DataPrivilege）已於同一 10.21.0 週期修復，見上表。
 
+### 本節在 2026-07-31 的更正（第二次，同日稍晚：#948 於本次 10.21.0 週期內修復移出）
+
+上一段（同一天稍早寫成）把 #948 列為「本次版本未修」——寫成當下為真，同一個 10.21.0 發版週期內、同一天稍晚 #948 經 PR #955 修復，此處記錄這個時序更正，不回頭改寫上一段的敘述（本節既有慣例：更正用新增段落表達，不就地編輯歷史敘述）。
+
+| 原第 10 項（經 #953 修復 #947 renumber 後的編號；原始編號為第 11 項） | Dashboard 設計器 `POST /_dashboard-designer/preview` 把呼叫者送來的整個 `WidgetDefinition`（含 `Source.RestOptions`）當「server-side 權威設定」直接餵進資料抓取管線 —— `AllowPrivateNetwork`／`AllowHttp`「只能在伺服器端開啟」的保證在這個端點不成立，呼叫者自己就是那個伺服器端（#948） | **已修**，10.21.0：三條寫入路徑（`_DashboardController.Create`／`.Update`／`_DashboardDesignerController.Preview`）共用的 `ValidateWidgetConfigs`（`JsonFileDashboardService`／`EfCoreDashboardService`）現在拒絕（非靜默清除）任何要求 `AllowPrivateNetwork`／`AllowHttp` 的 `rest` widget 定義；即使驗證有漏網之魚，`RestWidgetDataSource` 執行期也不再把這兩個布林當授權依據——改為要求一個 host 註冊的 `IDashboardEgressPolicy`（新介面，async，單一方法）核准該具體、已解析的目的地，未註冊時一律拒絕。詳見 `CHANGELOG.md` 10.21.0 `### Security`／`### Migration` 與 `docs/production-readiness.md` 對應條目。 |
+|---|---|---|
+
+**升級相容性提醒（呼應 CHANGELOG 的 Migration 段落）**：升級前已存在、且合法設定了 `AllowPrivateNetwork`／`AllowHttp` 的內網 `rest` widget，升級後會開始回傳 `502`，直到 operator 註冊一個核准該目的地的 `IDashboardEgressPolicy`（框架隨附一個設定驅動的 `ConfiguredAllowlistDashboardEgressPolicy`，不需要寫 C#）。這是本公告「第一類」（升級即修好、免動作）與「第二、三類」（需要你動手）分類法下的**第二類**，不是第一類——不要因為 issue 編號同屬本輪修復就假設它免動作。
+
 ---
 
 ## 這份公告不宣稱什麼
 
-- **不宣稱清單完整。** 依據是 #836 的 entrypoint→sink 窮舉表，而該表自己指出：以 entrypoint 為 key 的表看不見「sink 實體有沒有實作 `ITenant`」與「路徑有沒有繞過 global query filter」這兩個維度 —— #883／#947（皆已於 10.21.0 修復）當初就是這樣被漏掉的；#934／#948（見第四類第 9–10 項，皆未修）同樣不在該表的維度內，是後續各自獨立審查才找到的。而第一類第 1 項（本公告最嚴重的一條）是在十七輪審查之後才被找到的。
+- **不宣稱清單完整。** 依據是 #836 的 entrypoint→sink 窮舉表，而該表自己指出：以 entrypoint 為 key 的表看不見「sink 實體有沒有實作 `ITenant`」與「路徑有沒有繞過 global query filter」這兩個維度 —— #883／#947（皆已於 10.21.0 修復）當初就是這樣被漏掉的；#934（見第四類第 9 項，仍未修——`#947`／`#948` 原本的第 10／11 項皆已修復移出，第四類目前止於第 9 項）同樣不在該表的維度內，是後續獨立審查才找到的——**#948 曾經是另一個這樣的例子（原第四類第 10 項，經 #953 修復 #947 時 renumber 而來，原始編號為第 11 項），已於同一個 10.21.0 週期內修復並移出，見上方「本節在 2026-07-31 的更正（第二次）」**。而第一類第 1 項（本公告最嚴重的一條）是在十七輪審查之後才被找到的。
 - **不宣稱這些是新缺陷。** 多數可追溯到 2020–2026 的既有設計。2026-07 的工作是**發現**它們，不是造成它們。
 - **不宣稱升級就足夠。** 只有第一類是。第二、三類需要你動手，第四類目前無解。
 
@@ -188,4 +196,5 @@ curl -i -X POST https://<your-host>/_Admin/FrameworkMenu/Create \
   - 比對過程另外發現公告本身教下游寫法的四處文件仍呼叫已棄用的 `ApplyEtlModels()` 零參數多載（不套用 `ITenant` 過濾器），與本文無直接關係但屬同一批交叉檢查的副產品，已獨立立案 #893，不在本 PR 範圍內處理。
   - **2026-07-31（#927 release-prep 觸發的第三輪）**：`version.props` 在標題撰寫後又經 #859／#843／#883 三次 bump 到 10.21.0（10.19.0／10.20.0 皆未曾實際發版、無對應 tag），全文 12 處版本標籤由 10.19.0／10.20.0 改為實際即將發版的 10.21.0，逐列核對其宣稱的修法皆已在樹上（見本次 PR diff，未發現宣稱但未合併的項目）。同一輪順帶發現第四類原第 9／10 項（#867、#883／#876）已在同一 10.21.0 週期修好，卻仍留在「仍未修」清單——已移出並記錄於上方「本節在 2026-07-31 的更正」，同批新增 #934／#947／#948 三項本次確認仍未修的缺陷。
   - **2026-07-31（#947 修復落地，同一 10.21.0 週期，同日第四輪）**：本表新增 #934／#947／#948 之後，#947（`Selector` 的 `Ids` 路徑繞過列級 DataPrivilege）在同一版本週期內修好（`GetBatchQuery()` 改用 `GetAuthorizedIdsQuery` 空白 Searcher + AND，不再刪除既有 `Where` 節點）——與 #843／#841／#867／#883 走的是同一種「先誠實列為未修、修好後移表更正」流程，不是本公告從一開始就宣稱過度。已從第四類移除、移入上方「2026-07-31 的更正」表；第四類第 11 項（#948）改編號為第 10 項，「這份公告不宣稱什麼」一節的交叉引用同步更正。**已知殘留、如實揭露而非隱藏**：修法本身依賴一個「空白 Searcher 能壓下所有以 Searcher 值為條件的 `Where`」的假設，adversarial review（PR #953）證明該假設對兩種形狀不成立（`.Where(x => Searcher.Field == x.Field)` 這種不經 guard-then-add helper、直接在 lambda 裡讀 Searcher 的寫法）——兩者皆為 fail-closed（該列消失或整批清空，不會多洩漏），不影響本項「已修」的判定，但列為 `docs/production-readiness.md` 同條目的已知相容性限制，未來如需徹底關閉需要另一輪設計變更（在 `DPWhere` 掛的 `Where` 節點上加標記，讓 `WhereReplaceModifier` 能選擇性跳過），本次不做。
+  - **2026-07-31（PR #955 heterogeneous review 觸發的第五輪，同日稍晚，rebase 到 #953 之上後）**：上一輪（第四輪，#953）把第四類第 11 項（#948）renumber 成第 10 項；本輪（PR #955 review）修復 #948 本身，該第 10 項也從第四類移除、移入上方「本節在 2026-07-31 的更正（第二次）」——第四類至此止於第 9 項（#934，仍未修）。「這份公告不宣稱什麼」的窮舉表維度說明句、以及「本節在 2026-07-31 的更正（第二次）」表格內的原始項次標示，皆已同步更正為反映 #953 的 renumber（原第 11 項 → 經 renumber 的第 10 項），而非本輪分支的原始編號。第三輪、第四輪各自的歷史敘述本身不回頭編輯，理由同上。
 - [ ] 決定是否為第一類第 1 項的相容性影響（NULL-tenant 舊檔）提供一個一次性稽核指令，讓下游升級前能自查有沒有中招

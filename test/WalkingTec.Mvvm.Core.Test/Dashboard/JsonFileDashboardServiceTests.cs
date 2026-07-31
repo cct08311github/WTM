@@ -401,6 +401,65 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             kindDs.Verify(x => x.GetDataAsync(It.IsAny<WidgetDataRequest>(), It.IsAny<CancellationToken>()), Times.Once);
         }
 
+        /// <summary>Test double used only to prove GetDataAsync is never reached (#955 F6).</summary>
+        private class UnreachableRestDataSource : IWidgetDataSource
+        {
+            public string Name => "rest";
+            public WidgetDataSourceKind Kind => WidgetDataSourceKind.Rest;
+            public bool WasCalled { get; private set; }
+
+            public Task<WidgetDataResult> GetDataAsync(WidgetDataRequest request, CancellationToken ct = default)
+            {
+                WasCalled = true;
+                return Task.FromResult(new WidgetDataResult { Value = "should never be reached" });
+            }
+        }
+
+        // ─── #955 review finding F6: legacy request-supplied "options" channel ──────
+        // A "rest" widget with no persisted RestOptions used to accept a caller-supplied
+        // "options" query/body parameter (stripped of AllowPrivateNetwork/AllowHttp only).
+        // Since #948 that stripping is a no-op (RestWidgetDataSource no longer reads those
+        // two flags at all — the only gate is the registered IDashboardEgressPolicy,
+        // evaluated purely against the resolved destination), so this CanAccess-only
+        // (viewer-level) channel could otherwise reach any destination a host's policy
+        // approves for ITS OWN legitimate widgets, using the caller's own Url/Method/
+        // Headers/Body. Deleting the "throw new InvalidOperationException(...)" in
+        // JsonFileDashboardService.GetWidgetDataAsync's "rest" branch (the else-if with no
+        // persisted RestOptions) turns this test red — GetDataAsync would be reached again.
+
+        [TestMethod]
+        public async Task GetWidgetDataAsync_rejects_request_supplied_options_for_rest_widget_without_persisted_RestOptions()
+        {
+            var stubRest = new UnreachableRestDataSource();
+            var options = Options.Create(new DashboardOptions { DashboardDirectory = _tempDir });
+            var svc = new JsonFileDashboardService(options, new IWidgetDataSource[] { stubRest },
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<JsonFileDashboardService>.Instance);
+
+            var def = new DashboardDefinition
+            {
+                Title = "Legacy REST Widget",
+                Widgets = new Dictionary<string, WidgetDefinition>
+                {
+                    ["w1"] = new WidgetDefinition
+                    {
+                        Type = "chart",
+                        Source = new WidgetSourceDefinition { Kind = "rest" } // no RestOptions persisted
+                    }
+                }
+            };
+            await svc.CreateAsync(def);
+
+            var requestFilters = new Dictionary<string, string>
+            {
+                ["options"] = JsonSerializer.Serialize(new RestWidgetDataSourceOptions { Url = "https://8.8.8.8/data" })
+            };
+
+            Func<Task> act = () => svc.GetWidgetDataAsync(def.Id, "w1", requestFilters);
+            await act.Should().ThrowAsync<InvalidOperationException>();
+            stubRest.WasCalled.Should().BeFalse(
+                "the request must be rejected before ever reaching the underlying data source");
+        }
+
         // ─── CanAccess 權限邏輯（#430） ───────────────────────────────────────
 
         [TestMethod]

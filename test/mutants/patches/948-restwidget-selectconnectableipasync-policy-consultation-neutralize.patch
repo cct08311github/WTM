@@ -1,0 +1,19 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs b/src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs
+index 1b4b8548f..35b642625 100644
+--- a/src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs
++++ b/src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs
+@@ -535,7 +535,13 @@ public class RestWidgetDataSource : IWidgetDataSource
+                 IsPrivateNetwork = IsBlockedIp(ip),
+                 IsPlainHttp = isPlainHttp,
+             };
+-            if (await egressPolicy.IsAllowedAsync(destination, ct).ConfigureAwait(false))
++            // MUTANT test/mutants 948-restwidget-selectconnectableipasync-policy-consultation-neutralize:
++            // `false &&` short-circuits this condition so egressPolicy.IsAllowedAsync is never
++            // actually invoked (the await is never reached), silently reverting the connect-time
++            // layer to "no candidate is ever approved" even when a registered policy would have
++            // approved it. See test/mutants/entries/
++            // 948-restwidget-selectconnectableipasync-policy-consultation-neutralize.json.
++            if (false && await egressPolicy.IsAllowedAsync(destination, ct).ConfigureAwait(false))
+             {
+                 return ip;
+             }

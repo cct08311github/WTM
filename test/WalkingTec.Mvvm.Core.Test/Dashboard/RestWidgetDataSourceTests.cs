@@ -48,17 +48,45 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             StringAssert.Contains(ex.Message, "http://");
         }
 
+        /// <summary>
+        /// #948: AllowHttp/AllowPrivateNetwork on RestOptions no longer grant access by
+        /// themselves — both fields live inside the widget definition, which
+        /// _DashboardController.Create/Update and _DashboardDesignerController.Preview all
+        /// accept directly from the caller. Without a registered IDashboardEgressPolicy,
+        /// setting them is a no-op; the request must still be rejected.
+        /// This test replaces the pre-#948 version of the same name, which asserted the
+        /// opposite (that AllowHttp=true alone was sufficient) — that was the vulnerability.
+        /// </summary>
         [TestMethod]
-        public async Task ValidateUrlAsync_accepts_http_when_AllowHttp_is_true_and_network_allowed()
+        public async Task ValidateUrlAsync_rejects_http_even_when_AllowHttp_and_AllowPrivateNetwork_true_without_egress_policy()
         {
             var opts = new RestWidgetDataSourceOptions
             {
                 Url = "http://8.8.8.8/anything",
                 AllowHttp = true,
-                AllowPrivateNetwork = true // skip SSRF check for this unit
+                AllowPrivateNetwork = true
             };
-            // should not throw
-            await RestWidgetDataSource.ValidateUrlAsync(opts);
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => RestWidgetDataSource.ValidateUrlAsync(opts),
+                "AllowHttp/AllowPrivateNetwork alone must not grant plain-HTTP egress (#948)");
+        }
+
+        /// <summary>
+        /// #948: the same destination as above IS reachable once a host registers an
+        /// IDashboardEgressPolicy that approves it — proving the seam is functional, not
+        /// just a blanket deny.
+        /// </summary>
+        [TestMethod]
+        public async Task ValidateUrlAsync_accepts_http_when_egress_policy_approves_the_resolved_destination()
+        {
+            var opts = new RestWidgetDataSourceOptions
+            {
+                Url = "http://8.8.8.8/anything",
+                AllowHttp = true,
+                AllowPrivateNetwork = true
+            };
+            // should not throw — the policy approves this exact destination.
+            await RestWidgetDataSource.ValidateUrlAsync(opts, CancellationToken.None, new AlwaysApproveEgressPolicy());
         }
 
         [TestMethod]
@@ -77,16 +105,38 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             StringAssert.Contains(ex.Message, "AllowPrivateNetwork");
         }
 
+        /// <summary>
+        /// #948: replaces the pre-#948 version of this test, which asserted that
+        /// AllowPrivateNetwork=true alone (with no egress policy) was sufficient to reach a
+        /// private-range destination — that was the vulnerability this issue closes.
+        /// </summary>
         [TestMethod]
-        public async Task ValidateUrlAsync_SSRF_allows_private_ranges_when_opted_in()
+        public async Task ValidateUrlAsync_SSRF_still_blocks_private_ranges_when_AllowPrivateNetwork_true_but_no_egress_policy()
         {
             var opts = new RestWidgetDataSourceOptions
             {
                 Url = "https://10.0.0.1/api",
                 AllowPrivateNetwork = true
             };
-            // should not throw
-            await RestWidgetDataSource.ValidateUrlAsync(opts);
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => RestWidgetDataSource.ValidateUrlAsync(opts),
+                "AllowPrivateNetwork alone must not grant private-network egress (#948)");
+        }
+
+        /// <summary>
+        /// #948: the same private-range destination becomes reachable once a host registers
+        /// an IDashboardEgressPolicy that approves it.
+        /// </summary>
+        [TestMethod]
+        public async Task ValidateUrlAsync_SSRF_allows_private_ranges_when_egress_policy_approves()
+        {
+            var opts = new RestWidgetDataSourceOptions
+            {
+                Url = "https://10.0.0.1/api",
+                AllowPrivateNetwork = true
+            };
+            // should not throw — the policy approves this exact destination.
+            await RestWidgetDataSource.ValidateUrlAsync(opts, CancellationToken.None, new AlwaysApproveEgressPolicy());
         }
 
         [TestMethod]
@@ -197,6 +247,94 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             Assert.IsNull(chosen);
         }
 
+        // ── #955 review finding F3: SelectConnectableIpAsync (the connect-time,
+        // policy-aware IP selection PinnedConnectAsync's ConnectCallback actually uses)
+        // had zero direct test coverage — every existing GetDataAsync_* test used a fake
+        // IHttpClientFactory/HttpMessageHandler that never reaches SocketsHttpHandler's
+        // ConnectCallback at all. These tests exercise the method directly.
+        // Deleting the "if (egressPolicy == null) return null;" guard and the foreach
+        // policy-consultation loop (test/mutants/entries/
+        // 948-restwidget-selectconnectableipasync-policy-consultation-neutralize.json)
+        // turns SelectConnectableIpAsync_ApprovingPolicy_* tests below red — with the
+        // guard gone, an approved private/plain-HTTP destination can never be reached.
+
+        private static readonly Uri TestRequestUri = new("https://example.test/data");
+        private static readonly Uri TestPlainHttpRequestUri = new("http://example.test/data");
+
+        [TestMethod]
+        public async Task SelectConnectableIpAsync_AllPrivateCandidates_NoPolicy_ReturnsNull_ZeroPolicyCalls()
+        {
+            var candidates = new[] { IPAddress.Parse("10.0.0.1"), IPAddress.Parse("192.168.1.1") };
+            var result = await RestWidgetDataSource.SelectConnectableIpAsync(
+                candidates, TestRequestUri, port: 443, isPlainHttp: false, egressPolicy: null, CancellationToken.None);
+            Assert.IsNull(result);
+        }
+
+        [TestMethod]
+        public async Task SelectConnectableIpAsync_AllPrivateCandidates_ApprovingPolicy_ReturnsFirstApproved()
+        {
+            var candidates = new[] { IPAddress.Parse("10.0.0.1"), IPAddress.Parse("192.168.1.1") };
+            var policy = new StubEgressPolicy(approve: true);
+            var result = await RestWidgetDataSource.SelectConnectableIpAsync(
+                candidates, TestRequestUri, port: 8080, isPlainHttp: false, policy, CancellationToken.None);
+            Assert.AreEqual(IPAddress.Parse("10.0.0.1"), result);
+            Assert.IsTrue(policy.WasCalled);
+            Assert.IsNotNull(policy.LastDestination);
+            Assert.AreEqual(IPAddress.Parse("10.0.0.1"), policy.LastDestination!.ResolvedAddress);
+            Assert.AreEqual(8080, policy.LastDestination.Port);
+            Assert.IsTrue(policy.LastDestination.IsPrivateNetwork);
+            Assert.IsFalse(policy.LastDestination.IsPlainHttp);
+        }
+
+        [TestMethod]
+        public async Task SelectConnectableIpAsync_AllPrivateCandidates_DenyingPolicy_ReturnsNull_TriesEveryCandidate()
+        {
+            var candidates = new[] { IPAddress.Parse("10.0.0.1"), IPAddress.Parse("192.168.1.1") };
+            var policy = new StubEgressPolicy(approve: false);
+            var result = await RestWidgetDataSource.SelectConnectableIpAsync(
+                candidates, TestRequestUri, port: 443, isPlainHttp: false, policy, CancellationToken.None);
+            Assert.IsNull(result);
+            Assert.AreEqual(candidates.Length, policy.CallCount,
+                "a denying policy must be asked about every candidate before giving up");
+        }
+
+        [TestMethod]
+        public async Task SelectConnectableIpAsync_MixedPrivateAndPublicCandidates_NoPolicy_ReturnsPublicIp_ZeroPolicyCalls()
+        {
+            // #955 review F7: the fast path must find the public candidate regardless of
+            // its position in the candidate list, without ever consulting a policy —
+            // this is the exact scenario ValidateUrlAsync used to get wrong (rejecting
+            // outright on the first private candidate instead of trying the rest).
+            var candidates = new[] { IPAddress.Parse("10.0.0.1"), IPAddress.Parse("8.8.8.8") };
+            var result = await RestWidgetDataSource.SelectConnectableIpAsync(
+                candidates, TestRequestUri, port: 443, isPlainHttp: false, egressPolicy: null, CancellationToken.None);
+            Assert.AreEqual(IPAddress.Parse("8.8.8.8"), result);
+        }
+
+        [TestMethod]
+        public async Task SelectConnectableIpAsync_PlainHttp_PublicCandidate_NoPolicy_ReturnsNull()
+        {
+            // Plain HTTP always needs policy approval, even to a public IP — the fast
+            // path is scheme-gated, not just IP-gated.
+            var candidates = new[] { IPAddress.Parse("8.8.8.8") };
+            var result = await RestWidgetDataSource.SelectConnectableIpAsync(
+                candidates, TestPlainHttpRequestUri, port: 80, isPlainHttp: true, egressPolicy: null, CancellationToken.None);
+            Assert.IsNull(result);
+        }
+
+        [TestMethod]
+        public async Task SelectConnectableIpAsync_PlainHttp_PublicCandidate_ApprovingPolicy_ReturnsIt()
+        {
+            var candidates = new[] { IPAddress.Parse("8.8.8.8") };
+            var policy = new StubEgressPolicy(approve: true);
+            var result = await RestWidgetDataSource.SelectConnectableIpAsync(
+                candidates, TestPlainHttpRequestUri, port: 80, isPlainHttp: true, policy, CancellationToken.None);
+            Assert.AreEqual(IPAddress.Parse("8.8.8.8"), result);
+            Assert.IsTrue(policy.WasCalled);
+            Assert.IsTrue(policy.LastDestination!.IsPlainHttp);
+            Assert.IsFalse(policy.LastDestination.IsPrivateNetwork);
+        }
+
         // ── Request URI is NOT rewritten to an IP ────────────────────────
 
         [TestMethod]
@@ -255,18 +393,23 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             });
             var factory = new SingleClientFactory(handler);
             var cache = new MemoryCache(new MemoryCacheOptions());
-            var source = new RestWidgetDataSource(factory, cache);
+            // #948: an approving IDashboardEgressPolicy (not AllowPrivateNetwork) is what
+            // lets this request past the SSRF guard now. "localhost" is used instead of a
+            // fake ".internal" hostname because ValidateUrlAsync must resolve DNS for any
+            // hostname it cannot immediately classify as safe (it can no longer skip
+            // resolution just because AllowPrivateNetwork was requested) — "localhost"
+            // resolves instantly and deterministically via the OS with no real network
+            // traffic, unlike a placeholder domain that would trigger a live (and likely
+            // failing, in a sandboxed CI runner) DNS lookup.
+            var source = new RestWidgetDataSource(factory, cache, new AlwaysApproveEgressPolicy());
 
-            // Use AllowPrivateNetwork=true so the SSRF guard does not reject the request
-            // before reaching the HTTP layer, allowing us to inspect the request URI.
             var req = new WidgetDataRequest
             {
                 Parameters = new Dictionary<string, string>
                 {
                     ["options"] = JsonSerializer.Serialize(new RestWidgetDataSourceOptions
                     {
-                        Url = "https://api.example.internal/v1/data",
-                        AllowPrivateNetwork = true,
+                        Url = "https://localhost/v1/data",
                         CacheTtlSeconds = 0
                     })
                 }
@@ -275,7 +418,7 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             await source.GetDataAsync(req, CancellationToken.None);
 
             Assert.IsNotNull(capturedRequestUri, "Request should have been made");
-            Assert.AreEqual("api.example.internal", capturedRequestUri!.Host,
+            Assert.AreEqual("localhost", capturedRequestUri!.Host,
                 "Request URI host must remain the original hostname — not rewritten to an IP. " +
                 "Rewriting would break HTTPS TLS SNI and server certificate validation.");
         }
@@ -367,6 +510,83 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         }
 
         // ── End-to-end with mocked HttpClient ────────────────────────────
+
+        // ── #948: GetDataAsync-level proof — a private-network destination never reaches
+        // the HTTP layer without an approving IDashboardEgressPolicy, and does once one is
+        // registered. Deleting the guard in RestWidgetDataSource.ValidateUrlAsync (or its
+        // egressPolicy consultation) turns the first of these two tests red: the mock
+        // handler would be invoked (callCount > 0) even though no policy was registered.
+
+        [TestMethod]
+        public async Task GetDataAsync_never_invokes_HTTP_handler_for_private_destination_without_egress_policy()
+        {
+            int callCount = 0;
+            var handler = new MockHttpHandler(_ =>
+            {
+                callCount++;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"secret\":\"leaked\"}", Encoding.UTF8, "application/json")
+                };
+            });
+            var factory = new SingleClientFactory(handler);
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            var source = new RestWidgetDataSource(factory, cache); // no egress policy registered
+
+            var req = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["options"] = JsonSerializer.Serialize(new RestWidgetDataSourceOptions
+                    {
+                        Url = "https://169.254.169.254/latest/meta-data/iam/security-credentials/",
+                        AllowPrivateNetwork = true, // attacker-controlled widget definition asks for this
+                        CacheTtlSeconds = 0
+                    })
+                }
+            };
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => source.GetDataAsync(req, CancellationToken.None));
+            Assert.AreEqual(0, callCount,
+                "the HTTP handler must never be invoked for a blocked private-network destination — " +
+                "AllowPrivateNetwork=true alone must not obtain egress (#948)");
+        }
+
+        [TestMethod]
+        public async Task GetDataAsync_invokes_HTTP_handler_for_private_destination_when_egress_policy_approves()
+        {
+            int callCount = 0;
+            var handler = new MockHttpHandler(_ =>
+            {
+                callCount++;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json")
+                };
+            });
+            var factory = new SingleClientFactory(handler);
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            var source = new RestWidgetDataSource(factory, cache, new AlwaysApproveEgressPolicy());
+
+            var req = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["options"] = JsonSerializer.Serialize(new RestWidgetDataSourceOptions
+                    {
+                        Url = "https://10.0.0.1/internal-api",
+                        AllowPrivateNetwork = true,
+                        CacheTtlSeconds = 0
+                    })
+                }
+            };
+
+            var result = await source.GetDataAsync(req, CancellationToken.None);
+            Assert.IsNotNull(result);
+            Assert.AreEqual(1, callCount,
+                "with a registered, approving IDashboardEgressPolicy the request must reach the HTTP layer");
+        }
 
         [TestMethod]
         public async Task GetDataAsync_end_to_end_with_public_URL_and_json_body()
@@ -495,5 +715,25 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         private readonly HttpMessageHandler _handler;
         public SingleClientFactory(HttpMessageHandler handler) => _handler = handler;
         public HttpClient CreateClient(string name) => new(_handler, disposeHandler: false);
+    }
+
+    /// <summary>
+    /// #948: test double for <see cref="IDashboardEgressPolicy"/> that approves every
+    /// destination it is asked about. Stands in for a host-authored policy that has
+    /// already validated the destination against its own allowlist/config — tests use
+    /// this only to prove the seam is wired up and functional, never as a substitute for
+    /// exercising a real policy's own decision logic.
+    /// </summary>
+    internal sealed class AlwaysApproveEgressPolicy : IDashboardEgressPolicy
+    {
+        public Task<bool> IsAllowedAsync(DashboardEgressDestination destination, CancellationToken ct = default)
+            => Task.FromResult(true);
+    }
+
+    /// <summary>#948: test double for <see cref="IDashboardEgressPolicy"/> that denies every destination.</summary>
+    internal sealed class AlwaysDenyEgressPolicy : IDashboardEgressPolicy
+    {
+        public Task<bool> IsAllowedAsync(DashboardEgressDestination destination, CancellationToken ct = default)
+            => Task.FromResult(false);
     }
 }

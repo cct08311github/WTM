@@ -298,6 +298,12 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         }
 
         // ── Defect 1: Request-side options cannot enable security-sensitive flags ──
+        // #948 update: this section originally covered only the legacy-widget
+        // request-"options"-parameter stripping path. Since #948, AllowPrivateNetwork/
+        // AllowHttp are no longer honoured by RestWidgetDataSource at all without a
+        // registered IDashboardEgressPolicy approving the specific resolved destination
+        // — see the "ValidateUrlAsync ... egress policy" tests further down in this file
+        // and in RestWidgetDataSourceTests.cs for that (now primary) control.
 
         /// <summary>
         /// Verifies that <see cref="RestWidgetDataSource.ParseOptions"/> returns the raw
@@ -305,7 +311,9 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         /// AllowPrivateNetwork/AllowHttp is applied upstream in
         /// <see cref="JsonFileDashboardService.GetWidgetDataAsync"/> for legacy widgets.
         /// This test verifies the ParseOptions layer itself, and the integration test below
-        /// verifies the stripping that happens in the service layer.
+        /// verifies the stripping that happens in the service layer. (Belt-and-suspenders
+        /// only, post-#948 — see the section note above: RestWidgetDataSource itself no
+        /// longer trusts either field regardless of what ParseOptions returns.)
         /// </summary>
         [TestMethod]
         public void ParseOptions_deserializes_AllowPrivateNetwork_as_provided()
@@ -369,19 +377,63 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
         }
 
         /// <summary>
-        /// Verifies that a server-side RestOptions with AllowPrivateNetwork=true
-        /// is not rejected by ValidateUrlAsync (it skips the SSRF check intentionally).
+        /// #948: replaces the pre-#948 version of this test, which asserted that
+        /// AllowPrivateNetwork=true on RestOptions was, by itself, sufficient for
+        /// ValidateUrlAsync to skip the SSRF check. That was the vulnerability this issue
+        /// closes: RestOptions is not exclusively "server-side" data — WidgetDefinition
+        /// (and therefore WidgetSourceDefinition.RestOptions) is bound directly from the
+        /// request body on all three write paths (_DashboardController.Create/Update,
+        /// _DashboardDesignerController.Preview). Without a registered
+        /// IDashboardEgressPolicy, the field must have no effect.
         /// </summary>
         [TestMethod]
-        public async Task ValidateUrlAsync_allows_private_network_when_server_RestOptions_sets_AllowPrivateNetwork()
+        public async Task ValidateUrlAsync_still_blocks_private_network_even_when_RestOptions_sets_AllowPrivateNetwork_without_egress_policy()
         {
-            var serverOpts = new RestWidgetDataSourceOptions
+            var opts = new RestWidgetDataSourceOptions
             {
                 Url = "https://10.0.0.1/internal-api",
-                AllowPrivateNetwork = true  // set server-side by admin
+                AllowPrivateNetwork = true
             };
-            // Should not throw; AllowPrivateNetwork from server-side config is legitimate.
-            await RestWidgetDataSource.ValidateUrlAsync(serverOpts);
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => RestWidgetDataSource.ValidateUrlAsync(opts),
+                "AllowPrivateNetwork alone (no IDashboardEgressPolicy registered) must not grant private-network egress (#948)");
+        }
+
+        /// <summary>
+        /// #948: the same destination is reachable once a host registers an
+        /// IDashboardEgressPolicy that approves it — this is the actual, host-owned
+        /// control that replaces the AllowPrivateNetwork boolean.
+        /// </summary>
+        [TestMethod]
+        public async Task ValidateUrlAsync_allows_private_network_when_egress_policy_approves_the_resolved_destination()
+        {
+            var opts = new RestWidgetDataSourceOptions
+            {
+                Url = "https://10.0.0.1/internal-api",
+                AllowPrivateNetwork = true
+            };
+            var policy = new StubEgressPolicy(approve: true);
+            // Should not throw; the registered policy approves this exact destination.
+            await RestWidgetDataSource.ValidateUrlAsync(opts, CancellationToken.None, policy);
+            Assert.IsTrue(policy.WasCalled, "The egress policy must actually be consulted, not merely present.");
+        }
+
+        /// <summary>
+        /// #948: a registered policy that denies the destination must still reject it —
+        /// registering a policy is not itself a blanket allow.
+        /// </summary>
+        [TestMethod]
+        public async Task ValidateUrlAsync_still_blocks_private_network_when_egress_policy_denies()
+        {
+            var opts = new RestWidgetDataSourceOptions
+            {
+                Url = "https://10.0.0.1/internal-api",
+                AllowPrivateNetwork = true
+            };
+            var policy = new StubEgressPolicy(approve: false);
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => RestWidgetDataSource.ValidateUrlAsync(opts, CancellationToken.None, policy));
+            Assert.IsTrue(policy.WasCalled, "The egress policy must actually be consulted, not merely present.");
         }
 
         // ── Defect 2: Named HttpClient has AllowAutoRedirect=false ──────────
@@ -494,16 +546,21 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             await RestWidgetDataSource.ValidateUrlAsync(opts, CancellationToken.None);
         }
 
+        /// <summary>
+        /// #948: replaces the pre-#948 version of this test (same name), which asserted
+        /// AllowPrivateNetwork=true alone was sufficient — that was the vulnerability.
+        /// Without a registered IDashboardEgressPolicy, the request must still be blocked.
+        /// </summary>
         [TestMethod]
-        public async Task ValidateUrlAsync_does_not_throw_when_AllowPrivateNetwork_true()
+        public async Task ValidateUrlAsync_still_throws_when_AllowPrivateNetwork_true_but_no_egress_policy()
         {
             var opts = new RestWidgetDataSourceOptions
             {
                 Url = "https://10.0.0.1/internal",
                 AllowPrivateNetwork = true
             };
-            // Should not throw — private network explicitly allowed.
-            await RestWidgetDataSource.ValidateUrlAsync(opts, CancellationToken.None);
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => RestWidgetDataSource.ValidateUrlAsync(opts, CancellationToken.None));
         }
 
         [TestMethod]
@@ -799,6 +856,32 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             {
                 Content = new StringContent("{}", Encoding.UTF8, "application/json")
             });
+        }
+    }
+
+    // ── #948: IDashboardEgressPolicy test double ───────────────────────────────
+
+    /// <summary>
+    /// Configurable <see cref="IDashboardEgressPolicy"/> test double: approves or denies
+    /// every destination per <see cref="_approve"/>, and records whether/how many times
+    /// it was actually consulted — so a test can assert the seam is genuinely wired up,
+    /// not merely that a non-null policy happened to be present.
+    /// </summary>
+    internal sealed class StubEgressPolicy : IDashboardEgressPolicy
+    {
+        private readonly bool _approve;
+        public bool WasCalled { get; private set; }
+        public int CallCount { get; private set; }
+        public DashboardEgressDestination? LastDestination { get; private set; }
+
+        public StubEgressPolicy(bool approve) => _approve = approve;
+
+        public Task<bool> IsAllowedAsync(DashboardEgressDestination destination, CancellationToken ct = default)
+        {
+            WasCalled = true;
+            CallCount++;
+            LastDestination = destination;
+            return Task.FromResult(_approve);
         }
     }
 }

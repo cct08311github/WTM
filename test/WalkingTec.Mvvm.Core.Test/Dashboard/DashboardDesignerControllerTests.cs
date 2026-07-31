@@ -132,6 +132,30 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             result.Should().NotBeNull();
         }
 
+        // ── #948: DashboardOptions.EnableEditing global kill switch ────────────
+        // Deleting _DashboardDesignerController.Preview's
+        // "if (!_options.EnableEditing) return Forbid();" guard turns this test red — the
+        // mocked CreateAsync/GetWidgetDataAsync setups below would otherwise never be hit,
+        // proving they are only reachable once the guard is bypassed.
+
+        [TestMethod]
+        public async Task Preview_returns_403_when_EnableEditing_is_false()
+        {
+            var opts = Options.Create(new DashboardOptions { EnableEditing = false });
+            var ctrl = new _DashboardDesignerController(_service.Object, opts)
+            {
+                Wtm = MockWtmContext.CreateWtmContext()
+            };
+            ctrl.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
+
+            var widget = new WidgetDefinition { Type = "chart" };
+            var result = await ctrl.Preview(widget, CancellationToken.None) as ForbidResult;
+
+            result.Should().NotBeNull();
+            _service.Verify(x => x.CreateAsync(It.IsAny<DashboardDefinition>()), Times.Never,
+                "the service must never be reached when editing is globally disabled");
+        }
+
         [TestMethod]
         public async Task Preview_creates_transient_dashboard_and_returns_widget_data()
         {

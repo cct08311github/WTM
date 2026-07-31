@@ -1,0 +1,32 @@
+{
+  "id": "948-dashboard-restoptions-egress-write-guard-neutralize",
+  "kind": "security",
+  "description": "Issue #948: neutralizes JsonFileDashboardService.ValidateWidgetConfigs's write-time rejection of a caller-supplied WidgetSourceDefinition.RestOptions requesting AllowPrivateNetwork/AllowHttp, by prefixing the guard condition with a compile-preserving `false &&` (always-false at runtime via && short-circuit; not a compile-time constant since src.RestOptions is a runtime property access, so no CS0162 unreachable-code warning is emitted). This is the guard that prevents a caller from persisting a 'rest' widget definition asking for private-network or plain-HTTP egress through any of the three write paths that share this validation: _DashboardController.Create, _DashboardController.Update, and _DashboardDesignerController.Preview (which calls CreateAsync on a transient dashboard). red_tests below cover all three call paths plus the direct service-level Create/Update assertions (JsonFileDashboardServiceTests lives in DashboardReliabilityTests.cs, class DashboardWidgetConfigValidationTests) -- with the mutation applied, none of the six raise/return the expected rejection because ValidateWidgetConfigs's guard never fires. green_test is the sibling positive control proving a legitimately public HTTPS REST widget is still accepted -- it does not touch the mutated condition at all (RestOptions.AllowPrivateNetwork and AllowHttp are both false/default), so it must stay green under this mutation.",
+  "target_file": "src/WalkingTec.Mvvm.Core/Dashboard/JsonFileDashboardService.cs",
+  "target_symbol": "JsonFileDashboardService.ValidateWidgetConfigs(DashboardDefinition) -- the 'rest' AllowPrivateNetwork/AllowHttp rejection guard, line ~302",
+  "patch": "patches/948-dashboard-restoptions-egress-write-guard-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.CreateAsync_rejects_rest_widget_with_AllowPrivateNetwork_true|FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.CreateAsync_rejects_rest_widget_with_AllowHttp_true|FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.UpdateAsync_rejects_rest_widget_with_AllowPrivateNetwork_true|FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.DashboardSsrfWriteValidationEndToEndTests.Create_with_AllowPrivateNetwork_true_is_rejected|FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.DashboardSsrfWriteValidationEndToEndTests.Update_with_AllowPrivateNetwork_true_is_rejected_and_original_widget_survives|FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.DashboardSsrfWriteValidationEndToEndTests.Preview_with_AllowPrivateNetwork_true_is_rejected",
+  "red_tests": [
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.CreateAsync_rejects_rest_widget_with_AllowPrivateNetwork_true",
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.CreateAsync_rejects_rest_widget_with_AllowHttp_true",
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.UpdateAsync_rejects_rest_widget_with_AllowPrivateNetwork_true",
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardSsrfWriteValidationEndToEndTests.Create_with_AllowPrivateNetwork_true_is_rejected",
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardSsrfWriteValidationEndToEndTests.Update_with_AllowPrivateNetwork_true_is_rejected_and_original_widget_survives",
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardSsrfWriteValidationEndToEndTests.Preview_with_AllowPrivateNetwork_true_is_rejected"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.CreateAsync_rejects_rest_widget_with_AllowPrivateNetwork_true": "Assert\\.ThrowsException failed\\. Expected exception type:<System\\.ArgumentException> but no exception was thrown",
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.CreateAsync_rejects_rest_widget_with_AllowHttp_true": "Assert\\.ThrowsException failed\\. Expected exception type:<System\\.ArgumentException> but no exception was thrown",
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.UpdateAsync_rejects_rest_widget_with_AllowPrivateNetwork_true": "Assert\\.ThrowsException failed\\. Expected exception type:<System\\.ArgumentException> but no exception was thrown",
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardSsrfWriteValidationEndToEndTests.Create_with_AllowPrivateNetwork_true_is_rejected": "a widget definition requesting AllowPrivateNetwork must be rejected, not persisted",
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardSsrfWriteValidationEndToEndTests.Update_with_AllowPrivateNetwork_true_is_rejected_and_original_widget_survives": "Update must reject a widget definition requesting AllowPrivateNetwork",
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardSsrfWriteValidationEndToEndTests.Preview_with_AllowPrivateNetwork_true_is_rejected": "Preview must reject a widget definition requesting AllowPrivateNetwork before ever persisting the transient dashboard or fetching data"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against this branch's working tree (stale demo.db under bin/ removed first) with the mutant patch applied via `dotnet test ... --filter <red_test_filter>`: all six declared red_tests failed with exactly the messages the patterns above match -- three MSTest Assert.ThrowsException 'no exception was thrown' failures and three FluentAssertions NotBeNull 'because' failures naming the specific rejection each test expected. No other test in the same filter's TRX went red.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.CreateAsync_accepts_rest_widget_with_public_https_destination_and_no_security_flags",
+  "green_tests": [
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.CreateAsync_accepts_rest_widget_with_public_https_destination_and_no_security_flags"
+  ]
+}

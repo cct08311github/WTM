@@ -110,8 +110,14 @@ namespace WalkingTec.Mvvm.Mvc
         [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(string), StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
         public async Task<IActionResult> Preview([FromBody] WidgetDefinition widget, CancellationToken ct)
         {
+            // #948: global editing kill switch — Preview persists a transient dashboard
+            // (see CreateAsync below) and is part of the designer/authoring surface, so it
+            // is gated exactly like _DashboardController.Create/Update/Delete.
+            if (!_options.EnableEditing) return Forbid();
+
             if (widget == null)
                 return BadRequest("Widget definition is required.");
 

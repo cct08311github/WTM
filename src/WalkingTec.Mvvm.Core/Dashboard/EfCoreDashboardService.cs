@@ -26,9 +26,6 @@ public class EfCoreDashboardService : IDashboardService
     private readonly ILogger<EfCoreDashboardService> _logger;
     private readonly TimeProvider _timeProvider;
 
-    private static readonly JsonSerializerOptions _caseInsensitiveOptions =
-        new() { PropertyNameCaseInsensitive = true };
-
     public EfCoreDashboardService(
         IDbContextFactory<DashboardDbContext> dbFactory,
         IOptions<DashboardOptions> options,
@@ -285,7 +282,12 @@ public class EfCoreDashboardService : IDashboardService
                 parameters["filters"] = JsonSerializer.Serialize(filterConditions);
             }
 
-            // SSRF hardening for REST widgets (mirrors JsonFileDashboardService).
+            // SSRF hardening for REST widgets (mirrors JsonFileDashboardService — see that
+            // file's GetWidgetDataAsync for the full comment on what "authoritative" does
+            // and does not guarantee here: widgetSource.RestOptions is caller data on all
+            // three write paths (#948), not a trusted server-side setting; the real
+            // enforcement is ValidateWidgetConfigs above plus RestWidgetDataSource's
+            // IDashboardEgressPolicy seam, not this block).
             if (string.Equals(sourceName, "rest", StringComparison.OrdinalIgnoreCase))
             {
                 if (widgetSource.RestOptions != null)
@@ -295,18 +297,20 @@ public class EfCoreDashboardService : IDashboardService
                 else if (parameters.TryGetValue("options", out var requestOptionsJson)
                          && !string.IsNullOrWhiteSpace(requestOptionsJson))
                 {
-                    try
-                    {
-                        var requestOpts = JsonSerializer.Deserialize<RestWidgetDataSourceOptions>(
-                            requestOptionsJson, _caseInsensitiveOptions);
-                        if (requestOpts != null)
-                        {
-                            requestOpts.AllowPrivateNetwork = false;
-                            requestOpts.AllowHttp = false;
-                            parameters["options"] = JsonSerializer.Serialize(requestOpts);
-                        }
-                    }
-                    catch (JsonException) { }
+                    // #955 review finding F6 — mirrors JsonFileDashboardService: a
+                    // request-supplied "options" blob for a widget with no persisted
+                    // RestOptions is no longer honoured at all (was previously capped to
+                    // public HTTPS by stripping AllowPrivateNetwork/AllowHttp; since #948
+                    // those flags are no longer read at all, so stripping them here is a
+                    // no-op and this channel would otherwise ride along on whatever the
+                    // registered IDashboardEgressPolicy approves for other widgets, using
+                    // the caller's own Url/Method/Headers/Body). See JsonFileDashboardService's
+                    // sibling branch for the full rationale — kept in sync deliberately.
+                    throw new InvalidOperationException(
+                        $"Widget {widgetId} has no persisted RestOptions; a caller-supplied " +
+                        "'options' parameter is no longer accepted for REST widgets without " +
+                        "persisted RestOptions (issue #955 finding F6). Configure the widget's " +
+                        "Source.RestOptions on the dashboard definition instead.");
                 }
             }
         }
@@ -424,6 +428,23 @@ public class EfCoreDashboardService : IDashboardService
             {
                 if (src.RestOptions != null && string.IsNullOrWhiteSpace(src.RestOptions.Url))
                     return $"Widget '{widgetId}': 資料源 Kind 為 'rest' 且設有 RestOptions 時，必須指定 Url。";
+
+                // #948: mirrors JsonFileDashboardService.ValidateWidgetConfigs — reject
+                // (not silently strip) a caller-supplied RestOptions requesting
+                // AllowPrivateNetwork/AllowHttp. See that method's comment for the full
+                // reject-vs-strip rationale; kept in sync deliberately, same as the rest
+                // of this method.
+                if (src.RestOptions != null && (src.RestOptions.AllowPrivateNetwork || src.RestOptions.AllowHttp))
+                    return $"Widget '{widgetId}': 資料源 Kind 為 'rest' 時，不可在小工具定義中設定 " +
+                           $"AllowPrivateNetwork 或 AllowHttp（這些欄位由伺服器端 IDashboardEgressPolicy 決定，" +
+                           $"呼叫端無法自行授予私有網路或明文 HTTP 存取權限）。";
+
+                // #955 review finding F5: mirrors JsonFileDashboardService — AllowedPorts
+                // lives on the same caller-controlled RestOptions object; a null/empty
+                // value turns off RestWidgetDataSource's port allowlist entirely.
+                if (src.RestOptions != null && (src.RestOptions.AllowedPorts == null || src.RestOptions.AllowedPorts.Length == 0))
+                    return $"Widget '{widgetId}': 資料源 Kind 為 'rest' 時，AllowedPorts 不可為 null 或空陣列" +
+                           $"（這會關閉連接埠允許清單，讓呼叫端能探測任意連接埠）。請指定至少一個允許的連接埠。";
             }
         }
 

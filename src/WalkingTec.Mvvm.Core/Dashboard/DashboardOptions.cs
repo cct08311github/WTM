@@ -7,6 +7,34 @@ namespace WalkingTec.Mvvm.Core.Dashboard;
 public class DashboardOptions
 {
     public string DashboardDirectory { get; set; } = "App_Data/dashboards";
+
+    /// <summary>
+    /// Global kill switch for dashboard authoring. When <c>false</c>, every write/design
+    /// endpoint — <c>_DashboardController.Create</c>, <c>.Update</c>, <c>.Delete</c>, and
+    /// <c>_DashboardDesignerController.Preview</c> (which also persists, transiently) —
+    /// returns <c>403 Forbidden</c> for every caller, regardless of ownership or role.
+    /// Default <c>true</c> (unchanged behaviour): editing stays available exactly as it
+    /// was before this flag did anything.
+    /// </summary>
+    /// <remarks>
+    /// <b>Issue #948: before this fix, this property was declared (with no doc comment
+    /// at all — the summary above and this remarks section are both new) but was never
+    /// read anywhere in <c>src/</c>; editing authorization via this flag did not
+    /// exist.</b> (Issue #955 review correction: an earlier version of this remark
+    /// claimed the pre-fix property "had this exact doc comment", which cannot be true —
+    /// the summary above describes the 403 behaviour this same fix adds, so it could not
+    /// have existed before the fix that introduces it.) A setting that appears to gate a
+    /// capability but does nothing is worse than no setting at all: it reads as
+    /// protection to anyone configuring a deployment. This is deliberately a coarse,
+    /// all-or-nothing switch —
+    /// not a per-user/per-role policy (that already exists via
+    /// <see cref="IDashboardService.CanEdit"/>/<see cref="AdminRoles"/>, unaffected by
+    /// this flag) — for a deployment that wants to ship pre-built dashboards only and
+    /// remove the entire caller-write attack surface (including the REST-widget SSRF
+    /// surface a caller-supplied widget definition can otherwise reach — see
+    /// <see cref="IDashboardEgressPolicy"/>), without standing up a full authorization
+    /// policy just to turn authoring off.
+    /// </remarks>
     public bool EnableEditing { get; set; } = true;
     public int DefaultRefreshInterval { get; set; } = 60;
     public bool AllowIframeSameOrigin { get; set; } = false;
