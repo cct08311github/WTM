@@ -12,7 +12,7 @@
 - **Three approval modes** — 串签 (sequential), 会签 (all/joint), 或签 (any-one), each dispatched by one generic `ApproveMode` enum on a single Approval node type.
 - **Race-safe concurrency** via a `GuardedTransition` CAS helper (modeled on `TokenService`) — no double-approvals, no lost-completions.
 - **Opt-in notifications** through the shared `IWtmWebhookSink` (DingTalk / WeCom / Feishu / Slack / Teams).
-- **RBAC + multi-tenant** by construction — all entities are DIRECT `PersistPoco / ITenant` descendants. **This is the design intent, not the current state**: `DataContext`'s query filters do not currently reach WorkFlow's entity types because of a registration-order gap (#899) — do not rely on tenant isolation until it lands.
+- **RBAC + multi-tenant** by construction — all entities are DIRECT `PersistPoco/BasePoco, ITenant` descendants, and `ApplyWorkFlowModels(this)` applies the `ITenant` (plus, for `PersistPoco` entities, `IsValid` soft-delete) query filter immediately after registering each entity (#899) — pass `this` from `DataContext.OnModelCreating`, see §4 below.
 - **Consumer-owned migrations** — the module ships zero migrations; consumers run `dotnet ef migrations add` against their own `DataContext`.
 
 ### Deferred (roadmap)
@@ -127,18 +127,39 @@ Fields must be declared in `fieldWhitelist` or the routing evaluator fails close
 
 `WalkingTec.Mvvm.WorkFlow` ships **zero migrations** — identical to `WalkingTec.Mvvm.Etl`.
 
-**Step 1** — Call `ApplyWorkFlowModels()` from your application's `DataContext.OnModelCreating`:
+**Step 1** — Call `ApplyWorkFlowModels(this)` from your application's `DataContext.OnModelCreating`:
 
 ```csharp
 protected override void OnModelCreating(ModelBuilder modelBuilder)
 {
     base.OnModelCreating(modelBuilder);
-    modelBuilder.ApplyEtlModels(this);    // if also using Etl -- pass `this`, see note below
-    modelBuilder.ApplyWorkFlowModels();   // WorkFlow tables
+    modelBuilder.ApplyEtlModels(this);       // if also using Etl -- pass `this`, see note below
+    modelBuilder.ApplyWorkFlowModels(this);  // WorkFlow tables + ITenant/soft-delete filter (#899)
 }
 ```
 
-If also using Etl, pass `this`: the parameterless `ApplyEtlModels()` overload is `[Obsolete]` -- a recompile emits that warning, but nothing throws at runtime. Registration still succeeds; the four ETL tables just silently lose tenant isolation because the obsolete overload has no way to reach the current context instance and bind the `ITenant` query filter. A NuGet-only upgrade that never recompiles won't even see the warning.
+Pass `this` for BOTH `ApplyEtlModels` and `ApplyWorkFlowModels`: the parameterless overload of
+each is `[Obsolete]` -- a recompile emits that warning, but nothing throws at runtime.
+Registration still succeeds; the module's tables just silently lose tenant isolation (and, for
+WorkFlow's 6 `PersistPoco` entities, soft-delete filtering) because the obsolete overload has no
+way to reach the current context instance and bind the `ITenant`/`IsValid` query filter. A
+NuGet-only upgrade that never recompiles won't even see the warning.
+
+`ApplyWorkFlowModels(this)` does not, by itself, produce an EF migration — a query filter is
+model metadata, not schema, so nothing in `dotnet ef migrations add`'s diff changes because of
+this call alone (Step 2 below is about the module's tables, which exist regardless of which
+overload you call).
+
+**Tenant scope for the request path is automatic once you pass `this`** — no further consumer
+action needed. `AddWtmWorkFlow`/`AddWtmWorkFlowDesigner`'s DI factories stamp every
+factory-created module `DataContext` with the calling request's tenant before handing it to
+`IWorkflowEngine`/`IWorkflowDefinitionStore`/`IProcessDefinitionPublisher`, and the background
+timer path (`AddWtmWorkFlowTimers`) is tenant-aware by construction (it stamps the current
+candidate row's own tenant per iteration, never the ambient scope's). If you drive
+`IWorkflowEngine` from your OWN background code (a custom `IHostedService`, a Quartz job, a
+console tool) rather than through a controller, you must stamp the tenant yourself — call
+`((IDataContext)yourDataContext).SetTenantCode(tenantCode)` on the context you pass to the
+engine before using it; WTM has no ambient identity to read in a scope you built by hand.
 
 **Step 2** — Generate the migration in your app project:
 
@@ -149,7 +170,7 @@ dotnet ef migrations add WorkFlow_InitialCreate \
   --startup-project YourApp/YourApp.csproj
 ```
 
-This creates 9 tables: `Wf_ProcessDefinition`, `Wf_ProcessDefinitionVersion`, `Wf_ProcessInstance`, `Wf_NodeInstance`, `Wf_ApprovalTask`, `Wf_WorkflowEventLog`, `Wf_CcRecord`, `Wf_DelegationRule`, `Wf_WorkflowTimer`.
+This creates 10 tables: `Wf_ProcessDefinition`, `Wf_ProcessDefinitionVersion`, `Wf_ProcessInstance`, `Wf_NodeInstance`, `Wf_ApprovalTask`, `Wf_WorkflowEventLog`, `Wf_CcRecord`, `Wf_DelegationRule`, `Wf_WorkflowTimer`, `Wf_ProcessDefinitionDraft`.
 
 `Wf_DelegationRule` and `Wf_WorkflowTimer` ship in the Sprint-1 schema (zero migration churn when their waves land).
 
@@ -277,7 +298,7 @@ public class WfProcessDefinitionController : BaseController
 }
 ```
 
-The grid is intended to be tenant-scoped via the `DataContext` query filter on `TenantCode`, but that filter does not currently reach `ProcessDefinition` (#899) — treat the grid as unscoped until it lands. Searcher fields: `Code` (partial match), `Name` (partial match), `Category`, `IsEnabled`. Grid actions include a read-only detail dialog and a version-history dialog.
+The grid is tenant-scoped via the `ITenant` query filter on `TenantCode` (#899, `ApplyWorkFlowModels(this)`). Searcher fields: `Code` (partial match), `Name` (partial match), `Category`, `IsEnabled`. Grid actions include a read-only detail dialog and a version-history dialog.
 
 In-grid editing is intentionally absent — definitions are published via the API/designer endpoint.
 

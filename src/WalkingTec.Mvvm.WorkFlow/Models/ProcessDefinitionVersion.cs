@@ -26,9 +26,8 @@ namespace WalkingTec.Mvvm.WorkFlow.Models;
 /// <c>IsValid</c> is shadowed with <c>[BindNever]</c> to block model-binding from
 /// flipping it (low-risk but now guarded).  Because <c>ProcessDefinitionVersion</c>
 /// is a <c>PersistPoco</c>, <c>BaseCRUDVM.DoDelete</c> would soft-delete it by
-/// casting to <c>IPersistPoco</c> and setting <c>IsValid = false</c>, which is INTENDED to
-/// hide the version from the <c>IsValid == true</c> query filter but currently does not
-/// (#899 -- the filter is not wired up for this entity type at all), and orphaning any
+/// casting to <c>IPersistPoco</c> and setting <c>IsValid = false</c>, which (since #899) DOES
+/// hide the version from the <c>IsValid == true</c> query filter, and ALSO orphans any
 /// in-flight <c>ProcessInstance</c> pinned via <c>DefinitionVersionId</c> (data loss --
 /// this part is unaffected by #899, since it's an FK integrity problem, not a filter one).
 /// DO NOT scaffold a delete-capable CRUD VM for this entity (read + publish only).
@@ -37,10 +36,10 @@ namespace WalkingTec.Mvvm.WorkFlow.Models;
 /// </summary>
 /// <remarks>
 /// DIRECT descendant of <see cref="PersistPoco"/> and <see cref="ITenant"/> so that
-/// <c>DataContext.OnModelCreating</c> is INTENDED to auto-apply soft-delete + tenant query
-/// filters. <strong>It currently does not (#899)</strong> -- same registration-order gap as
-/// <see cref="ProcessDefinition"/>. Do not rely on tenant isolation for this entity until
-/// #899 lands.
+/// soft-delete + tenant query filters apply via
+/// <c>WorkFlowDbContextExtensions.ApplyWorkFlowModels(ModelBuilder, EmptyContext)</c> (#899) --
+/// NOT via <c>DataContext.OnModelCreating</c>'s own pass, which never sees WorkFlow's entity
+/// types (same registration-order gap #862 fixed for ETL) -- see <see cref="ProcessDefinition"/>.
 /// </remarks>
 [AuditChanges]
 public class ProcessDefinitionVersion : PersistPoco, ITenant

@@ -67,7 +67,8 @@ public class WorkflowTaskController : BaseController
     /// Returns the caller's pending approval inbox (tenant-scoped).
     ///
     /// <para>The query is scoped to <c>Wtm.LoginUserInfo.ITCode</c> and
-    /// <c>Wtm.LoginUserInfo.TenantCode</c> server-side.
+    /// <c>Wtm.LoginUserInfo.CurrentTenant</c> server-side (#899 session-half: CurrentTenant, not
+    /// the raw TenantCode claim — see the method body's own comment).
     /// No client-supplied actor or tenant is used.</para>
     ///
     /// <para>[AllRights] — any authenticated user can view their own inbox.</para>
@@ -81,8 +82,11 @@ public class WorkflowTaskController : BaseController
     {
         // Actor and tenant ALWAYS from the server-side authenticated session.
         // The client cannot influence which user's inbox is returned.
+        // #899 session-half: CurrentTenant, same source as the module DataContext's stamp
+        // (ResolveAmbientTenant reads LoginUserInfo.CurrentTenant) -- see WorkflowInstanceController's
+        // identical comment for the full rationale.
         var actorITCode = Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
-        var tenantCode  = Wtm?.LoginUserInfo?.TenantCode;
+        var tenantCode  = Wtm?.LoginUserInfo?.CurrentTenant;
 
         // Route through the engine (not direct DC) to honour the WTM red line:
         // controllers never touch DataContext directly.

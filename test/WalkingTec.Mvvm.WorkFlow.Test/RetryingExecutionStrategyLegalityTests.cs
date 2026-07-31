@@ -126,7 +126,7 @@ public class RetryingExecutionStrategyLegalityTests : IDisposable
 
         // Must not throw. Pre-#667-completion (bare BeginTransactionAsync in the start-handoff
         // tx) this line throws InvalidOperationException under a retrying execution strategy.
-        var inst = await engine.StartAsync(version.ID, null, "initiator", null);
+        var inst = await engine.StartAsync(version.ID, null, "initiator", "T1");
 
         Assert.AreEqual(InstanceState.Running, inst.State,
             "T-667-LEGALITY-01: StartAsync must succeed (not throw) under a retrying execution strategy.");
@@ -152,7 +152,7 @@ public class RetryingExecutionStrategyLegalityTests : IDisposable
         var engine     = WorkflowEngine_Exposed.CreateWithOptions(ctx, dispatcher, opts, NullLogger.Instance);
 
         var version = await SeedVersionAsync(ctx);
-        await engine.StartAsync(version.ID, null, "initiator", null);
+        await engine.StartAsync(version.ID, null, "initiator", "T1");
 
         await using var readCtx = new WfAbbaTestContext(_dbName);
         var taskA = await readCtx.Set<ApprovalTask>()

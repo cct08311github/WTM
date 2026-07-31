@@ -60,6 +60,13 @@ internal sealed partial class WorkflowTimerExecutor
         // IgnoreQueryFilters: cross-tenant system sweep; every write is PK+RowVer CAS.
         // Issue #665: bounded per-tick sweep — see WorkFlowOptions.SweepBatchSize.
         // Any remainder beyond the cap is picked up on the next poll tick.
+        // #899 follow-up (cross-vendor review of PR #918): IsValid==true added -- a
+        // soft-deleted-but-Pending ApprovalTask must not be swept/reverted. The revert CAS below
+        // (ExecuteUpdateAsync, not IgnoreQueryFilters) already goes through the active combined
+        // filter and would independently match 0 rows for a soft-deleted candidate, but the
+        // collision pre-check + FailClosed event write earlier in the loop body do not depend on
+        // that CAS, so filtering the candidate itself is what actually closes the "event/log
+        // written about a soft-deleted row" gap, not just the mutation.
         var expiredDelegated = await db.Set<ApprovalTask>()
             .IgnoreQueryFilters() // justified: cross-tenant system reaper sweep; all writes are PK+RowVer CAS
             .AsNoTracking()
@@ -67,7 +74,8 @@ internal sealed partial class WorkflowTimerExecutor
                          && t.DelegationRuleId != null
                          && t.DelegatedFromITCode != null
                          && t.DelegationExpiresUtc != null
-                         && t.DelegationExpiresUtc < now)
+                         && t.DelegationExpiresUtc < now
+                         && t.IsValid == true)
             .Select(t => new
             {
                 t.ID,
@@ -117,6 +125,10 @@ internal sealed partial class WorkflowTimerExecutor
                 // per-tick retry when the principal was added (加签'd) onto the same node. If principal already
                 // holds ANY task row on (NodeInstanceId, Generation), skip the flip and emit a FailClosed audit
                 // event for operator visibility. Do NOT revert — leave the expired delegated slot as-is.
+                // #899 follow-up (cross-vendor review of PR #918): deliberately NOT scoped to
+                // IsValid==true, same reasoning as Escalate.cs's identically-shaped collision
+                // check -- the unique index this probes (IX_Wf_ApprovalTask_Node_Assignee_Gen)
+                // is not filtered on IsValid, so a soft-deleted row still occupies the slot.
                 bool hasCollision = await db.Set<ApprovalTask>()
                     .IgnoreQueryFilters() // justified: cross-tenant system sweep; all writes are PK+RowVer CAS
                     .AsNoTracking()
@@ -140,10 +152,12 @@ internal sealed partial class WorkflowTimerExecutor
 
                     if (nodeForInstColl is not null)
                     {
+                        // #899 follow-up (cross-vendor review of PR #918): IsValid==true added --
+                        // do not write a FailClosed audit event attributed to a soft-deleted instance.
                         var instSnapColl = await db.Set<ProcessInstance>()
                             .IgnoreQueryFilters()
                             .AsNoTracking()
-                            .Where(i => i.ID == nodeForInstColl.InstanceId)
+                            .Where(i => i.ID == nodeForInstColl.InstanceId && i.IsValid == true)
                             .Select(i => new { i.ID, i.RowVer, i.TenantCode })
                             .FirstOrDefaultAsync(ct);
 
@@ -225,10 +239,14 @@ internal sealed partial class WorkflowTimerExecutor
 
                 if (nodeForInst is not null)
                 {
+                    // #899 follow-up (cross-vendor review of PR #918): IsValid==true added -- do
+                    // not write a DelegationExpiredReverted event or notify about a soft-deleted
+                    // instance (the task-level revert CAS above already succeeded independently of
+                    // this read, so this only gates the audit/notify tail, not the mutation).
                     var instSnap = await db.Set<ProcessInstance>()
                         .IgnoreQueryFilters()
                         .AsNoTracking()
-                        .Where(i => i.ID == nodeForInst.InstanceId)
+                        .Where(i => i.ID == nodeForInst.InstanceId && i.IsValid == true)
                         .Select(i => new { i.ID, i.RowVer, i.TenantCode })
                         .FirstOrDefaultAsync(ct);
 
@@ -259,10 +277,12 @@ internal sealed partial class WorkflowTimerExecutor
                         {
                             try
                             {
+                                // #899 follow-up (cross-vendor review of PR #918): IsValid==true
+                                // added -- do not notify the principal about a soft-deleted instance.
                                 var freshInstance = await db.Set<ProcessInstance>()
                                     .IgnoreQueryFilters()
                                     .AsNoTracking()
-                                    .Where(i => i.ID == instSnap.ID)
+                                    .Where(i => i.ID == instSnap.ID && i.IsValid == true)
                                     .FirstOrDefaultAsync(ct);
 
                                 if (freshInstance is not null)

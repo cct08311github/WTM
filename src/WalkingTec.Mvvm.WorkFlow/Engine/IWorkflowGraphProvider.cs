@@ -20,6 +20,17 @@
 // to skip the row query at any call site (see WorkflowEngine.StartAsync — DefinitionVersionId
 // there is attacker-controlled request input; the tenant-scoped query filter is the actual
 // authorization boundary and must run on every call).
+//
+// #899 provenance note: between #666 (when this comment was written) and #899 (2026-07), "the
+// tenant-scoped query filter is the actual authorization boundary" was NOT actually true for any
+// WorkFlow entity, including ProcessDefinitionVersion -- WorkFlow's ApplyWorkFlowModels()
+// zero-arg overload registered entity types too late for FrameworkContext.OnModelCreating's
+// Pass 2 to see them, so no HasQueryFilter was ever applied and the ROW QUERY above was
+// completely unfiltered. #899 fixed the wiring (ApplyWorkFlowModels(this ModelBuilder,
+// EmptyContext), ServiceCollectionExtensions.cs) so this comment's claim is now actually true.
+// Cross-vendor architecture audit (2026-07-30) flagged this specific comment as the most
+// severe instance of the false-auto-wiring assumption in this module, precisely because an
+// engineer trusting it would have concluded cross-tenant access was already blocked here.
 
 using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Models;

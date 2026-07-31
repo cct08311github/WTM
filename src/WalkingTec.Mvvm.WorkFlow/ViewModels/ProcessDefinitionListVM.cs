@@ -35,11 +35,13 @@ public class ProcessDefinitionSearcher : BaseSearcher
 /// published via the API/designer endpoint
 /// (<c>POST /api/_workflow/definitions/{id}/publish</c>).</para>
 ///
-/// <para><strong>Tenant-isolation is NOT currently automatic (#899).</strong>
-/// <see cref="ProcessDefinition"/> is a DIRECT <c>: PersistPoco, ITenant</c> descendant, so
-/// <c>DataContext</c> is intended to apply the <c>TenantCode == this.TenantCode</c> query
-/// filter before this VM's <see cref="GetSearchQuery"/> runs, but that filter does not
-/// currently reach <see cref="ProcessDefinition"/> -- do not rely on this until #899 lands.</para>
+/// <para><strong>Tenant-isolation (#899).</strong>
+/// <see cref="ProcessDefinition"/> is a DIRECT <c>: PersistPoco, ITenant</c> descendant;
+/// <c>ApplyWorkFlowModels(this ModelBuilder, EmptyContext)</c> applies the combined
+/// <c>IsValid == true &amp;&amp; TenantCode == this.TenantCode</c> query filter before this
+/// VM's <see cref="GetSearchQuery"/> runs, reaching <see cref="ProcessDefinition"/> (before
+/// #899 the zero-arg overload left a registration-order gap and this filter never reached any
+/// WorkFlow entity).</para>
 /// </summary>
 public class ProcessDefinitionListVM : BasePagedListVM<ProcessDefinition, ProcessDefinitionSearcher>
 {

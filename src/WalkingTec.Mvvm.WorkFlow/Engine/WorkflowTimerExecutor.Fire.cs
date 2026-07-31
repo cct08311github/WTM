@@ -143,7 +143,14 @@ internal sealed partial class WorkflowTimerExecutor
             .AsNoTracking()
             .Where(i => i.ID == nodeSnap.InstanceId)
             // DefinitionVersionId projected for FIX-A3: graph re-read at fire time.
-            .Select(i => new { i.ID, i.State, i.Generation, i.RowVer, i.TenantCode, i.NextSeq, i.DefinitionVersionId })
+            // IsValid projected for #899 follow-up (cross-vendor review of PR #918): this is the
+            // root GATE-0 gate for EVERY timer action (Remind/Escalate/AutoApprove/AutoReject all
+            // flow through ProcessTimerAsync below) -- without it, a soft-deleted ProcessInstance
+            // (IsValid=false, e.g. via BaseCRUDVM.DoDelete) that happens to still carry
+            // State==Running is indistinguishable here from a genuinely live one, and the timer
+            // pipeline would mutate/notify/re-arm for a row the framework's own soft-delete
+            // convention says to treat as gone.
+            .Select(i => new { i.ID, i.State, i.Generation, i.RowVer, i.TenantCode, i.NextSeq, i.DefinitionVersionId, i.IsValid })
             .FirstOrDefaultAsync(ct);
 
         if (instanceSnap == null)
@@ -160,7 +167,28 @@ internal sealed partial class WorkflowTimerExecutor
         // the next tick and is then retired cleanly) or its lease expires and is reclaimed by Phase-2.
         // Skipping shrinks the fire-vs-return contention window and preserves SLA for any nodes that
         // survive the return operation.
-        if (instanceSnap.State == InstanceState.Returning)
+        //
+        // #899 follow-up (cross-vendor review of PR #918, round 2): `&& instanceSnap.IsValid` added.
+        // Neither of the two resolutions this comment promises actually happens for a soft-deleted
+        // instance: (1) nothing acts on an invalid instance, so its Generation never advances, and
+        // (2) Phase-2's own reclaim query was ALREADY updated by this same PR's review to exclude
+        // `IsValid == false` rows (`WorkflowTimerExecutor.StrandReaper.cs`'s `ReclaimExpiredLeasesAsync`,
+        // "a soft-deleted instance stuck in Returning must not be reclaimed back to Running") — so
+        // Phase-2 will never touch it either. Without this guard, a Returning+soft-deleted instance's
+        // timer took this defer-and-return branch every tick, forever, staying Armed and re-consuming
+        // a TimerBatchSize candidate slot on every future tick with no path to ever being retired.
+        // With this guard, a Returning+invalid instance instead falls through to the isOrphan check
+        // below, whose `!instanceSnap.IsValid` disjunct is already true, so it is retired the same
+        // zero-side-effect way (Race C) any other soft-deleted instance already is.
+        //
+        // This is deliberately an ADDED CONJUNCT on the existing condition, NOT a reordering of the
+        // two blocks: isOrphan's own `instanceSnap.State != InstanceState.Running` disjunct is TRUE
+        // for EVERY Returning instance, valid or not — simply moving the isOrphan check ahead of this
+        // one would retire a live, valid in-flight 回退's timer too, which is a regression this PR's
+        // own FIX-A2 rationale (shrink the fire-vs-return contention window, preserve SLA for surviving
+        // nodes) exists to prevent. A Returning+valid instance still defers exactly as before; only the
+        // invalid-Returning cell changes.
+        if (instanceSnap.State == InstanceState.Returning && instanceSnap.IsValid)
         {
             _logger.LogDebug(
                 "Timer {TimerId} deferred: ProcessInstance {InstanceId} is in Returning sub-state " +
@@ -169,19 +197,25 @@ internal sealed partial class WorkflowTimerExecutor
             return;
         }
 
-        // GATE-0 orphan conditions: not Running, generation mismatch, or node not Activated.
+        // GATE-0 orphan conditions: not Running, generation mismatch, node not Activated, or
+        // (#899 follow-up) the instance has been soft-deleted. A soft-deleted instance is an
+        // orphan by the same logic as "not Running" -- the framework's IsValid convention says
+        // to treat it as gone, and retiring the timer with zero side-effects (Race C: no event,
+        // no notification, no re-arm) is the correct outcome, matching what would already happen
+        // if the row had been hard-deleted.
         bool isOrphan =
             instanceSnap.State != InstanceState.Running
             || timerGeneration != instanceSnap.Generation
-            || nodeSnap.State != NodeState.Activated;
+            || nodeSnap.State != NodeState.Activated
+            || !instanceSnap.IsValid;
 
         if (isOrphan)
         {
             // Retire orphan: flip timer to Fired, zero downstream side-effects (Race C).
             _logger.LogDebug(
-                "Timer {TimerId} orphan (InstanceState={InstanceState}, " +
+                "Timer {TimerId} orphan (InstanceState={InstanceState}, InstanceIsValid={InstanceIsValid}, " +
                 "TimerGen={TimerGen}, InstanceGen={InstanceGen}, NodeState={NodeState}) — retiring",
-                timerId, instanceSnap.State, timerGeneration, instanceSnap.Generation, nodeSnap.State);
+                timerId, instanceSnap.State, instanceSnap.IsValid, timerGeneration, instanceSnap.Generation, nodeSnap.State);
             await RetireOrphanAsync(db, timerId, timerRowVer, ct);
             return;
         }
@@ -483,7 +517,11 @@ internal sealed partial class WorkflowTimerExecutor
             var version = await db.Set<ProcessDefinitionVersion>()
                 .IgnoreQueryFilters() // cross-tenant system sweep; same justification as candidate SELECT
                 .AsNoTracking()
-                .SingleOrDefaultAsync(v => v.ID == definitionVersionId, ct);
+                // #899 follow-up: matches WorkflowEngine.StartAsync's own `v.IsValid == true`
+                // predicate on the identical entity (ProcessDefinitionVersion is documented as
+                // "must never be soft-deleted", so this is defence-in-depth/consistency, not a
+                // reachable-in-practice gap).
+                .SingleOrDefaultAsync(v => v.ID == definitionVersionId && v.IsValid == true, ct);
 
             if (version is null)
             {

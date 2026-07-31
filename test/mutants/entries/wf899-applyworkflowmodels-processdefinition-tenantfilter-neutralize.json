@@ -1,0 +1,22 @@
+{
+  "id": "wf899-applyworkflowmodels-processdefinition-tenantfilter-neutralize",
+  "kind": "security",
+  "description": "Issue #899 root cause: all 10 WalkingTec.Mvvm.WorkFlow ITenant entities (including ProcessDefinition) never received the global tenant/soft-delete query filter, because ApplyWorkFlowModels() registers WorkFlow entity types into the EF model AFTER FrameworkContext.OnModelCreating's Pass 2 loop (DataContext.cs) has already finished applying the ITenant filter -- so the filter was never actually enforced through any standard FrameworkContext-derived app, including the framework's own demo. This mutant deletes the ApplyWorkFlowTenantFilter<ProcessDefinition>(builder, context) call added to ApplyWorkFlowModels(ModelBuilder, EmptyContext) to fix that, reproducing the exact pre-fix behaviour for this one entity: a context scoped to tenant B can read tenant A's ProcessDefinition row, with the generated SQL carrying no TenantCode predicate at all. Checked against TenantFilterInvariantTests.ProcessDefinition_TenantB_CannotSeeTenantA_Row, which seeds a ProcessDefinition row under TenantA and asserts a context scoped to TenantB cannot resolve it -- with the mutant applied, that read succeeds and the assertion fails. The green control, ProcessDefinition_TenantA_CanSeeOwnRow, seeds a ProcessDefinition row under TenantA and asserts TenantA's own context can still read it -- proving the mutation does not have broader collateral effects (e.g. breaking the Wf_ProcessDefinition table registration itself). Mirrors the #862 ETL precedent (test/mutants/entries/etl862-applyetlmodels-tenantfilter-neutralize.json) exactly: same red+positive-control test-pair shape, one module over.",
+  "target_file": "src/WalkingTec.Mvvm.WorkFlow/ServiceCollectionExtensions.cs",
+  "target_symbol": "WorkFlowDbContextExtensions.ApplyWorkFlowModels(ModelBuilder, EmptyContext) -- the ApplyWorkFlowTenantFilter<ProcessDefinition>(builder, context) call",
+  "patch": "patches/wf899-applyworkflowmodels-processdefinition-tenantfilter-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.WorkFlow.Test/WalkingTec.Mvvm.WorkFlow.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.WorkFlow.Test.TenantFilterInvariantTests.ProcessDefinition_TenantB_CannotSeeTenantA_Row",
+  "red_tests": [
+    "WalkingTec.Mvvm.WorkFlow.Test.TenantFilterInvariantTests.ProcessDefinition_TenantB_CannotSeeTenantA_Row"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.WorkFlow.Test.TenantFilterInvariantTests.ProcessDefinition_TenantB_CannotSeeTenantA_Row": "#899: a context scoped to TenantB must NOT resolve TenantA's ProcessDefinition row"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured verbatim against the committed baseline (bin-relative stale demo.db checked for and absent; mutant patch applied via git apply, test run, then reverted via git apply -R): \"Assert.IsFalse failed. #899: a context scoped to TenantB must NOT resolve TenantA's ProcessDefinition row. If this fails, ApplyWorkFlowModels(ModelBuilder, EmptyContext) is no longer applying the ITenant query filter for ProcessDefinition.\" Confirmed via python3 test/mutants/run_mutant.py --mutant wf899-applyworkflowmodels-processdefinition-tenantfilter-neutralize: 'VERDICT: KILLED' / 'GATE: PASS'.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.WorkFlow.Test.TenantFilterInvariantTests.ProcessDefinition_TenantA_CanSeeOwnRow",
+  "green_tests": [
+    "WalkingTec.Mvvm.WorkFlow.Test.TenantFilterInvariantTests.ProcessDefinition_TenantA_CanSeeOwnRow"
+  ]
+}

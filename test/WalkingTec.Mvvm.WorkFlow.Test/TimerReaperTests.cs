@@ -25,6 +25,7 @@
 // Memory guard tests use Moq (mirrors MemoryGuardTests.cs pattern).
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -38,6 +39,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Notifications;
+using WalkingTec.Mvvm.WorkFlow.Definition;
 using WalkingTec.Mvvm.WorkFlow.Engine;
 using WalkingTec.Mvvm.WorkFlow.Models;
 using WalkingTec.Mvvm.WorkFlow.Notifications;
@@ -2537,6 +2539,473 @@ public class TimerReaperTests : IDisposable
             "Phase-3 fix (Issue #325): a DelegationExpiredReverted event must be written.");
         Assert.AreEqual("T1", eventLog.TenantCode,
             "Phase-3 fix (Issue #325): the event log entry must carry TenantCode='T1'.");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // T-899: soft-deleted (IsValid=false) rows must produce ZERO mutation, ZERO
+    // WorkflowEventLog write, and ZERO notification in the timer/reaper paths.
+    //
+    // Cross-vendor review of PR #918 (Blocking 2) found that most of the 32
+    // IgnoreQueryFilters() candidate/notify queries in WorkflowTimerExecutor.* never checked
+    // IsValid, so a soft-deleted ProcessInstance/ApprovalTask that still carried a "live"-looking
+    // State column could still be mutated/notified about. Fixed by adding IsValid==true to GATE-0
+    // (Fire.cs, the root gate for Remind/Escalate/AutoApprove/AutoReject) plus the task-level
+    // candidate queries and the post-commit notify re-reads -- see the #899 follow-up comments in
+    // WorkflowTimerExecutor.Fire.cs / .Escalate.cs / .Remind.cs / .AutoAction.cs /
+    // .StrandReaper.cs / .Sweep.cs. These two tests prove the GATE-0 fix (instance-level) and the
+    // task-level fix end to end, against the real WorkflowTimerExecutor.RunTickAsync -- not a
+    // reimplementation.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// T-899-1: a ProcessInstance with IsValid=false but State still reading Running (the exact
+    /// shape the review flagged as reachable) must NOT have its due Remind timer processed as a
+    /// live action.
+    ///
+    /// The event-log and notification dimensions are DOUBLY protected here (GATE-0's
+    /// `!instanceSnap.IsValid` check in Fire.cs, AND independently: (a)
+    /// <c>GuardedTransition.AllocateSeqAsync</c>'s own `ProcessInstance` read is not
+    /// IgnoreQueryFilters()'d, so the already-active combined ITenant/IsValid filter blocks it on
+    /// its own; (b) NotifyRemindAsync's `freshInstance` re-read has its own IsValid==true check
+    /// (Remind.cs). Verified directly, not assumed: reverting ONLY the GATE-0 disjunct still
+    /// leaves this test green, because of (a)/(b) -- this is intentional defense-in-depth, not a
+    /// vacuous assertion, but it means "zero event / zero notification" alone cannot isolate
+    /// GATE-0's own contribution.
+    ///
+    /// The chain-link-timer-count assertion below is NOT redundantly protected: a
+    /// `WorkflowTimer` INSERT is not subject to any query filter (filters only affect reads), so
+    /// only GATE-0 stands between a soft-deleted instance and a brand-new next-Remind-link timer
+    /// being armed for it. Which line's deletion turns THAT assertion red: the
+    /// `|| !instanceSnap.IsValid` disjunct in GATE-0's `isOrphan` condition
+    /// (WorkflowTimerExecutor.Fire.cs, ProcessTimerAsync) -- confirmed empirically by reverting
+    /// it locally and re-running this test, which failed exactly this assertion (chain-link count
+    /// went from 1 to 2) while the event/notification assertions stayed green as predicted above.
+    /// </summary>
+    [TestMethod]
+    public async Task T_899_1_SoftDeletedInstance_DueRemindTimer_RetiredAsOrphan_ZeroEventZeroNotification()
+    {
+        var localDbName = $"WfT899Sd1_{Guid.NewGuid():N}";
+        var cs = $"DataSource={localDbName}?mode=memory&cache=shared";
+        await using var keepAlive = new SqliteConnection(cs);
+        keepAlive.Open();
+
+        await using (var setup = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite))
+        {
+            await setup.Database.EnsureCreatedAsync();
+        }
+
+        var defId = Guid.NewGuid();
+        var verId = Guid.NewGuid();
+        var instanceId = Guid.NewGuid();
+        var nodeId = Guid.NewGuid();
+        var timerId = Guid.NewGuid();
+
+        // A real graph with a RemindEveryHours TimeoutDef on "approval" -- if GATE-0 fails to
+        // retire the timer as an orphan, HandleRemindAsync WOULD insert a next-link WorkflowTimer
+        // row (the one side effect nothing else in the pipeline independently blocks).
+        var graph = new WorkflowGraph
+        {
+            Key = "T899Sd1Graph",
+            Name = "T899Sd1Graph",
+            Nodes = new List<NodeDef>
+            {
+                new() { NodeKey = "start", Kind = NodeKind.Start },
+                new()
+                {
+                    NodeKey = "approval",
+                    Kind = NodeKind.Approval,
+                    ApproveMode = ApproveMode.Any,
+                    ApproverRule = new ApproverRuleDef { Type = "Static", Value = "alice" },
+                    Timeout = new TimeoutDef { Action = TimerAction.Remind, RemindEveryHours = 4, MaxReminders = 3 },
+                },
+                new() { NodeKey = "end", Kind = NodeKind.End },
+            },
+            Transitions = new List<TransitionDef>
+            {
+                new() { From = "start", To = "approval" },
+                new() { From = "approval", To = "end" },
+            },
+            FieldWhitelist = new List<FieldWhitelistEntry>(),
+        };
+
+        await using (var seed = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite))
+        {
+            seed.Set<ProcessDefinition>().Add(new ProcessDefinition
+            {
+                ID = defId, Code = "DEF_T899_SD1", Name = "T899 SoftDelete-1", IsEnabled = true,
+                IsValid = true, TenantCode = "T1",
+            });
+            await seed.SaveChangesAsync();
+
+            seed.Set<ProcessDefinitionVersion>().Add(new ProcessDefinitionVersion
+            {
+                ID = verId, DefinitionId = defId, VersionNo = 1,
+                GraphJson = WorkflowGraphSerializer.Serialize(graph),
+                ContentHash = "t899sd1", IsValid = true, TenantCode = "T1",
+            });
+            await seed.SaveChangesAsync();
+
+            // KEY: IsValid=false (soft-deleted) but State still reads Running -- soft-delete does
+            // not clear State, so nothing about the State column alone reveals this row should be
+            // treated as gone.
+            seed.Set<ProcessInstance>().Add(new ProcessInstance
+            {
+                ID = instanceId, State = InstanceState.Running, RowVer = 0,
+                InitiatorITCode = "alice", DefinitionVersionId = verId,
+                IsValid = false, Generation = 0, TenantCode = "T1",
+            });
+            seed.Set<NodeInstance>().Add(new NodeInstance
+            {
+                ID = nodeId, State = NodeState.Activated, RowVer = 0, NodeKey = "approval",
+                InstanceId = instanceId, TenantCode = "T1", TotalRequired = 1,
+                ApproveMode = ApproveMode.Any, Generation = 0,
+            });
+            seed.Set<WorkflowTimer>().Add(new WorkflowTimer
+            {
+                ID = timerId, TenantCode = "T1", NodeInstanceId = nodeId,
+                FireAtUtc = DateTime.UtcNow.AddHours(-1), Action = TimerAction.Remind,
+                IdempotencyKey = Guid.NewGuid().ToString("N"), Status = TimerStatus.Armed,
+                RowVer = 0, Generation = 0, RemindCount = 0,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var spy = new CountingWorkflowNotifier();
+        await using var executorDc = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite);
+        var executor = new WorkflowTimerExecutor(
+            (IDataContext)executorDc,
+            Options.Create(new WorkFlowOptions()),
+            NullLogger<WorkflowTimerExecutor>.Instance,
+            notifier: spy);
+
+        await executor.RunTickAsync(DateTime.UtcNow, CancellationToken.None);
+
+        await using var verify = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite);
+
+        var timerAfter = await verify.Set<WorkflowTimer>()
+            .IgnoreQueryFilters().AsNoTracking()
+            .SingleAsync(t => t.ID == timerId);
+        Assert.AreEqual(TimerStatus.Fired, timerAfter.Status,
+            "T-899-1: the timer itself must still be retired (flipped to Fired) as an orphan -- " +
+            "this is the existing, unchanged orphan-retirement mechanism, not a new side effect.");
+
+        var eventCount = await verify.Set<WorkflowEventLog>()
+            .IgnoreQueryFilters().AsNoTracking()
+            .CountAsync(e => e.InstanceId == instanceId);
+        Assert.AreEqual(0, eventCount,
+            "T-899-1: ZERO WorkflowEventLog rows must be written for a soft-deleted instance's " +
+            "orphaned timer -- a live Remind fire would have written a TimeoutRemind event.");
+
+        Assert.AreEqual(0, spy.CallCount,
+            "T-899-1: ZERO notifier calls must be made for a soft-deleted instance's orphaned " +
+            "timer -- a live Remind fire would have called NotifyTimeoutRemindAsync.");
+
+        // The one assertion NOT redundantly protected by the AllocateSeq filter or the notify-level
+        // IsValid re-check -- see the class doc comment above for why this is the assertion that
+        // actually isolates GATE-0's own contribution.
+        var timerCountAfter = await verify.Set<WorkflowTimer>()
+            .IgnoreQueryFilters().AsNoTracking()
+            .CountAsync(t => t.NodeInstanceId == nodeId);
+        Assert.AreEqual(1, timerCountAfter,
+            "T-899-1: exactly 1 WorkflowTimer row must exist for this node after the tick (the " +
+            "original, now Fired) -- a live Remind fire would have inserted a second, next-link " +
+            "Armed WorkflowTimer row (RemindEveryHours=4 is configured on the graph's TimeoutDef).");
+    }
+
+    /// <summary>
+    /// T-899-2: an ApprovalTask that is individually soft-deleted (IsValid=false) but still reads
+    /// State==Pending (the instance/node around it remain valid and Running/Activated) must not
+    /// be escalated.
+    ///
+    /// The AssigneeITCode-unchanged outcome ALONE is, like T-899-1's event/notification
+    /// dimensions, redundantly protected: <c>GuardedTransition.EscalateTaskAssigneeAsync</c>'s own
+    /// CAS query is not IgnoreQueryFilters()'d, so the already-active combined filter blocks a
+    /// soft-deleted row from matching on its own, independent of the `taskSnap` fix below.
+    /// Verified directly: reverting ONLY the `taskSnap` fix still leaves an
+    /// AssigneeITCode-unchanged-only test green.
+    ///
+    /// To isolate `taskSnap`'s OWN contribution, this test instead engineers the COLLISION branch
+    /// (design's WF-19 FIX-2 lesson): a second, unrelated ApprovalTask already occupies
+    /// (NodeInstanceId, Generation, AssigneeITCode=escalateTarget). If `taskSnap` incorrectly
+    /// includes the soft-deleted task, `HandleEscalateAsync` takes the "collision detected"
+    /// branch -- which writes a FailClosed WorkflowEventLog row and returns a non-null
+    /// EscalateInfo (triggering a post-commit notification) WITHOUT ever reaching the
+    /// CAS-filter-protected reassignment call. Neither of those two side effects depends on the
+    /// CAS's own filter, so they DO isolate `taskSnap`'s contribution.
+    ///
+    /// Which line's deletion turns THIS test red: the `&amp;&amp; t.IsValid == true` clause on
+    /// `taskSnap`'s query in HandleEscalateAsync (WorkflowTimerExecutor.Escalate.cs) -- confirmed
+    /// empirically by reverting it locally and re-running this test, which failed on the
+    /// zero-event / zero-notification assertions (the collision branch ran for a row that should
+    /// have been treated as gone) while the AssigneeITCode-unchanged assertion stayed green (per
+    /// the CAS-level redundant protection explained above).
+    /// </summary>
+    [TestMethod]
+    public async Task T_899_2_SoftDeletedApprovalTask_EscalateTimer_TaskNotReassigned()
+    {
+        var localDbName = $"WfT899Sd2_{Guid.NewGuid():N}";
+        var cs = $"DataSource={localDbName}?mode=memory&cache=shared";
+        await using var keepAlive = new SqliteConnection(cs);
+        keepAlive.Open();
+
+        await using (var setup = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite))
+        {
+            await setup.Database.EnsureCreatedAsync();
+        }
+
+        var defId = Guid.NewGuid();
+        var verId = Guid.NewGuid();
+        var instanceId = Guid.NewGuid();
+        var nodeId = Guid.NewGuid();
+        var taskId = Guid.NewGuid();
+        var collidingTaskId = Guid.NewGuid();
+        var timerId = Guid.NewGuid();
+        const string originalAssignee = "carol";
+        const string escalateTarget = "admin-fallback";
+
+        await using (var seed = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite))
+        {
+            seed.Set<ProcessDefinition>().Add(new ProcessDefinition
+            {
+                ID = defId, Code = "DEF_T899_SD2", Name = "T899 SoftDelete-2", IsEnabled = true,
+                IsValid = true, TenantCode = "T1",
+            });
+            await seed.SaveChangesAsync();
+
+            seed.Set<ProcessDefinitionVersion>().Add(new ProcessDefinitionVersion
+            {
+                ID = verId, DefinitionId = defId, VersionNo = 1, GraphJson = "{}",
+                ContentHash = "t899sd2", IsValid = true, TenantCode = "T1",
+            });
+            await seed.SaveChangesAsync();
+
+            // Instance and node are both VALID and Running/Activated -- only the task itself is
+            // soft-deleted, proving the task-level fix independently of GATE-0's instance-level one.
+            seed.Set<ProcessInstance>().Add(new ProcessInstance
+            {
+                ID = instanceId, State = InstanceState.Running, RowVer = 0,
+                InitiatorITCode = "alice", DefinitionVersionId = verId,
+                IsValid = true, Generation = 0, TenantCode = "T1",
+            });
+            seed.Set<NodeInstance>().Add(new NodeInstance
+            {
+                ID = nodeId, State = NodeState.Activated, RowVer = 0, NodeKey = "approval",
+                InstanceId = instanceId, TenantCode = "T1", TotalRequired = 2,
+                ApproveMode = ApproveMode.Any, Generation = 0,
+            });
+            seed.Set<ApprovalTask>().Add(new ApprovalTask
+            {
+                ID = taskId, State = TaskState.Pending, RowVer = 0, Generation = 0,
+                NodeInstanceId = nodeId, AssigneeITCode = originalAssignee,
+                IsValid = false, // KEY: task itself soft-deleted, State still reads Pending
+                TenantCode = "T1",
+            });
+            // The escalation target already has a live task on this (NodeInstanceId, Generation) --
+            // the WF-19 FIX-2 collision condition. This task is genuinely valid/live.
+            seed.Set<ApprovalTask>().Add(new ApprovalTask
+            {
+                ID = collidingTaskId, State = TaskState.Pending, RowVer = 0, Generation = 0,
+                NodeInstanceId = nodeId, AssigneeITCode = escalateTarget,
+                IsValid = true, TenantCode = "T1",
+            });
+            seed.Set<WorkflowTimer>().Add(new WorkflowTimer
+            {
+                ID = timerId, TenantCode = "T1", NodeInstanceId = nodeId,
+                ApprovalTaskId = taskId,
+                FireAtUtc = DateTime.UtcNow.AddHours(-1), Action = TimerAction.Escalate,
+                IdempotencyKey = Guid.NewGuid().ToString("N"), Status = TimerStatus.Armed,
+                RowVer = 0, Generation = 0,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var opts = new WorkFlowOptions
+        {
+            AllowTimerAutoAction = true,
+            AdminFallbackITCode = escalateTarget,
+        };
+        var spy = new CountingWorkflowNotifier();
+        await using var executorDc = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite);
+        var executor = new WorkflowTimerExecutor(
+            (IDataContext)executorDc,
+            Options.Create(opts),
+            NullLogger<WorkflowTimerExecutor>.Instance,
+            notifier: spy);
+
+        await executor.RunTickAsync(DateTime.UtcNow, CancellationToken.None);
+
+        await using var verify = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite);
+
+        var taskAfter = await verify.Set<ApprovalTask>()
+            .IgnoreQueryFilters().AsNoTracking()
+            .SingleAsync(t => t.ID == taskId);
+        Assert.AreEqual(originalAssignee, taskAfter.AssigneeITCode,
+            "T-899-2: a soft-deleted ApprovalTask must NOT be reassigned by Escalate -- " +
+            "AssigneeITCode must remain unchanged.");
+
+        // The dimension that actually isolates the taskSnap fix (see class doc comment): the
+        // soft-deleted task must not be treated as a live escalation candidate at all, so the
+        // collision branch (which would fire for a LIVE task colliding with escalateTarget) must
+        // never run for it -- zero event, zero notification.
+        var eventCount = await verify.Set<WorkflowEventLog>()
+            .IgnoreQueryFilters().AsNoTracking()
+            .CountAsync(e => e.InstanceId == instanceId);
+        Assert.AreEqual(0, eventCount,
+            "T-899-2: ZERO WorkflowEventLog rows must be written -- a live escalation attempt on " +
+            "this soft-deleted task would have hit the collision branch and written a FailClosed " +
+            "event (the escalateTarget already has a task on this node/generation).");
+
+        Assert.AreEqual(0, spy.CallCount,
+            "T-899-2: ZERO notifier calls must be made -- the collision branch returns a non-null " +
+            "EscalateInfo that triggers NotifyEscalateAsync post-commit for a live task.");
+
+        var timerAfter = await verify.Set<WorkflowTimer>()
+            .IgnoreQueryFilters().AsNoTracking()
+            .SingleAsync(t => t.ID == timerId);
+        Assert.AreEqual(TimerStatus.Fired, timerAfter.Status,
+            "T-899-2: the timer itself is still retired (taskSnap==null is the SAME orphan path " +
+            "the pre-existing 'task no longer Pending' branch already used).");
+    }
+
+    /// <summary>
+    /// T-899-3 (cross-vendor review of the session-half PR, round 2): a ProcessInstance that is
+    /// BOTH in the Returning sub-state AND soft-deleted (IsValid=false) must have its due timer
+    /// retired, not left Armed forever.
+    ///
+    /// <para>Before this fix, GATE-0's Returning-defer check (<c>if (instanceSnap.State ==
+    /// InstanceState.Returning)</c>, <c>WorkflowTimerExecutor.Fire.cs</c>) ran BEFORE the
+    /// <c>isOrphan</c> check that contains <c>!instanceSnap.IsValid</c> (T-899-1's own fix, added
+    /// earlier in this same PR) — so a Returning+invalid instance took the defer-and-return branch
+    /// every tick, forever. Confirmed exhaustively neither of the Returning-defer comment's two
+    /// promised resolutions applies to this cell: (1) nothing acts on an invalid instance, so its
+    /// Generation never advances, and (2) <c>WorkflowTimerExecutor.StrandReaper.cs</c>'s Phase-2
+    /// reclaim query (<c>ReclaimExpiredLeasesAsync</c>) already excludes <c>IsValid == false</c>
+    /// rows — added by this same PR's review specifically because "a soft-deleted instance stuck
+    /// in Returning must not be reclaimed back to Running". T-899-1 cannot cover this cell: it uses
+    /// <c>State=Running</c>, not <c>State=Returning</c> — the two states take entirely different
+    /// branches in GATE-0 before either one reaches the shared <c>isOrphan</c> check.</para>
+    ///
+    /// <para>Which line's deletion turns this red: the <c>&amp;&amp; instanceSnap.IsValid</c>
+    /// conjunct added to the Returning-defer's own condition (<c>WorkflowTimerExecutor.Fire.cs</c>,
+    /// <c>ProcessTimerAsync</c>) — confirmed empirically by reverting it locally and re-running this
+    /// test, which failed the timer-status assertion below (stayed Armed instead of flipping to
+    /// Fired) while T-TMO-22c (the Returning+valid sibling cell, <c>TimerReaperTests.cs</c>) stayed
+    /// green throughout, proving this fix does not touch the still-legitimate Returning+valid defer.
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    public async Task T_899_3_ReturningAndSoftDeletedInstance_DueTimer_RetiredNotStrandedForever()
+    {
+        var localDbName = $"WfT899Sd3_{Guid.NewGuid():N}";
+        var cs = $"DataSource={localDbName}?mode=memory&cache=shared";
+        await using var keepAlive = new SqliteConnection(cs);
+        keepAlive.Open();
+
+        await using (var setup = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite))
+        {
+            await setup.Database.EnsureCreatedAsync();
+        }
+
+        var defId = Guid.NewGuid();
+        var verId = Guid.NewGuid();
+        var instanceId = Guid.NewGuid();
+        var nodeId = Guid.NewGuid();
+        var timerId = Guid.NewGuid();
+
+        await using (var seed = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite))
+        {
+            seed.Set<ProcessDefinition>().Add(new ProcessDefinition
+            {
+                ID = defId, Code = "DEF_T899_SD3", Name = "T899 SoftDelete-3", IsEnabled = true,
+                IsValid = true, TenantCode = "T1",
+            });
+            await seed.SaveChangesAsync();
+
+            seed.Set<ProcessDefinitionVersion>().Add(new ProcessDefinitionVersion
+            {
+                ID = verId, DefinitionId = defId, VersionNo = 1, GraphJson = "{}",
+                ContentHash = "t899sd3", IsValid = true, TenantCode = "T1",
+            });
+            await seed.SaveChangesAsync();
+
+            // KEY: State=Returning (a 回退-to-node operation is "in progress") AND IsValid=false
+            // (soft-deleted) at the same time -- the cross-product cell GATE-0 mishandled.
+            seed.Set<ProcessInstance>().Add(new ProcessInstance
+            {
+                ID = instanceId, State = InstanceState.Returning, RowVer = 0,
+                InitiatorITCode = "alice", DefinitionVersionId = verId,
+                IsValid = false, Generation = 0, TenantCode = "T1",
+                ReturningLeaseUtc = DateTime.UtcNow.AddMinutes(5), // lease not yet expired --
+                // proves retirement happens via the GATE-0 ordering fix, not via Phase-2 racing in
+                // first (Phase-2 would only fire after this lease expires, and Phase-2 itself now
+                // excludes IsValid==false rows -- see the class doc comment).
+            });
+            seed.Set<NodeInstance>().Add(new NodeInstance
+            {
+                ID = nodeId, State = NodeState.Activated, RowVer = 0, NodeKey = "approval",
+                InstanceId = instanceId, TenantCode = "T1", TotalRequired = 1,
+                ApproveMode = ApproveMode.Any, Generation = 0,
+            });
+            seed.Set<WorkflowTimer>().Add(new WorkflowTimer
+            {
+                ID = timerId, TenantCode = "T1", NodeInstanceId = nodeId,
+                FireAtUtc = DateTime.UtcNow.AddHours(-1), Action = TimerAction.Remind,
+                IdempotencyKey = Guid.NewGuid().ToString("N"), Status = TimerStatus.Armed,
+                RowVer = 0, Generation = 0, RemindCount = 0,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var spy = new CountingWorkflowNotifier();
+        await using var executorDc = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite);
+        var executor = new WorkflowTimerExecutor(
+            (IDataContext)executorDc,
+            Options.Create(new WorkFlowOptions()),
+            NullLogger<WorkflowTimerExecutor>.Instance,
+            notifier: spy);
+
+        await executor.RunTickAsync(DateTime.UtcNow, CancellationToken.None);
+
+        await using var verify = new WfTenantTestDataContext(cs, DBTypeEnum.SQLite);
+
+        var timerAfter = await verify.Set<WorkflowTimer>()
+            .IgnoreQueryFilters().AsNoTracking()
+            .SingleAsync(t => t.ID == timerId);
+        Assert.AreEqual(TimerStatus.Fired, timerAfter.Status,
+            "T-899-3: a Returning+soft-deleted instance's timer must be retired (Fired), not " +
+            "deferred forever -- an un-fixed GATE-0 would leave this Armed indefinitely, " +
+            "consuming a TimerBatchSize slot on every future tick.");
+
+        var eventCount = await verify.Set<WorkflowEventLog>()
+            .IgnoreQueryFilters().AsNoTracking()
+            .CountAsync(e => e.InstanceId == instanceId);
+        Assert.AreEqual(0, eventCount,
+            "T-899-3: ZERO WorkflowEventLog rows must be written for a soft-deleted instance's " +
+            "orphaned timer, matching T-899-1's same property.");
+
+        Assert.AreEqual(0, spy.CallCount,
+            "T-899-3: ZERO notifier calls must be made for a soft-deleted instance's orphaned timer.");
+    }
+
+    /// <summary>
+    /// Counts every call across all 9 <see cref="IWorkflowNotifier"/> methods -- unlike
+    /// <see cref="SpyWorkflowNotifier"/> (which only intercepts the 3 timeout DIMs via an
+    /// optional callback), this exists purely to assert "zero notifications of ANY kind" for the
+    /// T-899 soft-delete tests above.
+    /// </summary>
+    private sealed class CountingWorkflowNotifier : IWorkflowNotifier
+    {
+        public int CallCount { get; private set; }
+
+        public Task NotifyTaskAssignedAsync(ProcessInstance i, NodeInstance n, ApprovalTask t, CancellationToken ct = default) { CallCount++; return Task.CompletedTask; }
+        public Task NotifyApprovedAsync(ProcessInstance i, NodeInstance n, ApprovalTask t, string actor, CancellationToken ct = default) { CallCount++; return Task.CompletedTask; }
+        public Task NotifyRejectedAsync(ProcessInstance i, NodeInstance n, ApprovalTask t, string actor, string? reason, CancellationToken ct = default) { CallCount++; return Task.CompletedTask; }
+        public Task NotifyInstanceCompletedAsync(ProcessInstance i, CancellationToken ct = default) { CallCount++; return Task.CompletedTask; }
+        public Task NotifyWithdrawnAsync(ProcessInstance i, string actor, CancellationToken ct = default) { CallCount++; return Task.CompletedTask; }
+        public Task NotifyReturnedToInitiatorAsync(ProcessInstance i, NodeInstance n, ApprovalTask t, string actor, string? reason, CancellationToken ct = default) { CallCount++; return Task.CompletedTask; }
+        public Task NotifyTimeoutRemindAsync(ProcessInstance i, NodeInstance n, int remindCount, CancellationToken ct = default) { CallCount++; return Task.CompletedTask; }
+        public Task NotifyTimeoutEscalatedAsync(ProcessInstance i, NodeInstance n, string old, string @new, CancellationToken ct = default) { CallCount++; return Task.CompletedTask; }
+        public Task NotifyTimeoutAutoActionedAsync(ProcessInstance i, NodeInstance n, ApprovalTask t, string outcome, CancellationToken ct = default) { CallCount++; return Task.CompletedTask; }
     }
 }
 

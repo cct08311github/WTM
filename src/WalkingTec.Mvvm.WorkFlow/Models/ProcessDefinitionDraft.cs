@@ -22,14 +22,15 @@
 //     Id, TenantCode, DefinitionId, GraphJson, BaseContentHash,
 //     RowVersion, LastSavedBy, LastSavedAt, IsValid, CreateTime, UpdateTime.
 //
-// HasQueryFilter invariant (design intent -- NOT currently wired, #899): DIRECT
-// `: PersistPoco, ITenant` descendant so that DataContext.OnModelCreating
-// (DataContext.cs:164) is intended to auto-apply the soft-delete (IsValid == true) and
-// tenant-isolation (TenantCode == this.TenantCode) query filters. It currently does not --
+// HasQueryFilter invariant (#899, fixed): DIRECT `: PersistPoco, ITenant` descendant so that
+// the soft-delete (IsValid == true) and tenant-isolation (TenantCode == this.TenantCode) query
+// filters apply. NOT via DataContext.OnModelCreating's own Pass 2 (DataContext.cs:164) --
 // WorkFlow's entity types are registered via ApplyWorkFlowModels() after
-// base.OnModelCreating() returns, too late for DataContext's filter-applying pass to see
-// them (same wiring-order bug #862 fixed for ETL). Multi-level inheritance would ALSO
-// silently skip the filter once #899 is fixed — derive directly.
+// base.OnModelCreating() returns, too late for that pass to see them (same wiring-order bug
+// #862 fixed for ETL). Fixed by ApplyWorkFlowModels(this ModelBuilder, EmptyContext) re-applying
+// the same filter shape immediately after registering each entity -- see
+// ServiceCollectionExtensions.cs. Multi-level inheritance would silently skip the filter --
+// derive directly.
 
 using System;
 using System.ComponentModel.DataAnnotations;
@@ -57,12 +58,13 @@ namespace WalkingTec.Mvvm.WorkFlow.Models;
 /// Transported in the <c>If-Match</c> / <c>ETag</c> HTTP headers — never in the raw
 /// JSON body — so the body stays a pure graph document (spec §3.2 / R2 verdict).</para>
 ///
-/// <para><strong>HasQueryFilter invariant (design intent -- NOT currently wired, #899):</strong>
+/// <para><strong>HasQueryFilter invariant (#899, fixed):</strong>
 /// DIRECT descendant of <see cref="PersistPoco"/> and <see cref="ITenant"/> so that
-/// <c>DataContext.OnModelCreating</c> is intended to auto-apply soft-delete + tenant query
-/// filters. It currently does not -- same registration-order gap as
-/// <see cref="ProcessDefinition"/>. Multi-level inheritance would ALSO silently skip the
-/// filter once #899 is fixed; derive directly (spec §3.2 / T-DSN-6).
+/// soft-delete + tenant query filters apply via
+/// <c>WorkFlowDbContextExtensions.ApplyWorkFlowModels(ModelBuilder, EmptyContext)</c> --
+/// NOT via <c>DataContext.OnModelCreating</c>'s own pass, which never sees WorkFlow's entity
+/// types (same registration-order gap #862 fixed for ETL). Multi-level inheritance would
+/// silently skip the filter; derive directly (spec §3.2 / T-DSN-6).
 /// </para>
 ///
 /// <para><strong>Post-publish resurrection guard:</strong>

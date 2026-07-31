@@ -1,0 +1,22 @@
+{
+  "id": "wf899-fire-returning-isvalid-ordering-reintroduce",
+  "kind": "security",
+  "description": "Cross-vendor review of the #899 session-half PR found a second, independent defect while auditing this one: WorkflowTimerExecutor.Fire.cs's GATE-0 deferred a due timer whenever its ProcessInstance was in the Returning sub-state, BEFORE the isOrphan check that carries this same PR's own `|| !instanceSnap.IsValid` disjunct (added earlier by T-899-1) -- so an instance that was BOTH Returning AND soft-deleted (IsValid=false) took the defer-and-return branch every tick, forever, never reaching the disjunct that would retire it. Neither resolution the defer comment promises (the 回退 completing and advancing Generation, or the lease expiring and being reclaimed by Phase-2) ever applies to a soft-deleted instance: nothing acts on an invalid row to advance its Generation, and Phase-2's own reclaim query (WorkflowTimerExecutor.StrandReaper.cs's ReclaimExpiredLeasesAsync) was already updated earlier in this PR to exclude IsValid == false rows for exactly this reason -- so the timer stays Armed indefinitely, re-consuming a TimerBatchSize candidate slot on every future tick with no path to ever being retired. This mutant reverses the fix: the `&& instanceSnap.IsValid` conjunct is removed from the Returning-defer condition, reproducing the exact pre-fix behaviour. Checked against TimerReaperTests.T_899_3_ReturningAndSoftDeletedInstance_DueTimer_RetiredNotStrandedForever, which seeds a ProcessInstance that is State=Returning AND IsValid=false with a due Remind timer, runs a real tick via WorkflowTimerExecutor.RunTickAsync, and asserts the timer flips to Fired (retired) -- with the mutant applied, the timer stays Armed instead and the assertion fails with 'Expected:<Fired>. Actual:<Armed>.'. The green control, T_TMO_22c_ReturningInstance_DueTimer_SkippedThisTick_StaysArmed (pre-existing, unmodified), seeds a ProcessInstance that is State=Returning but IsValid=true (a legitimate in-flight 回退) and asserts its timer stays Armed (correctly deferred, not retired) -- proving the mutation does not have broader collateral effects on the still-legitimate Returning+valid defer path: this assertion is true both before AND after the mutant is applied, by design, since removing the IsValid conjunct only changes behaviour for the Returning+INVALID cell, never the Returning+valid one this control exercises.",
+  "target_file": "src/WalkingTec.Mvvm.WorkFlow/Engine/WorkflowTimerExecutor.Fire.cs",
+  "target_symbol": "WorkflowTimerExecutor.ProcessTimerAsync -- the `&& instanceSnap.IsValid` conjunct on the Returning-defer condition",
+  "patch": "patches/wf899-fire-returning-isvalid-ordering-reintroduce.patch",
+  "test_project": "test/WalkingTec.Mvvm.WorkFlow.Test/WalkingTec.Mvvm.WorkFlow.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.WorkFlow.Test.TimerReaperTests.T_899_3_ReturningAndSoftDeletedInstance_DueTimer_RetiredNotStrandedForever",
+  "red_tests": [
+    "WalkingTec.Mvvm.WorkFlow.Test.TimerReaperTests.T_899_3_ReturningAndSoftDeletedInstance_DueTimer_RetiredNotStrandedForever"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.WorkFlow.Test.TimerReaperTests.T_899_3_ReturningAndSoftDeletedInstance_DueTimer_RetiredNotStrandedForever": "Expected:<Fired>. Actual:<Armed>"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.WorkFlow.Test.TimerReaperTests.T_TMO_22c_ReturningInstance_DueTimer_SkippedThisTick_StaysArmed",
+  "green_tests": [
+    "WalkingTec.Mvvm.WorkFlow.Test.TimerReaperTests.T_TMO_22c_ReturningInstance_DueTimer_SkippedThisTick_StaysArmed"
+  ],
+  "red_expected_assertion_patterns_observed": "Captured verbatim against the committed baseline (3ffed4079; bin-relative stale demo.db checked for and absent; mutant patch applied via git apply, test run, then reverted via git apply -R): \"Assert.AreEqual failed. Expected:<Fired>. Actual:<Armed>. T-899-3: a Returning+soft-deleted instance's timer must be retired (Fired), not deferred forever -- an un-fixed GATE-0 would leave this Armed indefinitely, consuming a TimerBatchSize slot on every future tick.\" Confirmed via python3 test/mutants/run_mutant.py --mutant wf899-fire-returning-isvalid-ordering-reintroduce: 'VERDICT: KILLED' / 'GATE: PASS'."
+}

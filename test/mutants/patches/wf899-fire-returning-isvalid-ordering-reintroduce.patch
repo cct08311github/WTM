@@ -1,0 +1,13 @@
+diff --git a/src/WalkingTec.Mvvm.WorkFlow/Engine/WorkflowTimerExecutor.Fire.cs b/src/WalkingTec.Mvvm.WorkFlow/Engine/WorkflowTimerExecutor.Fire.cs
+index 7355b2122..06c43a55d 100644
+--- a/src/WalkingTec.Mvvm.WorkFlow/Engine/WorkflowTimerExecutor.Fire.cs
++++ b/src/WalkingTec.Mvvm.WorkFlow/Engine/WorkflowTimerExecutor.Fire.cs
+@@ -188,7 +188,7 @@ internal sealed partial class WorkflowTimerExecutor
+         // own FIX-A2 rationale (shrink the fire-vs-return contention window, preserve SLA for surviving
+         // nodes) exists to prevent. A Returning+valid instance still defers exactly as before; only the
+         // invalid-Returning cell changes.
+-        if (instanceSnap.State == InstanceState.Returning && instanceSnap.IsValid)
++        if (instanceSnap.State == InstanceState.Returning)
+         {
+             _logger.LogDebug(
+                 "Timer {TimerId} deferred: ProcessInstance {InstanceId} is in Returning sub-state " +

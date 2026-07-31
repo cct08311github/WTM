@@ -244,8 +244,9 @@ public class WorkflowDesignerController : BaseController
     /// <list type="bullet">
     ///   <item>201 Created — new head inserted; <c>Location</c> header set.</item>
     ///   <item>400 Bad Request — invalid code format or model-state error.</item>
-    ///   <item>409 Conflict — code already exists. Currently checked globally, not
-    ///   per-tenant (#899): a code used by a different tenant is also rejected here.</item>
+    ///   <item>409 Conflict — code already exists IN THIS TENANT (#899): the check is scoped
+    ///   by the ITenant global query filter, so a code used by a different tenant is NOT
+    ///   rejected here.</item>
     /// </list>
     /// </para>
     /// </summary>
@@ -279,7 +280,12 @@ public class WorkflowDesignerController : BaseController
         }
 
         // Anti-spoofing: actor and tenant always server-side.
-        var tenantCode = Wtm?.LoginUserInfo?.TenantCode;
+        // #899 session-half: CurrentTenant, same source as WorkflowDefinitionStore's own
+        // DataContext stamp (ResolveAmbientTenant reads LoginUserInfo.CurrentTenant) -- required
+        // so CreateDefinitionAsync's tenantCode/_dc.TenantCode guard compares same-sourced values
+        // instead of two independently-derived ones. See WorkflowInstanceController's identical
+        // comment for the full rationale.
+        var tenantCode = Wtm?.LoginUserInfo?.CurrentTenant;
         var createdBy  = Wtm?.LoginUserInfo?.ITCode;
 
         _logger.LogInformation(
@@ -289,11 +295,12 @@ public class WorkflowDesignerController : BaseController
         var result = await _store!.CreateDefinitionAsync(request, tenantCode, createdBy, ct);
 
         if (result.Outcome == CreateDefinitionOutcome.DuplicateCode)
-            // #899: the duplicate check is currently global (no TenantCode predicate), so
-            // do not claim "in this tenant" here -- that would be inaccurate today.
+            // #899: the duplicate check is scoped by the ITenant global query filter
+            // (ApplyWorkFlowModels(this)) -- a code already used by a DIFFERENT tenant is
+            // correctly NOT a duplicate here, so "already exists" always means "in this tenant".
             return Conflict(new CreateDefinitionResponseDto(
                 false, null, null,
-                $"A definition with code '{request.Code}' already exists."));
+                $"A definition with code '{request.Code}' already exists in this tenant."));
 
         // 201 Created with Location pointing at the graph endpoint.
         var location = Url.Action(

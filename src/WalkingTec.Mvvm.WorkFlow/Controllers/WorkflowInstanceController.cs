@@ -81,8 +81,14 @@ public class WorkflowInstanceController : BaseController
 
         // Actor and tenant ALWAYS come from the authenticated session.
         // The model-bound InitiatorITCode / TenantCode on the DTO are [BindNever] and ignored.
+        // #899 session-half: CurrentTenant (not the raw TenantCode claim) so this matches the
+        // same source the module's own DataContext is stamped with (ResolveAmbientTenant reads
+        // LoginUserInfo.CurrentTenant) -- identical for ordinary users
+        // (CurrentTenant = _currentTenant ?? TenantCode), differs only under host-admin tenant
+        // switching. Required so WorkflowEngine.StartAsync's tenantCode/version.TenantCode guard
+        // compares two values that come from the same place.
         var actorITCode = Wtm?.LoginUserInfo?.ITCode ?? string.Empty;
-        var tenantCode  = Wtm?.LoginUserInfo?.TenantCode;
+        var tenantCode  = Wtm?.LoginUserInfo?.CurrentTenant;
 
         _logger.LogInformation(
             "[WorkflowInstance] Start requested. VersionId={VersionId} Actor={Actor}",

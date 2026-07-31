@@ -353,7 +353,11 @@ namespace WalkingTec.Mvvm.Demo
             // WalkingTec.Mvvm.Etl/ServiceCollectionExtensions.cs).
             modelBuilder.ApplyEtlModels(this);
             // FIX-B2: register WorkFlow models so the designer store can use this DB context.
-            modelBuilder.ApplyWorkFlowModels();
+            // #899: must pass `this` for the identical reason as ApplyEtlModels above -- the
+            // zero-arg overload can never bind the ITenant/soft-delete query filters to the
+            // current context instance (see its [Obsolete] message and ApplyWorkFlowModels's own
+            // remarks in WalkingTec.Mvvm.WorkFlow/ServiceCollectionExtensions.cs).
+            modelBuilder.ApplyWorkFlowModels(this);
         }
     }
 

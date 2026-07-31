@@ -59,7 +59,13 @@ internal sealed class WfProdDiTestContext : EmptyContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
-        modelBuilder.ApplyWorkFlowModels();
+        // #899: pass `this` so this fixture's doc comment ("exactly like a real consumer's
+        // DataContext.OnModelCreating would") is actually true -- the zero-arg overload this
+        // used to call can never apply the ITenant/soft-delete filter. Every seeded row and
+        // context in this file uses TenantCode == null (single-tenant scenario), and EF's
+        // null-safe `==` translation matches NULL == NULL, so this is behaviour-preserving for
+        // every existing test here while also now exercising the real production filter wiring.
+        modelBuilder.ApplyWorkFlowModels(this);
     }
 }
 

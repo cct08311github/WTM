@@ -32,12 +32,15 @@ internal sealed partial class WorkflowTimerExecutor
         // so NO DateTime appears in any UPDATE WHERE clause (portable: Oracle/DaMeng safe).
         // Issue #665: bounded per-tick sweep — see WorkFlowOptions.SweepBatchSize.
         // Any remainder beyond the cap is picked up on the next poll tick.
+        // #899 follow-up (cross-vendor review of PR #918): IsValid==true added -- a soft-deleted
+        // instance stuck in Returning must not be reclaimed back to Running.
         var expiredLeases = await db.Set<ProcessInstance>()
             .IgnoreQueryFilters() // cross-tenant system sweep; every reclaim write is PK+RowVer CAS
             .AsNoTracking()
             .Where(i => i.State == InstanceState.Returning
                          && i.ReturningLeaseUtc != null
-                         && i.ReturningLeaseUtc < now)
+                         && i.ReturningLeaseUtc < now
+                         && i.IsValid == true)
             .Select(i => new { i.ID, i.RowVer, i.TenantCode })
             .Take(_options.SweepBatchSize)
             .ToListAsync(ct);
@@ -190,11 +193,13 @@ internal sealed partial class WorkflowTimerExecutor
         // Only re-drive nodes whose owning instance is still Running.
         // A two-step materialize approach avoids complex correlated subqueries
         // that may not translate cleanly across all supported providers (SQLite/Oracle/DaMeng).
+        // #899 follow-up (cross-vendor review of PR #918): IsValid==true added -- a soft-deleted
+        // instance must not be pulled into re-drive even if its State column still reads Running.
         var instanceIds = activatedSeqNodes.Select(n => n.InstanceId).Distinct().ToList();
         var runningInstanceIds = await db.Set<ProcessInstance>()
             .IgnoreQueryFilters() // cross-tenant system sweep (same justification)
             .AsNoTracking()
-            .Where(i => instanceIds.Contains(i.ID) && i.State == InstanceState.Running)
+            .Where(i => instanceIds.Contains(i.ID) && i.State == InstanceState.Running && i.IsValid)
             .Select(i => i.ID)
             .ToListAsync(ct);
 
@@ -214,13 +219,16 @@ internal sealed partial class WorkflowTimerExecutor
             // ── Strand-check: find the terminal task at SequencePointer ───────────
             // Idempotent: if the pointer was already advanced by another host (task at
             // pointer is no longer AutoApproved/AutoRejected), AnyAsync returns false → skip.
+            // #899 follow-up (cross-vendor review of PR #918): IsValid==true added -- a
+            // soft-deleted task must not be treated as a live strand signature.
             var terminalTask = await db.Set<ApprovalTask>()
                 .IgnoreQueryFilters() // cross-tenant system sweep
                 .AsNoTracking()
                 .Where(t => t.NodeInstanceId == node.ID
                              && t.SequenceOrder == node.SequencePointer
                              && (t.State == TaskState.AutoApproved
-                                 || t.State == TaskState.AutoRejected))
+                                 || t.State == TaskState.AutoRejected)
+                             && t.IsValid == true)
                 .Select(t => new { t.ID, t.State, t.AssigneeITCode })
                 .FirstOrDefaultAsync(ct);
 
@@ -247,13 +255,17 @@ internal sealed partial class WorkflowTimerExecutor
                 continue;
             }
 
+            // #899 follow-up (cross-vendor review of PR #918): re-checked below (not in the query
+            // itself, to keep this a SingleOrDefaultAsync like its sibling `fullNode` read) --
+            // closes the TOCTOU window between Step 2's batch IsValid check and this per-candidate
+            // fresh read.
             var fullInstance = await db.Set<ProcessInstance>()
                 .IgnoreQueryFilters() // cross-tenant system sweep
                 .AsNoTracking()
                 .SingleOrDefaultAsync(i => i.ID == node.InstanceId, ct);
 
-            if (fullInstance is null || fullInstance.State != InstanceState.Running)
-                continue; // instance no longer Running — safe skip
+            if (fullInstance is null || fullInstance.State != InstanceState.Running || !fullInstance.IsValid)
+                continue; // instance no longer Running (or soft-deleted) — safe skip
 
             // ── This node matches the strand signature — re-drive via SystemContinueTaskAsync ──
             // Tenant-scoped: set _dc.TenantCode before calling the engine so that

@@ -1,0 +1,13 @@
+diff --git a/src/WalkingTec.Mvvm.WorkFlow/ServiceCollectionExtensions.cs b/src/WalkingTec.Mvvm.WorkFlow/ServiceCollectionExtensions.cs
+index 8e7c68b73..3cec24d29 100644
+--- a/src/WalkingTec.Mvvm.WorkFlow/ServiceCollectionExtensions.cs
++++ b/src/WalkingTec.Mvvm.WorkFlow/ServiceCollectionExtensions.cs
+@@ -461,7 +461,7 @@ public static class ServiceCollectionExtensions
+         var dc = factory?.CreateDC();
+         if (dc != null)
+         {
+-            dc.SetTenantCode(ResolveAmbientTenant(sp));
++            dc.SetTenantCode(null);
+             WarnIfTenantFilterMissing(dc, sp);
+             return (dc, true);
+         }

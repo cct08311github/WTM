@@ -6,9 +6,20 @@
 // Backs the WorkflowDesignerController read/create/metadata operations.
 // All DB work happens here — controllers NEVER touch IDataContext directly (WTM red line).
 //
-// Tenant isolation: all queries go through IDataContext.Set<T>() which has the tenant
-// query filter applied automatically by the consumer DataContext (DIRECT PersistPoco/ITenant
-// descendant pattern — same guarantee as ProcessDefinitionPublisher).
+// Tenant isolation: all queries go through IDataContext.Set<T>() which has the tenant (and,
+// for PersistPoco entities, soft-delete) query filter applied because the consumer's
+// DataContext.OnModelCreating calls ApplyWorkFlowModels(this) (#899). Before #899 this comment
+// claimed the filter was "applied automatically by the consumer DataContext" via a DIRECT
+// PersistPoco/ITenant descendant pattern that does not exist for entities an ApplyXxxModels()
+// extension method registers AFTER base.OnModelCreating() returns -- see ApplyWorkFlowModels's
+// own remarks in ServiceCollectionExtensions.cs for the full history.
+//
+// #899 session-half: the filter above binds to THIS context instance's own TenantCode -- which
+// IWtmDataContextFactory.CreateDC() never sets on its own (see the production ctor's remarks
+// below). AddWtmWorkFlowDesigner()'s DI factory now stamps the caller's ambient tenant onto the
+// context this class creates, via the WorkflowDefinitionStore(IWtmDataContextFactory, string?)
+// overload -- without that stamp the filter above is permanently bound to null and every query
+// in this file returns zero rows for a migrated multi-tenant consumer.
 //
 // Version immutability: this class has NO method that updates or deletes a
 // ProcessDefinitionVersion row.  The public interface (IWorkflowDefinitionStore) is
@@ -18,11 +29,11 @@
 //
 // IDataContext resolution (WTM pattern):
 //   WTM registers IDataContext in DI as NullContext (a stub that throws NotImplementedException).
-//   The real DataContext is created transiently via IWtmDataContextFactory.CreateDC() — the same
-//   mechanism used by WTMContext.DC getter.  In production AddWtmWorkFlowDesigner() registers
-//   this store via a factory lambda that calls IWtmDataContextFactory.CreateDC(), and the store
-//   owns the resulting connection (disposing it via IDisposable).  In tests, the direct
-//   WorkflowDefinitionStore(IDataContext) constructor is used with a real test context.
+//   The real DataContext is created transiently via IWtmDataContextFactory.CreateDC().  In
+//   production AddWtmWorkFlowDesigner() registers this store via a factory lambda that calls
+//   IWtmDataContextFactory.CreateDC(), and the store owns the resulting connection (disposing it
+//   via IDisposable).  In tests, the direct WorkflowDefinitionStore(IDataContext) constructor is
+//   used with a real test context.
 
 using System;
 using System.Collections.Generic;
@@ -54,16 +65,43 @@ public sealed class WorkflowDefinitionStore : IWorkflowDefinitionStore, IDisposa
 
     /// <summary>
     /// Production constructor: resolves the real <see cref="IDataContext"/> via the
-    /// <see cref="IWtmDataContextFactory"/> (same mechanism as <c>WTMContext.DC</c>).
-    /// This store owns and disposes the created DataContext on <see cref="Dispose"/>.
+    /// <see cref="IWtmDataContextFactory"/>. This store owns and disposes the created
+    /// DataContext on <see cref="Dispose"/>. Equivalent to calling
+    /// <see cref="WorkflowDefinitionStore(IWtmDataContextFactory, string?)"/> with a
+    /// <c>null</c> <c>tenantCode</c> — kept unchanged for binary compatibility with existing
+    /// callers that predate #899's session-half fix.
     /// </summary>
     public WorkflowDefinitionStore(IWtmDataContextFactory dcFactory)
+        : this(dcFactory, tenantCode: null)
+    {
+    }
+
+    /// <summary>
+    /// Production constructor (#899 session-half): resolves the real <see cref="IDataContext"/>
+    /// via the <see cref="IWtmDataContextFactory"/> and stamps it with <paramref name="tenantCode"/>
+    /// — the caller's ambient tenant, resolved by
+    /// <see cref="ServiceCollectionExtensions.ResolveAmbientTenant"/> in
+    /// <see cref="ServiceCollectionExtensions.AddWtmWorkFlowDesigner"/>'s DI factory.
+    /// <para>
+    /// <strong>Not the same mechanism as <c>WTMContext.DC</c>, in the tenant dimension.</strong>
+    /// <c>WTMContext</c>'s own <c>CreateDC()</c> instance method (<c>WTMContext.CreateDC.cs</c>)
+    /// resolves <c>_loginUserInfo?.CurrentTenant</c> and stamps it before returning; the
+    /// <see cref="IWtmDataContextFactory.CreateDC"/> this constructor calls does not — called
+    /// with no arguments (as the one-parameter overload above does), it always returns a context
+    /// whose <c>TenantCode</c> is <c>null</c>, regardless of who is actually asking. This
+    /// constructor closes that gap for the designer catalog store specifically, by taking the
+    /// already-resolved tenant as an explicit parameter instead of re-deriving it.
+    /// </para>
+    /// This store owns and disposes the created DataContext on <see cref="Dispose"/>.
+    /// </summary>
+    public WorkflowDefinitionStore(IWtmDataContextFactory dcFactory, string? tenantCode)
     {
         if (dcFactory is null) throw new ArgumentNullException(nameof(dcFactory));
         _dc = dcFactory.CreateDC()
             ?? throw new InvalidOperationException(
                 "IWtmDataContextFactory.CreateDC() returned null. " +
                 "Ensure a valid database connection is configured in appsettings.json.");
+        _dc.SetTenantCode(tenantCode);
         _ownsDc = true;
     }
 
@@ -143,7 +181,42 @@ public sealed class WorkflowDefinitionStore : IWorkflowDefinitionStore, IDisposa
     {
         if (request is null) throw new ArgumentNullException(nameof(request));
 
-        // Check for duplicate code in this tenant (tenant filter auto-applied).
+        // #899 follow-up (cross-vendor review of PR #918): `tenantCode` is a caller-supplied
+        // parameter, never previously checked against anything -- nothing stopped a caller from
+        // passing a value that disagrees with `_dc`'s own TenantCode. The duplicate-code check
+        // below is scoped by `_dc`'s own TenantCode via the (now-active) ITenant filter, but the
+        // INSERT further down used to write whatever `tenantCode` value was passed, regardless of
+        // whether it agreed. A mismatch would mean the new ProcessDefinition is written under a
+        // TenantCode the duplicate check never actually checked against -- immediately invisible
+        // to the calling context's own subsequent reads (or, if `tenantCode` happens to coincide
+        // with a DIFFERENT tenant's value, visible to that other tenant instead). `_dc.TenantCode`
+        // is directly available here (unlike WorkflowEngine.StartAsync, which has to compare
+        // against an already-loaded row instead) since this store holds `IDataContext`, not a
+        // bare `DbContext`. Fail closed instead of silently writing a row nobody can find again.
+        //
+        // #899 session-half note: before that fix, `_dc.TenantCode` was UNCONDITIONALLY null (the
+        // DI factory called IWtmDataContextFactory.CreateDC() with no tenant argument), so this
+        // guard rejected every non-null `tenantCode` a real controller ever passed -- CreateDefinitionAsync
+        // was permanently unreachable for a real, non-null tenant. The DI factory now stamps `_dc`
+        // with the same caller-derived tenant the controller resolves for `tenantCode`
+        // (WorkflowDesignerController.CreateDefinition reads Wtm.LoginUserInfo?.CurrentTenant --
+        // the SAME source, not a coincidentally-matching independent one), so the two sides of this
+        // comparison are now same-sourced and this guard is a genuine invariant, not a tautological
+        // reject-everything check. It still protects against real drift: a non-WTM caller
+        // constructing this store directly with a mismatched tenantCode, or a future regression
+        // that reverts the controller's LoginUserInfo?.CurrentTenant alignment.
+        if (!string.Equals(tenantCode, _dc.TenantCode, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"CreateDefinitionAsync: tenantCode '{tenantCode}' does not match the calling " +
+                $"context's own TenantCode '{_dc.TenantCode}'. Refusing to create a " +
+                "ProcessDefinition whose TenantCode would not match the context that is about " +
+                "to check for and insert it.");
+
+        // Check for duplicate code in this tenant. No explicit TenantCode predicate needed --
+        // the ITenant global query filter (#899, ApplyWorkFlowModels(this)) scopes this query to
+        // the calling context's own TenantCode, so the same Code used by a DIFFERENT tenant is
+        // correctly invisible here and is not treated as a duplicate (the schema's own unique
+        // index is composite (TenantCode, Code) -- two tenants sharing a Code is by design).
         var exists = await _dc.Set<ProcessDefinition>()
             .AnyAsync(d => d.Code == request.Code, cancellationToken);
 
@@ -297,7 +370,7 @@ public sealed class WorkflowDefinitionStore : IWorkflowDefinitionStore, IDisposa
         Guid versionId,
         CancellationToken cancellationToken = default)
     {
-        // Tenant filter is applied automatically — cross-tenant ID behaves as 404.
+        // Tenant filter (#899, ApplyWorkFlowModels(this)) applies here -- cross-tenant ID behaves as 404.
         var version = await _dc.Set<ProcessDefinitionVersion>()
             .AsNoTracking()
             .FirstOrDefaultAsync(v => v.ID == versionId, cancellationToken);
@@ -324,7 +397,7 @@ public sealed class WorkflowDefinitionStore : IWorkflowDefinitionStore, IDisposa
     {
         if (string.IsNullOrWhiteSpace(code)) throw new ArgumentException("code must not be empty.", nameof(code));
 
-        // Resolve the definition head to get its ID (tenant filter auto-applied).
+        // Resolve the definition head to get its ID (tenant filter, #899, ApplyWorkFlowModels(this)).
         var definition = await _dc.Set<ProcessDefinition>()
             .AsNoTracking()
             .FirstOrDefaultAsync(d => d.Code == code, cancellationToken);
@@ -361,7 +434,7 @@ public sealed class WorkflowDefinitionStore : IWorkflowDefinitionStore, IDisposa
         if (string.IsNullOrWhiteSpace(code)) throw new ArgumentException("code must not be empty.", nameof(code));
         if (string.IsNullOrWhiteSpace(graphJson)) throw new ArgumentException("graphJson must not be empty.", nameof(graphJson));
 
-        // Resolve the definition head (tenant filter auto-applied).
+        // Resolve the definition head (tenant filter, #899, ApplyWorkFlowModels(this)).
         var definition = await _dc.Set<ProcessDefinition>()
             .FirstOrDefaultAsync(d => d.Code == code, cancellationToken);
 

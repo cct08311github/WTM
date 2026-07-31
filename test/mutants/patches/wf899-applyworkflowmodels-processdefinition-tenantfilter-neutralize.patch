@@ -1,0 +1,12 @@
+diff --git a/src/WalkingTec.Mvvm.WorkFlow/ServiceCollectionExtensions.cs b/src/WalkingTec.Mvvm.WorkFlow/ServiceCollectionExtensions.cs
+index 5c265ee13..6fce63b27 100644
+--- a/src/WalkingTec.Mvvm.WorkFlow/ServiceCollectionExtensions.cs
++++ b/src/WalkingTec.Mvvm.WorkFlow/ServiceCollectionExtensions.cs
+@@ -671,7 +671,6 @@ public static class WorkFlowDbContextExtensions
+         // entity, right here -- instead of relying on FrameworkContext.OnModelCreating's Pass 2
+         // (which never sees these types -- see remarks above). ApplyWorkFlowTenantFilter<T>
+         // decides combined-vs-tenant-only per T from IPersistPoco-ness, same as Pass 2 does.
+-        ApplyWorkFlowTenantFilter<ProcessDefinition>(builder, context);
+         ApplyWorkFlowTenantFilter<ProcessDefinitionVersion>(builder, context);
+         ApplyWorkFlowTenantFilter<ProcessDefinitionDraft>(builder, context);
+         ApplyWorkFlowTenantFilter<ProcessInstance>(builder, context);

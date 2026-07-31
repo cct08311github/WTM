@@ -1,0 +1,22 @@
+{
+  "id": "wf899-resolvedatacontext-tenantstamp-neutralize",
+  "kind": "security",
+  "description": "Issue #899 session-half root cause: every WorkFlow request-path service (WorkflowEngine/WorkflowTimerExecutor via ScopedWorkflowDataContextHolder.Resolve() -> ResolveDataContext, WorkflowDefinitionStore, ProcessDefinitionPublisher) builds its own module DataContext via IWtmDataContextFactory.CreateDC() called with NO tenant argument, so TenantCode was unconditionally null regardless of who was actually asking -- the model-half ITenant/soft-delete query filter (#899, ApplyWorkFlowModels(this)) binds to THIS context instance's own TenantCode, so a migrated multi-tenant consumer's module reads matched ZERO rows. This mutant deletes the fix: ResolveDataContext's `dc.SetTenantCode(ResolveAmbientTenant(sp))` call is replaced with a hardcoded `dc.SetTenantCode(null)`, reproducing the exact pre-session-half-fix behaviour -- the caller's ambient tenant (WTMContext.LoginUserInfo.CurrentTenant) is resolved but discarded, and the DataContext this factory-path branch returns always carries TenantCode == null no matter which tenant scope requested it. Checked against SessionTenantStampingTests899.ResolveDataContext_ScopeWithCurrentTenantA_StampsHolderDataContext, which builds a real prod-like DI container (mirroring ProdDiReproTests.cs), sets a scoped WTMContext.LoginUserInfo.CurrentTenant = 'A', resolves the shared holder DataContext, and asserts its TenantCode == 'A' -- with the mutant applied, TenantCode is null instead and the assertion fails. The green control, ResolveDataContext_BackgroundScopeWithNoLoginUserInfo_TenantCodeStaysNull, asserts that a background scope with no HttpContext/LoginUserInfo ALSO produces TenantCode == null -- proving the mutation does not have broader collateral effects (e.g. breaking DI resolution or the holder itself) beyond the one behaviour it targets: this assertion is true both before AND after the mutant is applied, by design, since the background path's correct value already is null. Mirrors the existing wf899-applyworkflowmodels-processdefinition-tenantfilter-neutralize.json precedent: same red+positive-control test-pair shape, this time targeting the session half's stamping call rather than the model half's filter registration.",
+  "target_file": "src/WalkingTec.Mvvm.WorkFlow/ServiceCollectionExtensions.cs",
+  "target_symbol": "ServiceCollectionExtensions.ResolveDataContext(IServiceProvider) -- the dc.SetTenantCode(ResolveAmbientTenant(sp)) call",
+  "patch": "patches/wf899-resolvedatacontext-tenantstamp-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.WorkFlow.Test/WalkingTec.Mvvm.WorkFlow.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.WorkFlow.Test.SessionTenantStampingTests899.ResolveDataContext_ScopeWithCurrentTenantA_StampsHolderDataContext",
+  "red_tests": [
+    "WalkingTec.Mvvm.WorkFlow.Test.SessionTenantStampingTests899.ResolveDataContext_ScopeWithCurrentTenantA_StampsHolderDataContext"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.WorkFlow.Test.SessionTenantStampingTests899.ResolveDataContext_ScopeWithCurrentTenantA_StampsHolderDataContext": "Without it this holder DataContext's TenantCode stays null regardless of the ambient WTMContext's CurrentTenant"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.WorkFlow.Test.SessionTenantStampingTests899.ResolveDataContext_BackgroundScopeWithNoLoginUserInfo_TenantCodeStaysNull",
+  "green_tests": [
+    "WalkingTec.Mvvm.WorkFlow.Test.SessionTenantStampingTests899.ResolveDataContext_BackgroundScopeWithNoLoginUserInfo_TenantCodeStaysNull"
+  ],
+  "red_expected_assertion_patterns_observed": "Captured verbatim against the committed baseline (fad1161fb; bin-relative stale demo.db checked for and absent; mutant patch applied via git apply, test run, then reverted via git apply -R): \"Assert.AreEqual failed. Expected:<A>. Actual:<(null)>. #899 session-half: which line's deletion turns this red -- the `dc.SetTenantCode(ResolveAmbientTenant(sp))` call in ResolveDataContext (ServiceCollectionExtensions.cs). Without it this holder DataContext's TenantCode stays null regardless of the ambient WTMContext's CurrentTenant.\" Confirmed via python3 test/mutants/run_mutant.py --mutant wf899-resolvedatacontext-tenantstamp-neutralize: 'VERDICT: KILLED' / 'GATE: PASS'."
+}

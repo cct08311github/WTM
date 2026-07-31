@@ -1,6 +1,10 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Linq.Expressions;
 using System.Reflection;
+using System.Threading;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.StaticFiles;
@@ -70,7 +74,10 @@ public static class ServiceCollectionExtensions
             // (unchanged behaviour) when no logging provider is registered.
             var logger = sp.GetService<ILogger<ProcessDefinitionPublisher>>();
             if (factory != null)
-                return new ProcessDefinitionPublisher(factory, options, logger);
+                // #899 session-half: stamp the caller's ambient tenant (see ResolveAmbientTenant)
+                // onto the DataContext this ctor creates via the factory -- the DI-fallback branch
+                // below is untouched, that IDataContext's lifetime/tenant belongs to its own scope.
+                return new ProcessDefinitionPublisher(factory, ResolveAmbientTenant(sp), options, logger);
             var dc = sp.GetRequiredService<IDataContext>();
             return new ProcessDefinitionPublisher(dc, options, logger);
         });
@@ -295,7 +302,8 @@ public static class ServiceCollectionExtensions
         {
             var factory = sp.GetService<IWtmDataContextFactory>();
             if (factory != null)
-                return new WorkflowDefinitionStore(factory);
+                // #899 session-half: same stamping as IProcessDefinitionPublisher above.
+                return new WorkflowDefinitionStore(factory, ResolveAmbientTenant(sp));
             var dc = sp.GetRequiredService<IDataContext>();
             return new WorkflowDefinitionStore(dc);
         });
@@ -415,7 +423,7 @@ public static class ServiceCollectionExtensions
     /// <c>AddWtmWorkFlow()</c> — engine tests use the internal direct-<c>DbContext</c>
     /// constructor and controller tests mock <see cref="IWorkflowEngine"/> entirely, so the
     /// broken production registration itself was never exercised (see
-    /// <c>ProdDiRegressionTests</c>).
+    /// <c>ProdDiReproTests</c>).
     /// </para>
     /// <para>
     /// Returns <c>Owned = true</c> when this call created a fresh DataContext via the factory —
@@ -424,6 +432,28 @@ public static class ServiceCollectionExtensions
     /// <see cref="IWtmDataContextFactory"/>) — that instance's lifetime is owned by the caller's
     /// DI scope, not by us.
     /// </para>
+    /// <para>
+    /// <strong>#899 session-half:</strong> <c>IWtmDataContextFactory.CreateDC()</c> is called here
+    /// with NO arguments, so the DataContext it returns always writes to the module's default
+    /// connection with <c>TenantCode == null</c> at creation time (unlike <c>WTMContext.DC</c>,
+    /// whose OWN <c>CreateDC()</c> instance method resolves <c>_loginUserInfo?.CurrentTenant</c>
+    /// and stamps it before returning — see <c>WTMContext.CreateDC.cs</c>). The #899 fix wired an
+    /// <see cref="ITenant"/> query filter into <c>ApplyWorkFlowModels(this)</c> that binds to
+    /// THIS context instance's own <c>TenantCode</c>; without a stamp here that filter is
+    /// permanently bound to <c>null</c>, so a migrated multi-tenant consumer's module reads
+    /// return zero rows regardless of who is asking. The factory-path branch below now stamps
+    /// the caller's ambient tenant (<see cref="ResolveAmbientTenant"/>) onto the freshly-created
+    /// <paramref name="sp"/>-scoped DataContext — deliberately via <c>SetTenantCode</c> AFTER
+    /// <c>CreateDC()</c>, never via <c>CreateDC(currentTenant: ...)</c>, because that parameter
+    /// re-routes a tenant with <c>IsUsingDB == true</c> to a DIFFERENT physical database
+    /// (<c>WtmDataContextFactory.CreateDC</c>'s <c>CreateTenantDC</c> branch) — this module
+    /// always writes <c>Wf_*</c> tables to the default connection today, and smuggling a
+    /// connection re-route into a filter fix would be its own compatibility break. When no
+    /// ambient <see cref="WTMContext"/>/<c>LoginUserInfo</c> is available (the background
+    /// timer scope has no <c>HttpContext</c>), <see cref="ResolveAmbientTenant"/> resolves to
+    /// <c>null</c> — the exact same value this path always produced before, so the background
+    /// path is byte-identical.
+    /// </para>
     /// </summary>
     internal static (IDataContext Dc, bool Owned) ResolveDataContext(IServiceProvider sp)
     {
@@ -431,10 +461,107 @@ public static class ServiceCollectionExtensions
         var dc = factory?.CreateDC();
         if (dc != null)
         {
+            dc.SetTenantCode(ResolveAmbientTenant(sp));
+            WarnIfTenantFilterMissing(dc, sp);
             return (dc, true);
         }
 
         return (sp.GetRequiredService<IDataContext>(), false);
+    }
+
+    /// <summary>
+    /// #899 session-half: resolves the tenant the CURRENT DI scope is acting on behalf of, the
+    /// same way every other WTM-framework DataContext (<c>WTMContext.DC</c>,
+    /// <c>WtmDataContextFactory.CreateDC</c>'s own callers) does — by reading the scoped
+    /// <see cref="WTMContext"/>'s <c>LoginUserInfo.CurrentTenant</c>, never by re-deriving tenant
+    /// resolution independently (that would drift from <c>WTMContext</c>'s own logic, including
+    /// its #116 Referer-based-resolution security fix, the moment either one changes).
+    /// <para>
+    /// <see cref="WTMContext"/> is registered <c>AddScoped</c> (<c>IServiceExtension.cs</c> /
+    /// <c>FrameworkServiceExtension.cs</c>), so <c>sp.GetService&lt;WTMContext&gt;()</c> resolves
+    /// the SAME instance every other consumer in this DI scope sees. On a real HTTP request,
+    /// WTM's middleware pipeline has already called <c>EnsureLoginUserInfoAsync()</c> before any
+    /// controller (and therefore before any WorkFlow service) runs, so <c>LoginUserInfo</c> is a
+    /// plain field read here, never a blocking reload.
+    /// </para>
+    /// <para>
+    /// On a scope with no <see cref="Microsoft.AspNetCore.Http.HttpContext"/> (the background
+    /// timer tick scope — <c>WorkflowTimerHostedService.TickAsync</c> creates a bare DI scope,
+    /// not an HTTP request scope), <see cref="WTMContext.LoginUserInfo"/>'s getter short-circuits
+    /// to <c>null</c> (<c>WTMContext.User.cs</c>) — so this method returns <c>null</c> there,
+    /// identical to what <see cref="ResolveDataContext"/> always produced before this fix. The
+    /// background reaper/sweep code paths remain per-candidate <c>SetTenantCode</c>-driven
+    /// (<c>WorkflowTimerExecutor.*.cs</c>) exactly as before; this method is never called a
+    /// second time to "helpfully" give the background scope itself a tenant.
+    /// </para>
+    /// </summary>
+    internal static string? ResolveAmbientTenant(IServiceProvider sp)
+        => sp.GetService<WTMContext>()?.LoginUserInfo?.CurrentTenant;
+
+    // #899 session-half: process-wide, fire-at-most-once flag for WarnIfTenantFilterMissing.
+    // 0 = not yet checked; any non-zero Interlocked.Exchange result means another thread/request
+    // already ran (or is running) the check — this call returns immediately without logging
+    // again. Deliberately process-lifetime, not per-scope/per-request: the model shape (whether
+    // ApplyWorkFlowModels(this) was migrated) cannot change at runtime, so re-checking on every
+    // request would be pure overhead for a fact that is fixed at process startup.
+    private static int _tenantFilterCheckLogged;
+
+    /// <summary>
+    /// #899 session-half self-check: the first time a factory-created module DataContext is
+    /// resolved in this process, inspect whether the consumer's <c>DataContext.OnModelCreating</c>
+    /// has actually migrated to <c>ApplyWorkFlowModels(this)</c> — i.e. whether
+    /// <see cref="ProcessDefinition"/> has an active EF Core query filter — and log once if not.
+    /// Un-migrated consumers keep working unfiltered (Compatibility red line — see the
+    /// <c>[Obsolete]</c> overload's own doc comment); this makes that state loud instead of
+    /// silent, without changing behaviour.
+    /// <para>
+    /// <c>LogError</c> when <see cref="GlobalData.AllTenant"/> is non-empty — a real multi-tenant
+    /// deployment running genuinely unprotected, the worst case this can detect. <c>LogWarning</c>
+    /// otherwise (single-tenant deployments are only missing the soft-delete half; still worth
+    /// flagging, not an emergency).
+    /// </para>
+    /// </summary>
+    internal static void WarnIfTenantFilterMissing(IDataContext dc, IServiceProvider sp)
+    {
+        if (Interlocked.Exchange(ref _tenantFilterCheckLogged, 1) != 0)
+        {
+            return;
+        }
+
+        // Only a real DbContext exposes .Model; NullContext/other IDataContext test doubles
+        // cannot be inspected this way -- nothing to warn about if we cannot even ask.
+        if (dc is not DbContext dbContext)
+        {
+            return;
+        }
+
+        // GetDeclaredQueryFilters() (not the obsolete single-filter GetQueryFilter()) -- matches
+        // the idiom TenantFilterInvariantTests.cs already uses to inspect the same model metadata.
+        var filters = dbContext.Model.FindEntityType(typeof(ProcessDefinition))?.GetDeclaredQueryFilters();
+        var hasFilter = filters != null && filters.Any();
+        if (hasFilter)
+        {
+            return;
+        }
+
+        var logger = sp.GetService<ILoggerFactory>()?.CreateLogger("WalkingTec.Mvvm.WorkFlow.TenantFilterCheck");
+        var isMultiTenantDeployment = (sp.GetService<GlobalData>()?.AllTenant?.Count ?? 0) > 0;
+
+        const string message =
+            "#899: this WorkFlow module DataContext has no ITenant/soft-delete query filter " +
+            "active -- your DataContext.OnModelCreating is still calling the obsolete zero-argument " +
+            "modelBuilder.ApplyWorkFlowModels() overload. Change it to " +
+            "modelBuilder.ApplyWorkFlowModels(this) to enable tenant isolation and soft-delete " +
+            "filtering for the 10 WorkFlow entities. This message is logged once per process.";
+
+        if (isMultiTenantDeployment)
+        {
+            logger?.LogError(message);
+        }
+        else
+        {
+            logger?.LogWarning(message);
+        }
     }
 
     private static void ThrowMemoryNotSupported()
@@ -532,20 +659,104 @@ public static class WorkFlowDbContextExtensions
 {
     /// <summary>
     /// Called from the CONSUMER's <c>DataContext.OnModelCreating</c> (NOT from FrameworkContext)
-    /// to register all WorkFlow tables, indexes, FK relationships, and per-provider RowVer mapping.
-    /// Called the same way as <c>ApplyEtlModels(this)</c> in WalkingTec.Mvvm.Etl
-    /// (ServiceCollectionExtensions.cs:187) -- from the consumer's own DataContext.OnModelCreating --
-    /// but NOT the same tenant-isolation behavior: that overload applies its own <c>ITenant</c> query
-    /// filters, this method applies none.
+    /// to register all WorkFlow tables, indexes, FK relationships, per-provider RowVer mapping,
+    /// AND the <see cref="ITenant"/> (plus, for <c>PersistPoco</c> entities, soft-delete) global
+    /// query filter for every WorkFlow entity.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Issue #899, resolved:</b> the (now obsolete)
+    /// <see cref="ApplyWorkFlowModels(ModelBuilder)"/> zero-argument overload registers WorkFlow
+    /// entity types via <c>modelBuilder.Entity&lt;T&gt;()</c>, but every documented call site
+    /// (<c>docs/workflow.md</c>, <c>demo/WalkingTec.Mvvm.Demo/DataContext.cs</c>) invokes it from
+    /// the consumer's own <c>DataContext.OnModelCreating</c> AFTER
+    /// <c>base.OnModelCreating(modelBuilder)</c> returns. By the time that base call returns,
+    /// <c>FrameworkContext.OnModelCreating</c>'s own Pass 2 loop
+    /// (<c>src/WalkingTec.Mvvm.Core/DataContext.cs</c>) has ALREADY finished iterating
+    /// <c>modelBuilder.Model.GetEntityTypes()</c> and applying the <see cref="ITenant"/> /
+    /// <c>IPersistPoco</c> global query filters for every entity type known to the model AT THAT
+    /// POINT — it can never retroactively see an entity type registered afterward. All 10
+    /// WorkFlow entities implement <see cref="ITenant"/>, but the filter was never actually
+    /// enforced through a standard <c>FrameworkContext</c>-derived app: a context scoped to
+    /// tenant A could read tenant B's <c>ProcessDefinition</c>/<c>ApprovalTask</c>/etc. row by id
+    /// with no filter applied at all — same root cause as #862's <c>ApplyEtlModels()</c> defect,
+    /// one module over (confirmed, not assumed — see the SQLite-fixture behavioural tests in
+    /// <c>TenantFilterInvariantTests.cs</c>).</para>
     ///
-    /// <para><strong>Does NOT add HasQueryFilter itself.</strong> This comment used to assert those
-    /// filters are auto-applied by the consumer's <c>DataContext</c> for every <c>ITenant</c> entity
-    /// that is a DIRECT descendant of <c>PersistPoco</c>/<c>BasePoco</c> (DataContext.cs:164) -- the
-    /// same auto-wiring assumption #862 disproved for ETL's identical zero-arg overload. Do not rely
-    /// on that claim for WorkFlow's own <c>ITenant</c> entities until #899 (which tracks re-verifying
-    /// and, if needed, fixing this the same way #862 fixed it for ETL) is resolved.</para>
+    /// <para><b>Not a copy of ETL's fix — the filter composition differs.</b> Core's Pass 2
+    /// applies a SINGLE combined filter, <c>IsValid == true &amp;&amp; TenantCode ==
+    /// this.TenantCode</c>, for any entity that is both <c>IPersistPoco</c> and
+    /// <see cref="ITenant"/> (<c>DataContext.cs:238-258</c>, via <c>Expression.AndAlso</c>) — a
+    /// tenant-only filter is only correct for a <c>BasePoco</c>-only entity. ETL's
+    /// <c>ApplyEtlTenantFilter&lt;T&gt;</c> applies tenant-only because all four ETL entities are
+    /// <c>BasePoco</c>. WorkFlow has BOTH kinds among its 10 <see cref="ITenant"/> entities:</para>
+    /// <para>
+    /// <c>PersistPoco, ITenant</c> (6): <see cref="ProcessDefinition"/>,
+    /// <see cref="ProcessInstance"/>, <see cref="ProcessDefinitionVersion"/>,
+    /// <see cref="ProcessDefinitionDraft"/>, <see cref="ApprovalTask"/>,
+    /// <see cref="DelegationRule"/>.
+    /// </para>
+    /// <para>
+    /// <c>BasePoco, ITenant</c> (4): <see cref="NodeInstance"/>, <see cref="WorkflowTimer"/>,
+    /// <see cref="CcRecord"/>, <see cref="WorkflowEventLog"/>.
+    /// </para>
+    /// <para>Copying ETL's tenant-only helper here would have left the 6 <c>PersistPoco</c>
+    /// entities without their soft-delete filter. <c>ApplyWorkFlowTenantFilter&lt;T&gt;</c>
+    /// below re-derives the combined-vs-tenant-only choice per entity from its own
+    /// <c>IPersistPoco</c>-ness at the call site, exactly like Pass 2 does, instead of assuming
+    /// ETL's all-<c>BasePoco</c> shape. <b>This widens the defect's impact beyond multi-tenant
+    /// deployments</b>: soft-delete filter absence for the 6 <c>PersistPoco</c> entities affects
+    /// SINGLE-tenant deployments too — today every framework-standard query sees soft-deleted
+    /// <c>ProcessDefinition</c>/<c>ApprovalTask</c>/<c>DelegationRule</c> rows regardless of
+    /// tenancy.</para>
     ///
-    /// <para><strong>EF migrations — consumer owns them.</strong>
+    /// <para><b>No migration needed.</b> All 10 entities already implement <see cref="ITenant"/>
+    /// and their <c>TenantCode</c> columns/indexes are already registered in
+    /// <c>ApplyWorkFlowModelsCore</c> below (unchanged by this fix) — this overload only changes
+    /// which <c>HasQueryFilter</c> calls run at model-build time, not the schema. A query filter
+    /// is EF metadata, never emitted into a migration/DDL diff.</para>
+    ///
+    /// <para><b>Engine background writes</b> (<c>WorkflowTimerExecutor.*</c>,
+    /// <c>NodeKindHandlers</c>, etc.) stamp <c>TenantCode</c> at every real persisted write site
+    /// — verified by enumerating every <c>new NodeInstance/ApprovalTask/WorkflowEventLog/
+    /// WorkflowTimer/CcRecord/ProcessInstance/ProcessDefinition*</c> construction under
+    /// <c>src/WalkingTec.Mvvm.WorkFlow/Engine</c> and <c>Definition</c> that is actually
+    /// persisted (<c>db.Set&lt;T&gt;().Add(...)</c> / <c>_dc.AddEntity(...)</c>): every one
+    /// assigns <c>TenantCode</c> from an already-tenant-scoped source (the owning
+    /// <c>ProcessInstance</c>/<c>NodeInstance</c>/<c>ProcessDefinition</c>, or a snapshot
+    /// variable captured from one). The handful of constructions that do NOT set
+    /// <c>TenantCode</c> (the "for notifier" shells inside
+    /// <c>WorkflowTimerExecutor.*.NotifyXxxAsync</c>) are transient objects passed straight to a
+    /// notifier call and never added to a <c>DbSet</c> — confirmed by reading each call site, not
+    /// inferred from naming.</para>
+    ///
+    /// <para><b>Engine query filter activation</b> (30+ <c>IgnoreQueryFilters()</c> call sites in
+    /// <c>WorkflowTimerExecutor.*</c>): this fix activates those calls from no-op to real —
+    /// today, with no filter registered, <c>IgnoreQueryFilters()</c> is a documented no-op. The
+    /// bare (unnamed) form is deliberately kept rather than switching to EF Core 10's named query
+    /// filters: every one of those sites is a cross-TENANT system sweep (background reaper/timer
+    /// executor with no per-request identity), and TODAY — with no filter active at all — those
+    /// sweeps already see <c>IsValid == false</c> rows too. Composing the new combined filter
+    /// with a bare <c>IgnoreQueryFilters()</c> therefore PRESERVES that existing soft-delete
+    /// visibility for the sweeps (only the tenant dimension changes, from "always ignored because
+    /// nothing existed to ignore" to "explicitly ignored because the sweep is cross-tenant by
+    /// design") instead of silently narrowing sweep visibility to <c>IsValid == true</c> rows as
+    /// an accidental side effect of an unrelated fix. This is a decided choice, not an
+    /// oversight — narrowing sweep visibility to non-soft-deleted rows only would be a separate,
+    /// deliberately-scoped behaviour change, not a consequence of wiring the tenant filter
+    /// correctly.</para>
+    ///
+    /// <para><b>Why <c>ApplyDashboardModels</c></b> (<c>Dashboard/EfCoreDashboardDbContext.cs</c>)
+    /// <b>is not touched by this fix:</b> it is the same zero-argument extension-method shape and
+    /// would have the identical defect if its entities implemented <see cref="ITenant"/> — they
+    /// use a hand-rolled <c>TenantId</c> string property instead, so there is no <c>ITenant</c>
+    /// filter to fail to apply and no HasQueryFilter gap for this issue to close there.
+    /// Tracked structurally, not per-component, by #901 (the <c>IModelFinalizingConvention</c>
+    /// class-level fix): if Dashboard entities are ever changed to implement <c>ITenant</c>,
+    /// #901's model-finalizing convention would close the gap automatically, whereas a third
+    /// <c>ApplyDashboardModels(this ModelBuilder, EmptyContext)</c> overload copy-pasted from
+    /// this one would not be a good use of #899's "targeted stop-the-bleeding" scope.</para>
+    ///
+    /// <para><b>EF migrations — consumer owns them.</b>
     /// <c>WalkingTec.Mvvm.WorkFlow</c> ships ZERO migrations (same as Etl).
     /// Generate migrations in your consumer application:
     /// <code>
@@ -554,19 +765,70 @@ public static class WorkFlowDbContextExtensions
     ///   --project &lt;YourApp&gt;/&lt;YourApp&gt;.csproj \
     ///   --startup-project &lt;YourApp&gt;/&lt;YourApp&gt;.csproj
     /// </code>
-    /// This creates 9 tables: Wf_ProcessDefinition, Wf_ProcessDefinitionVersion,
+    /// This creates 10 tables: Wf_ProcessDefinition, Wf_ProcessDefinitionVersion,
     /// Wf_ProcessInstance, Wf_NodeInstance, Wf_ApprovalTask, Wf_WorkflowEventLog,
-    /// Wf_CcRecord, Wf_DelegationRule, Wf_WorkflowTimer.
+    /// Wf_CcRecord, Wf_DelegationRule, Wf_WorkflowTimer, Wf_ProcessDefinitionDraft (#899
+    /// correction: this comment previously said 9 tables — it undercounted the WF-21.3 draft
+    /// table, added after the "9 tables" line was first written).
     /// </para>
     ///
-    /// <para><strong>RowVer concurrency mapping (WF-3, spec §7.2):</strong>
+    /// <para><b>RowVer concurrency mapping (WF-3, spec §7.2):</b>
     /// <c>uint RowVer</c> is mapped as a plain property — NOT as an EF concurrency token.
     /// The engine manages it inside the WHERE clause of <c>ExecuteUpdateAsync</c>
     /// (app-incremented, portable CAS pattern from WF-0 / TokenService).
     /// The provider is detected at model-build time via <c>Database.ProviderName</c>.
     /// </para>
+    /// </remarks>
+    /// <param name="builder">ModelBuilder from your DataContext.OnModelCreating.</param>
+    /// <param name="context">
+    /// Pass <c>this</c> from your DataContext.OnModelCreating override. Required so the
+    /// TenantCode filter binds to the CURRENT context instance's TenantCode at query time
+    /// (EF Core's supported "DbContext instance access in query filters" idiom) instead of a
+    /// value that would otherwise be impossible to obtain from a ModelBuilder-only extension
+    /// method.
+    /// </param>
+    public static ModelBuilder ApplyWorkFlowModels(this ModelBuilder builder, EmptyContext context)
+    {
+        ApplyWorkFlowModelsCore(builder);
+
+        // #899: apply the combined (IsValid + TenantCode) filter for every WorkFlow
+        // PersistPoco/ITenant entity, and the tenant-only filter for every BasePoco/ITenant
+        // entity, right here -- instead of relying on FrameworkContext.OnModelCreating's Pass 2
+        // (which never sees these types -- see remarks above). ApplyWorkFlowTenantFilter<T>
+        // decides combined-vs-tenant-only per T from IPersistPoco-ness, same as Pass 2 does.
+        ApplyWorkFlowTenantFilter<ProcessDefinition>(builder, context);
+        ApplyWorkFlowTenantFilter<ProcessDefinitionVersion>(builder, context);
+        ApplyWorkFlowTenantFilter<ProcessDefinitionDraft>(builder, context);
+        ApplyWorkFlowTenantFilter<ProcessInstance>(builder, context);
+        ApplyWorkFlowTenantFilter<ApprovalTask>(builder, context);
+        ApplyWorkFlowTenantFilter<DelegationRule>(builder, context);
+        ApplyWorkFlowTenantFilter<NodeInstance>(builder, context);
+        ApplyWorkFlowTenantFilter<WorkflowTimer>(builder, context);
+        ApplyWorkFlowTenantFilter<CcRecord>(builder, context);
+        ApplyWorkFlowTenantFilter<WorkflowEventLog>(builder, context);
+
+        return builder;
+    }
+
+    /// <summary>
+    /// 舊版多載（無 <see cref="EmptyContext"/> 參數）— 僅為向下相容保留，行為與升級前完全一致：
+    /// 只註冊資料表結構、索引、FK 關聯與 RowVer 對應，<b>不會</b>套用 <see cref="ITenant"/> 全域
+    /// 查詢過濾器（含 6 個 <c>PersistPoco</c> entity 的 soft-delete 過濾器）。這正是 #899 描述的
+    /// 問題本身——本多載沒有管道可以取得目前的 context 執行個體，因此無法修正。請改用
+    /// <see cref="ApplyWorkFlowModels(ModelBuilder, EmptyContext)"/>。
     /// </summary>
+    [Obsolete("ApplyWorkFlowModels() without a DbContext instance can never apply the ITenant " +
+              "global query filter (or, for the 6 PersistPoco entities, the IsValid soft-delete " +
+              "filter) to any of the 10 WorkFlow entities (issue #899) -- table/column/index " +
+              "registration is unchanged and still runs, but tenant isolation and soft-delete " +
+              "filtering for these tables do not. Call ApplyWorkFlowModels(this) from your " +
+              "DataContext.OnModelCreating instead.")]
     public static ModelBuilder ApplyWorkFlowModels(this ModelBuilder builder)
+    {
+        return ApplyWorkFlowModelsCore(builder);
+    }
+
+    private static ModelBuilder ApplyWorkFlowModelsCore(ModelBuilder builder)
     {
         // ── ProcessDefinition ────────────────────────────────────────────────
         builder.Entity<ProcessDefinition>(e =>
@@ -916,5 +1178,45 @@ public static class WorkFlowDbContextExtensions
         });
 
         return builder;
+    }
+
+    /// <summary>
+    /// Applies the SAME filter shape <c>DataContext.cs</c>'s Pass 2 loop uses for a
+    /// <c>TopBasePoco</c> descendant: the combined <c>IsValid == true &amp;&amp; TenantCode ==
+    /// this.TenantCode</c> filter for a type that is ALSO <c>IPersistPoco</c> (6 of the 10
+    /// WorkFlow entities), or the tenant-only filter for a <c>BasePoco</c>-only
+    /// <see cref="ITenant"/> type (the other 4). See the remarks on
+    /// <see cref="ApplyWorkFlowModels(ModelBuilder, EmptyContext)"/> for why this needs to live
+    /// here rather than relying on the base context's own filter application, and why it is NOT
+    /// simply a copy of ETL's tenant-only <c>EtlDbContextExtensions.ApplyEtlTenantFilter&lt;T&gt;</c>.
+    /// </summary>
+    private static void ApplyWorkFlowTenantFilter<T>(ModelBuilder builder, EmptyContext context)
+        where T : class, ITenant
+    {
+        var pe = Expression.Parameter(typeof(T));
+        var conditions = new List<Expression>();
+
+        // Mirrors DataContext.cs Pass 2's ordering exactly (IsValid first, then TenantCode) --
+        // only entities that are ALSO IPersistPoco get the soft-delete half of the filter. This
+        // is the one place this method's logic diverges from ETL's ApplyEtlTenantFilter<T>,
+        // which always applies tenant-only because every ETL entity is BasePoco (no IPersistPoco
+        // entity exists in that module to get wrong).
+        if (typeof(IPersistPoco).IsAssignableFrom(typeof(T)))
+        {
+            conditions.Add(Expression.Equal(Expression.Property(pe, "IsValid"), Expression.Constant(true)));
+        }
+
+        conditions.Add(Expression.Equal(
+            Expression.Property(pe, nameof(ITenant.TenantCode)),
+            Expression.PropertyOrField(Expression.Constant(context), nameof(EmptyContext.TenantCode))));
+
+        Expression finalExp = conditions[0];
+        for (int i = 1; i < conditions.Count; i++)
+        {
+            finalExp = Expression.AndAlso(finalExp, conditions[i]);
+        }
+
+        var lambda = Expression.Lambda<Func<T, bool>>(finalExp, pe);
+        builder.Entity<T>().HasQueryFilter(lambda);
     }
 }

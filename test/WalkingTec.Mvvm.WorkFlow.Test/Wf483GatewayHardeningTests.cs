@@ -249,12 +249,16 @@ public class Wf483GatewayHardeningTests : IDisposable
         var (engine1, ctx1) = MakeEngine();
         await using var _ctx1 = ctx1;
 
-        var version = await SeedVersionAsync(ctx1, AndFork3BranchGraph());
         // Use a non-null tenantCode so the UNIQUE index on
         // (TenantCode, InstanceId, NodeKey, Generation) correctly fires when
         // the loser re-drives the same gateway — SQLite treats NULL!=NULL in
         // unique indexes (SQL standard), which would prevent constraint violations.
+        // #899 follow-up (cross-vendor review of PR #918): the seeded ProcessDefinitionVersion
+        // must carry the SAME tenantCode passed to StartAsync below -- WorkflowEngine.StartAsync
+        // now fails closed on a mismatch (the version this instance is pinned to must actually
+        // belong to the tenant the instance is being created for).
         const string tenantCode = "T_GW4";
+        var version = await SeedVersionAsync(ctx1, AndFork3BranchGraph(), tenantCode: tenantCode);
         var instance = await engine1.StartAsync(
             version.ID,
             formDataJson: null,

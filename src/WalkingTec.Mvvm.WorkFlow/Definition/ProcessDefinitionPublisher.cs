@@ -63,11 +63,41 @@ public sealed class ProcessDefinitionPublisher : IProcessDefinitionPublisher, ID
 
     /// <summary>
     /// Production constructor: resolves the real <see cref="IDataContext"/> via the
-    /// <see cref="IWtmDataContextFactory"/> (same mechanism as <c>WTMContext.DC</c>).
+    /// <see cref="IWtmDataContextFactory"/>. This publisher owns and disposes the created
+    /// DataContext on <see cref="Dispose"/>. Equivalent to calling
+    /// <see cref="ProcessDefinitionPublisher(IWtmDataContextFactory, string?, IOptions{WorkFlowOptions}?, ILogger{ProcessDefinitionPublisher}?)"/>
+    /// with a <c>null</c> <c>tenantCode</c> — kept unchanged for binary compatibility with
+    /// existing callers that predate #899's session-half fix.
+    /// </summary>
+    public ProcessDefinitionPublisher(
+        IWtmDataContextFactory dcFactory,
+        IOptions<WorkFlowOptions>? options = null,
+        ILogger<ProcessDefinitionPublisher>? logger = null)
+        : this(dcFactory, tenantCode: null, options, logger)
+    {
+    }
+
+    /// <summary>
+    /// Production constructor (#899 session-half): resolves the real <see cref="IDataContext"/>
+    /// via the <see cref="IWtmDataContextFactory"/> and stamps it with <paramref name="tenantCode"/>
+    /// — the caller's ambient tenant, resolved by
+    /// <see cref="ServiceCollectionExtensions.ResolveAmbientTenant"/> in
+    /// <see cref="ServiceCollectionExtensions.AddWtmWorkFlow"/>'s DI factory.
+    /// <para>
+    /// <strong>Not the same mechanism as <c>WTMContext.DC</c>, in the tenant dimension.</strong>
+    /// <c>WTMContext</c>'s own <c>CreateDC()</c> instance method (<c>WTMContext.CreateDC.cs</c>)
+    /// resolves <c>_loginUserInfo?.CurrentTenant</c> and stamps it before returning; the
+    /// <see cref="IWtmDataContextFactory.CreateDC"/> this constructor calls does not — called
+    /// with no arguments (as the two/three-parameter overload above does), it always returns a
+    /// context whose <c>TenantCode</c> is <c>null</c>, regardless of who is actually publishing.
+    /// This constructor closes that gap for the publish flow specifically, by taking the
+    /// already-resolved tenant as an explicit parameter instead of re-deriving it.
+    /// </para>
     /// This publisher owns and disposes the created DataContext on <see cref="Dispose"/>.
     /// </summary>
     public ProcessDefinitionPublisher(
         IWtmDataContextFactory dcFactory,
+        string? tenantCode,
         IOptions<WorkFlowOptions>? options = null,
         ILogger<ProcessDefinitionPublisher>? logger = null)
     {
@@ -76,6 +106,7 @@ public sealed class ProcessDefinitionPublisher : IProcessDefinitionPublisher, ID
             ?? throw new InvalidOperationException(
                 "IWtmDataContextFactory.CreateDC() returned null. " +
                 "Ensure a valid database connection is configured in appsettings.json.");
+        _dc.SetTenantCode(tenantCode);
         _options = options?.Value;
         _logger = (ILogger?)logger ?? NullLogger.Instance;
         _ownsDc = true;
@@ -160,7 +191,7 @@ public sealed class ProcessDefinitionPublisher : IProcessDefinitionPublisher, ID
             await using var tx = await _dc.Database.BeginTransactionAsync(innerCt);
             try
             {
-                // Load the definition head (tenant filter auto-applied by DataContext).
+                // Load the definition head (tenant filter, #899, ApplyWorkFlowModels(this)).
                 var definition = await _dc.Set<ProcessDefinition>()
                     .FirstOrDefaultAsync(d => d.Code == definitionCode, innerCt);
 
@@ -319,7 +350,7 @@ public sealed class ProcessDefinitionPublisher : IProcessDefinitionPublisher, ID
             await using var tx = await _dc.Database.BeginTransactionAsync(innerCt);
             try
             {
-                // Load head (tenant filter auto-applied).
+                // Load head (tenant filter, #899, ApplyWorkFlowModels(this)).
                 var definition = await _dc.Set<ProcessDefinition>()
                     .FirstOrDefaultAsync(d => d.Code == definitionCode, innerCt);
 

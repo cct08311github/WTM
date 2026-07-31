@@ -133,12 +133,17 @@ internal sealed partial class WorkflowTimerExecutor
         }
 
         // Task-scoped timer: read the task snapshot to get current assignee + RowVer.
+        // #899 follow-up (cross-vendor review of PR #918): `IsValid == true` added -- a
+        // soft-deleted-but-Pending ApprovalTask must be treated the same as "no longer Pending"
+        // (the taskSnap==null branch below), not escalated. Without this, a soft-deleted task
+        // could still reach the reassignment CAS / FailClosed event / collision-notify paths.
         var taskSnap = await db.Set<ApprovalTask>()
             .IgnoreQueryFilters() // cross-tenant system sweep; write is PK+RowVer CAS
             .AsNoTracking()
             .Where(t => t.ID == approvalTaskId.Value
                          && t.State == TaskState.Pending
-                         && t.Generation == timerGeneration)
+                         && t.Generation == timerGeneration
+                         && t.IsValid == true)
             .Select(t => new { t.ID, t.RowVer, t.AssigneeITCode, t.NodeInstanceId })
             .FirstOrDefaultAsync(ct);
 
@@ -195,6 +200,13 @@ internal sealed partial class WorkflowTimerExecutor
 
         // Collision pre-check (WF-19 FIX-2 lesson): target must not have ANY task row
         // on (NodeInstanceId, Generation) regardless of State — unique-index class prevention.
+        // #899 follow-up (cross-vendor review of PR #918): deliberately NOT scoped to
+        // IsValid==true, unlike the other task-candidate reads in this file. The unique index
+        // this probes (IX_Wf_ApprovalTask_Node_Assignee_Gen, ServiceCollectionExtensions.cs) is
+        // NOT filtered on IsValid, so a soft-deleted row still physically occupies that slot and
+        // a real INSERT there would still throw a unique-constraint violation regardless of
+        // IsValid. This probe must see the same rows the database itself would reject on, or it
+        // stops preventing exactly the crash it exists to prevent.
         bool hasCollision = await db.Set<ApprovalTask>()
             .IgnoreQueryFilters() // cross-tenant system sweep
             .AsNoTracking()
@@ -354,16 +366,22 @@ internal sealed partial class WorkflowTimerExecutor
                 return;
             }
 
+            // #899 follow-up (cross-vendor review of PR #918): IsValid==true added -- do not send
+            // an escalation notification about a soft-deleted instance. GATE-0 (Fire.cs) already
+            // retires the timer as an orphan before HandleEscalateAsync ever runs when the
+            // instance was ALREADY soft-deleted at candidate-select time; this fresh re-read
+            // closes the narrow window where the instance is soft-deleted AFTER GATE-0 but
+            // before this post-commit notify runs.
             var freshInstance = await db.Set<ProcessInstance>()
                 .IgnoreQueryFilters() // cross-tenant system sweep
                 .AsNoTracking()
-                .Where(i => i.ID == instanceId)
+                .Where(i => i.ID == instanceId && i.IsValid == true)
                 .FirstOrDefaultAsync(ct);
 
             if (freshInstance is null)
             {
                 _logger.LogDebug(
-                    "NotifyEscalateAsync: instance {InstanceId} not found — skipping notification",
+                    "NotifyEscalateAsync: instance {InstanceId} not found or not valid — skipping notification",
                     instanceId);
                 return;
             }

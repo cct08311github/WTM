@@ -457,7 +457,7 @@ public class ReturnToNodeEngineTests : IDisposable
         var engine   = MakeEngine(ctx);
 
         // Start a new instance — engine mints nodeA task for "alice".
-        var instance = await engine.StartAsync(version.ID, null, "initiator", null);
+        var instance = await engine.StartAsync(version.ID, null, "initiator", "T1");
         Assert.IsNotNull(instance, "T-ABBA-RET-05: StartAsync must succeed");
 
         // Advance nodeA so that nodeB is activated (alice approves nodeA → bob gets nodeB).
@@ -596,7 +596,7 @@ public class ReturnToNodeEngineTests : IDisposable
         var engine  = MakeEngine(ctx);
 
         // Start instance + advance nodeA → nodeB activated.
-        var inst   = await engine.StartAsync(version.ID, null, "init", null);
+        var inst   = await engine.StartAsync(version.ID, null, "init", "T1");
         var taskA  = await ctx.Set<ApprovalTask>().AsNoTracking()
             .SingleAsync(t => t.State == TaskState.Pending);
         await engine.ApproveTaskAsync(taskA.ID, "alice");
@@ -735,7 +735,7 @@ public class ReturnToNodeEngineTests : IDisposable
             version = await SeedVersionIntoContextAsync(plainCtx, dbName);
             var setupEngine = MakeEngine(plainCtx);
 
-            var inst  = await setupEngine.StartAsync(version.ID, null, "init", null);
+            var inst  = await setupEngine.StartAsync(version.ID, null, "init", "T1");
             instId    = inst.ID;
             var taskA = await plainCtx.Set<ApprovalTask>().AsNoTracking()
                 .SingleAsync(t => t.State == TaskState.Pending);
@@ -1239,7 +1239,7 @@ public class DeadlockRetryEnvelopeTests : IDisposable
 
         // Seed: start a workflow, advance nodeA to get nodeB activated (bob@nodeB).
         var version = await SeedVersionAsync(ctx);
-        var inst    = await engine.StartAsync(version.ID, null, "initiator", null);
+        var inst    = await engine.StartAsync(version.ID, null, "initiator", "T1");
 
         // Advance nodeA (alice's task) so bob gets nodeB.
         await using var readCtx1 = new WfAbbaTestContext(_dbName);
@@ -1354,7 +1354,7 @@ public class DeadlockRetryEnvelopeTests : IDisposable
         var engine     = WorkflowEngine_Exposed.CreateWithOptions(ctx, dispatcher, opts, NullLogger.Instance);
 
         var version = await SeedVersionAsync(ctx);
-        var inst = await engine.StartAsync(version.ID, null, "initiator", null);
+        var inst = await engine.StartAsync(version.ID, null, "initiator", "T1");
 
         // Advance nodeA (alice) so bob gets nodeB (All mode, single approver).
         await using var readCtx1 = new WfAbbaTestContext(_dbName);
@@ -1409,7 +1409,7 @@ public class DeadlockRetryEnvelopeTests : IDisposable
         var version = await SeedVersionAsync(ctx);
 
         interceptor.Arm();
-        var inst = await engine.StartAsync(version.ID, null, "initiator", null);
+        var inst = await engine.StartAsync(version.ID, null, "initiator", "T1");
 
         Assert.AreEqual(InstanceState.Running, inst.State,
             "T-667-RETRY-06: StartAsync must succeed on retry after a one-shot deadlock.");
@@ -2192,7 +2192,7 @@ public class AddApproverLockOrderTests : IDisposable
         await ctx.SaveChangesAsync();
 
         var engine = MakeEngine(ctx);
-        var inst   = await engine.StartAsync(ver.ID, null, "initiator", null);
+        var inst   = await engine.StartAsync(ver.ID, null, "initiator", "T1");
         Assert.IsNotNull(inst, "SeedRunningInstanceAsync: StartAsync must succeed");
 
         await using var readCtx = MakeContext();
@@ -2237,7 +2237,7 @@ public class AddApproverLockOrderTests : IDisposable
         await ctx.SaveChangesAsync();
 
         var engine = MakeEngine(ctx);
-        var inst   = await engine.StartAsync(ver.ID, null, "init", null);
+        var inst   = await engine.StartAsync(ver.ID, null, "init", "T1");
 
         // Scope to the approval node of this instance to avoid Start/End NodeInstance collisions.
         var nodeId = await ctx.Set<NodeInstance>().AsNoTracking()
@@ -2395,7 +2395,7 @@ public class AddApproverLockOrderTests : IDisposable
         await ctx.SaveChangesAsync();
 
         var engine = MakeEngine(ctx);
-        var inst   = await engine.StartAsync(ver.ID, null, "initiator", null);
+        var inst   = await engine.StartAsync(ver.ID, null, "initiator", "T1");
 
         // alice's task is Pending (seq=0), carol's is NotYetActive (seq=1).
         await using var readCtx = MakeContext();
@@ -2455,7 +2455,7 @@ public class AddApproverLockOrderTests : IDisposable
         await ctx.SaveChangesAsync();
 
         var engine = MakeEngine(ctx);
-        var inst   = await engine.StartAsync(ver.ID, null, "initiator", null);
+        var inst   = await engine.StartAsync(ver.ID, null, "initiator", "T1");
 
         await using var readCtx = MakeContext();
         var nodeIdSem04 = await readCtx.Set<NodeInstance>().AsNoTracking()
@@ -2521,7 +2521,7 @@ public class AddApproverLockOrderTests : IDisposable
             await schemaCtx.SaveChangesAsync();
 
             var seedEngine = MakeEngine(schemaCtx);
-            var inst = await seedEngine.StartAsync(ver.ID, null, "initiator", null);
+            var inst = await seedEngine.StartAsync(ver.ID, null, "initiator", "T1");
             Assert.IsNotNull(inst, "T-ABBA-2902-CONC-01: StartAsync must succeed");
 
             await using var readCtx = new WfAbbaTestContext(dbPath, SqliteTestDbMode.FileWal);

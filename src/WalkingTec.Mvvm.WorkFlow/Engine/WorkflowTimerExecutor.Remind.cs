@@ -152,28 +152,36 @@ internal sealed partial class WorkflowTimerExecutor
                 return;
             }
 
+            // #899 follow-up (cross-vendor review of PR #918): IsValid==true added -- do not send
+            // a reminder about a soft-deleted instance. GATE-0 (Fire.cs) already retires the timer
+            // as an orphan before HandleRemindAsync ever runs when the instance was ALREADY
+            // soft-deleted at candidate-select time; this fresh re-read closes the narrow window
+            // where the instance is soft-deleted AFTER GATE-0 but before this post-commit notify.
             var freshInstance = await db.Set<ProcessInstance>()
                 .IgnoreQueryFilters() // cross-tenant system sweep
                 .AsNoTracking()
-                .Where(i => i.ID == instanceId)
+                .Where(i => i.ID == instanceId && i.IsValid == true)
                 .FirstOrDefaultAsync(ct);
 
             if (freshInstance is null)
             {
                 _logger.LogDebug(
-                    "NotifyRemindAsync: instance {InstanceId} not found — skipping notification",
+                    "NotifyRemindAsync: instance {InstanceId} not found or not valid — skipping notification",
                     instanceId);
                 return;
             }
 
             // Re-read current Pending assignees (honors delegation/escalation reassignments).
             // We do a minimal projection — only ITCode — so the recipients are current at fire time.
+            // #899 follow-up: IsValid==true added -- a soft-deleted-but-Pending ApprovalTask must
+            // not be reminded (same reasoning as Escalate.cs's taskSnap fix).
             var pendingAssignees = await db.Set<ApprovalTask>()
                 .IgnoreQueryFilters() // cross-tenant system sweep
                 .AsNoTracking()
                 .Where(t => t.NodeInstanceId == nodeInstanceId
                              && t.State == TaskState.Pending
-                             && t.Generation == timerGeneration)
+                             && t.Generation == timerGeneration
+                             && t.IsValid == true)
                 .Select(t => t.AssigneeITCode)
                 .ToListAsync(ct);
 

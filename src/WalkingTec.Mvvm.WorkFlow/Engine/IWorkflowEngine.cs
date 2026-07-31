@@ -184,7 +184,8 @@ public interface IWorkflowEngine
     /// without the controller touching <c>DataContext</c> directly (WTM red line).</para>
     /// </summary>
     /// <param name="actorITCode">Server-side ITCode from <c>Wtm.LoginUserInfo.ITCode</c>.</param>
-    /// <param name="tenantCode">Server-side tenant from <c>Wtm.LoginUserInfo.TenantCode</c>.</param>
+    /// <param name="tenantCode">Server-side tenant from <c>Wtm.LoginUserInfo.CurrentTenant</c>
+    /// (#899 session-half — same source the module DataContext is stamped with).</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>List of pending tasks ordered by <c>DueUtc</c> ascending (nulls last).</returns>
     Task<IReadOnlyList<Models.ApprovalTask>> GetPendingTasksAsync(

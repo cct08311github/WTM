@@ -162,9 +162,12 @@ internal sealed partial class WorkflowEngine
         string? tenantCode,
         CancellationToken ct = default)
     {
-        // The DataContext query filter (ITenant + IsValid) auto-scopes to tenantCode
-        // because it is registered against the correct context.
-        // We additionally filter by AssigneeITCode and State server-side.
+        // The ITenant + IsValid combined query filter (#899, ApplyWorkFlowModels(this)) scopes
+        // this to Db's own TenantCode -- it is registered against Db itself, not derived from
+        // the tenantCode parameter above (kept for the interface's own documented contract; see
+        // IWorkflowEngine.GetPendingTasksAsync). We additionally filter by AssigneeITCode and
+        // State server-side, and re-assert IsValid explicitly (belt-and-suspenders; the filter
+        // already enforces it for this PersistPoco entity).
         var tasks = await Db.Set<ApprovalTask>()
             .AsNoTracking()
             .Where(t => t.AssigneeITCode == actorITCode

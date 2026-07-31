@@ -292,6 +292,25 @@ internal sealed partial class WorkflowEngine : IWorkflowEngine, IDisposable
             ?? throw new InvalidOperationException(
                    $"ProcessDefinitionVersion {definitionVersionId} not found or not valid.");
 
+        // #899 follow-up (cross-vendor review of PR #918): `tenantCode` is a caller-supplied
+        // parameter, never previously checked against anything -- nothing stopped a caller from
+        // passing a value that disagrees with the tenant `version` was actually loaded under.
+        // Once the #899 filter is active, `version.TenantCode` is GUARANTEED to equal Db's own
+        // TenantCode (the query above only returns rows the filter lets Db see), so comparing
+        // `tenantCode` against `version.TenantCode` is equivalent to comparing it against the
+        // context's own tenant identity without downcasting `Db`. A mismatch means the
+        // ProcessInstance this method is about to INSERT would be written under a TenantCode
+        // that does not match the version it is pinned to -- immediately invisible to the
+        // context that just wrote it (or, if `tenantCode` happens to coincide with a DIFFERENT
+        // tenant's value, visible to that other tenant instead of this one). Fail closed instead
+        // of silently writing a row nobody can find again.
+        if (!string.Equals(tenantCode, version.TenantCode, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"StartAsync: tenantCode '{tenantCode}' does not match ProcessDefinitionVersion " +
+                $"{definitionVersionId}'s own TenantCode '{version.TenantCode}'. Refusing to " +
+                "create a ProcessInstance whose TenantCode would not match the version it is " +
+                "pinned to.");
+
         var graph = _graphProvider.GetGraph(version);
 
         // Find the single Start node (validated at publish time).

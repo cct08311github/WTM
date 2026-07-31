@@ -4734,7 +4734,7 @@ appsettings.Production.json   ← 生產環境覆蓋（連線字串、JWT Key）
 | **撤回/回退/抄送** | 撤回(WithdrawPolicy)、回退發起人(ReturnToInitiator)、抄送(CC，非阻塞) |
 | **Opt-in 通知** | `AddWtmWorkFlowNotifications()` 複用 `IWtmWebhookSink`；post-commit best-effort，通知失敗不回滾 |
 | **雙軌稽核** | `[AuditChanges]`（VM CRUD）+ append-only `WorkflowEventLog`（引擎轉換，`ExecuteUpdateAsync` bypass 了 EF change tracker） |
-| **RBAC + 多租戶** | 所有 Entity 直接繼承 `PersistPoco, ITenant`，但 `DataContext` 的 `ITenant` query filter 目前**不會**自動套用到 WorkFlow 型別（`ApplyWorkFlowModels()` 在 `base.OnModelCreating()` 之後才註冊，Pass 2 過濾器迴圈看不到）——追蹤於 #899，修好前勿依賴租戶隔離 |
+| **RBAC + 多租戶** | 所有 Entity 直接繼承 `PersistPoco/BasePoco, ITenant`；`ApplyWorkFlowModels(this)` 多載（#899）在註冊每個型別後立刻補套用 `ITenant`（+ `PersistPoco` 型別的 `IsValid`）query filter——`DataContext` 自己的 Pass 2 看不到 WorkFlow 型別（`ApplyWorkFlowModels()` 在 `base.OnModelCreating()` 之後才註冊），所以由這個多載自己補上；消費端 `DataContext.OnModelCreating` 需呼叫 `ApplyWorkFlowModels(this)`（傳 `this`），舊版零參數多載保留但標 `[Obsolete]`、行為不變（不套過濾器） |
 | **零內建 migration** | 消費者自行 `ApplyWorkFlowModels()` + `dotnet ef migrations add`，與 Etl 模組相同模式 |
 
 ### 18.2 三種審批模式
@@ -4778,12 +4778,14 @@ WorkFlow 套件**零內建 migration**，需自行在應用程式的 `DataContex
 protected override void OnModelCreating(ModelBuilder modelBuilder)
 {
     base.OnModelCreating(modelBuilder);
-    modelBuilder.ApplyEtlModels(this);   // 若同時使用 Etl —— 務必傳 this，否則 ETL 表悄悄失去 ITenant 過濾
-    modelBuilder.ApplyWorkFlowModels();  // WorkFlow 9 張資料表
+    modelBuilder.ApplyEtlModels(this);      // 若同時使用 Etl —— 務必傳 this，否則 ETL 表悄悄失去 ITenant 過濾
+    modelBuilder.ApplyWorkFlowModels(this); // WorkFlow 10 張資料表 + ITenant/IsValid 過濾器（#899，務必傳 this）
 }
 ```
 
-若同時使用 ETL，`ApplyEtlModels()` 不帶參數的舊多載已標記 `[Obsolete]`：重新編譯會看到警告，但執行期不會拋錯——註冊照常成功，只是綁不上 `ITenant` 過濾器，四張 ETL 表會悄悄失去租戶隔離。
+`ApplyEtlModels()`／`ApplyWorkFlowModels()` 兩者不帶參數的舊多載都已標記 `[Obsolete]`：重新編譯會看到警告，但執行期不會拋錯——註冊照常成功，只是綁不上 `ITenant` 過濾器，該模組的表會悄悄失去租戶隔離（WorkFlow 另外還會失去 6 個 `PersistPoco` entity 的 soft-delete 過濾）。改用 `ApplyWorkFlowModels(this)` 本身不會產生 EF migration——query filter 是 model metadata，不是 schema，`dotnet ef migrations add` 的 diff 不會因為這一行改變。
+
+**session 半邊（#899 補完）：認證請求的租戶範圍自動生效，不需消費端額外動作**——只要 `OnModelCreating` 傳了 `this`，`AddWtmWorkFlow`／`AddWtmWorkFlowDesigner` 的 DI factory 就會在建立每個模組自鑄的 `DataContext` 後，自動戳上目前請求的租戶，再交給 `IWorkflowEngine`／`IWorkflowDefinitionStore`／`IProcessDefinitionPublisher`；背景 timer（`AddWtmWorkFlowTimers`）天生 tenant-aware（逐候選列自行戳記，不依賴 ambient scope）。**唯一例外**：若消費端自己寫背景程式（自訂 `IHostedService`、Quartz job、console 工具）直接驅動 `IWorkflowEngine`，必須自行對傳給引擎的 context 呼叫 `((IDataContext)yourDataContext).SetTenantCode(tenantCode)`——這種手動建立的 scope 沒有 ambient 身分可讀。
 
 產生 migration：
 
@@ -4794,7 +4796,7 @@ dotnet ef migrations add WorkFlowInitialCreate \
   --startup-project YourApp/YourApp.csproj
 ```
 
-建立的 9 張資料表：`Wf_ProcessDefinition`、`Wf_ProcessDefinitionVersion`、`Wf_ProcessInstance`、`Wf_NodeInstance`、`Wf_ApprovalTask`、`Wf_WorkflowEventLog`、`Wf_CcRecord`、`Wf_DelegationRule`、`Wf_WorkflowTimer`（後兩張供 Wave 4/5 使用，Sprint-1 schema 已到位，零 migration 費用）。
+建立的 10 張資料表：`Wf_ProcessDefinition`、`Wf_ProcessDefinitionVersion`、`Wf_ProcessInstance`、`Wf_NodeInstance`、`Wf_ApprovalTask`、`Wf_WorkflowEventLog`、`Wf_CcRecord`、`Wf_DelegationRule`、`Wf_WorkflowTimer`（後兩張供 Wave 4/5 使用，Sprint-1 schema 已到位，零 migration 費用）、`Wf_ProcessDefinitionDraft`（WF-21.3 設計器草稿儲存）。
 
 ### 18.5 API Endpoints
 
@@ -4969,8 +4971,9 @@ Ack 任務帶有 `Generation` 戳記，回退時與跨度一起丟棄。
 #### 18.9.6 Migration（Wave 3 schema additive 欄位）
 
 ```csharp
-// 在 DataContext.OnModelCreating 呼叫（已有則自動掃描）
-modelBuilder.ApplyWorkFlowModels();
+// 在 DataContext.OnModelCreating 呼叫（已有則自動掃描）——務必傳 this（#899），
+// 否則 ITenant/IsValid 過濾器綁不上目前 context 執行個體
+modelBuilder.ApplyWorkFlowModels(this);
 ```
 
 ```bash
@@ -5266,7 +5269,7 @@ new FunctionPrivilege { MenuName = "工作流设计器 API", Url = WorkflowPrivi
 
 #### 18.13.3 Migration（必需）
 
-呼叫 `AddWtmWorkFlowDesigner()` 後，`ApplyWorkFlowModels()` 會額外註冊 `ProcessDefinitionDraft` 實體。請執行消費者 migration：
+呼叫 `AddWtmWorkFlowDesigner()` 後，`ApplyWorkFlowModels(this)` 會額外註冊 `ProcessDefinitionDraft` 實體（並套用其 `ITenant`/`IsValid` 過濾器，#899）。請執行消費者 migration：
 
 ```bash
 dotnet ef migrations add AddWorkFlowDesigner \

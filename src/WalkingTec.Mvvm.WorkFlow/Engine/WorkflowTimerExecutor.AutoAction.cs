@@ -174,12 +174,16 @@ internal sealed partial class WorkflowTimerExecutor
         // FIX-B3: when approvalTaskId is non-null (task-scoped timer), drain claims ONLY that
         // specific task.  A stale Sequential step-k timer must never auto-approve step k+1.
         // Node-scoped timers (approvalTaskId==null) keep the original node-wide drain.
+        // #899 follow-up (cross-vendor review of PR #918): IsValid==true added -- a
+        // soft-deleted-but-Pending ApprovalTask must not be auto-approved/auto-rejected (same
+        // reasoning as Escalate.cs's taskSnap / Remind.cs's pendingAssignees fixes).
         var pendingTasks = await db.Set<ApprovalTask>()
             .IgnoreQueryFilters() // cross-tenant system sweep; writes are PK+RowVer CAS
             .AsNoTracking()
             .Where(t => t.NodeInstanceId == nodeInstanceId
                          && t.State == TaskState.Pending
                          && t.Generation == timerGeneration
+                         && t.IsValid == true
                          && (approvalTaskId == null || t.ID == approvalTaskId.Value))
             .Select(t => new { t.ID, t.RowVer, t.AssigneeITCode })
             .ToListAsync(ct);
@@ -225,12 +229,17 @@ internal sealed partial class WorkflowTimerExecutor
                 })
                 .FirstOrDefaultAsync(ct);
 
-            if (freshInstSnap == null || freshInstSnap.State != InstanceState.Running)
+            // #899 follow-up (cross-vendor review of PR #918): !freshInstSnap.IsValid added to the
+            // break condition -- IsValid was already projected above (line ~228) but not
+            // previously checked here. A soft-deleted instance stops the drain the same way a
+            // terminal-state instance does (no further claims), closing the within-drain TOCTOU
+            // window between GATE-0's snapshot and this per-iteration fresh read.
+            if (freshInstSnap == null || freshInstSnap.State != InstanceState.Running || !freshInstSnap.IsValid)
             {
                 // Instance reached terminal state (a prior post-commit continuation completed the workflow
-                // between ticks, or the instance was cancelled).  No further claims needed.
+                // between ticks, or the instance was cancelled or soft-deleted).  No further claims needed.
                 _logger.LogDebug(
-                    "AutoAction: instance {InstanceId} is no longer Running during drain — stopping",
+                    "AutoAction: instance {InstanceId} is no longer Running/valid during drain — stopping",
                     instanceId);
                 break;
             }
@@ -318,16 +327,19 @@ internal sealed partial class WorkflowTimerExecutor
                 return;
             }
 
+            // #899 follow-up (cross-vendor review of PR #918): IsValid==true added -- do not send
+            // an auto-action notification about a soft-deleted instance (same reasoning as
+            // Escalate.cs/Remind.cs's freshInstance fixes).
             var freshInstance = await db.Set<ProcessInstance>()
                 .IgnoreQueryFilters() // cross-tenant system sweep
                 .AsNoTracking()
-                .Where(i => i.ID == instanceId)
+                .Where(i => i.ID == instanceId && i.IsValid == true)
                 .FirstOrDefaultAsync(ct);
 
             if (freshInstance is null)
             {
                 _logger.LogDebug(
-                    "NotifyAutoActionedAsync: instance {InstanceId} not found — skipping notification",
+                    "NotifyAutoActionedAsync: instance {InstanceId} not found or not valid — skipping notification",
                     instanceId);
                 return;
             }
