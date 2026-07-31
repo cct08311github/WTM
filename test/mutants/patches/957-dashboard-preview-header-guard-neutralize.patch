@@ -1,0 +1,23 @@
+diff --git a/src/WalkingTec.Mvvm.Mvc/_DashboardDesignerController.cs b/src/WalkingTec.Mvvm.Mvc/_DashboardDesignerController.cs
+index b309d13b9..8d0021013 100644
+--- a/src/WalkingTec.Mvvm.Mvc/_DashboardDesignerController.cs
++++ b/src/WalkingTec.Mvvm.Mvc/_DashboardDesignerController.cs
+@@ -151,10 +151,15 @@ namespace WalkingTec.Mvvm.Mvc
+             // created below is always brand new, so there is never an existing widget to
+             // fall back to — any masked-sentinel header value is always rejected here
+             // (DashboardCredentialMasking.ReconcileWidgetHeaders case (e)).
++            // MUTANT test/mutants 957-dashboard-preview-header-guard-neutralize: skips
++            // Preview's own reconciliation call entirely, letting a masked-sentinel header
++            // value (or, in principle, a stale header carried into a fresh transient widget)
++            // through unrejected. See
++            // test/mutants/entries/957-dashboard-preview-header-guard-neutralize.json.
+             var previewWidgets = new Dictionary<string, WidgetDefinition> { [previewWidgetId] = widget };
+-            var (headerError, headerWarnings) = DashboardCredentialMasking.ReconcileWidgetHeaders(previewWidgets, existingWidgets: null);
+-            if (headerError != null) return BadRequest(headerError);
+-            DashboardCredentialMasking.LogWarnings(_logger, headerWarnings);
++            // var (headerError, headerWarnings) = DashboardCredentialMasking.ReconcileWidgetHeaders(previewWidgets, existingWidgets: null);
++            // if (headerError != null) return BadRequest(headerError);
++            // DashboardCredentialMasking.LogWarnings(_logger, headerWarnings);
+ 
+             // Build a transient single-widget dashboard
+             var transient = new DashboardDefinition

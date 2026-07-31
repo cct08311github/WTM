@@ -1,0 +1,17 @@
+diff --git a/src/WalkingTec.Mvvm.Mvc/_DashboardController.cs b/src/WalkingTec.Mvvm.Mvc/_DashboardController.cs
+index 6bcb352b3..e9fe0b402 100644
+--- a/src/WalkingTec.Mvvm.Mvc/_DashboardController.cs
++++ b/src/WalkingTec.Mvvm.Mvc/_DashboardController.cs
+@@ -83,7 +83,11 @@ namespace WalkingTec.Mvvm.Mvc
+             // behind a REST widget's data source — mask header VALUES (keys survive) before
+             // this ever reaches JSON serialization. See DashboardCredentialMasking's own
+             // XML doc for why this must not mutate the object GetAsync returned.
+-            return Ok(DashboardCredentialMasking.MaskForRead(dashboard));
++            // MUTANT test/mutants 957-dashboard-get-masking-neutralize: reverts to the
++            // pre-#957 call, returning the persisted DashboardDefinition (REST widget
++            // credentials verbatim) to any viewer who merely passes CanAccess. See
++            // test/mutants/entries/957-dashboard-get-masking-neutralize.json.
++            return Ok(dashboard);
+         }
+ 
+         [HttpPost("")]

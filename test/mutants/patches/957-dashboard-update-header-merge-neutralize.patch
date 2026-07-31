@@ -1,0 +1,23 @@
+diff --git a/src/WalkingTec.Mvvm.Mvc/_DashboardController.cs b/src/WalkingTec.Mvvm.Mvc/_DashboardController.cs
+index 6bcb352b3..ef5ccaef0 100644
+--- a/src/WalkingTec.Mvvm.Mvc/_DashboardController.cs
++++ b/src/WalkingTec.Mvvm.Mvc/_DashboardController.cs
+@@ -161,9 +161,15 @@ namespace WalkingTec.Mvvm.Mvc
+             // value to restore. F1 (#960): preservation is scoped to the widget's current
+             // REST destination — a URL edit to a different host drops (does not forward)
+             // stored headers, logged below. See DashboardCredentialMasking.ReconcileWidgetHeaders.
+-            var (headerError, headerWarnings) = DashboardCredentialMasking.ReconcileWidgetHeaders(dashboard.Widgets, existing.Widgets);
+-            if (headerError != null) return BadRequest(headerError);
+-            DashboardCredentialMasking.LogWarnings(_logger, headerWarnings);
++            // MUTANT test/mutants 957-dashboard-update-header-merge-neutralize: skips the
++            // reconciliation call entirely, reintroducing the pre-#957 "wholesale replace"
++            // write — a caller-submitted definition that never touched headers silently
++            // wipes them, and a round-tripped masked sentinel is persisted as a literal
++            // credential instead of being rejected/restored. See
++            // test/mutants/entries/957-dashboard-update-header-merge-neutralize.json.
++            // var (headerError, headerWarnings) = DashboardCredentialMasking.ReconcileWidgetHeaders(dashboard.Widgets, existing.Widgets);
++            // if (headerError != null) return BadRequest(headerError);
++            // DashboardCredentialMasking.LogWarnings(_logger, headerWarnings);
+ 
+             dashboard.Owner = existing.Owner; // preserve owner
+             dashboard.TenantId = tenantId;    // server-side tenant, prevent spoofing

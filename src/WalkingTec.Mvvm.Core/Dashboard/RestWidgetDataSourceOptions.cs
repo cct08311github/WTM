@@ -31,7 +31,24 @@ public class RestWidgetDataSourceOptions
     /// Custom request headers. Avoid putting long-lived secrets here —
     /// the Dashboard config is stored in plain JSON.
     /// </summary>
-    public Dictionary<string, string> Headers { get; set; } = new();
+    /// <remarks>
+    /// <b>Issue #957:</b> <c>_DashboardController.Get</c> masks every header VALUE
+    /// (never the key) before returning a widget's <see cref="RestWidgetDataSourceOptions"/>
+    /// to any caller who only has view (<c>CanAccess</c>) authorization — see
+    /// <see cref="WalkingTec.Mvvm.Core.Dashboard.DashboardCredentialMasking"/>. Because of
+    /// that, this property is deliberately nullable with no default value: System.Text.Json
+    /// leaves an unset property untouched on deserialization, so a request body that omits
+    /// the <c>headers</c> key entirely binds to <c>null</c> here, while <c>"headers": {}</c>
+    /// binds to an empty (non-null) dictionary — the two are indistinguishable if this
+    /// property defaults to <c>new()</c>. <c>_DashboardController.Create</c>/<c>Update</c>
+    /// (via <c>DashboardCredentialMasking.ReconcileWidgetHeaders</c>) rely on exactly that
+    /// distinction: <c>null</c> means "caller didn't touch headers, preserve whatever is
+    /// already persisted for this widget" (the shipped dashboard designer never renders a
+    /// headers-editing UI and always omits this key — without the preserve behaviour,
+    /// saving any REST widget through the designer would silently wipe its headers), while
+    /// <c>{}</c> means "caller explicitly wants zero headers, clear them."
+    /// </remarks>
+    public Dictionary<string, string>? Headers { get; set; }
 
     /// <summary>
     /// Optional request body for POST. Empty / null means no body.

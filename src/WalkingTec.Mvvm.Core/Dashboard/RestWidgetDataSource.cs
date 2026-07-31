@@ -563,21 +563,26 @@ public class RestWidgetDataSource : IWidgetDataSource
         }
 
         using var req = new HttpRequestMessage(new HttpMethod(normalizedMethod), options.Url);
-        foreach (var h in options.Headers)
+        // #957: Headers is now nullable (see its own XML doc) — a persisted widget with no
+        // configured headers deserializes to null, not an empty dictionary.
+        if (options.Headers != null)
         {
-            // S3: Header injection / CRLF guard — use the validating Add() instead of
-            // TryAddWithoutValidation(). HttpRequestHeaders.Add() throws FormatException
-            // when a name or value contains CRLF sequences or other invalid characters,
-            // preventing HTTP request-splitting via operator-controlled header config.
-            try
+            foreach (var h in options.Headers)
             {
-                req.Headers.Add(h.Key, h.Value);
-            }
-            catch (Exception ex) when (ex is FormatException || ex is InvalidOperationException)
-            {
-                throw new InvalidOperationException(
-                    $"REST widget: header '{h.Key}' was rejected by the HTTP stack " +
-                    "(possible invalid characters or CRLF in name/value).", ex);
+                // S3: Header injection / CRLF guard — use the validating Add() instead of
+                // TryAddWithoutValidation(). HttpRequestHeaders.Add() throws FormatException
+                // when a name or value contains CRLF sequences or other invalid characters,
+                // preventing HTTP request-splitting via operator-controlled header config.
+                try
+                {
+                    req.Headers.Add(h.Key, h.Value);
+                }
+                catch (Exception ex) when (ex is FormatException || ex is InvalidOperationException)
+                {
+                    throw new InvalidOperationException(
+                        $"REST widget: header '{h.Key}' was rejected by the HTTP stack " +
+                        "(possible invalid characters or CRLF in name/value).", ex);
+                }
             }
         }
         if (!string.IsNullOrEmpty(options.Body) &&

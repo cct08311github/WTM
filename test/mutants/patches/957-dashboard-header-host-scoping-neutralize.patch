@@ -1,0 +1,23 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Dashboard/DashboardCredentialMasking.cs b/src/WalkingTec.Mvvm.Core/Dashboard/DashboardCredentialMasking.cs
+index 3f68e03fe..53b79057d 100644
+--- a/src/WalkingTec.Mvvm.Core/Dashboard/DashboardCredentialMasking.cs
++++ b/src/WalkingTec.Mvvm.Core/Dashboard/DashboardCredentialMasking.cs
+@@ -345,10 +345,16 @@ public static class DashboardCredentialMasking
+             // F1: credentials are host-scoped — see this method's own XML remarks for the full
+             // rationale. Any URL that fails to parse on EITHER side is treated as "not the same
+             // destination"; never let an ambiguous comparison fall into the preserve branch.
++            // MUTANT test/mutants 957-dashboard-header-host-scoping-neutralize: forces
++            // sameDestination to always be true regardless of the actual comparison,
++            // reintroducing the F1 credential-forwarding defect — stored headers (and a
++            // round-tripped sentinel) carry over to ANY new destination an editor types,
++            // not just the one they were bound to. See
++            // test/mutants/entries/957-dashboard-header-host-scoping-neutralize.json.
+             var hasIncomingDestination = TryGetDestination(restOptions.Url, out var incomingDestination);
+             var hasExistingDestination = TryGetDestination(existingRestOptions?.Url, out var existingDestination);
+-            var sameDestination = hasIncomingDestination && hasExistingDestination &&
+-                                   string.Equals(incomingDestination, existingDestination, StringComparison.Ordinal);
++            var sameDestination = true || (hasIncomingDestination && hasExistingDestination &&
++                                   string.Equals(incomingDestination, existingDestination, StringComparison.Ordinal));
+ 
+             if (!sameDestination && existingHeaders is { Count: > 0 })
+             {

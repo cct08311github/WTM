@@ -146,6 +146,16 @@ namespace WalkingTec.Mvvm.Mvc
             var tenantId = GetTenantId();
             const string previewWidgetId = "_preview";
 
+            // #957: Preview binds WidgetDefinition straight from the request body, same
+            // threat model as _DashboardController.Create/Update. The transient dashboard
+            // created below is always brand new, so there is never an existing widget to
+            // fall back to — any masked-sentinel header value is always rejected here
+            // (DashboardCredentialMasking.ReconcileWidgetHeaders case (e)).
+            var previewWidgets = new Dictionary<string, WidgetDefinition> { [previewWidgetId] = widget };
+            var (headerError, headerWarnings) = DashboardCredentialMasking.ReconcileWidgetHeaders(previewWidgets, existingWidgets: null);
+            if (headerError != null) return BadRequest(headerError);
+            DashboardCredentialMasking.LogWarnings(_logger, headerWarnings);
+
             // Build a transient single-widget dashboard
             var transient = new DashboardDefinition
             {

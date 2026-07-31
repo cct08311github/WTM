@@ -1,0 +1,22 @@
+{
+  "id": "957-dashboard-preview-header-guard-neutralize",
+  "kind": "security",
+  "description": "Issue #957 adversarial review finding F5 (#960): the two existing #957 mutants (957-dashboard-get-masking-neutralize, 957-dashboard-update-header-merge-neutralize) both target _DashboardController only -- deleting _DashboardDesignerController.Preview's own DashboardCredentialMasking.ReconcileWidgetHeaders call site turned nothing red, because no test in any of the three original test files touched _DashboardDesignerController at all. This mutant closes that specific gap by comments-out the reconciliation call (and its BadRequest short-circuit and LogWarnings call) in Preview itself, exactly mirroring how 957-dashboard-update-header-merge-neutralize neutralizes the sibling call site in Update. With the guard neutralized, Preview would accept a masked-sentinel header value for a widget it is about to persist (even if only transiently) instead of rejecting it -- the same case (e) protection Create already has, now proven to depend on Preview's own call, not merely on shared code coverage from Update's tests. red_test is Preview_with_masked_sentinel_header_value_is_rejected, added specifically because no prior test exercised this call site. green_test is Preview_with_a_real_header_value_is_accepted_by_the_header_guard, a positive control proving a legitimate header value still passes Preview's guard (i.e. this mutant's blast radius is the sentinel-rejection check specifically, not 'Preview always returns something different') -- unaffected by this mutation since a non-sentinel value was never going to be rejected by the guard in the first place.",
+  "target_file": "src/WalkingTec.Mvvm.Mvc/_DashboardDesignerController.cs",
+  "target_symbol": "_DashboardDesignerController.Preview(WidgetDefinition, CancellationToken) -- the DashboardCredentialMasking.ReconcileWidgetHeaders(...) call, its BadRequest short-circuit, and the LogWarnings call, line ~155-157",
+  "patch": "patches/957-dashboard-preview-header-guard-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.DashboardCredentialMaskingEndToEndTests.Preview_with_masked_sentinel_header_value_is_rejected",
+  "red_tests": [
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardCredentialMaskingEndToEndTests.Preview_with_masked_sentinel_header_value_is_rejected"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardCredentialMaskingEndToEndTests.Preview_with_masked_sentinel_header_value_is_rejected": "Expected object not to be <null> because Preview always builds a brand-new transient widget, so there is never an existing value to restore"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured by applying the patch manually and running exactly as run_mutant.py does (`dotnet build -c Release` then `dotnet test -c Release --no-restore --filter <red_test_filter>`) before writing this file, then reverting the manual patch application and letting run_mutant.py apply/run/revert it itself for the actual gate run: 'Expected object not to be <null> because Preview always builds a brand-new transient widget, so there is never an existing value to restore — a masked-sentinel header value can never be legitimate here, same as Create.' Also ran the full Preview-filtered test set (17 tests, unrelated Preview/GetDeletePreview tests included) under the same mutant beforehand to confirm this was the ONLY test that went red.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.DashboardCredentialMaskingEndToEndTests.Preview_with_a_real_header_value_is_accepted_by_the_header_guard",
+  "green_tests": [
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardCredentialMaskingEndToEndTests.Preview_with_a_real_header_value_is_accepted_by_the_header_guard"
+  ]
+}

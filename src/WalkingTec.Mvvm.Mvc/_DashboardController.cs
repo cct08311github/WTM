@@ -79,7 +79,11 @@ namespace WalkingTec.Mvvm.Mvc
                 return Forbid();
             }
 
-            return Ok(dashboard);
+            // #957: CanAccess authorizes viewing dashboard content, not the credentials
+            // behind a REST widget's data source — mask header VALUES (keys survive) before
+            // this ever reaches JSON serialization. See DashboardCredentialMasking's own
+            // XML doc for why this must not mutate the object GetAsync returned.
+            return Ok(DashboardCredentialMasking.MaskForRead(dashboard));
         }
 
         [HttpPost("")]
@@ -97,6 +101,15 @@ namespace WalkingTec.Mvvm.Mvc
 
             var widgetTypeError = ValidateWidgetTypes(dashboard, _options);
             if (widgetTypeError != null) return BadRequest(widgetTypeError);
+
+            // #957: Create has no previously-persisted widget to fall back to, so a
+            // masked-sentinel header value here is always rejected — see
+            // DashboardCredentialMasking.ReconcileWidgetHeaders case (e). (No F1 host-scoped
+            // drops are possible on Create either, for the same reason — nothing existing to
+            // drop from — but Warnings is still logged for consistency with Update/Preview.)
+            var (headerError, headerWarnings) = DashboardCredentialMasking.ReconcileWidgetHeaders(dashboard.Widgets, existingWidgets: null);
+            if (headerError != null) return BadRequest(headerError);
+            DashboardCredentialMasking.LogWarnings(_logger, headerWarnings);
 
             var (userId, _) = GetUserInfo();
             dashboard.Owner = userId;
@@ -140,6 +153,17 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 return Forbid();
             }
+
+            // #957: reconcile caller-submitted REST widget headers against what is
+            // currently persisted before this definition is written — preserves headers
+            // the caller's editor never touched (absent/null), honours an explicit clear
+            // ({}), and rejects a round-tripped masked-sentinel value with no existing
+            // value to restore. F1 (#960): preservation is scoped to the widget's current
+            // REST destination — a URL edit to a different host drops (does not forward)
+            // stored headers, logged below. See DashboardCredentialMasking.ReconcileWidgetHeaders.
+            var (headerError, headerWarnings) = DashboardCredentialMasking.ReconcileWidgetHeaders(dashboard.Widgets, existing.Widgets);
+            if (headerError != null) return BadRequest(headerError);
+            DashboardCredentialMasking.LogWarnings(_logger, headerWarnings);
 
             dashboard.Owner = existing.Owner; // preserve owner
             dashboard.TenantId = tenantId;    // server-side tenant, prevent spoofing
