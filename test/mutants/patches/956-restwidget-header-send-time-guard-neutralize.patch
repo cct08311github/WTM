@@ -1,0 +1,19 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs b/src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs
+index eeaf19ac4..62a4d0f09 100644
+--- a/src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs
++++ b/src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs
+@@ -770,8 +770,13 @@ public class RestWidgetDataSource : IWidgetDataSource
+         // in JsonFileDashboardService/EfCoreDashboardService.ValidateWidgetConfigs — a widget
+         // persisted before this check shipped (or edited directly in the JSON store) is only
+         // ever protected by THIS call. See ValidateHeaders for the full rationale.
++        // MUTANT test/mutants 956-restwidget-header-send-time-guard-neutralize:
++        // `false &&` short-circuits this block so the send-time guard never actually throws --
++        // a request carrying a hard-rejected header name, too many headers, or an oversized
++        // header set reaches the outgoing HTTP request unmodified. See test/mutants/entries/
++        // 956-restwidget-header-send-time-guard-neutralize.json.
+         var headerValidationError = ValidateHeaders(options.Headers);
+-        if (headerValidationError != null)
++        if (false && headerValidationError != null)
+         {
+             throw new InvalidOperationException(headerValidationError);
+         }

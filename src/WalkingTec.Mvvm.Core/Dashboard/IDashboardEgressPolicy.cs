@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -94,6 +95,24 @@ public interface IDashboardEgressPolicy
 /// TOCTOU-safety property <see cref="RestWidgetDataSource"/>'s DNS pinning already
 /// provides for the built-in blocklist.
 /// </summary>
+/// <remarks>
+/// <b>Issue #948 review finding F8 (implemented): <see cref="TenantId"/>, <see cref="DashboardId"/>,
+/// <see cref="WidgetId"/>, <see cref="Method"/>, <see cref="HeaderNames"/>, and
+/// <see cref="HasBody"/> were added after the initial #948/#955 release.</b> The #955 review
+/// deferred this on the theory that adding members later would be binary-breaking — false for
+/// this type specifically: it is a <c>sealed class</c> constructed only by the framework
+/// (<see cref="RestWidgetDataSource"/>) and only ever read by policy implementations, so new
+/// non-<c>required</c> properties are purely additive for every existing caller and every
+/// existing <see cref="IDashboardEgressPolicy"/> implementation. The real reason to add them now
+/// is semantic freezing, not a binary-compat deadline: a policy author who never saw
+/// <see cref="TenantId"/> on this type would have no way to write a tenant-scoped policy later
+/// without a breaking interface change, and every release this type ships without it makes that
+/// freeze more expensive to undo. All six new properties are constructed by a single function,
+/// <see cref="RestWidgetDataSource.BuildDestination"/>, called from both the fast pre-check
+/// (<see cref="RestWidgetDataSource.ValidateUrlAsync"/>) and the authoritative connect-time check
+/// (<see cref="RestWidgetDataSource.PinnedConnectAsync"/>) — the same destination shape reaches a
+/// policy regardless of which of the two checks is asking.
+/// </remarks>
 public sealed class DashboardEgressDestination
 {
     /// <summary>The original request URI (hostname form — never rewritten to an IP).</summary>
@@ -116,4 +135,56 @@ public sealed class DashboardEgressDestination
     /// (as opposed to <c>https://</c>).
     /// </summary>
     public required bool IsPlainHttp { get; init; }
+
+    /// <summary>
+    /// Issue #948-F8: the tenant the fetching widget belongs to, when known — the same value
+    /// threaded through <see cref="WidgetDataRequest.TenantId"/>. <c>null</c> for callers that
+    /// never supplied one, including <c>DashboardAlertHostedService.EvaluateAllAsync</c>'s
+    /// background evaluation path, which calls <c>GetWidgetDataAsync</c> with no user and,
+    /// depending on the summary, potentially no tenant either.
+    /// </summary>
+    public string? TenantId { get; init; }
+
+    /// <summary>
+    /// Issue #948-F8: the id of the dashboard the fetching widget belongs to, when known.
+    /// <c>null</c> for a <c>Preview</c>-only transient widget or any caller that did not
+    /// supply one.
+    /// </summary>
+    public string? DashboardId { get; init; }
+
+    /// <summary>
+    /// Issue #948-F8: the id of the fetching widget itself, when known. <c>null</c> under the
+    /// same conditions as <see cref="DashboardId"/>.
+    /// </summary>
+    public string? WidgetId { get; init; }
+
+    /// <summary>
+    /// Issue #948-F8: the normalized (upper-case) HTTP method this request will use
+    /// (e.g. <c>"GET"</c>, <c>"POST"</c>).
+    /// </summary>
+    public string? Method { get; init; }
+
+    /// <summary>
+    /// Issue #948-F8: the request header NAMES this request will send — never their values.
+    /// <c>null</c> or empty when the widget has no configured headers.
+    /// </summary>
+    /// <remarks>
+    /// <b>Read both sentences before using this for anything security-relevant.</b> (1) It
+    /// tells you which header names are ABOUT to be sent to this destination — useful, for
+    /// example, for a policy that wants to log "an Authorization header is present" without
+    /// ever touching the credential itself, since a policy is host code and anything it
+    /// receives may end up in a log line. (2) Seeing a name here does **not** mean the
+    /// framework has validated its value in any way, and does not mean the name itself passed
+    /// <see cref="RestWidgetDataSource"/>'s own hard-rejected-header-name check (issue #956) —
+    /// that check runs independently, before and after this policy is consulted, and rejects
+    /// the request outright rather than filtering the name out of this collection. Do not infer
+    /// "this header is safe" from its presence here.
+    /// </remarks>
+    public IReadOnlyCollection<string>? HeaderNames { get; init; }
+
+    /// <summary>
+    /// Issue #948-F8: <c>true</c> when this request carries a non-empty body (POST only —
+    /// <see cref="RestWidgetDataSource"/> never sends a body on GET).
+    /// </summary>
+    public bool HasBody { get; init; }
 }

@@ -1,0 +1,17 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs b/src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs
+index eeaf19ac4..5192a71c1 100644
+--- a/src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs
++++ b/src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs
+@@ -1046,7 +1046,11 @@ public class RestWidgetDataSource : IWidgetDataSource
+         var canonicalNode = CanonicalizeNode(node);
+         var canonicalJson = canonicalNode?.ToJsonString(_cacheKeyJsonOptions) ?? "null";
+ 
+-        var canonical = (tenantId ?? NullTenantSentinel) + canonicalJson;
++        // MUTANT test/mutants 952-restwidget-cachekey-tenant-component-neutralize:
++        // tenant component of the canonical cache-key input is dropped, so two
++        // requests differing only in TenantId hash to the same cache key. See
++        // test/mutants/entries/952-restwidget-cachekey-tenant-component-neutralize.json.
++        var canonical = canonicalJson;
+         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
+         return CacheKeyPrefix + Convert.ToHexStringLower(hash);
+     }

@@ -1,0 +1,19 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Dashboard/JsonFileDashboardService.cs b/src/WalkingTec.Mvvm.Core/Dashboard/JsonFileDashboardService.cs
+index e9879d348..249b85b6f 100644
+--- a/src/WalkingTec.Mvvm.Core/Dashboard/JsonFileDashboardService.cs
++++ b/src/WalkingTec.Mvvm.Core/Dashboard/JsonFileDashboardService.cs
+@@ -323,7 +323,13 @@ public class JsonFileDashboardService : IDashboardService
+                 // See RestWidgetDataSource.ValidateHeaders for the full rationale — this call
+                 // and RestWidgetDataSource's own send-time call share that one implementation,
+                 // not two hand-synchronized copies.
+-                if (src.RestOptions != null)
++                // MUTANT test/mutants 956-restwidget-header-write-time-guard-neutralize:
++                // `false &&` short-circuits this block so ValidateHeaders is never actually
++                // consulted at write time -- a widget definition carrying a hard-rejected
++                // header name, too many headers, or an oversized header set is persisted
++                // without complaint. See test/mutants/entries/
++                // 956-restwidget-header-write-time-guard-neutralize.json.
++                if (false && src.RestOptions != null)
+                 {
+                     var headerError = RestWidgetDataSource.ValidateHeaders(src.RestOptions.Headers);
+                     if (headerError != null)

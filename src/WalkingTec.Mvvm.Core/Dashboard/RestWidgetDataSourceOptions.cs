@@ -97,11 +97,17 @@ public class RestWidgetDataSourceOptions
     /// host-registered <see cref="IDashboardEgressPolicy"/> to explicitly approve the
     /// specific resolved destination (see that interface's XML doc). The field is kept
     /// deserializable for JSON back-compat with already-persisted widget JSON — it is not
-    /// itself read by <see cref="RestWidgetDataSource"/> as a grant, and (issue #955
-    /// review correction) <see cref="DashboardEgressDestination"/> carries no widget,
-    /// dashboard, or tenant identifier a policy could use to look this field's originating
-    /// widget back up even if it wanted to — an earlier version of this remark claimed
-    /// otherwise; that capability does not exist.
+    /// itself read by <see cref="RestWidgetDataSource"/> as a grant. (Issue #955 review
+    /// correction, since superseded: an earlier version of this remark claimed
+    /// <see cref="DashboardEgressDestination"/> carries no widget/dashboard/tenant
+    /// identifier a policy could use to look this field's originating widget back up —
+    /// that was true when written but is no longer true. Issue #948-F8 added
+    /// <see cref="DashboardEgressDestination.TenantId"/>,
+    /// <see cref="DashboardEgressDestination.DashboardId"/>, and
+    /// <see cref="DashboardEgressDestination.WidgetId"/> — a policy CAN now correlate a
+    /// destination back to the widget/dashboard/tenant that produced it. This still does
+    /// not make this boolean itself a grant; the grant is still exclusively
+    /// <see cref="IDashboardEgressPolicy.IsAllowedAsync"/>'s return value.)
     /// </remarks>
     public bool AllowPrivateNetwork { get; set; } = false;
 

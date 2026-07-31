@@ -1,0 +1,22 @@
+{
+  "id": "948f8-configuredallowlist-method-check-neutralize",
+  "kind": "security",
+  "description": "Issue #948-F8: neutralizes ConfiguredAllowlistDashboardEgressPolicy.IsAllowedAsync's Methods gate by forcing the check to never actually run via a compile-preserving `false &&` prefix (same established pattern as the sibling write/send-time mutants). This reintroduces the exact defect the Methods field's own consumer requirement closes: an entry configured with Methods = [\"GET\"] (intended to let a REST widget only GET a specific internal host, not POST/DELETE/etc. to it) instead approves ANY method to that host/IP/port -- i.e. DashboardEgressAllowlistEntry.Methods becomes exactly the 'destination field with no in-repo consumer' issue #948-F8 explicitly required NOT to ship. red_test is the non-matching-method denial; green_test is the matching-method approval, proving the mutant's blast radius is specifically the Methods gate, not host/port matching (which stays correct either way).",
+  "target_file": "src/WalkingTec.Mvvm.Core/Dashboard/ConfiguredAllowlistDashboardEgressPolicy.cs",
+  "target_symbol": "ConfiguredAllowlistDashboardEgressPolicy.IsAllowedAsync(DashboardEgressDestination, CancellationToken) -- the entry.Methods check, line ~89",
+  "patch": "patches/948f8-configuredallowlist-method-check-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.ConfiguredAllowlistDashboardEgressPolicyTests.IsAllowedAsync_NonMatchingMethod_Denies",
+  "red_tests": [
+    "WalkingTec.Mvvm.Core.Test.Dashboard.ConfiguredAllowlistDashboardEgressPolicyTests.IsAllowedAsync_NonMatchingMethod_Denies"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Core.Test.Dashboard.ConfiguredAllowlistDashboardEgressPolicyTests.IsAllowedAsync_NonMatchingMethod_Denies": "Assert\\.IsFalse failed\\. an entry restricted to GET must not approve a POST destination"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured by applying the patch manually and running exactly as run_mutant.py does (`dotnet build -c Release` then `dotnet test -c Release --no-restore --filter <red_test_filter>`) before writing this file, then reverting the manual patch application and letting run_mutant.py apply/run/revert it itself for the actual gate run. The declared red test failed with exactly this message (MSTest's own Assert.IsFalse -- confirmed identical between Debug and Release). Also ran the full ConfiguredAllowlistDashboardEgressPolicyTests filter (23 tests, including the new TenantId gating group and all pre-existing Host/Port matching tests) under the same mutant beforehand: only the one declared test failed; IsAllowedAsync_MatchingMethod_Allows and IsAllowedAsync_MethodMatchIsCaseInsensitive and IsAllowedAsync_NullMethods_AllowsAnyMethod all stayed green (expected -- disabling the check only removes a REJECTION path, so anything that was already supposed to be approved stays approved), and every TenantId/Host/Port test (an independent code block, untouched by this patch) stayed green.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.ConfiguredAllowlistDashboardEgressPolicyTests.IsAllowedAsync_MatchingMethod_Allows",
+  "green_tests": [
+    "WalkingTec.Mvvm.Core.Test.Dashboard.ConfiguredAllowlistDashboardEgressPolicyTests.IsAllowedAsync_MatchingMethod_Allows"
+  ]
+}

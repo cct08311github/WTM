@@ -459,6 +459,92 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             var id = await svc.CreateAsync(dashboard);
             id.Should().NotBeNullOrEmpty("empty dashboard is always valid");
         }
+
+        // ── #956: hard-rejected header names / count / size are rejected at WRITE time ──
+        // Independent of, and required in addition to, the send-time check in
+        // RestWidgetDataSource.FetchJsonAsync (see RestWidgetHeaderHardeningTests.cs) — a
+        // write-time-only check would leave an already-persisted widget unprotected forever,
+        // and a send-time-only check would give an operator reviewing/saving a widget
+        // definition no signal that it is invalid. Deleting the
+        // "RestWidgetDataSource.ValidateHeaders(src.RestOptions.Headers)" call in
+        // JsonFileDashboardService.ValidateWidgetConfigs turns every test in this group red —
+        // see test/mutants/entries/956-restwidget-header-write-time-guard-neutralize.json.
+
+        [TestMethod]
+        [DataRow("Host")]
+        [DataRow("Transfer-Encoding")]
+        [DataRow("Content-Length")]
+        [DataRow("Connection")]
+        [DataRow("Upgrade")]
+        [DataRow("TE")]
+        [DataRow("Trailer")]
+        [DataRow("Expect")]
+        [DataRow("Proxy-Authorization")]
+        public async Task CreateAsync_rejects_rest_widget_with_hard_rejected_header_name(string headerName)
+        {
+            var svc = CreateService();
+            var dashboard = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8/data",
+                Headers = new Dictionary<string, string> { [headerName] = "x" }
+            });
+
+            var ex = await Assert.ThrowsExceptionAsync<ArgumentException>(() => svc.CreateAsync(dashboard));
+            ex.Message.Should().Contain(headerName);
+        }
+
+        [TestMethod]
+        public async Task CreateAsync_rejects_rest_widget_with_too_many_headers()
+        {
+            var svc = CreateService();
+            var headers = new Dictionary<string, string>();
+            for (int i = 0; i < 21; i++) { headers[$"X-Custom-{i}"] = "v"; }
+            var dashboard = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8/data",
+                Headers = headers
+            });
+
+            var ex = await Assert.ThrowsExceptionAsync<ArgumentException>(() => svc.CreateAsync(dashboard));
+            ex.Message.Should().Contain("header count");
+        }
+
+        [TestMethod]
+        public async Task CreateAsync_rejects_rest_widget_with_headers_exceeding_total_size()
+        {
+            var svc = CreateService();
+            var dashboard = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8/data",
+                Headers = new Dictionary<string, string> { ["X-Big"] = new string('v', 9 * 1024) }
+            });
+
+            var ex = await Assert.ThrowsExceptionAsync<ArgumentException>(() => svc.CreateAsync(dashboard));
+            ex.Message.Should().Contain("total header");
+        }
+
+        /// <summary>
+        /// Positive control (issue #956): a real Authorization credential plus a custom
+        /// header must still be accepted at write time — proving the guard is scoped to
+        /// the hard-rejected set, not "any Headers".
+        /// </summary>
+        [TestMethod]
+        public async Task CreateAsync_accepts_rest_widget_with_Authorization_and_custom_header()
+        {
+            var svc = CreateService();
+            var dashboard = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8/data",
+                Headers = new Dictionary<string, string>
+                {
+                    ["Authorization"] = "Bearer real-token",
+                    ["X-Api-Key"] = "real-key"
+                }
+            });
+
+            var id = await svc.CreateAsync(dashboard);
+            id.Should().NotBeNullOrEmpty("Authorization and custom headers are the explicitly supported use case");
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════════════

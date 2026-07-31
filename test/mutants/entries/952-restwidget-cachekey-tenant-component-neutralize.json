@@ -1,0 +1,22 @@
+{
+  "id": "952-restwidget-cachekey-tenant-component-neutralize",
+  "kind": "security",
+  "description": "Issue #952: neutralizes the tenant component of RestWidgetDataSource.BuildCacheKey's canonical cache-key input by dropping `(tenantId ?? NullTenantSentinel) +` and hashing only the canonicalized options JSON. This reintroduces the exact defect #952 exists to close: two REST widget fetches identical in Url/Method/Body/JsonPath/Headers but belonging to different tenants collide on the same IMemoryCache entry, so tenant B's widget can read back tenant A's cached (potentially privileged) response for the whole CacheTtlSeconds window. red_tests below is the direct tenant-isolation test; green_tests is the byte-identical positive control (same tenant, same options), which must keep sharing a cache entry under this mutant -- proving the mutant's blast radius is specifically the tenant dimension, not caching in general.",
+  "target_file": "src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs",
+  "target_symbol": "RestWidgetDataSource.BuildCacheKey(RestWidgetDataSourceOptions, string?) -- the `canonical` assignment",
+  "patch": "patches/952-restwidget-cachekey-tenant-component-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.RestWidgetDataSourceTests.GetDataAsync_cache_NOT_shared_across_different_TenantId_for_identical_request",
+  "red_tests": [
+    "WalkingTec.Mvvm.Core.Test.Dashboard.RestWidgetDataSourceTests.GetDataAsync_cache_NOT_shared_across_different_TenantId_for_identical_request"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Core.Test.Dashboard.RestWidgetDataSourceTests.GetDataAsync_cache_NOT_shared_across_different_TenantId_for_identical_request": "Assert\\.AreEqual failed\\. Expected:<2>\\. Actual:<1>\\. identical Url/Method/Body/JsonPath but different TenantId must NOT share a cache entry"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured by applying the patch manually and running exactly as run_mutant.py does (`dotnet build -c Release` then `dotnet test -c Release --no-restore --filter <red_test_filter>`) before writing this file, then reverting the manual patch application and letting run_mutant.py apply/run/revert it itself for the actual gate run. The declared red test failed with exactly this message (MSTest's own Assert.AreEqual, not FluentAssertions -- unaffected by issue #959's Debug/Release FluentAssertions subject-name difference; verified the message is identical between a Debug and a Release run). Also ran the full RestWidgetDataSourceTests filter (54 tests) under the same mutant beforehand to confirm the failure set was EXACTLY this one test -- every other cache-key test (Headers isolation, the byte-identical positive control, and the end-to-end attack reproduction, all of which use the SAME tenant on both sides of their comparison) stayed green, confirming the mutation's blast radius matches what is declared here.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.RestWidgetDataSourceTests.GetDataAsync_cache_IS_shared_for_byte_identical_requests",
+  "green_tests": [
+    "WalkingTec.Mvvm.Core.Test.Dashboard.RestWidgetDataSourceTests.GetDataAsync_cache_IS_shared_for_byte_identical_requests"
+  ]
+}

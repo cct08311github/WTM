@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -53,6 +54,16 @@ namespace WalkingTec.Mvvm.Core.Dashboard;
 ///         to prevent memory exhaustion.</item>
 ///   <item>Request timeout bounded by <see cref="RestWidgetDataSourceOptions.TimeoutSeconds"/>
 ///         (clamped to [1, 60]).</item>
+///   <item>Cache key (issue #952): <c>IMemoryCache</c> key is <c>SHA256(tenant + canonical
+///         JSON of the ENTIRE options object)</c> — see <see cref="BuildCacheKey"/> for why
+///         this is a hash of the whole object rather than a hand-picked field list.</item>
+///   <item>Header hardening (issue #956): a fixed set of hop-by-hop/framing header names
+///         (<c>Host</c>, <c>Transfer-Encoding</c>, <c>Content-Length</c>, <c>Connection</c>,
+///         <c>Upgrade</c>, <c>TE</c>, <c>Trailer</c>, <c>Expect</c>, anything starting with
+///         <c>Proxy-</c>) is rejected outright, plus a header-count and total-size cap — see
+///         <see cref="ValidateHeaders"/>, enforced at both write time
+///         (<c>JsonFileDashboardService</c>/<c>EfCoreDashboardService.ValidateWidgetConfigs</c>)
+///         and send time (<see cref="FetchJsonAsync"/>).</item>
 /// </list>
 /// </remarks>
 public class RestWidgetDataSource : IWidgetDataSource
@@ -82,10 +93,41 @@ public class RestWidgetDataSource : IWidgetDataSource
     /// </summary>
     internal const string EgressPolicyOptionKey = "WtmRestWidget.EgressPolicy";
 
+    /// <summary>
+    /// <see cref="HttpRequestOptions"/> key used to pass the <see cref="RestWidgetRequestContext"/>
+    /// built by <see cref="BuildRequestContext"/> from <see cref="FetchJsonAsync"/> to
+    /// <see cref="PinnedConnectAsync"/> (issue #948-F8). The pre-check
+    /// (<see cref="ValidateUrlAsync"/>) builds its own context from the same inputs
+    /// (<c>options</c>/tenantId/dashboardId/widgetId) via the same function — this key only
+    /// exists to carry that value across the async boundary into the connect-time callback,
+    /// which has no other way to see it.
+    /// </summary>
+    internal const string RequestContextOptionKey = "WtmRestWidget.RequestContext";
+
     private const int TimeoutSecondsMin = 1;
     private const int TimeoutSecondsMax = 60;
     private const int MaxResponseBytesMin = 1024;           // 1 KB
     private const int MaxResponseBytesDefault = 1024 * 1024; // 1 MiB
+
+    // ── Header hardening (issue #956) ───────────────────────────────────
+
+    /// <summary>
+    /// Header names <see cref="RestWidgetDataSource"/> rejects outright — never configurable,
+    /// not subject to any <see cref="IDashboardEgressPolicy"/> override. See
+    /// <see cref="ValidateHeaders"/> for the full rationale.
+    /// </summary>
+    internal static readonly FrozenSet<string> HardRejectedHeaderNames =
+        new[] { "Host", "Transfer-Encoding", "Content-Length", "Connection", "Upgrade", "TE", "Trailer", "Expect" }
+        .ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Maximum number of custom headers a REST widget may configure (issue #956).</summary>
+    internal const int MaxHeaderCount = 20;
+
+    /// <summary>
+    /// Maximum total UTF-8 byte length of all header names plus values combined
+    /// (issue #956).
+    /// </summary>
+    internal const int MaxHeaderTotalBytes = 8 * 1024; // 8 KB
 
     public string Name => "rest";
     public WidgetDataSourceKind Kind => WidgetDataSourceKind.Rest;
@@ -115,15 +157,20 @@ public class RestWidgetDataSource : IWidgetDataSource
         // messages before we even attempt the TCP connection.
         // The authoritative TOCTOU-safe check happens again at actual connect time
         // inside PinnedConnectAsync via SocketsHttpHandler.ConnectCallback.
-        await ValidateUrlAsync(options, ct, _egressPolicy).ConfigureAwait(false);
+        // #948-F8: tenantId/dashboardId/widgetId are threaded through so the destination a
+        // policy sees carries this fetch's identity (see BuildRequestContext/BuildDestination).
+        await ValidateUrlAsync(options, ct, _egressPolicy, request.TenantId, request.DashboardId, request.WidgetId)
+            .ConfigureAwait(false);
 
-        var cacheKey = BuildCacheKey(options);
+        // #952: cache key is a hash of tenant + the ENTIRE options object — see BuildCacheKey.
+        var cacheKey = BuildCacheKey(options, request.TenantId);
         if (options.CacheTtlSeconds > 0 && _cache.TryGetValue(cacheKey, out WidgetDataResult? cached) && cached != null)
         {
             return cached;
         }
 
-        var json = await FetchJsonAsync(options, ct).ConfigureAwait(false);
+        var json = await FetchJsonAsync(options, ct, request.TenantId, request.DashboardId, request.WidgetId)
+            .ConfigureAwait(false);
         var node = ExtractJsonPath(json, options.JsonPath);
         var result = MapToWidgetResult(node);
 
@@ -207,7 +254,8 @@ public class RestWidgetDataSource : IWidgetDataSource
     /// connected fine downstream).
     /// </remarks>
     internal static async Task ValidateUrlAsync(
-        RestWidgetDataSourceOptions options, CancellationToken ct = default, IDashboardEgressPolicy? egressPolicy = null)
+        RestWidgetDataSourceOptions options, CancellationToken ct = default, IDashboardEgressPolicy? egressPolicy = null,
+        string? tenantId = null, string? dashboardId = null, string? widgetId = null)
     {
         if (string.IsNullOrWhiteSpace(options.Url))
         {
@@ -295,7 +343,12 @@ public class RestWidgetDataSource : IWidgetDataSource
         // uses at connect time — see this method's own remarks for why that (not two
         // hand-synchronized implementations) is what makes the ANY-one-candidate-suffices
         // semantics actually match between the two layers.
-        var approvedIp = await SelectConnectableIpAsync(ips, uri, resolvedPort, isPlainHttp, egressPolicy, ct)
+        // #948-F8: build the request context (tenant/dashboard/widget identity + method/header
+        // names/has-body) via the SAME function FetchJsonAsync uses, so the destination this
+        // pre-check hands to egressPolicy is field-for-field identical to what the connect-time
+        // check will hand it for the same fetch — see BuildRequestContext/BuildDestination.
+        var requestContext = BuildRequestContext(options, tenantId, dashboardId, widgetId);
+        var approvedIp = await SelectConnectableIpAsync(ips, uri, resolvedPort, isPlainHttp, egressPolicy, ct, requestContext)
             .ConfigureAwait(false);
         if (approvedIp == null)
         {
@@ -425,6 +478,14 @@ public class RestWidgetDataSource : IWidgetDataSource
             new HttpRequestOptionsKey<IDashboardEgressPolicy?>(EgressPolicyOptionKey),
             out var egressPolicy);
 
+        // #948-F8: read back the SAME context FetchJsonAsync built via BuildRequestContext —
+        // guarantees this connect-time destination matches the pre-check's field-for-field.
+        // Delegates to ReadRequestContext (rather than inlining the TryGetValue call here) so a
+        // test can exercise the EXACT readback logic directly — SocketsHttpConnectionContext has
+        // no public constructor (see ReadRequestContext's own doc comment), so nothing can drive
+        // this method itself in a unit test; only this one-line delegation stays unpinned.
+        var requestContext = ReadRequestContext(context.InitialRequestMessage);
+
         var host = context.DnsEndPoint.Host;
         var port = context.DnsEndPoint.Port;
         var requestUri = context.InitialRequestMessage.RequestUri;
@@ -443,7 +504,7 @@ public class RestWidgetDataSource : IWidgetDataSource
 
         var chosen = await SelectConnectableIpAsync(
             candidates, requestUri ?? new Uri($"{(isPlainHttp ? "http" : "https")}://{host}:{port}/"),
-            port, isPlainHttp, egressPolicy, ct).ConfigureAwait(false);
+            port, isPlainHttp, egressPolicy, ct, requestContext).ConfigureAwait(false);
         if (chosen == null)
         {
             // All resolved IPs are in blocked ranges (and none was approved by
@@ -509,7 +570,7 @@ public class RestWidgetDataSource : IWidgetDataSource
     /// <returns>The first connectable/approved <see cref="IPAddress"/>, or <c>null</c> if none is.</returns>
     internal static async ValueTask<IPAddress?> SelectConnectableIpAsync(
         IPAddress[] candidates, Uri requestUri, int port, bool isPlainHttp,
-        IDashboardEgressPolicy? egressPolicy, CancellationToken ct)
+        IDashboardEgressPolicy? egressPolicy, CancellationToken ct, RestWidgetRequestContext? requestContext = null)
     {
         if (!isPlainHttp)
         {
@@ -527,14 +588,10 @@ public class RestWidgetDataSource : IWidgetDataSource
 
         foreach (var ip in candidates)
         {
-            var destination = new DashboardEgressDestination
-            {
-                RequestUri = requestUri,
-                ResolvedAddress = ip,
-                Port = port,
-                IsPrivateNetwork = IsBlockedIp(ip),
-                IsPlainHttp = isPlainHttp,
-            };
+            // #948-F8: the ONE place a DashboardEgressDestination is ever constructed — both
+            // ValidateUrlAsync (pre-check) and PinnedConnectAsync (connect-time) reach this same
+            // call via this same method, so the two never risk building it differently.
+            var destination = BuildDestination(requestUri, ip, port, isPlainHttp, requestContext);
             if (await egressPolicy.IsAllowedAsync(destination, ct).ConfigureAwait(false))
             {
                 return ip;
@@ -543,10 +600,184 @@ public class RestWidgetDataSource : IWidgetDataSource
         return null;
     }
 
+    /// <summary>
+    /// Issue #948-F8: the single function that constructs a <see cref="DashboardEgressDestination"/>
+    /// — called only from <see cref="SelectConnectableIpAsync"/>'s policy-consultation loop, which
+    /// in turn is the only code <see cref="ValidateUrlAsync"/> (pre-check) and
+    /// <see cref="PinnedConnectAsync"/> (connect-time) both go through. Do not construct
+    /// <see cref="DashboardEgressDestination"/> anywhere else — a second construction site is
+    /// exactly the "two hand-synchronized copies" shape this repo has already shipped bugs from
+    /// (see <see cref="ValidateUrlAsync"/>'s own remarks on why it delegates to
+    /// <see cref="SelectConnectableIpAsync"/> instead of re-implementing candidate selection).
+    /// </summary>
+    internal static DashboardEgressDestination BuildDestination(
+        Uri requestUri, IPAddress resolvedIp, int port, bool isPlainHttp, RestWidgetRequestContext? context)
+    {
+        return new DashboardEgressDestination
+        {
+            RequestUri = requestUri,
+            ResolvedAddress = resolvedIp,
+            Port = port,
+            IsPrivateNetwork = IsBlockedIp(resolvedIp),
+            IsPlainHttp = isPlainHttp,
+            TenantId = context?.TenantId,
+            DashboardId = context?.DashboardId,
+            WidgetId = context?.WidgetId,
+            Method = context?.Method,
+            HeaderNames = context?.HeaderNames,
+            HasBody = context?.HasBody ?? false,
+        };
+    }
+
+    /// <summary>
+    /// Issue #948-F8: everything about a REST widget fetch that an
+    /// <see cref="IDashboardEgressPolicy"/> might want to see about the CALLER — as opposed to
+    /// the network destination itself, which <see cref="DashboardEgressDestination"/> already
+    /// carried before this issue. Built by <see cref="BuildRequestContext"/>, called once by
+    /// <see cref="ValidateUrlAsync"/> (pre-check) and once by <see cref="FetchJsonAsync"/> (which
+    /// threads its result to <see cref="PinnedConnectAsync"/> via <see cref="RequestContextOptionKey"/>)
+    /// — same function, same inputs, so both calls produce field-equal contexts for the same fetch.
+    /// </summary>
+    internal sealed record RestWidgetRequestContext(
+        string? TenantId,
+        string? DashboardId,
+        string? WidgetId,
+        string Method,
+        IReadOnlyCollection<string>? HeaderNames,
+        bool HasBody);
+
+    /// <summary>
+    /// Issue #948-F8: the single function that builds a <see cref="RestWidgetRequestContext"/>
+    /// from a fetch's options and identity. Deterministic and side-effect-free — calling it
+    /// twice with the same arguments (as <see cref="ValidateUrlAsync"/> and
+    /// <see cref="FetchJsonAsync"/> each independently do) always produces field-equal results.
+    /// <see cref="RestWidgetRequestContext.HeaderNames"/> carries <paramref name="options"/>'s
+    /// header KEYS only — see that property's own doc comment on <see cref="DashboardEgressDestination.HeaderNames"/>
+    /// for why values must never appear here (a policy is host code and may log what it receives).
+    /// </summary>
+    internal static RestWidgetRequestContext BuildRequestContext(
+        RestWidgetDataSourceOptions options, string? tenantId, string? dashboardId, string? widgetId)
+    {
+        var method = string.IsNullOrWhiteSpace(options.Method) ? "GET" : options.Method.Trim().ToUpperInvariant();
+        var headerNames = options.Headers is { Count: > 0 }
+            ? (IReadOnlyCollection<string>)options.Headers.Keys.ToArray()
+            : null;
+        return new RestWidgetRequestContext(
+            tenantId, dashboardId, widgetId, method, headerNames, !string.IsNullOrEmpty(options.Body));
+    }
+
+    /// <summary>
+    /// Issue #948-F8: reads back the <see cref="RestWidgetRequestContext"/> <see cref="FetchJsonAsync"/>
+    /// stored on <paramref name="message"/>'s <see cref="HttpRequestMessage.Options"/> via
+    /// <see cref="RequestContextOptionKey"/>. <c>null</c> if none was set (e.g. a message built
+    /// outside <see cref="FetchJsonAsync"/>).
+    /// </summary>
+    /// <remarks>
+    /// Extracted specifically so a test can call it directly with a real
+    /// <see cref="HttpRequestMessage"/> — <see cref="PinnedConnectAsync"/> calls this same method
+    /// on <c>context.InitialRequestMessage</c>, but <see cref="PinnedConnectAsync"/> itself cannot
+    /// be driven from a unit test: its <c>SocketsHttpConnectionContext</c> parameter has no public
+    /// constructor (confirmed empirically, not assumed — see the #948-F8 test file). Extracting
+    /// this lookup means a test exercises the EXACT readback logic <see cref="PinnedConnectAsync"/>
+    /// depends on, not a hand-duplicated copy of it; only the one-line delegation inside
+    /// <see cref="PinnedConnectAsync"/> that calls this method remains outside what a test can
+    /// reach directly.
+    /// </remarks>
+    internal static RestWidgetRequestContext? ReadRequestContext(HttpRequestMessage message)
+    {
+        message.Options.TryGetValue(
+            new HttpRequestOptionsKey<RestWidgetRequestContext?>(RequestContextOptionKey),
+            out var requestContext);
+        return requestContext;
+    }
+
+    // ── Header hardening (issue #956) ───────────────────────────────────
+
+    /// <summary>
+    /// Issue #956: rejects a REST widget's <see cref="RestWidgetDataSourceOptions.Headers"/>
+    /// outright when it contains a hard-rejected name, too many headers, or too much total
+    /// name+value length. Returns a descriptive error message on rejection, or <c>null</c>
+    /// when <paramref name="headers"/> is acceptable (including <c>null</c>/empty).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>What is hard-rejected and why.</b> <c>Host</c>, <c>Transfer-Encoding</c>,
+    /// <c>Content-Length</c>, <c>Connection</c>, <c>Upgrade</c>, <c>TE</c>, <c>Trailer</c>,
+    /// <c>Expect</c>, and anything starting with <c>Proxy-</c> are never configurable — not
+    /// even via a permissive <see cref="IDashboardEgressPolicy"/> — because this specific set
+    /// breaks the invariants issue #948's own DNS-pinning/connect-time SSRF guard depends on.
+    /// <c>Host</c> is the sharpest example: <see cref="PinnedConnectAsync"/> validates and
+    /// connects to a specific resolved IP while deliberately keeping the outgoing request's URI
+    /// (and therefore its default <c>Host</c> header) as the original, already-approved
+    /// hostname — see that method's own remarks on why, and <see cref="RestWidgetDataSource"/>'s
+    /// class-level remarks for why HTTPS correctness depends on it. A caller-supplied <c>Host</c>
+    /// header override would let an operator-approved connection (this IP, this port) present as
+    /// a DIFFERENT virtual host to the server actually answering the socket — the URL the policy
+    /// checked never changes, but what the server treats the request as being FOR does. The other
+    /// names in the set are the standard hop-by-hop/framing headers .NET's own
+    /// <c>HttpRequestHeaders.Add</c> either special-cases or that would let a caller desynchronize
+    /// request framing (<c>Transfer-Encoding</c>/<c>Content-Length</c> smuggling), pin a raw
+    /// socket open (<c>Connection</c>/<c>Upgrade</c>/<c>TE</c>/<c>Trailer</c>), or manipulate
+    /// proxy-only semantics (<c>Proxy-*</c>) this client was never meant to expose.</para>
+    /// <para><b>What stays legal, deliberately.</b> <c>Authorization</c>, <c>X-Api-Key</c>, and
+    /// any other custom header are NOT rejected by this method — "a REST widget calling an
+    /// external service that needs an API key" is the explicit, supported use case this feature
+    /// exists to serve (see <see cref="RestWidgetDataSourceOptions.Headers"/>'s own doc comment
+    /// and issue #957's credential-masking feature, which exists because real credentials are
+    /// expected to live here).</para>
+    /// <para><b>Count and size caps.</b> At most <see cref="MaxHeaderCount"/> headers, and at
+    /// most <see cref="MaxHeaderTotalBytes"/> combined UTF-8 bytes across every name and value —
+    /// a bound on how much a caller-controlled widget definition can inflate the outgoing
+    /// request, independent of any single header's own content.</para>
+    /// <para><b>Enforced at BOTH write time and send time — this is the one shared
+    /// implementation both call.</b> <c>JsonFileDashboardService</c>/<c>EfCoreDashboardService
+    /// .ValidateWidgetConfigs</c> call this at Create/Update (Preview goes through the same
+    /// <c>CreateAsync</c>); <see cref="FetchJsonAsync"/> calls it again on every fetch. Write-time
+    /// only would leave a widget persisted before this method existed — or edited directly in
+    /// the JSON file store — permanently unprotected, since <c>ValidateWidgetConfigs</c> never
+    /// re-runs against already-persisted data. Send-time only would still work correctly, but an
+    /// operator reviewing a widget definition (or a future admin UI listing them) would have no
+    /// signal that a definition is invalid until someone actually views the widget.</para>
+    /// </remarks>
+    internal static string? ValidateHeaders(Dictionary<string, string>? headers)
+    {
+        if (headers == null || headers.Count == 0)
+        {
+            return null;
+        }
+
+        if (headers.Count > MaxHeaderCount)
+        {
+            return $"REST widget: header count {headers.Count} exceeds the maximum of {MaxHeaderCount}.";
+        }
+
+        long totalBytes = 0;
+        foreach (var (name, value) in headers)
+        {
+            if (!string.IsNullOrEmpty(name) &&
+                (HardRejectedHeaderNames.Contains(name) || name.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase)))
+            {
+                return $"REST widget: header '{name}' is not permitted. Hop-by-hop/framing " +
+                       "headers (Host, Transfer-Encoding, Content-Length, Connection, Upgrade, " +
+                       "TE, Trailer, Expect, Proxy-*) are never configurable — they can break " +
+                       "the SSRF guard's own invariants (see RestWidgetDataSource.ValidateHeaders).";
+            }
+            totalBytes += Encoding.UTF8.GetByteCount(name ?? "") + Encoding.UTF8.GetByteCount(value ?? "");
+        }
+
+        if (totalBytes > MaxHeaderTotalBytes)
+        {
+            return $"REST widget: total header name+value length {totalBytes} bytes exceeds the " +
+                   $"maximum of {MaxHeaderTotalBytes} bytes.";
+        }
+
+        return null;
+    }
+
     // ── HTTP fetch ───────────────────────────────────────────────────────
 
     private async Task<string> FetchJsonAsync(
-        RestWidgetDataSourceOptions options, CancellationToken ct)
+        RestWidgetDataSourceOptions options, CancellationToken ct,
+        string? tenantId = null, string? dashboardId = null, string? widgetId = null)
     {
         var client = _httpClientFactory.CreateClient(HttpClientName);
         client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds);
@@ -560,6 +791,16 @@ public class RestWidgetDataSource : IWidgetDataSource
             throw new InvalidOperationException(
                 $"REST widget: HTTP method '{options.Method}' is not allowed. " +
                 "Only GET and POST are supported for widget data sources.");
+        }
+
+        // #956 send-time enforcement: independent of, and in addition to, the write-time check
+        // in JsonFileDashboardService/EfCoreDashboardService.ValidateWidgetConfigs — a widget
+        // persisted before this check shipped (or edited directly in the JSON store) is only
+        // ever protected by THIS call. See ValidateHeaders for the full rationale.
+        var headerValidationError = ValidateHeaders(options.Headers);
+        if (headerValidationError != null)
+        {
+            throw new InvalidOperationException(headerValidationError);
         }
 
         using var req = new HttpRequestMessage(new HttpMethod(normalizedMethod), options.Url);
@@ -599,6 +840,14 @@ public class RestWidgetDataSource : IWidgetDataSource
         req.Options.Set(
             new HttpRequestOptionsKey<IDashboardEgressPolicy?>(EgressPolicyOptionKey),
             _egressPolicy);
+
+        // #948-F8: pass the SAME request context ValidateUrlAsync built (same function, same
+        // inputs) to PinnedConnectAsync via HttpRequestMessage.Options, so the connect-time
+        // destination a policy sees carries identical tenant/dashboard/widget/method/header-name/
+        // has-body values to what the pre-check already showed it.
+        req.Options.Set(
+            new HttpRequestOptionsKey<RestWidgetRequestContext?>(RequestContextOptionKey),
+            BuildRequestContext(options, tenantId, dashboardId, widgetId));
 
         // Note: the request URI is kept as the original hostname URL.
         // TLS SNI and server-certificate validation derive from the URI host (hostname),
@@ -738,10 +987,128 @@ public class RestWidgetDataSource : IWidgetDataSource
         return v.ToString();
     }
 
-    // ── Cache key ────────────────────────────────────────────────────────
+    // ── Cache key (issue #952) ──────────────────────────────────────────
 
-    private static string BuildCacheKey(RestWidgetDataSourceOptions o)
+    /// <summary>Cache-key format version — bumped whenever the canonicalization algorithm
+    /// itself changes, so a key computed by an old algorithm can never collide with one
+    /// computed by a new one.</summary>
+    internal const string CacheKeyPrefix = "WtmRestWidget::v2::";
+
+    /// <summary>
+    /// Sentinel substituted for a <c>null</c> tenant when building the canonical cache-key
+    /// input. The leading space makes it distinguishable from any tenant code this framework's
+    /// <c>TenantCode</c> convention would produce, so a null-tenant fetch can never collide
+    /// with a real tenant whose code happens to be the literal text <c>"null"</c>.
+    /// </summary>
+    private const string NullTenantSentinel = " null";
+
+    private static readonly JsonSerializerOptions _cacheKeyJsonOptions = new() { WriteIndented = false };
+
+    /// <summary>
+    /// Builds the <see cref="IMemoryCache"/> key for one REST widget fetch (issue #952).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The point is not "add Headers to the key" — the key is structurally incapable
+    /// of omitting a field.</b> Issue #952 exists because the pre-fix key
+    /// (<c>$"...{Method}::{Url}::{Body}::{JsonPath}"</c>) hand-enumerated four fields and
+    /// omitted <see cref="RestWidgetDataSourceOptions.Headers"/> entirely — two requests
+    /// differing only in <c>Headers</c> (e.g. one carrying a real <c>Authorization</c>, one
+    /// carrying none) shared a cache entry, so an unauthenticated second widget could read back
+    /// the first widget's authorized response for the whole TTL window. Re-enumerating the
+    /// fields (add <c>Headers</c>, keep the rest hand-listed) would only relocate the same
+    /// failure to the next field someone adds — during this issue's own design review, a
+    /// proposed fix that did exactly that itself omitted
+    /// <see cref="RestWidgetDataSourceOptions.AllowedPorts"/>, which is the concrete proof this
+    /// class of fix is not safe to repeat. Instead, this method reflection-serializes the ENTIRE
+    /// <paramref name="options"/> object — every current and future public property of
+    /// <see cref="RestWidgetDataSourceOptions"/> is automatically part of the key with no
+    /// per-field code anywhere in this method to keep in sync.</para>
+    /// <para><b>Determinism.</b> Default <see cref="JsonSerializer"/> property ordering
+    /// currently follows declaration order but that is not a documented, version-stable
+    /// contract, so this method does not rely on it: the serialized <see cref="JsonNode"/> tree
+    /// is recursively re-sorted by property name (<see cref="StringComparer.Ordinal"/>) at every
+    /// level via <see cref="CanonicalizeNode"/> before hashing. This is also what sorts
+    /// <see cref="RestWidgetDataSourceOptions.Headers"/> by key — <see cref="CanonicalizeNode"/>
+    /// is a generic JSON-object canonicalizer with no <c>Headers</c>-specific code; it would sort
+    /// any future <c>Dictionary&lt;string,string&gt;</c> property the same way, automatically.</para>
+    /// <para><b>Cache fragmentation is accepted, deliberately</b> (this repo's stated priority
+    /// order is Compatibility &gt; Security &gt; Quality &gt; Performance). Two widgets differing
+    /// only in, say, <see cref="RestWidgetDataSourceOptions.MaxResponseBytes"/> no longer share a
+    /// cache entry even though that field cannot affect the response body — the direct, accepted
+    /// cost of structural completeness over a smaller, hand-picked key.</para>
+    /// <para><b>No HMAC, no random salt — deliberate, not an oversight.</b> (a) Any actor able to
+    /// enumerate <see cref="IMemoryCache"/> keys in-process can equally read the plaintext
+    /// <c>Headers</c> straight out of the widget-definition cache; an HMAC keyed by a secret in
+    /// that SAME process would not raise the bar against that threat model, only add cost.
+    /// (b) A random per-process salt would make "two tenants get different keys" a tautology that
+    /// cannot fail any test — a documented failure mode in this repo (a proposed random-salt
+    /// design during this issue's own review was rejected for exactly this reason).</para>
+    /// <para><b>Tenant, not user/principal.</b> <paramref name="tenantId"/> is included; no
+    /// user/principal identifier is, for three independent reasons: (1) authorization
+    /// (<c>CanAccess</c>) already runs in the controller before <see cref="RestWidgetDataSource"/>
+    /// is ever reached, so by the time this method runs the caller is already known to be allowed
+    /// to view this widget; (2) <c>DashboardAlertHostedService.EvaluateAllAsync</c> calls
+    /// <c>GetWidgetDataAsync(..., null, summary.TenantId, ct)</c> — there is no user on that path
+    /// at all; (3) since issue #955 finding F6, fetch-time <paramref name="options"/> always comes from
+    /// the widget's own persisted <c>Source.RestOptions</c> (never from a caller-supplied request
+    /// parameter), so the response is a pure function of (tenant, options) — partitioning by user
+    /// would buy zero additional isolation while destroying the cache for every dashboard shared
+    /// across a team.</para>
+    /// <para><b><c>Headers == null</c> vs <c>Headers == {}</c> (issue #957 made these two
+    /// distinguishable at the model level): deliberately NOT canonicalized to the same key.</b>
+    /// Both currently produce a byte-identical outgoing request — <see cref="FetchJsonAsync"/>'s
+    /// <c>if (options.Headers != null) foreach (...)</c> adds zero headers either way — so
+    /// merging them into one cache-key representation would be a safe, valid optimization today.
+    /// This method deliberately does not, because doing so would require it to know and depend on
+    /// that fetch-time behaviour, re-introducing the exact per-field special-casing this whole
+    /// redesign exists to remove — this method stays a pure, generic canonicalizer of whatever
+    /// <paramref name="options"/> actually is. The cost is one avoidable cache miss the first time a
+    /// widget configured with <c>Headers: {}</c> and one with no configured headers would
+    /// otherwise have collided — accepted under the same performance-last priority as the
+    /// <c>MaxResponseBytes</c> fragmentation above.</para>
+    /// </remarks>
+    private static string BuildCacheKey(RestWidgetDataSourceOptions options, string? tenantId)
     {
-        return $"WtmRestWidget::{o.Method.ToUpperInvariant()}::{o.Url}::{o.Body ?? ""}::{o.JsonPath}";
+        var node = JsonSerializer.SerializeToNode(options, typeof(RestWidgetDataSourceOptions), _cacheKeyJsonOptions);
+        var canonicalNode = CanonicalizeNode(node);
+        var canonicalJson = canonicalNode?.ToJsonString(_cacheKeyJsonOptions) ?? "null";
+
+        var canonical = (tenantId ?? NullTenantSentinel) + canonicalJson;
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
+        return CacheKeyPrefix + Convert.ToHexStringLower(hash);
+    }
+
+    /// <summary>
+    /// Recursively rebuilds <paramref name="node"/> with every <see cref="JsonObject"/>'s
+    /// properties re-ordered by key (<see cref="StringComparer.Ordinal"/>) at every nesting
+    /// level. <see cref="JsonArray"/> element order is left untouched — array element order is
+    /// part of the value being canonicalized, not an artifact of serialization. Generic: knows
+    /// nothing about <see cref="RestWidgetDataSourceOptions"/> or <c>Headers</c> specifically —
+    /// any current or future object-valued (including dictionary-valued) property gets the same
+    /// deterministic treatment automatically.
+    /// </summary>
+    private static JsonNode? CanonicalizeNode(JsonNode? node)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                var sorted = new JsonObject();
+                foreach (var key in obj.Select(kv => kv.Key).OrderBy(k => k, StringComparer.Ordinal))
+                {
+                    // node[key] is still parented to `obj`; DeepClone() before handing it to a
+                    // new parent — a JsonNode can only ever have one parent at a time.
+                    sorted.Add(key, CanonicalizeNode(obj[key]?.DeepClone()));
+                }
+                return sorted;
+            case JsonArray arr:
+                var items = new JsonArray();
+                foreach (var item in arr)
+                {
+                    items.Add(CanonicalizeNode(item?.DeepClone()));
+                }
+                return items;
+            default:
+                return node?.DeepClone();
+        }
     }
 }

@@ -1,0 +1,18 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Dashboard/ConfiguredAllowlistDashboardEgressPolicy.cs b/src/WalkingTec.Mvvm.Core/Dashboard/ConfiguredAllowlistDashboardEgressPolicy.cs
+index 88db0f886..70881e067 100644
+--- a/src/WalkingTec.Mvvm.Core/Dashboard/ConfiguredAllowlistDashboardEgressPolicy.cs
++++ b/src/WalkingTec.Mvvm.Core/Dashboard/ConfiguredAllowlistDashboardEgressPolicy.cs
+@@ -86,7 +86,12 @@ public sealed class ConfiguredAllowlistDashboardEgressPolicy : IDashboardEgressP
+ 
+             // #948-F8: Method — null/empty entry.Methods means "any method" (back-compat: an
+             // entry configured before this field existed keeps matching exactly as it did).
+-            if (entry.Methods is { Length: > 0 } methods &&
++            // MUTANT test/mutants 948f8-configuredallowlist-method-check-neutralize:
++            // `false &&` short-circuits this block so an entry's Methods restriction is never
++            // actually enforced -- an entry configured for GET-only would also approve POST/
++            // DELETE/etc. to the same host/IP/port. See test/mutants/entries/
++            // 948f8-configuredallowlist-method-check-neutralize.json.
++            if (false && entry.Methods is { Length: > 0 } methods &&
+                 !Array.Exists(methods, m => string.Equals(m, destination.Method, StringComparison.OrdinalIgnoreCase)))
+             {
+                 continue;

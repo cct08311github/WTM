@@ -84,6 +84,24 @@ public sealed class ConfiguredAllowlistDashboardEgressPolicy : IDashboardEgressP
                 continue;
             }
 
+            // #948-F8: Method — null/empty entry.Methods means "any method" (back-compat: an
+            // entry configured before this field existed keeps matching exactly as it did).
+            if (entry.Methods is { Length: > 0 } methods &&
+                !Array.Exists(methods, m => string.Equals(m, destination.Method, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            // #948-F8: TenantId — null/empty entry.TenantId means "any tenant" (same back-compat
+            // reasoning as Methods above). A configured entry.TenantId only matches a destination
+            // that actually carries that same tenant; a destination with no tenant (e.g. a
+            // background alert evaluation with no TenantId) never matches a tenant-scoped entry.
+            if (!string.IsNullOrEmpty(entry.TenantId) &&
+                !string.Equals(entry.TenantId, destination.TenantId, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             return Task.FromResult(true);
         }
         return Task.FromResult(false);
@@ -110,4 +128,21 @@ public sealed class DashboardEgressAllowlistEntry
 
     /// <summary>Allowed destination ports for this entry. Null or empty means any port.</summary>
     public int[]? Ports { get; set; }
+
+    /// <summary>
+    /// Issue #948-F8: allowed HTTP methods for this entry (e.g. <c>["GET"]</c>), matched
+    /// case-insensitively against <see cref="DashboardEgressDestination.Method"/>. Null or
+    /// empty (the default) means any method — an entry configured before this field existed
+    /// keeps matching exactly as it did.
+    /// </summary>
+    public string[]? Methods { get; set; }
+
+    /// <summary>
+    /// Issue #948-F8: when set, this entry only approves a destination whose
+    /// <see cref="DashboardEgressDestination.TenantId"/> equals this value
+    /// (case-insensitive). Null or empty (the default) means any tenant, including a
+    /// destination with no tenant at all — an entry configured before this field existed
+    /// keeps matching exactly as it did.
+    /// </summary>
+    public string? TenantId { get; set; }
 }

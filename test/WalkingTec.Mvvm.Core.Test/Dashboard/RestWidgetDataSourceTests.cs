@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -8,6 +9,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using FluentAssertions;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core.Dashboard;
@@ -697,6 +699,232 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             var ex = await Assert.ThrowsExceptionAsync<InvalidOperationException>(
                 () => source.GetDataAsync(req, CancellationToken.None));
             StringAssert.Contains(ex.Message, "MaxResponseBytes");
+        }
+
+        // ── Cache key (issue #952) ────────────────────────────────────────
+        // #952 exists because the pre-fix key was Method::Url::Body::JsonPath — no tenant, no
+        // Headers. Deleting the tenant component of the new BuildCacheKey (i.e. reverting
+        // "(tenantId ?? NullTenantSentinel) + canonicalJson" to just "canonicalJson") turns
+        // GetDataAsync_cache_isolated_by_TenantId... red — see
+        // test/mutants/entries/952-restwidget-cachekey-tenant-component-neutralize.json.
+
+        private static RestWidgetDataSourceOptions AuthorizedFetchOptions(string url) => new()
+        {
+            Url = url,
+            Headers = new Dictionary<string, string> { ["Authorization"] = "Bearer victim-token" },
+            CacheTtlSeconds = 60
+        };
+
+        private static RestWidgetDataSourceOptions UnauthenticatedFetchOptions(string url) => new()
+        {
+            Url = url,
+            CacheTtlSeconds = 60
+        };
+
+        /// <summary>
+        /// Two requests identical in Url/Method/Body/JsonPath but different TenantId must not
+        /// share a cache entry. RED pre-fix: the old key had no tenant component at all, so the
+        /// second call would be served from the first tenant's cached entry (callCount stays 1).
+        /// </summary>
+        [TestMethod]
+        public async Task GetDataAsync_cache_NOT_shared_across_different_TenantId_for_identical_request()
+        {
+            int callCount = 0;
+            var handler = new MockHttpHandler(_ =>
+            {
+                callCount++;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"n\":1}", Encoding.UTF8, "application/json")
+                };
+            });
+            var factory = new SingleClientFactory(handler);
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            var source = new RestWidgetDataSource(factory, cache);
+
+            var optionsJson = JsonSerializer.Serialize(UnauthenticatedFetchOptions("https://8.8.8.8/shared-url"));
+            var reqTenantA = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string> { ["options"] = optionsJson },
+                TenantId = "tenant-a"
+            };
+            var reqTenantB = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string> { ["options"] = optionsJson },
+                TenantId = "tenant-b"
+            };
+
+            await source.GetDataAsync(reqTenantA, CancellationToken.None);
+            await source.GetDataAsync(reqTenantB, CancellationToken.None);
+
+            Assert.AreEqual(2, callCount,
+                "identical Url/Method/Body/JsonPath but different TenantId must NOT share a cache entry");
+        }
+
+        /// <summary>
+        /// Within one tenant, two requests differing only in Headers must not share a cache
+        /// entry. RED pre-fix: the old key had no Headers component, so an unauthenticated
+        /// second request (no Headers) would be served the first (authorized) request's
+        /// cached response.
+        /// </summary>
+        [TestMethod]
+        public async Task GetDataAsync_cache_NOT_shared_across_different_Headers_within_same_tenant()
+        {
+            int callCount = 0;
+            var handler = new MockHttpHandler(_ =>
+            {
+                callCount++;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"n\":1}", Encoding.UTF8, "application/json")
+                };
+            });
+            var factory = new SingleClientFactory(handler);
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            var source = new RestWidgetDataSource(factory, cache);
+
+            var reqWithAuth = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["options"] = JsonSerializer.Serialize(AuthorizedFetchOptions("https://8.8.8.8/shared-url"))
+                },
+                TenantId = "tenant-a"
+            };
+            var reqNoAuth = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["options"] = JsonSerializer.Serialize(UnauthenticatedFetchOptions("https://8.8.8.8/shared-url"))
+                },
+                TenantId = "tenant-a"
+            };
+
+            await source.GetDataAsync(reqWithAuth, CancellationToken.None);
+            await source.GetDataAsync(reqNoAuth, CancellationToken.None);
+
+            Assert.AreEqual(2, callCount,
+                "identical Url/Method/Body/JsonPath but different Headers must NOT share a cache entry, even within one tenant");
+        }
+
+        /// <summary>
+        /// Positive control: two byte-identical requests DO still share a cache entry. Without
+        /// this, a "fix" that simply disables caching entirely would also pass the two tests
+        /// above.
+        /// </summary>
+        [TestMethod]
+        public async Task GetDataAsync_cache_IS_shared_for_byte_identical_requests()
+        {
+            int callCount = 0;
+            var handler = new MockHttpHandler(_ =>
+            {
+                callCount++;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"n\":1}", Encoding.UTF8, "application/json")
+                };
+            });
+            var factory = new SingleClientFactory(handler);
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            var source = new RestWidgetDataSource(factory, cache);
+
+            var optionsJson = JsonSerializer.Serialize(AuthorizedFetchOptions("https://8.8.8.8/shared-url"));
+            var req1 = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string> { ["options"] = optionsJson },
+                TenantId = "tenant-a"
+            };
+            var req2 = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string> { ["options"] = optionsJson },
+                TenantId = "tenant-a"
+            };
+
+            await source.GetDataAsync(req1, CancellationToken.None);
+            await source.GetDataAsync(req2, CancellationToken.None);
+            await source.GetDataAsync(req1, CancellationToken.None);
+
+            Assert.AreEqual(1, callCount,
+                "byte-identical requests (same tenant, same options) must still share a cache entry — " +
+                "a fix that disables caching altogether would otherwise pass the isolation tests above for the wrong reason");
+        }
+
+        /// <summary>
+        /// Attack reproduction, end to end (issue #952): a privileged widget with a real
+        /// Authorization header completes a fetch and its response is cached. Within the TTL, a
+        /// second widget with identical Url/Method/Body/JsonPath and NO headers calls
+        /// GetWidgetData and must NOT receive the first widget's cached, authorized body.
+        /// </summary>
+        /// <remarks>
+        /// The theft (pre-fix) is deterministic, not a race: an unauthenticated probe that gets
+        /// a non-2xx response throws in FetchJsonAsync BEFORE <c>_cache.Set</c> is ever reached
+        /// (see GetDataAsync's early-return-on-exception control flow), so a failed probe never
+        /// poisons the key — an attacker could poll for free, with no window to miss, until the
+        /// victim's authorized response lands and gets cached under the (pre-fix) shared key.
+        /// This test does not need to model that polling window itself: the two-call sequence
+        /// below (authorized fetch succeeds and caches; unauthenticated fetch follows within
+        /// TTL) already is the moment the theft would be observed.
+        /// </remarks>
+        [TestMethod]
+        public async Task GetDataAsync_unauthenticated_second_widget_does_not_receive_first_widgets_cached_authorized_response()
+        {
+            var handler = new MockHttpHandler(req =>
+            {
+                var isAuthorized = req.Headers.TryGetValues("Authorization", out var vals) &&
+                                    vals.Contains("Bearer victim-token");
+                var body = isAuthorized
+                    ? "{\"secret\":\"vip-authorized-data\"}"
+                    : "{\"secret\":\"public-unauthorized-data\"}";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(body, Encoding.UTF8, "application/json")
+                };
+            });
+            var factory = new SingleClientFactory(handler);
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            // Same RestWidgetDataSource / same IMemoryCache instance for both widgets — this is
+            // what production looks like: RestWidgetDataSource is registered Transient but the
+            // IMemoryCache it's constructed with is Singleton (AddWtmDashboard/AddMemoryCache),
+            // so unrelated widgets across the whole app genuinely share one cache backend.
+            var source = new RestWidgetDataSource(factory, cache);
+
+            const string sharedUrl = "https://8.8.8.8/vendor-api";
+            var privilegedWidgetReq = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["options"] = JsonSerializer.Serialize(new RestWidgetDataSourceOptions
+                    {
+                        Url = sharedUrl,
+                        Headers = new Dictionary<string, string> { ["Authorization"] = "Bearer victim-token" },
+                        JsonPath = "$.secret",
+                        CacheTtlSeconds = 60
+                    })
+                },
+                TenantId = "tenant-a"
+            };
+            var attackerWidgetReq = new WidgetDataRequest
+            {
+                Parameters = new Dictionary<string, string>
+                {
+                    ["options"] = JsonSerializer.Serialize(new RestWidgetDataSourceOptions
+                    {
+                        Url = sharedUrl,
+                        JsonPath = "$.secret",
+                        CacheTtlSeconds = 60
+                    })
+                },
+                TenantId = "tenant-a"
+            };
+
+            var privilegedResult = await source.GetDataAsync(privilegedWidgetReq, CancellationToken.None);
+            var attackerResult = await source.GetDataAsync(attackerWidgetReq, CancellationToken.None);
+
+            privilegedResult.Value.Should().Be("vip-authorized-data");
+            attackerResult.Value.Should().Be("public-unauthorized-data",
+                "the unauthenticated widget must get its OWN response, never the privileged widget's cached one");
+            attackerResult.Value.Should().NotBe(privilegedResult.Value,
+                "if these ever match, the cache leaked the authorized response to the unauthenticated request");
         }
     }
 

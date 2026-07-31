@@ -312,6 +312,23 @@ public class JsonFileDashboardService : IDashboardService
                 if (src.RestOptions != null && (src.RestOptions.AllowedPorts == null || src.RestOptions.AllowedPorts.Length == 0))
                     return $"Widget '{widgetId}': 資料源 Kind 為 'rest' 時，AllowedPorts 不可為 null 或空陣列" +
                            $"（這會關閉連接埠允許清單，讓呼叫端能探測任意連接埠）。請指定至少一個允許的連接埠。";
+
+                // #956: reject Headers containing a hard-rejected name (Host/Transfer-Encoding/
+                // Content-Length/Connection/Upgrade/TE/Trailer/Expect/Proxy-*), too many headers,
+                // or too much total name+value length — at WRITE time. This is one of two
+                // independent enforcement points (RestWidgetDataSource.FetchJsonAsync enforces
+                // the identical check again at SEND time); write-time-only would leave a widget
+                // persisted before this check shipped (or hand-edited into the JSON store)
+                // unprotected forever, since ValidateWidgetConfigs only runs on Create/Update.
+                // See RestWidgetDataSource.ValidateHeaders for the full rationale — this call
+                // and RestWidgetDataSource's own send-time call share that one implementation,
+                // not two hand-synchronized copies.
+                if (src.RestOptions != null)
+                {
+                    var headerError = RestWidgetDataSource.ValidateHeaders(src.RestOptions.Headers);
+                    if (headerError != null)
+                        return $"Widget '{widgetId}': {headerError}";
+                }
             }
         }
 
@@ -652,10 +669,14 @@ public class JsonFileDashboardService : IDashboardService
         // #843: thread tenantId through so background/no-HttpContext callers (AnalysisWidgetDataSource)
         // can scope the DataContext to this widget's own tenant instead of defaulting to
         // WTMContext.CreateDC()'s LoginUserInfo-derived (and, in the background case, always-null) tenant.
+        // #948-F8: also thread dashboardId/widgetId — both are already method parameters here —
+        // so RestWidgetDataSource can populate DashboardEgressDestination.DashboardId/WidgetId.
         var request = new WidgetDataRequest
         {
             Parameters = parameters,
-            TenantId = tenantId
+            TenantId = tenantId,
+            DashboardId = dashboardId,
+            WidgetId = widgetId
         };
 
         // Q9: per-widget timeout — prevents one slow OLAP/REST widget from starving the thread

@@ -22,13 +22,16 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             => new StaticOptionsMonitor(options);
 
         private static DashboardEgressDestination Destination(
-            string requestHost, string resolvedIp, int port, bool isPrivate = true, bool isPlainHttp = false) => new()
+            string requestHost, string resolvedIp, int port, bool isPrivate = true, bool isPlainHttp = false,
+            string? method = null, string? tenantId = null) => new()
         {
             RequestUri = new Uri($"{(isPlainHttp ? "http" : "https")}://{requestHost}/data"),
             ResolvedAddress = IPAddress.Parse(resolvedIp),
             Port = port,
             IsPrivateNetwork = isPrivate,
             IsPlainHttp = isPlainHttp,
+            Method = method,
+            TenantId = tenantId,
         };
 
         [TestMethod]
@@ -135,6 +138,116 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
 
             var allowed = await policy.IsAllowedAsync(Destination("other.example", "10.9.9.9", 443));
             Assert.IsTrue(allowed);
+        }
+
+        // ── #948-F8: Methods / TenantId gating ────────────────────────────────
+        // A destination field with no in-repo consumer is speculative generalization — these
+        // tests, plus ConfiguredAllowlistDashboardEgressPolicy.IsAllowedAsync's Methods/TenantId
+        // checks, are that real consumer. Deleting either check turns the corresponding "Denies"
+        // test below red without affecting the others — see
+        // test/mutants/entries/948f8-configuredallowlist-method-check-neutralize.json for the
+        // Methods check specifically.
+
+        [TestMethod]
+        public async Task IsAllowedAsync_MatchingMethod_Allows()
+        {
+            var options = new DashboardEgressAllowlistOptions
+            {
+                Entries = { new DashboardEgressAllowlistEntry { Host = "10.1.2.3", Methods = new[] { "GET" } } }
+            };
+            var policy = new ConfiguredAllowlistDashboardEgressPolicy(MonitorFor(options));
+
+            var allowed = await policy.IsAllowedAsync(Destination("internal.example", "10.1.2.3", 443, method: "GET"));
+            Assert.IsTrue(allowed);
+        }
+
+        [TestMethod]
+        public async Task IsAllowedAsync_NonMatchingMethod_Denies()
+        {
+            var options = new DashboardEgressAllowlistOptions
+            {
+                Entries = { new DashboardEgressAllowlistEntry { Host = "10.1.2.3", Methods = new[] { "GET" } } }
+            };
+            var policy = new ConfiguredAllowlistDashboardEgressPolicy(MonitorFor(options));
+
+            var allowed = await policy.IsAllowedAsync(Destination("internal.example", "10.1.2.3", 443, method: "POST"));
+            Assert.IsFalse(allowed, "an entry restricted to GET must not approve a POST destination");
+        }
+
+        [TestMethod]
+        public async Task IsAllowedAsync_MethodMatchIsCaseInsensitive()
+        {
+            var options = new DashboardEgressAllowlistOptions
+            {
+                Entries = { new DashboardEgressAllowlistEntry { Host = "10.1.2.3", Methods = new[] { "get" } } }
+            };
+            var policy = new ConfiguredAllowlistDashboardEgressPolicy(MonitorFor(options));
+
+            Assert.IsTrue(await policy.IsAllowedAsync(Destination("internal.example", "10.1.2.3", 443, method: "GET")));
+        }
+
+        [TestMethod]
+        public async Task IsAllowedAsync_NullMethods_AllowsAnyMethod()
+        {
+            var options = new DashboardEgressAllowlistOptions
+            {
+                Entries = { new DashboardEgressAllowlistEntry { Host = "10.1.2.3", Methods = null } }
+            };
+            var policy = new ConfiguredAllowlistDashboardEgressPolicy(MonitorFor(options));
+
+            Assert.IsTrue(await policy.IsAllowedAsync(Destination("internal.example", "10.1.2.3", 443, method: "POST")));
+        }
+
+        [TestMethod]
+        public async Task IsAllowedAsync_MatchingTenantId_Allows()
+        {
+            var options = new DashboardEgressAllowlistOptions
+            {
+                Entries = { new DashboardEgressAllowlistEntry { Host = "10.1.2.3", TenantId = "tenant-a" } }
+            };
+            var policy = new ConfiguredAllowlistDashboardEgressPolicy(MonitorFor(options));
+
+            var allowed = await policy.IsAllowedAsync(Destination("internal.example", "10.1.2.3", 443, tenantId: "tenant-a"));
+            Assert.IsTrue(allowed);
+        }
+
+        [TestMethod]
+        public async Task IsAllowedAsync_NonMatchingTenantId_Denies()
+        {
+            var options = new DashboardEgressAllowlistOptions
+            {
+                Entries = { new DashboardEgressAllowlistEntry { Host = "10.1.2.3", TenantId = "tenant-a" } }
+            };
+            var policy = new ConfiguredAllowlistDashboardEgressPolicy(MonitorFor(options));
+
+            var allowed = await policy.IsAllowedAsync(Destination("internal.example", "10.1.2.3", 443, tenantId: "tenant-b"));
+            Assert.IsFalse(allowed, "an entry scoped to tenant-a must not approve a tenant-b destination");
+        }
+
+        [TestMethod]
+        public async Task IsAllowedAsync_TenantScopedEntry_DeniesDestinationWithNoTenant()
+        {
+            var options = new DashboardEgressAllowlistOptions
+            {
+                Entries = { new DashboardEgressAllowlistEntry { Host = "10.1.2.3", TenantId = "tenant-a" } }
+            };
+            var policy = new ConfiguredAllowlistDashboardEgressPolicy(MonitorFor(options));
+
+            var allowed = await policy.IsAllowedAsync(Destination("internal.example", "10.1.2.3", 443, tenantId: null));
+            Assert.IsFalse(allowed, "a tenant-scoped entry must not approve a destination with no tenant at all");
+        }
+
+        [TestMethod]
+        public async Task IsAllowedAsync_NullEntryTenantId_AllowsAnyTenant()
+        {
+            var options = new DashboardEgressAllowlistOptions
+            {
+                Entries = { new DashboardEgressAllowlistEntry { Host = "10.1.2.3", TenantId = null } }
+            };
+            var policy = new ConfiguredAllowlistDashboardEgressPolicy(MonitorFor(options));
+
+            Assert.IsTrue(await policy.IsAllowedAsync(Destination("internal.example", "10.1.2.3", 443, tenantId: "any-tenant")));
+            Assert.IsTrue(await policy.IsAllowedAsync(Destination("internal.example", "10.1.2.3", 443, tenantId: null)));
         }
 
         private sealed class StaticOptionsMonitor : IOptionsMonitor<DashboardEgressAllowlistOptions>

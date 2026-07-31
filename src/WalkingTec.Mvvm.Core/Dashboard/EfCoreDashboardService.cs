@@ -318,7 +318,14 @@ public class EfCoreDashboardService : IDashboardService
         // #843: thread tenantId through so background/no-HttpContext callers (AnalysisWidgetDataSource)
         // can scope the DataContext to this widget's own tenant instead of defaulting to
         // WTMContext.CreateDC()'s LoginUserInfo-derived (and, in the background case, always-null) tenant.
-        var request = new WidgetDataRequest { Parameters = parameters, TenantId = tenantId };
+        // #948-F8: also thread dashboardId/widgetId — mirrors JsonFileDashboardService.
+        var request = new WidgetDataRequest
+        {
+            Parameters = parameters,
+            TenantId = tenantId,
+            DashboardId = dashboardId,
+            WidgetId = widgetId
+        };
 
         var timeoutSeconds = _options.WidgetDataTimeoutSeconds;
         if (timeoutSeconds > 0)
@@ -445,6 +452,17 @@ public class EfCoreDashboardService : IDashboardService
                 if (src.RestOptions != null && (src.RestOptions.AllowedPorts == null || src.RestOptions.AllowedPorts.Length == 0))
                     return $"Widget '{widgetId}': 資料源 Kind 為 'rest' 時，AllowedPorts 不可為 null 或空陣列" +
                            $"（這會關閉連接埠允許清單，讓呼叫端能探測任意連接埠）。請指定至少一個允許的連接埠。";
+
+                // #956: mirrors JsonFileDashboardService — reject a hard-rejected header name,
+                // too many headers, or too much total name+value length at write time. See
+                // RestWidgetDataSource.ValidateHeaders for the shared implementation and full
+                // rationale; kept in sync deliberately, same as the rest of this method.
+                if (src.RestOptions != null)
+                {
+                    var headerError = RestWidgetDataSource.ValidateHeaders(src.RestOptions.Headers);
+                    if (headerError != null)
+                        return $"Widget '{widgetId}': {headerError}";
+                }
             }
         }
 

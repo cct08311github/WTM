@@ -1,0 +1,24 @@
+{
+  "id": "956-restwidget-header-write-time-guard-neutralize",
+  "kind": "security",
+  "description": "Issue #956: neutralizes JsonFileDashboardService.ValidateWidgetConfigs' write-time header guard by forcing the RestOptions.Headers validation block to never execute via a compile-preserving `false &&` prefix (mirrors the established pattern from 948-dashboard-restoptions-egress-write-guard-neutralize -- not a compile-time constant since the right-hand operand is a runtime property/method result, so no CS0162 unreachable-code warning). This reintroduces the write-time half of #956's defect: a caller can persist a 'rest' widget whose RestOptions.Headers carries too many headers, or headers whose combined name+value length exceeds the cap, with no rejection and no signal to an operator reviewing the definition -- the header-NAME hard-reject case (Host/Transfer-Encoding/etc.) is exercised by the send-time sibling mutant (956-restwidget-header-send-time-guard-neutralize) rather than duplicated here, since both guards call the SAME RestWidgetDataSource.ValidateHeaders implementation and this entry only needs to prove THIS call site is load-bearing. red_tests are the count-cap and size-cap rejections (both non-parameterized MSTest methods, unlike the DataRow-based per-header-name test in the same class -- run_mutant.py's TRX parser keys results by className.methodName only, so a DataRow method's multiple outcomes would silently collapse to whichever data row's UnitTestResult is processed last in the TRX, which is not a reliable gate signal). green_test is the Authorization+custom-header positive control, proving the guard's blast radius is the hard-rejected/count/size checks specifically, not 'rest' widgets with Headers in general.",
+  "target_file": "src/WalkingTec.Mvvm.Core/Dashboard/JsonFileDashboardService.cs",
+  "target_symbol": "JsonFileDashboardService.ValidateWidgetConfigs(DashboardDefinition) -- the RestWidgetDataSource.ValidateHeaders(...) call guard, line ~326",
+  "patch": "patches/956-restwidget-header-write-time-guard-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.CreateAsync_rejects_rest_widget_with_too_many_headers|FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.CreateAsync_rejects_rest_widget_with_headers_exceeding_total_size",
+  "red_tests": [
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.CreateAsync_rejects_rest_widget_with_too_many_headers",
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.CreateAsync_rejects_rest_widget_with_headers_exceeding_total_size"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.CreateAsync_rejects_rest_widget_with_too_many_headers": "Assert\\.ThrowsException failed\\. Expected exception type:<System\\.ArgumentException> but no exception was thrown",
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.CreateAsync_rejects_rest_widget_with_headers_exceeding_total_size": "Assert\\.ThrowsException failed\\. Expected exception type:<System\\.ArgumentException> but no exception was thrown"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured by applying the patch manually and running exactly as run_mutant.py does (`dotnet build -c Release` then `dotnet test -c Release --no-restore --filter <red_test_filter>`) before writing this file, then reverting the manual patch application and letting run_mutant.py apply/run/revert it itself for the actual gate run. Both declared red tests failed with exactly this message (MSTest's own Assert.ThrowsException -- confirmed identical between Debug and Release). Also ran the full DashboardWidgetConfigValidationTests filter (29 tests, including the 8 hard-rejected-header-name DataRow cases and the AllowPrivateNetwork/AllowHttp/AllowedPorts groups) under the same mutant beforehand: only the two declared tests failed; every other test, including the positive control and the unrelated AllowedPorts/AllowPrivateNetwork guards (separate code paths, untouched by this patch), stayed green.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.CreateAsync_accepts_rest_widget_with_Authorization_and_custom_header",
+  "green_tests": [
+    "WalkingTec.Mvvm.Core.Test.Dashboard.DashboardWidgetConfigValidationTests.CreateAsync_accepts_rest_widget_with_Authorization_and_custom_header"
+  ]
+}

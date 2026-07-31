@@ -422,6 +422,82 @@ namespace WalkingTec.Mvvm.Core.Test.Dashboard
             id.Should().NotBeNullOrEmpty();
         }
 
+        // ── #956: hard-rejected header names / count / size are rejected at WRITE time ──
+        // Mirrors JsonFileDashboardService's DashboardWidgetConfigValidationTests (see
+        // DashboardReliabilityTests.cs) against EfCoreDashboardService.
+
+        [TestMethod]
+        [DataRow("Host")]
+        [DataRow("Transfer-Encoding")]
+        [DataRow("Content-Length")]
+        [DataRow("Connection")]
+        [DataRow("Upgrade")]
+        [DataRow("TE")]
+        [DataRow("Trailer")]
+        [DataRow("Expect")]
+        [DataRow("Proxy-Authorization")]
+        public async Task Create_rejects_rest_widget_with_hard_rejected_header_name(string headerName)
+        {
+            var svc = BuildService();
+            var def = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8/data",
+                Headers = new Dictionary<string, string> { [headerName] = "x" }
+            });
+
+            Func<Task> act = () => svc.CreateAsync(def);
+            (await act.Should().ThrowAsync<ArgumentException>()).Which.Message.Should().Contain(headerName);
+        }
+
+        [TestMethod]
+        public async Task Create_rejects_rest_widget_with_too_many_headers()
+        {
+            var svc = BuildService();
+            var headers = new Dictionary<string, string>();
+            for (int i = 0; i < 21; i++) { headers[$"X-Custom-{i}"] = "v"; }
+            var def = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8/data",
+                Headers = headers
+            });
+
+            Func<Task> act = () => svc.CreateAsync(def);
+            (await act.Should().ThrowAsync<ArgumentException>()).Which.Message.Should().Contain("header count");
+        }
+
+        [TestMethod]
+        public async Task Create_rejects_rest_widget_with_headers_exceeding_total_size()
+        {
+            var svc = BuildService();
+            var def = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8/data",
+                Headers = new Dictionary<string, string> { ["X-Big"] = new string('v', 9 * 1024) }
+            });
+
+            Func<Task> act = () => svc.CreateAsync(def);
+            (await act.Should().ThrowAsync<ArgumentException>()).Which.Message.Should().Contain("total header");
+        }
+
+        /// <summary>Positive control (issue #956) — mirrors JsonFileDashboardService's.</summary>
+        [TestMethod]
+        public async Task Create_accepts_rest_widget_with_Authorization_and_custom_header()
+        {
+            var svc = BuildService();
+            var def = RestWidgetDashboard(new RestWidgetDataSourceOptions
+            {
+                Url = "https://8.8.8.8/data",
+                Headers = new Dictionary<string, string>
+                {
+                    ["Authorization"] = "Bearer real-token",
+                    ["X-Api-Key"] = "real-key"
+                }
+            });
+
+            var id = await svc.CreateAsync(def);
+            id.Should().NotBeNullOrEmpty();
+        }
+
         // ── #955 review finding F6: legacy request-supplied "options" channel ────────
         // Mirrors JsonFileDashboardServiceTests — a "rest" widget with no persisted
         // RestOptions must no longer honour a caller-supplied "options" parameter at all.
