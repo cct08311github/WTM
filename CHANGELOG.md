@@ -544,6 +544,91 @@ honest than the commit messages describing the same work.
   on any platform at this dependency combination; tracked separately in #891, not
   introduced or fixed by this change.
 
+- **`LookupCacheService.RefreshAsync<T>` silently proceeded to write the cache after failing to
+  acquire its per-key stampede lock — the one semaphore-timeout call site in this file that never
+  got the #112(4)/M10 fix; `LookupCacheWarmupService` logged "warm-up completed" even on a run
+  that cached nothing (#804, MEDIUM).** Verified directly against the code, not the issue text:
+  `RefreshAsync` computed `bool acquired = await semaphore.WaitAsync(StampedeTimeout, ct)` but
+  never checked it before calling `Invalidate<T>`/`LoadFromDbAsync`/`SetCache` — unlike
+  `GetAll`/`GetAllAsync` (`LookupCacheService.cs:207-234` sync, `:293-313` async), which already
+  re-check the cache and skip `SetCache` on a timed-out acquire. A caller that timed out does not
+  hold the lock, so its write races the legitimate holder's own `SetCache` and can overwrite a
+  fresher value with a stale one for the full TTL — exactly the failure mode the semaphore exists
+  to prevent, and the one scenario the #112(4)/#141 hardening (`76b002fa0`) never reached.
+  Separately, `LookupCacheWarmupService.WarmTypesAsync` warms every `[CacheLookup(WarmOnStartup =
+  true)]` type with `tenantId = null`. For any such type that also implements `ITenant`, with
+  `DefaultTenantIsolation` in effect (the default), that call lands on
+  `LookupCacheService`'s own existing #112(1)/#168 bypass
+  (`_forcedTenantIsolationTypes.Contains(typeof(T)) && tenantId == null &&
+  DefaultTenantIsolation`), which returns the DB result directly WITHOUT ever calling `SetCache`.
+  The call completing without throwing was indistinguishable, from the warm-up service's own
+  point of view, from an actual cache write — so it logged `"Lookup cache warmed: {TypeName}"`
+  per type and `"Lookup cache warm-up completed."` overall regardless of whether the cache stayed
+  empty. A success log that fires whether or not anything succeeded is a false assurance, not a
+  smaller defect than the stampede bug in the same file.
+
+  **Fix.** `RefreshAsync` now checks `acquired` the same way the other two call sites do, but
+  responds differently: `GetAll`/`GetAllAsync` are read paths with a safe fallback (return the DB
+  result, just don't cache it); `RefreshAsync` is an explicit, caller-invoked "make this happen
+  now" operation with no return value the caller can inspect, so silently completing as if the
+  refresh had happened would itself be a false assurance. It now logs a warning and throws
+  `System.TimeoutException` instead. **Behaviour change a caller can observe:** a `RefreshAsync`
+  (or `WTMContext.RefreshLookupAsync`) call that cannot acquire the per-key lock within
+  `StampedeTimeout` now throws instead of returning normally having silently not refreshed
+  anything (or, before the #112(4) fix, racing a stale write). This is a narrow window — the
+  default timeout is 10 seconds and a same-key refresh collision only occurs under concurrent
+  `GetAll`/`GetAllAsync`/`RefreshAsync` calls for the same type+tenant — but it is a real,
+  disclosed change, not a pure bug fix with identical externally-visible behaviour otherwise.
+  `LookupCacheOptions` gained `StampedeTimeout` (default unchanged, `TimeSpan.FromSeconds(10)`),
+  so the timeout this file's own log messages already told operators to "consider increasing" is
+  now actually configurable — `LookupCacheService`'s `StampedeTimeout` reads
+  `_options.StampedeTimeout` instead of a hardcoded `private static readonly` field.
+  `LookupCacheWarmupService.WarmTypesAsync` now skips (rather than attempts and mis-reports) any
+  `ITenant` type under `DefaultTenantIsolation`, logging that it is not warmable for the null
+  tenant instead of a false "warmed"; `ExecuteAsync` now tracks how many types were *actually*
+  cached (`SetCache` ran) versus merely attempted, and only logs "warm-up completed" when that
+  count is greater than zero — a warm-up run that caches nothing now logs a Warning-level "0 of N
+  type(s) were actually cached" instead.
+
+  **Not fixed here, disclosed rather than left as a silent gap:** (1) `RefreshAsync` also does not
+  check `_registry.ContainsKey(typeof(T))` before calling `SetCache`, unlike `GetAll`/`GetAllAsync`
+  (the #112(2) guard, "non-[CacheLookup] types must never be stored in the cache — without a TTL
+  they would be immortal"). `SetCache`'s TTL comes from `_registry.TryGetValue(typeof(T), out var
+  attr)`; if that lookup misses, no `AbsoluteExpirationRelativeToNow` is set, so calling
+  `RefreshAsync<T>()` for a type that is not `[CacheLookup]`-attributed would insert an immortal
+  cache entry the normal `SaveChanges`-triggered invalidation path skips (it gates on
+  `IsCacheable`). Real, but out of this PR's authorized scope (the issue names two specific
+  claims); needs its own issue. (2) `DistributedLookupCacheService.RefreshAsync` (a separate
+  `ILookupCacheService` implementation, `src/WalkingTec.Mvvm.Core/Cache/DistributedLookupCacheService.cs:345-360`)
+  has the textually identical defect — `bool acquired = await semaphore.WaitAsync(...)` computed
+  and never checked before `Invalidate`/`SetDistributed` — and was not touched by this PR, which
+  is scoped to `LookupCacheService.cs`. Tracked as a follow-up, not fixed here.
+
+  **Tests** (`test/WalkingTec.Mvvm.Core.Test/Cache/`): `LookupCacheStampedeRefreshTimeoutTests804.cs`
+  — a real `DbCommandInterceptor` counts actual SQL `SELECT` executions (not a weaker "did
+  anything crash" proxy) against a `SqliteTestDbMode.FileWal` database with multiple genuinely
+  racing `DbContext` instances (shared-cache in-memory is documented elsewhere in this codebase as
+  unsafe for that shape of test): one test pins that N=6 concurrent cache-miss `GetAllAsync`
+  callers with a slow loader produce EXACTLY ONE real load (not "fewer than N", the weaker bound
+  this repo has shipped and regretted before); the other holds the per-key lock with a slow
+  loader, calls `RefreshAsync` with a short `StampedeTimeout` from a second, independently-racing
+  context, and asserts it throws `TimeoutException`, that the loader count stays at exactly the
+  holder's one call (the timed-out `RefreshAsync` must never reach `LoadFromDbAsync`), and that
+  the cache ends up holding the holder's result, not a stale write from the timed-out caller.
+  `LookupCacheWarmupTenantHonestyTests804.cs` — one test proves a genuinely warmable
+  (non-`ITenant`) type is both cached after warm-up and served on a follow-up lookup without a
+  further DB hit (same reference back), and that the honest "completed" log fires; the other
+  registers only an `ITenant` type, asserts nothing is cached, that the "completed" log text never
+  appears in the captured log stream, and that the honest "0 of N" warning does. Both fix commits
+  were manually verified red-then-green: temporarily reverting just the new `if (!acquired)`
+  guard in `RefreshAsync` and just the new `ITenant`/`DefaultTenantIsolation` skip branch in
+  `WarmTypesAsync` (leaving the shared `StampedeTimeout`-configurability and warmed-count
+  infrastructure in place) reproduces exactly the two new tests failing and no others, then
+  restoring the guards turns both green again — this is a manual, one-time proof for this PR, not
+  a `test/mutants/entries/` CI-enforced mutant (none was added for this change).
+
+  Full suite: `test/WalkingTec.Mvvm.Core.Test` — `4824 passed, 0 failed`.
+
 ## [10.18.0] - 2026-07-22
 
 The **LayUI eval-retirement epic (#470) reaches the whole form + grid + dialog family.** Slices G→O plus the docs endgame (Q) complete the opt-in, eval-free island-render migration begun in 10.16.0: every interactive LayUI widget — combobox/tree, transfer, upload, laydate, slider/colorpicker, ueditor/richtext, textarea counters, tree-container, chart, search-panel, and the full data grid (render core, toolbar/row-button dispatch, local-data, and cell editing) — now renders through declarative JSON islands + `data-wtm-*` delegated handlers when `WtmUIOptions.UseSelectIslandRender = true`, instead of inline `<script>`. **Every migration is default-off and byte-identical to before** — this release ships **zero behaviour change** to existing deployments ⚠️ *(the byte-identical and zero-behaviour-change claims in this sentence are **retracted** — see "Corrected" under [Unreleased] and #835)* while making a strict, `unsafe-inline`/`unsafe-eval`-free Content-Security-Policy achievable for the whole form/grid/dialog surface. `framework_layui.js` stays at exactly **one** active-code `eval(` (the deprecated `IsScript` path). Also: a vendored-layui XSS fix (opt-in-legacy only), refresh-token table indexes, and CI/compose ARM64 fixes.

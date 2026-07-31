@@ -122,19 +122,51 @@ namespace WalkingTec.Mvvm.Core.Cache
 
             using var scope = _serviceProvider.CreateScope();
 
+            // Bug #804: track how many types were ACTUALLY cached (SetCache actually ran), as
+            // opposed to how many were merely attempted. The two diverge for any WarmOnStartup
+            // type that also implements ITenant: with DefaultTenantIsolation in effect (the
+            // default), warming with tenantId=null hits LookupCacheService's own #112(1)/#168
+            // bypass (GetAll/GetAllAsync return the DB result directly WITHOUT calling SetCache
+            // whenever isTenantIsolated && tenantId == null && DefaultTenantIsolation) — before
+            // this fix, WarmTypesAsync still logged "Lookup cache warmed: {TypeName}" for it
+            // (the call completed without throwing) and this method unconditionally logged
+            // "warm-up completed" afterward, regardless of whether anything actually landed in
+            // the cache. A success log that fires whether or not anything succeeded is worse
+            // than no log: an operator reading it has no way to tell the two states apart.
+            int warmedCount = 0;
+
             if (defaultGroupTypes.Count > 0)
             {
-                await WarmDefaultGroupAsync(scope.ServiceProvider, defaultGroupTypes, method, stoppingToken)
+                warmedCount += await WarmDefaultGroupAsync(scope.ServiceProvider, defaultGroupTypes, method, stoppingToken)
                     .ConfigureAwait(false);
             }
 
             if (namedGroups.Count > 0 && !stoppingToken.IsCancellationRequested)
             {
-                await WarmNamedGroupsAsync(scope.ServiceProvider, namedGroups, method, stoppingToken)
+                warmedCount += await WarmNamedGroupsAsync(scope.ServiceProvider, namedGroups, method, stoppingToken)
                     .ConfigureAwait(false);
             }
 
-            _logger.LogInformation("[WTM] Lookup cache warm-up completed.");
+            if (warmedCount > 0)
+            {
+                _logger.LogInformation(
+                    "[WTM] Lookup cache warm-up completed: {WarmedCount}/{TotalCount} type(s) actually cached.",
+                    warmedCount, types.Count);
+            }
+            else
+            {
+                // Bug #804: this is the honest counterpart of the log above — do not claim
+                // success. See the per-type skip/failure log entries just above this one (emitted
+                // by WarmTypesAsync/WarmDefaultGroupAsync/WarmNamedGroupsAsync) for why each type
+                // was not cached: tenant-isolated types cannot be warmed for the null tenant by
+                // this single-tenant-only service (by design, see the class doc above); resolution
+                // failures (DbContext/ConnectionKey/WTMContext) are logged separately per type.
+                _logger.LogWarning(
+                    "[WTM] Lookup cache warm-up finished: 0 of {TotalCount} type(s) were actually " +
+                    "cached. See the preceding log entries for why. The first request for each " +
+                    "type will populate its cache lazily instead.",
+                    types.Count);
+            }
         }
 
         /// <summary>
@@ -145,7 +177,7 @@ namespace WalkingTec.Mvvm.Core.Cache
         /// <see cref="InvalidOperationException"/>) cannot escape <see cref="ExecuteAsync"/> and
         /// stop the host under <c>BackgroundServiceExceptionBehavior.StopHost</c>.
         /// </summary>
-        private async Task WarmDefaultGroupAsync(
+        private async Task<int> WarmDefaultGroupAsync(
             IServiceProvider scopedProvider,
             List<Type> defaultGroupTypes,
             MethodInfo method,
@@ -164,7 +196,7 @@ namespace WalkingTec.Mvvm.Core.Cache
                     "[WTM] Lookup cache warm-up: resolving the default connection failed: {Message}. " +
                     "{Count} default-connection type(s) will not be warmed; first request will populate the cache.",
                     ex.Message, defaultGroupTypes.Count);
-                return;
+                return 0;
             }
 
             if (dc == null)
@@ -172,12 +204,12 @@ namespace WalkingTec.Mvvm.Core.Cache
                 _logger.LogWarning(
                     "[WTM] Lookup cache warm-up skipped for {Count} default-connection type(s): EF Core DbContext not available.",
                     defaultGroupTypes.Count);
-                return;
+                return 0;
             }
 
             try
             {
-                await WarmTypesAsync(defaultGroupTypes, dc, method, stoppingToken).ConfigureAwait(false);
+                return await WarmTypesAsync(defaultGroupTypes, dc, method, stoppingToken).ConfigureAwait(false);
             }
             finally
             {
@@ -200,7 +232,7 @@ namespace WalkingTec.Mvvm.Core.Cache
         /// subclass whose constructor graph fails to resolve) must not escape and stop the host.
         /// </para>
         /// </summary>
-        private async Task WarmNamedGroupsAsync(
+        private async Task<int> WarmNamedGroupsAsync(
             IServiceProvider scopedProvider,
             Dictionary<string, List<Type>> namedGroups,
             MethodInfo method,
@@ -219,7 +251,7 @@ namespace WalkingTec.Mvvm.Core.Cache
                     "[WTM] Lookup cache warm-up: resolving WTMContext for ConnectionKey routing failed: {Message}. " +
                     "ConnectionKey type(s) will not be warmed; first request will populate the cache. Type(s): {Types}",
                     ex.Message, failedTypeNames);
-                return;
+                return 0;
             }
 
             if (wtm == null)
@@ -229,9 +261,10 @@ namespace WalkingTec.Mvvm.Core.Cache
                     "[WTM] Lookup cache warm-up: ConnectionKey types cannot be warmed without WTMContext; " +
                     "first request will populate the cache. Type(s): {Types}",
                     allNamedTypeNames);
-                return;
+                return 0;
             }
 
+            int warmedCount = 0;
             foreach (var (connectionKey, groupTypes) in namedGroups)
             {
                 if (stoppingToken.IsCancellationRequested) break;
@@ -273,30 +306,58 @@ namespace WalkingTec.Mvvm.Core.Cache
 
                 try
                 {
-                    await WarmTypesAsync(groupTypes, dc, method, stoppingToken).ConfigureAwait(false);
+                    warmedCount += await WarmTypesAsync(groupTypes, dc, method, stoppingToken).ConfigureAwait(false);
                 }
                 finally
                 {
                     dc.Dispose();
                 }
             }
+            return warmedCount;
         }
 
         /// <summary>
         /// Warms a batch of types (all sharing one already-resolved <see cref="DbContext"/>) via
         /// reflection over <see cref="ILookupCacheService.GetAllAsync{T}"/>. Per-type failures are
         /// logged as warnings and never propagate — a single broken type must not abort the rest
-        /// of the batch or the host's startup.
+        /// of the batch or the host's startup. Returns the number of types actually cached (see
+        /// the Bug #804 tenant-isolation skip below for why this can be less than <paramref
+        /// name="types"/>'s count even when nothing throws).
         /// </summary>
-        private async Task WarmTypesAsync(
+        private async Task<int> WarmTypesAsync(
             IReadOnlyList<Type> types,
             DbContext dc,
             MethodInfo method,
             CancellationToken stoppingToken)
         {
+            int warmedCount = 0;
             foreach (var type in types)
             {
                 if (stoppingToken.IsCancellationRequested) break;
+
+                // Bug #804: warming with tenantId=null (this method's hard-coded call below) is a
+                // documented no-op for any type that is EFFECTIVELY tenant-isolated — i.e.
+                // implements ITenant, with DefaultTenantIsolation in effect (the default; see the
+                // class doc's "Single-tenant (null-tenant) only" note above, and
+                // LookupCacheService.GetAll/GetAllAsync's #112(1)/#168 bypass, verified in that
+                // file: `_forcedTenantIsolationTypes.Contains(typeof(T)) && tenantId == null &&
+                // DefaultTenantIsolation` returns the DB result directly WITHOUT ever calling
+                // SetCache). Invoking GetAllAsync here for such a type would run a real DB query
+                // purely to throw the result away — wasted work — and (before this fix) the call
+                // completing without an exception was indistinguishable from an actual cache
+                // write, so the per-type log below claimed "warmed" and the top-level
+                // "warm-up completed" log fired even though the cache stayed empty. Skip the call
+                // outright and say so honestly instead.
+                if (typeof(ITenant).IsAssignableFrom(type) && _cacheService.DefaultTenantIsolation)
+                {
+                    _logger.LogInformation(
+                        "[WTM] Lookup cache warm-up: {TypeName} is tenant-isolated; the null " +
+                        "(default) tenant cannot be cached for it. Not warmed here — each " +
+                        "tenant's cache is populated lazily on its own first request instead.",
+                        type.Name);
+                    continue;
+                }
+
                 try
                 {
                     var generic = method.MakeGenericMethod(type);
@@ -305,6 +366,7 @@ namespace WalkingTec.Mvvm.Core.Cache
                         await task.ConfigureAwait(false);
 
                     _logger.LogInformation("[WTM] Lookup cache warmed: {TypeName}", type.Name);
+                    warmedCount++;
                 }
                 catch (Exception ex)
                 {
@@ -316,6 +378,7 @@ namespace WalkingTec.Mvvm.Core.Cache
                         type.Name, inner.Message);
                 }
             }
+            return warmedCount;
         }
 
         /// <summary>

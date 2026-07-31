@@ -34,7 +34,13 @@ namespace WalkingTec.Mvvm.Core.Cache
 
         // per-key SemaphoreSlim，防 stampede
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _keyLocks = new();
-        private static readonly TimeSpan StampedeTimeout = TimeSpan.FromSeconds(10);
+
+        // Bug #804: was `private static readonly TimeSpan StampedeTimeout = TimeSpan.FromSeconds(10)`
+        // — a hardcoded, process-wide constant despite this file's own log messages telling
+        // operators to "consider increasing StampedeTimeout" (no such knob existed). Now reads
+        // from LookupCacheOptions so it is both configurable per-instance and per-key-lock
+        // timeout behaviour is testable without a real 10-second wait. Default value unchanged.
+        private TimeSpan StampedeTimeout => _options.StampedeTimeout;
 
         // 啟動時掃描結果（Build 後不再修改，FrozenDictionary 優化讀取路徑）
         private readonly FrozenDictionary<Type, CacheLookupAttribute> _registry;
@@ -382,6 +388,37 @@ namespace WalkingTec.Mvvm.Core.Cache
             bool acquired = await semaphore.WaitAsync(StampedeTimeout, ct).ConfigureAwait(false);
             try
             {
+                // Bug #804: mirror the GetAll/GetAllAsync semaphore-timeout handling (Bug #112 (4)
+                // / M10 fix, see :207-234 sync / :293-313 async above). A caller that timed out
+                // does NOT hold the lock, so it must not proceed to Invalidate/SetCache — doing so
+                // would race the legitimate holder's own Invalidate/SetCache pair (a concurrent
+                // GetAll/GetAllAsync cache-miss load, or another RefreshAsync) and could overwrite
+                // a fresher value with this call's own (possibly older-snapshot) result for the
+                // full TTL, defeating the exact invariant the semaphore exists to protect.
+                //
+                // Unlike the read paths, RefreshAsync is an explicit, caller-invoked "make this
+                // happen now" operation (WTMContext.RefreshLookupAsync, admin tooling after a
+                // batch import). Silently returning as if the refresh succeeded — the read-path
+                // fallback of "return a valid value, just don't cache it" — would be a false
+                // assurance here: there is no return value to inspect, so the caller has no way
+                // to learn the refresh did not happen. Fail loud instead: log, then throw, so the
+                // caller can retry or alert.
+                if (!acquired)
+                {
+                    _logger?.LogWarning(
+                        "[WTM] LookupCache.RefreshAsync<{TypeName}> stampede-protection: timed out " +
+                        "after {TimeoutMs}ms waiting for the per-key refresh lock (key '{Key}'). " +
+                        "Another caller currently holds it. The cache was NOT refreshed.",
+                        typeof(T).Name, (int)StampedeTimeout.TotalMilliseconds, key);
+                    throw new TimeoutException(
+                        $"[WTM] LookupCache.RefreshAsync<{typeof(T).Name}> timed out after " +
+                        $"{StampedeTimeout.TotalMilliseconds}ms waiting for the per-key refresh lock " +
+                        $"(key '{key}'). Another caller currently holds it (a concurrent GetAll/" +
+                        "GetAllAsync load, or another RefreshAsync call). The cache was NOT " +
+                        "refreshed — retry, or increase StampedeTimeout if this occurs frequently.");
+                    // NOTE: semaphore was NOT acquired, so we must NOT Release it below.
+                }
+
                 // Bug #112 (3): was InvalidateType(typeof(T)) which cancels the
                 // shared CTS → evicts ALL tenants' entries, causing a cross-tenant
                 // stampede. Replace with single-tenant Invalidate<T>(tenantId) which
