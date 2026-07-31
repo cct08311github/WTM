@@ -49,6 +49,34 @@ grep -q '\[dry-run\] No files changed or pushed.' "$TMP_DIR/out1.txt"
 run_case "dry-run pre-release suffix" --dry-run --suffix beta.1 > "$TMP_DIR/out2.txt"
 grep -q 'Version : 10.5.1-beta.1' "$TMP_DIR/out2.txt"
 
+# #925 cross-vendor review finding 4: the real (non-dry-run) publish path is disabled --
+# it packed only 3 of 6 published packages and ran none of publish-nuget.yml's gate. This
+# must refuse BEFORE any token resolution or dotnet call, so unset GITEA_TOKEN entirely
+# here (a real publish attempt must never get far enough to need one).
+echo "[case] real (non-dry-run) publish refuses unconditionally"
+(
+  cd "$TEST_REPO"
+  unset GITEA_TOKEN
+  if ./scripts/publish-to-gitea.sh > "$TMP_DIR/out3.txt" 2>&1; then
+    echo "FAIL: publish-to-gitea.sh without --dry-run should have exited non-zero" >&2
+    exit 1
+  fi
+  exit 0
+)
+grep -q 'publish path is disabled' "$TMP_DIR/out3.txt"
+
+echo "[case] real publish with --suffix still refuses unconditionally"
+(
+  cd "$TEST_REPO"
+  unset GITEA_TOKEN
+  if ./scripts/publish-to-gitea.sh --suffix beta.1 > "$TMP_DIR/out4.txt" 2>&1; then
+    echo "FAIL: publish-to-gitea.sh --suffix without --dry-run should have exited non-zero" >&2
+    exit 1
+  fi
+  exit 0
+)
+grep -q 'publish path is disabled' "$TMP_DIR/out4.txt"
+
 # #924 review finding 6: the cases above always ran with GITEA_TOKEN set in the
 # environment, so the ~/.gitea-token file-fallback path scripts/resolve-gitea-token.py
 # implements had no coverage. Exercise it directly, with GITEA_TOKEN unset and

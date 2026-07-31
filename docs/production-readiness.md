@@ -57,6 +57,33 @@ WTM 設計為「快速 CRUD 開發框架」，**不**是高流量 SaaS 平台或
 
 ---
 
+## Release 供應鏈完整性（#925，2026-07-31）
+
+`publish-nuget.yml` 是把六個套件從 Gitea 推到兩個公開/私有 registry 的唯一自動化路徑。#925 起這個 workflow 本身經過一輪 cross-vendor review，8 項發現全部驗證後修復（#937）。**這裡只寫這次改動實際證明了什麼，不寫「gate every publish」這種本文件無法逐項驗證的整句宣稱**——CHANGELOG 對這批改動的描述不得超出以下清單。
+
+**已驗證、每次 publish 執行**：
+- 觸發來源完整性：`workflow_dispatch` 必須打在 `dotnet10` 分支本身；tag push 的 tag 必須指到 `origin/dotnet10` 歷史上的一個 commit（用 `git merge-base --is-ancestor`，不要求等於當下 tip——刻意相容既有的 tag-object 去重重建 SOP）。
+- 版本一致性：tag/`version_suffix` 與 `version.props`/`CHANGELOG.md` 的三方協調（`scripts/reconcile-release-version.sh`），穩定版額外要求 CHANGELOG 最新標題有**合法曆法日期**（不只是形狀對）。
+- 本機 vulnerability scan 改走 `dotnet list package --vulnerable --format json` 直接寫檔 + 結構化解析（`scripts/check-vulnerable-packages.py`），不再靠 `echo | grep -q` 這種在 `set -o pipefail` 下會被 SIGPIPE 誤判成乾淨的管線。
+- 六個套件的 smoke test 在**任何 push 之前**執行，對 `WalkingTec.Mvvm.Etl` 的 13 個 #883 changed members 做的是**執行期 reflection 斷言**（`ParameterInfo` 逐一比對名稱／型別／順序／`IsOptional`／`DefaultValue`／`IsVirtual`），不是編譯期呼叫——後者曾經誤稱自己證明了 optionality/順序/virtuality，實際上四者都證明不了（見 `test/smoke/publish-nuget-fixture/Program.cs` 的檔頭說明與 PR 描述裡的實測）。**這個 fixture 證明的是編譯期 metadata 與文件相符，不證明任何執行期行為**——`declaredSystemQuery: true` 真的會繞過租戶過濾這件事，由 `test/WalkingTec.Mvvm.Etl.Test` 涵蓋，不是這支 smoke fixture。
+- Gitea/GitHub Packages 各自的 version-cohort 檢查（`scripts/check-package-cohort.py`，NuGet V3 標準協定）：同一版本若只有部分套件已存在，直接拒絕，不會用 `--skip-duplicate` 悄悄補齊、混進兩個不同 commit 的產物。
+- GitHub mirror 的 sanitize/leak-gate/nuspec 檢查全部在**第一個 push（Gitea）之前**跑完；GitHub Packages 的重新 pack 改成從 `git archive` 對一個在任何 merge-fallback 分支跑之前就先釘住的 commit SHA 抽取到一個沒有 `.git` 的乾淨目錄——merge 產生的內容不可能進到打包輸入。
+- 既有 GitHub 上的同名 tag 若要被 force-move，先比對兩邊的 tree hash 是否相同；不同就拒絕，不再無條件 force-push。
+
+**刻意沒做、且這裡明講原因**：
+- 不重跑完整 .NET 測試套件或 mutation-gate（跑一次要跨越這台 2-capacity runner 的容量，而且 CI 的 `build-and-test` conclusion 欄位在本 repo 是不可靠訊號，見 CLAUDE.md「CI red does not mean failed」——引用它取代真的重跑，等於用一個已知不可靠的訊號冒充驗證，這個決定本身寫在 workflow 檔案的註解裡）。
+- 這次修復撰寫期間**刻意不呼叫任何 Gitea/GitHub API、不 push 任何 tag**（含 PR 本身也未開）。以下邏輯因此只做到 bash 語法檢查 + 邏輯覆查 + 對標準 git plumbing 指令（`git fetch`/`rev-parse`/`ls-remote`）的行為推導，**沒有對 mac-mini Gitea 或 GitHub Packages 的真實 registry / 真實 tag push 端到端跑過**：`scripts/check-package-cohort.py` 的 HTTP 呼叫邏輯（只在本機對 nuget.org 這個公開、非 Gitea/GitHub 的標準 NuGet V3 端點，以及一個假造的本機 fixture server 驗證過協定正確性，見 `test/check-package-cohort-tests.sh`）；「Push release tag to GitHub」步驟的 tree-比對 force-move guard；`is_prerelease` 帶進 GitHub Release payload 那段。下次真實 tag 發版時應視為這幾段邏輯的首次生產驗證。
+- `scripts/publish-to-gitea.sh` 的真實發佈路徑已停用（見 `docs/gitea-packages.md` §7）——這是「runner 不可用時的本機 fallback」，不是這個 gate 的一部分，過去被文件誤導成等效替代品。
+
+**可重跑的盤點指令**（驗證上面「每次 publish 執行」清單裡各檢查確實排在第一個 push 之前，而不是憑記憶）：
+```bash
+grep -n '^\s*- name:' .github/workflows/publish-nuget.yml | \
+  grep -B999 'Push to Gitea Packages' | tail -20
+```
+執行時間點：2026-07-31，對應 commit 見同一批次的 git log；上面兩份清單如果與 workflow 檔案實際內容不符，以 `.github/workflows/publish-nuget.yml` 為準，這份文件過期。
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。

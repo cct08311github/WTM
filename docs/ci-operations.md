@@ -401,7 +401,7 @@ Mac-mini 上全部跑在 **Docker**（`/Volumes/T7/dockerdata-binds/gitea/`）�
     git push origin v10.13.5                        # publish-nuget run 約 30s 內出現
     ```
     （2026-06-21 v10.13.5 實證：原 tag push + workflow_dispatch + restart+同物件重推 = 0 run；全新 `git tag -a` 重建 → 立即觸發 publish run 6218。**不需要重啟 gitea。**）
-- 想本機發 Gitea 套件（繞過 runner，**只發 Gitea、不含 GitHub Packages / mirror sync**——那兩者是 CI 專屬，靠 `.sync/` manifest + `GH_MIRROR_PAT`）：`scripts/publish-to-gitea.sh`（或手動 `dotnet pack` 六個專案 + `dotnet nuget push "*.nupkg" --source gitea --skip-duplicate`）。優先修好 CI 觸發，本機發只當最後 fallback。
+- **`scripts/publish-to-gitea.sh` 的真實（非 `--dry-run`）路徑已停用（#925 cross-vendor review finding 4）。** 它只 pack 6 個套件中的 3 個（Core/Mvc/TagHelpers.LayUI，永遠不含 WorkFlow/Etl/FileHandlers.S3），也完全不跑 `publish-nuget.yml` 的任何 gate（six-package smoke test、local vulnerability scan、version-cohort check）——runner 掛掉時若真的用它繞過 CI，等於官方文件教人跳過所有這些檢查去發布不完整的一批套件。**修好 CI 觸發永遠優先於本機發** —— runner 卡死多半是 tag-object 去重（見上一條），不是真的不可用：`git tag -d` + `git push origin :refs/tags/vX.Y.Z` + `git tag -a` 重建（新 timestamp → 新 tag-object sha）幾乎都能解決。`--dry-run` 仍可用於預覽版本號/套件清單，但不執行任何 pack/push。
 
 完整 release 流程見 [`docs/wtm-developer-manual.md`](./wtm-developer-manual.md) 與 [`CHANGELOG.md`](../CHANGELOG.md)。
 

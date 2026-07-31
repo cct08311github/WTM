@@ -86,7 +86,41 @@ if [[ -s "$FAKE_GIT_LOG" || -s "$FAKE_CURL_LOG" ]]; then
   exit 1
 fi
 
-run_case "same version triggers workflow" 10.5.1 > "$TMP_DIR/out2.txt"
+# #925: an unchanged version now REFUSES without --confirm-gate (Task D) -- no
+# version-bump ceremony happened, so nothing here signals that
+# .claude/commands/wtm-release-check.md's gate was just run against the current HEAD.
+run_case_expect_failure() {
+  local name="$1"
+  shift
+  echo "[case] $name"
+  set +e
+  (
+    cd "$TEST_REPO"
+    ./scripts/release-gitea-package.sh "$@"
+  ) > "$TMP_DIR/fail_out.txt" 2>&1
+  local status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    echo "expected failure but got exit 0: $name" >&2
+    cat "$TMP_DIR/fail_out.txt" >&2
+    exit 1
+  fi
+  cat "$TMP_DIR/fail_out.txt"
+}
+
+# Captured to a file rather than piped straight into `grep -q` -- under this script's
+# own `set -o pipefail`, `grep -q` closes the pipe after its first match and SIGPIPEs
+# whatever is still writing upstream (docs/ci-operations.md pitfall #3, the same
+# `grep | head` trap this repo has already hit in CI).
+run_case_expect_failure "same version without --confirm-gate refuses" 10.5.1 \
+  > "$TMP_DIR/refuse_out.txt"
+grep -q -- '--confirm-gate' "$TMP_DIR/refuse_out.txt"
+if [[ -s "$FAKE_GIT_LOG" || -s "$FAKE_CURL_LOG" ]]; then
+  echo "same-version refusal unexpectedly executed git/curl actions" >&2
+  exit 1
+fi
+
+run_case "same version with --confirm-gate triggers workflow" --confirm-gate 10.5.1 > "$TMP_DIR/out2.txt"
 grep -q 'Triggered Gitea Packages publish for 10.5.1' "$TMP_DIR/out2.txt"
 grep -q 'dispatches' "$FAKE_CURL_LOG"
 

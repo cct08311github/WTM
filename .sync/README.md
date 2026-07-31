@@ -15,7 +15,7 @@ The three files in this directory drive the divergence:
 | `github-excludes.txt` | Paths to delete from the push tree before pushing to GitHub. Trailing slash = directory. | 2 |
 | `github-sanitize.sed` | Sed rules applied to remaining text files. Strips internal hostnames / token names / brand-name references. | 3 (last) |
 
-The sync workflow (`.github/workflows/publish-nuget.yml` -> `Sync to GitHub` job) runs all three in order and only then pushes the resulting tree to GitHub.
+The sync workflow (`.github/workflows/publish-nuget.yml` -> `Sync to GitHub` job) runs all three in order and only then pushes the resulting tree to GitHub. It fires only on a release-tag push (`if: startsWith(github.ref, 'refs/tags/')` on every step in that job) — there is no cron/scheduled sync, and a `workflow_dispatch` run (used to cut a Gitea-only pre-release) never reaches these steps at all.
 
 ## Invariants (#659)
 

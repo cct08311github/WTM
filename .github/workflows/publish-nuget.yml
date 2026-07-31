@@ -17,6 +17,16 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # #925 cross-vendor review finding 3: this runner has capacity 2, so nothing
+    # previously stopped two publish runs (a tag push racing a workflow_dispatch, or two
+    # tag pushes from a retry) from executing concurrently and interleaving pushes to the
+    # same registries. One release publish at a time, queued rather than run in
+    # parallel -- never cancelled mid-push (cancel-in-progress: false), since an
+    # in-flight publish may already have pushed some but not all of six packages and
+    # cancelling it would leave that partial state with nothing to finish it.
+    concurrency:
+      group: publish-nuget-release
+      cancel-in-progress: false
     env:
       PACKAGE_SOURCE: https://mac-mini.tailde842d.ts.net/api/packages/chiu0831/nuget/index.json
 
@@ -30,85 +40,335 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Determine package version
+      # #925 cross-vendor review finding 5: nothing previously verified that the commit
+      # actually being published was cut from the authoritative dotnet10 branch tip.
+      # .claude/commands/wtm-release-check.md already requires a human/agent to check
+      # this manually (`git rev-parse HEAD` == `git rev-parse origin/dotnet10`) before
+      # tagging -- this makes it an automated, unbypassable precondition of the publish
+      # job itself, covering both trigger shapes:
+      #   - workflow_dispatch: must be dispatched against the `dotnet10` branch ref
+      #     itself (a direct API dispatch with an arbitrary `ref`, bypassing
+      #     scripts/release-gitea-package.sh which always dispatches against dotnet10,
+      #     would otherwise sail through every other check here).
+      #   - tag push: the tag's PEELED commit (dereferencing an annotated tag object to
+      #     the commit it wraps; a no-op for a lightweight tag) must be an ANCESTOR of
+      #     (or equal to) origin/dotnet10's current tip.
+      # Ancestor-of-tip, not equal-to-tip, is the correct check for the tag case: this
+      # repo's documented tag-object-dedup recovery SOP (docs/gitea-packages.md,
+      # "tag-trigger 卡死的真正根因") deletes and recreates a tag on the SAME release
+      # commit while dotnet10 may have advanced further in the meantime (unrelated
+      # commits landing while the recovery is performed) -- an equal-to-tip check would
+      # make that documented, working recovery procedure fail this gate. Ancestor-of-tip
+      # still rejects the actual threats this check exists for: a tag cut on a stale
+      # commit that was never dotnet10's tip, or on a feature-branch commit never merged
+      # into dotnet10 at all.
+      - name: Verify release ref integrity
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin dotnet10 --quiet
+          AUTHORITATIVE_SHA="$(git rev-parse origin/dotnet10)"
+          echo "origin/dotnet10 is currently at ${AUTHORITATIVE_SHA}"
+
+          case "$EVENT_NAME" in
+            workflow_dispatch)
+              if [ "$REF" != "refs/heads/dotnet10" ]; then
+                echo "::error::workflow_dispatch fired against ref '${REF}', not refs/heads/dotnet10. This job only publishes from the dotnet10 branch tip -- aborting before any pack/push step runs. Use scripts/release-gitea-package.sh, which always dispatches against dotnet10."
+                exit 1
+              fi
+              if ! git merge-base --is-ancestor "$SHA" "$AUTHORITATIVE_SHA"; then
+                echo "::error::workflow_dispatch ref is dotnet10, but its checked-out SHA (${SHA}) is not an ancestor of origin/dotnet10's current tip (${AUTHORITATIVE_SHA}). Refusing to publish."
+                exit 1
+              fi
+              echo "workflow_dispatch verified: ${SHA} is dotnet10 (or an ancestor of its current tip)."
+              ;;
+            push)
+              PEELED_SHA="$(git rev-parse "${REF_NAME}^{commit}")"
+              if ! git merge-base --is-ancestor "$PEELED_SHA" "$AUTHORITATIVE_SHA"; then
+                echo "::error::tag '${REF_NAME}' points at commit ${PEELED_SHA}, which is not an ancestor of origin/dotnet10's current tip (${AUTHORITATIVE_SHA}). A tag built from a stale or feature-branch commit would otherwise pass every other check here -- refusing to publish."
+                exit 1
+              fi
+              echo "tag '${REF_NAME}' verified: ${PEELED_SHA} is on origin/dotnet10's history."
+              ;;
+            *)
+              echo "::error::unexpected event_name '${EVENT_NAME}' -- refusing to publish."
+              exit 1
+              ;;
+          esac
+
+      # #925: previously this step read ONLY version.props and the workflow_dispatch
+      # input — it never looked at the tag name that triggered the run at all. Pushing
+      # tag `v10.21.0-rc.1` therefore published a STABLE `10.21.0` package (the suffix
+      # silently vanished), and nothing checked that the tag, version.props, and
+      # CHANGELOG.md agreed with each other. scripts/reconcile-release-version.sh is the
+      # single source of truth for this reconciliation, shared with
+      # test/reconcile-release-version-tests.sh so the logic is unit-tested without a
+      # real publish. A failure here aborts the job before ANY pack/push step runs.
+      - name: Determine and reconcile package version
         id: version
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
           VERSION_SUFFIX: ${{ github.event.inputs.version_suffix }}
-        run: |
-          BASE=$(grep -oP '(?<=<VersionPrefix>)[^<]+' version.props)
-          if [ -n "$VERSION_SUFFIX" ]; then
-            echo "version=${BASE}-${VERSION_SUFFIX}" >> $GITHUB_OUTPUT
-          else
-            echo "version=${BASE}" >> $GITHUB_OUTPUT
-          fi
+        run: scripts/reconcile-release-version.sh >> "$GITHUB_OUTPUT"
 
+      # #925: `/p:Version=$PKG_VERSION` ALONE silently does nothing to the packed nupkg
+      # version in this repo. version.props unconditionally sets
+      # `<PackageVersion>$(VersionPrefix)</PackageVersion>` in its Release
+      # PropertyGroup, and NuGet's pack target reads `PackageVersion` (not `Version`) for
+      # the nuspec — so without also passing `/p:PackageVersion=`, every `dotnet pack -c
+      # Release` here always emitted the bare version.props VersionPrefix, dropping any
+      # pre-release suffix. Verified empirically while building this fix: packing with
+      # only `/p:Version=99.0.0-rc.5` produced a nupkg whose nuspec still read
+      # `<version>10.21.0</version>`; adding `/p:PackageVersion=99.0.0-rc.5` alongside it
+      # produced `<version>99.0.0-rc.5</version>` as expected. This means the
+      # `version_suffix` workflow_dispatch input — the ONLY existing way to cut a
+      # pre-release — has never actually worked; there is no CHANGELOG record of any
+      # `-alpha`/`-beta`/`-rc` version ever having shipped, consistent with the bug
+      # having been latent rather than exercised. Both properties are set (not just
+      # PackageVersion) so `Version`-derived outputs elsewhere stay consistent.
+      #
+      # These six pack steps only ever write to the local nupkgs/ directory -- nothing
+      # here is a publish. Every check in this job (smoke, vulnerability scan, cohort
+      # check, sanitize/leak-gate/nuspec checks) runs against exactly these files before
+      # the first `nuget push` anywhere (see "Push to Gitea Packages" below and #925
+      # cross-vendor review finding 3).
       - name: Pack WalkingTec.Mvvm.Core
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
-        run: dotnet pack src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION
+        run: dotnet pack src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
 
       - name: Pack WalkingTec.Mvvm.TagHelpers.LayUI
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
-        run: dotnet pack src/WalkingTec.Mvvm.TagHelpers.LayUI/WalkingTec.Mvvm.TagHelpers.LayUI.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION
+        run: dotnet pack src/WalkingTec.Mvvm.TagHelpers.LayUI/WalkingTec.Mvvm.TagHelpers.LayUI.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
 
       - name: Pack WalkingTec.Mvvm.Mvc
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
-        run: dotnet pack src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION
+        run: dotnet pack src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
 
       - name: Pack WalkingTec.Mvvm.WorkFlow
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
-        run: dotnet pack src/WalkingTec.Mvvm.WorkFlow/WalkingTec.Mvvm.WorkFlow.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION
+        run: dotnet pack src/WalkingTec.Mvvm.WorkFlow/WalkingTec.Mvvm.WorkFlow.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
 
       - name: Pack WalkingTec.Mvvm.Etl
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
-        run: dotnet pack src/WalkingTec.Mvvm.Etl/WalkingTec.Mvvm.Etl.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION
+        run: dotnet pack src/WalkingTec.Mvvm.Etl/WalkingTec.Mvvm.Etl.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
 
       - name: Pack WalkingTec.Mvvm.FileHandlers.S3
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
-        run: dotnet pack src/WalkingTec.Mvvm.FileHandlers.S3/WalkingTec.Mvvm.FileHandlers.S3.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION
+        run: dotnet pack src/WalkingTec.Mvvm.FileHandlers.S3/WalkingTec.Mvvm.FileHandlers.S3.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
 
       - name: List packages
         run: ls -lh nupkgs/
 
-      # Issue #678: common.props now sets IncludeSymbols/SymbolPackageFormat=snupkg, so
-      # `dotnet pack` above also emits a *.snupkg (symbol package, containing the PDB +
-      # SourceLink map) alongside each *.nupkg in nupkgs/. No separate push step is
-      # needed for it: `dotnet nuget push` auto-detects the adjacent *.snupkg for each
-      # *.nupkg it pushes and publishes it to the source's SymbolPackagePublish
-      # resource unless `--no-symbols` is passed (see `dotnet nuget push` docs). Gitea's
-      # NuGet service index (https://mac-mini.tailde842d.ts.net/api/packages/chiu0831/nuget/index.json)
-      # advertises `SymbolPackagePublish/4.9.0`, and this was confirmed live: pushing
-      # `*.nupkg` here also ships the matching `*.snupkg`. A prior revision added a
-      # dedicated "Push symbol packages" step on the (incorrect) premise that the glob
-      # below doesn't cover snupkgs — that step was a redundant duplicate push
-      # (harmless only via --skip-duplicate) and was removed. Do not re-add it; if the
-      # symbol endpoint ever needs independent failure isolation from the primary
-      # publish, that must be done via `--no-symbols` on this step plus a separate
-      # explicit `*.snupkg` push, verified end-to-end against Gitea before merging —
-      # not by re-adding a step that runs after (and depends on) this one having
-      # already pushed the symbols implicitly.
-      - name: Push to Gitea Packages
+      # #925 cross-vendor review finding 3 (partial support): an auditable record of
+      # exactly which six artifacts (by content hash) are about to be checked and
+      # published, tied to the commit checked out for this run. Also a hard sanity
+      # check -- if a pack step above silently produced the wrong count (e.g. a glob
+      # picked up a stale file), fail here rather than downstream.
+      - name: Verify package artifact count and manifest
         run: |
-          dotnet nuget push "nupkgs/*.nupkg" \
-            --api-key ${{ secrets.PAT_TOKEN }} \
-            --source ${{ env.PACKAGE_SOURCE }} \
-            --skip-duplicate
+          set -euo pipefail
+          NUPKG_COUNT=$(ls nupkgs/*.nupkg 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$NUPKG_COUNT" -ne 6 ]; then
+            echo "::error::Expected exactly 6 .nupkg files in nupkgs/, found ${NUPKG_COUNT}"
+            exit 1
+          fi
+          echo "Artifact manifest for commit ${GITHUB_SHA} (sha256):"
+          sha256sum nupkgs/*.nupkg
 
-      # ── GitHub mirror sync ─────────────────────────────────────────────────
+      # ── #925: pre-publish verification gate ─────────────────────────────────────────
+      # Everything from here down to (and not including) "Push to Gitea Packages" runs
+      # BEFORE the first `nuget push` to any registry. Any failure aborts the job with
+      # nothing published — the packages built above exist only as local files in
+      # nupkgs/ at that point, not on any registry.
+      #
+      # What this proves, and what it does NOT: see the #925 PR description for the full
+      # accounting. In short — proven here, on this exact commit, every run: the tag /
+      # version.props / CHANGELOG agreement above, that all six packages install and
+      # that Etl's #883 breaking-change surface matches what's documented (below), and
+      # that this exact dependency graph has no known FIXABLE vulnerability (further
+      # below). NOT re-verified here: the full .NET test suite (11 projects; ci-build.yml
+      # already serializes it with -m:1 specifically because running it concurrently
+      # OOM-kills this runner, #902 — re-running it a second time inside every publish
+      # would either contend for the same 2-capacity runner or double the release
+      # wall-clock) and the mutation-gate verdicts (inherently slower still — each mutant
+      # is its own build+test cycle). Querying Gitea Actions' own recorded run/job
+      # conclusion for this SHA as a substitute was considered and rejected: this repo's
+      # own operational history (CLAUDE.md "CI red does not mean failed",
+      # docs/ci-operations.md pitfall #4) is that the job `conclusion` field is actively
+      # unreliable for exactly the jobs that would matter here (`build-and-test`) due to
+      # a known Gitea Actions artifact-upload quirk, and reading raw job logs via the
+      # Actions API the way the documented human SOP does would need to be validated
+      # against a live run to trust — which this change cannot do (no real publish is
+      # possible in this repo, and getting the API call wrong would either silently
+      # no-op the check or hard-block every future release). Moving that check here
+      # without being able to prove it works would be exactly the "moving it and hoping"
+      # this issue exists to stop, so it is named as a gap instead.
+      #
+      # #925 fact 3: the smoke test previously ran AFTER both the Gitea and GitHub
+      # publish stages and only installed 4 of the 6 packages, so a break in Etl or
+      # FileHandlers.S3 would have been discovered only once already-immutable versions
+      # were live on both registries. It now runs here, against the packages that were
+      # just packed to the local nupkgs/ directory — before either registry has seen
+      # them — and covers all six.
+      #
+      # #925 cross-vendor review findings 6 & 9:
+      #  - finding 9: the scaffolded project used to be created at `smoke/` in the
+      #    checkout ROOT. `.gitignore` does not exclude it, so if this step ever ran
+      #    after the GitHub sync's `git add -A` (it doesn't today, but nothing enforced
+      #    that), or if a future edit reordered steps, `smoke/`/`smoke.csproj` would be
+      #    committed and pushed to the public mirror. Building it under $RUNNER_TEMP
+      #    instead removes the possibility entirely — it is never inside the git
+      #    checkout at all.
+      #  - finding 6 (isolation half): a re-run at the SAME version (a retry after a
+      #    transient failure, or a workflow_dispatch re-publish) could previously
+      #    silently pass by resolving an ALREADY-CACHED older package from the runner's
+      #    shared global NuGet packages folder instead of the one just built — NuGet
+      #    treats a given package id+version as immutable once cached and will not
+      #    re-fetch it. Reproduced locally while building this fix: packing
+      #    WalkingTec.Mvvm.Etl twice at the same version with a real signature change in
+      #    between, a stale shared NUGET_PACKAGES cache made the smoke fixture below
+      #    report 0 failures against the OLD signature even though the just-built nupkg
+      #    had the new one. `NUGET_PACKAGES` is redirected to a fresh, empty,
+      #    $RUNNER_TEMP-scoped directory for these steps so there is nothing to reuse,
+      #    and a dedicated NuGet.Config lists ONLY nuget.org (for genuine third-party
+      #    transitive dependencies) plus the just-built local nupkgs/ folder — never the
+      #    Gitea or GitHub registries — so the six WTM packages under test can only ever
+      #    resolve from the candidate build.
+      - name: Smoke test package install (all six packages)
+        env:
+          PKG_VERSION: ${{ steps.version.outputs.version }}
+          NUPKG_DIR: ${{ github.workspace }}/nupkgs
+        run: |
+          set -euo pipefail
+          SMOKE_DIR="${RUNNER_TEMP}/smoke"
+          rm -rf "$SMOKE_DIR"
+          mkdir -p "$SMOKE_DIR" && cd "$SMOKE_DIR"
+
+          # Isolate the NuGet global packages cache for this smoke test only -- see the
+          # step header comment (finding 6) for why a shared cache can hide a real
+          # regression on a same-version re-run.
+          export NUGET_PACKAGES="${RUNNER_TEMP}/smoke-nuget-packages"
+          rm -rf "$NUGET_PACKAGES"
+          mkdir -p "$NUGET_PACKAGES"
+
+          dotnet new console --framework net10.0
+
+          # Candidate-feed-only NuGet.Config: nuget.org for genuine third-party
+          # transitive dependencies (EF Core, Quartz, ...), plus the local nupkgs/
+          # folder for the six WTM packages under test. Deliberately NOT the Gitea or
+          # GitHub Packages registries -- if the candidate build is missing from
+          # nupkgs/, restore must fail loudly, never silently fall back to an
+          # already-published version of the same package id+version.
+          cat > NuGet.Config <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration>
+            <packageSources>
+              <clear />
+              <add key="nuget-org" value="https://api.nuget.org/v3/index.json" />
+              <add key="local-nupkgs" value="${NUPKG_DIR}" />
+            </packageSources>
+          </configuration>
+          EOF
+
+          dotnet add package WalkingTec.Mvvm.Core --version "$PKG_VERSION"
+          dotnet add package WalkingTec.Mvvm.Mvc --version "$PKG_VERSION"
+          dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version "$PKG_VERSION"
+          dotnet add package WalkingTec.Mvvm.WorkFlow --version "$PKG_VERSION"
+          dotnet add package WalkingTec.Mvvm.Etl --version "$PKG_VERSION"
+          dotnet add package WalkingTec.Mvvm.FileHandlers.S3 --version "$PKG_VERSION"
+          # #925: the scaffolded Program.cs never references a single type from any of
+          # these packages, so `dotnet build` below would previously have passed even
+          # for a completely broken assembly. Replace it with a fixture that runs (not
+          # just compiles) System.Reflection assertions against all 13 members changed
+          # by #883's breaking signature change -- see the fixture's own header comment
+          # for exactly what it proves and why a compile-only version of this file could
+          # not (cross-vendor review finding 6).
+          cp "$GITHUB_WORKSPACE/test/smoke/publish-nuget-fixture/Program.cs" Program.cs
+          dotnet restore --force
+          dotnet build -c Release --no-restore
+          dotnet run -c Release --no-build
+
+      # #925 cross-vendor review finding 1: the PREVIOUS version of this step piped
+      # `echo "$VULN_OUTPUT" | grep -q "..."` under `set -o pipefail`. `grep -q` exits
+      # the instant it finds a match and closes its end of the pipe; if VULN_OUTPUT is
+      # larger than the pipe can drain before grep exits, `echo` takes SIGPIPE (exit
+      # 141), and bash's pipefail rule ("the pipeline's exit status is the LAST
+      # non-zero exit code, or zero if all succeeded") made the whole pipeline exit 141
+      # even though grep DID match -- so the `if` guarding the abort path evaluated
+      # false and the gate printed "clean" on a vulnerable dependency graph.
+      # docs/ci-operations.md pitfall #3 already documented this exact class of trap
+      # (a different call site, `grep | head`) before this bug shipped; reproduced here
+      # again with ~3MB of synthetic output (see PR description for the exact repro and
+      # the new code failing closed on the same input).
+      #
+      # Fix (matching what docs/ci-operations.md pitfall #3 already prescribes: stop
+      # piping into something that can exit early): no text, no pipe. `dotnet list
+      # package --vulnerable --format json` is redirected straight to a file, and
+      # scripts/check-vulnerable-packages.py parses it structurally. That script fails
+      # closed (exit 2, distinct from the "real vulnerability found" exit 1) on ANY
+      # output it does not recognise -- malformed JSON, an unexpected shape, `dotnet`
+      # itself exiting non-zero -- so an unparseable scan can never be reported as clean.
+      - name: Local vulnerability scan (release gate)
+        run: |
+          set -euo pipefail
+          dotnet restore WalkingTec.Mvvm.sln --verbosity quiet
+          VULN_JSON="${RUNNER_TEMP}/vuln-scan.json"
+          VULN_STDERR="${RUNNER_TEMP}/vuln-scan.stderr"
+          set +e
+          dotnet list WalkingTec.Mvvm.sln package --vulnerable --include-transitive \
+            --format json --output-version 1 > "$VULN_JSON" 2> "$VULN_STDERR"
+          DOTNET_EXIT=$?
+          set -e
+          cat "$VULN_STDERR" >&2 || true
+          if [ "$DOTNET_EXIT" -ne 0 ]; then
+            echo "::error::'dotnet list package --vulnerable' itself exited ${DOTNET_EXIT} -- treating as a gate failure, not a clean scan (see stderr above)."
+            exit 1
+          fi
+          if ! python3 scripts/check-vulnerable-packages.py "$VULN_JSON"; then
+            echo "::error::Vulnerable package(s) found in the dependency graph at this exact commit (see output above). Aborting before anything is published -- NU1903 is a P0 release gate (docs/dependency-management.md)."
+            exit 1
+          fi
+
+      # #925 cross-vendor review finding 3 (partial support): before pushing anything,
+      # check whether this exact version already exists PARTIALLY on the Gitea
+      # registry -- the exact "package N of 6 failed last time" scenario described in
+      # the "Push to Gitea Packages" step's comment below. `--skip-duplicate` alone
+      # cannot distinguish "clean idempotent re-run" from "topping up a broken partial
+      # publish with content from a different commit"; this can, and refuses to
+      # proceed on the latter (see scripts/check-package-cohort.py for exactly what it
+      # checks and its exit codes; NOTE its own header comment on how far this has been
+      # exercised, since a live Gitea/GitHub API call was out of scope for the session
+      # that authored it).
+      - name: Verify version cohort not partially published (Gitea)
+        env:
+          PKG_VERSION: ${{ steps.version.outputs.version }}
+          PAT: ${{ secrets.PAT_TOKEN }}
+        run: |
+          python3 scripts/check-package-cohort.py \
+            "$PACKAGE_SOURCE" "$PKG_VERSION" \
+            WalkingTec.Mvvm.Core WalkingTec.Mvvm.Mvc WalkingTec.Mvvm.TagHelpers.LayUI \
+            WalkingTec.Mvvm.WorkFlow WalkingTec.Mvvm.Etl WalkingTec.Mvvm.FileHandlers.S3 \
+            --token "$PAT"
+
+      # ── GitHub mirror sync — checks only, no push yet ────────────────────────────────
       # Required secret: GH_MIRROR_PAT — a Personal Access Token for account
       # `cct08311github` with scopes: repo, workflow, write:packages, read:packages.
       # Add it in Gitea repo Settings → Secrets → GH_MIRROR_PAT.
       # (must NOT start with GITHUB_ — Gitea reserves that prefix)
       #
       # These steps run only on real tag pushes (not workflow_dispatch without
-      # a tag ref). If any step here fails the job exits non-zero, which means
-      # the GitHub sync failed — but the Gitea publish above has already
-      # succeeded unconditionally.
+      # a tag ref).
       #
       # Security: all github.ref_name / steps.* values are passed through env:
       # vars rather than inline shell interpolation to prevent accidental
@@ -122,6 +382,13 @@ jobs:
       # github/dotnet10 is the one thing the pre-push scan can't see). Both
       # invocations share one script materialized in $RUNNER_TEMP so the check
       # can never drift between the two call sites.
+      #
+      # #925 cross-vendor review finding 3: EVERY step in this section — including the
+      # sanitized re-pack and its nuspec check, and the GitHub package-cohort check —
+      # now runs BEFORE "Push to Gitea Packages" (the job's first irreversible action;
+      # see that step below). The original ordering pushed to Gitea FIRST and ran these
+      # checks only afterward, so a failure here used to leave Gitea packages published
+      # with no matching GitHub sync and no way to have caught it beforehand.
 
       - name: Configure GitHub remote
         if: startsWith(github.ref, 'refs/tags/')
@@ -322,6 +589,15 @@ jobs:
           # Bundle all manifest changes into a single commit.
           git diff --cached --quiet || \
             git commit -m "chore(sync): apply github mirror manifest"
+          # #925 cross-vendor review finding 2: capture the exact commit that is about
+          # to be leak-gate-scanned and packed for GitHub Packages, RIGHT NOW — before
+          # "Push dotnet10 branch to GitHub" below has any chance to run its
+          # merge-fallback path (`git merge github/dotnet10 -X ours`, which can accept
+          # non-conflicting mirror-only files into the tree). Every later step that
+          # needs "the sanitized Gitea tree" uses this exact SHA, never a live re-read
+          # of HEAD, so nothing downstream can accidentally observe post-merge content.
+          echo "SANITIZED_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "Captured SANITIZED_SHA=$(git rev-parse HEAD)"
 
       # Leak-gate: scan the fully sanitized, committed tree BEFORE the first
       # push attempt (#659). This is the step that closes the fast-forward
@@ -331,6 +607,134 @@ jobs:
       - name: Sync manifest — leak-gate scan
         if: startsWith(github.ref, 'refs/tags/')
         run: bash "$RUNNER_TEMP/wtm-leak-gate.sh"
+
+      # #925 cross-vendor review finding 2: this used to `dotnet pack` directly in the
+      # live working directory, AFTER "Push dotnet10 branch to GitHub" (below) had
+      # potentially already run its merge-fallback path. `-X ours` only resolves
+      # CONFLICTING hunks — a non-conflicting file that exists ONLY on the public
+      # mirror (e.g. a rogue root `Directory.Build.targets`, which MSBuild
+      # auto-imports and executes for every project under it, including during
+      # `dotnet pack`) is silently ACCEPTED into the merged tree with no conflict at
+      # all. Packing that merge result would execute whatever arbitrary code such a
+      # file contained, in a working directory whose `.git/config` (from "Configure
+      # GitHub remote" above) embeds the write-scoped GH_MIRROR_PAT in the remote URL.
+      #
+      # Fix: this step now runs BEFORE "Push dotnet10 branch to GitHub" (see this
+      # job's step order) and packs from `git archive "$SANITIZED_SHA"` extracted into
+      # a fresh directory under $RUNNER_TEMP — never the live working tree.
+      # `SANITIZED_SHA` was captured immediately after the sanitize+commit step above,
+      # i.e. BEFORE the merge-fallback branch has any chance to run, and is never
+      # re-derived afterward — so even if that merge later creates a new commit on
+      # sync-to-github-tmp to satisfy GitHub's non-fast-forward push, this step has
+      # already built (and, once past the checks below, will ship) exactly the
+      # Gitea-authored sanitized tree and nothing else. `git archive` of a fixed
+      # commit-ish is git's own guarantee of "exactly that tree, nothing more" — there
+      # is no code path by which content from `github/dotnet10` can reach this
+      # extraction. The extraction directory also has no `.git` at all (a plain `tar`
+      # extraction, not a worktree or clone) — verified empirically that `dotnet pack`
+      # succeeds from such a directory (SourceLink's git-based tasks simply find no
+      # repository and contribute nothing; `RepositoryUrl` is still correctly embedded
+      # in the nuspec because common.props sets it as an explicit MSBuild property,
+      # not one SourceLink derives from `git remote`) — so there is no repo metadata,
+      # and therefore no PAT-bearing remote URL, anywhere near the `dotnet pack`
+      # process.
+      - name: Re-pack from sanitized source for GitHub Packages
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          PKG_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "Packing GitHub Packages artifacts from SANITIZED_SHA=${SANITIZED_SHA} (captured before any mirror merge could run):"
+          git log -1 --format='  commit %H%n  author %an <%ae>%n  date   %ad%n  subject %s' "$SANITIZED_SHA"
+
+          PACK_DIR="${RUNNER_TEMP}/sanitized-pack"
+          rm -rf "$PACK_DIR"
+          mkdir -p "$PACK_DIR"
+          git archive "$SANITIZED_SHA" | tar -x -C "$PACK_DIR"
+
+          mkdir -p nupkgs-github
+          # #925: PackageVersion, not Version, is what NuGet packs into the nuspec here
+          # (see the identical comment on the Gitea pack steps above) -- both are passed.
+          dotnet pack "$PACK_DIR/src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj"                         -c Release -o nupkgs-github /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
+          dotnet pack "$PACK_DIR/src/WalkingTec.Mvvm.TagHelpers.LayUI/WalkingTec.Mvvm.TagHelpers.LayUI.csproj" -c Release -o nupkgs-github /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
+          dotnet pack "$PACK_DIR/src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj"                           -c Release -o nupkgs-github /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
+          dotnet pack "$PACK_DIR/src/WalkingTec.Mvvm.WorkFlow/WalkingTec.Mvvm.WorkFlow.csproj"                 -c Release -o nupkgs-github /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
+          dotnet pack "$PACK_DIR/src/WalkingTec.Mvvm.Etl/WalkingTec.Mvvm.Etl.csproj"                           -c Release -o nupkgs-github /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
+          dotnet pack "$PACK_DIR/src/WalkingTec.Mvvm.FileHandlers.S3/WalkingTec.Mvvm.FileHandlers.S3.csproj"   -c Release -o nupkgs-github /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
+          # Sanity-check: the sanitized placeholder MUST be present in EVERY nuspec.
+          # Loop over each .nupkg individually — passing a glob to unzip treats the
+          # first file as the archive and the rest as member-name filters, so without
+          # this loop only the first package would be checked.
+          for pkg in nupkgs-github/*.nupkg; do
+            if ! unzip -p "$pkg" '*.nuspec' 2>/dev/null | grep -q 'internal\.registry\.invalid'; then
+              echo "ERROR: sanitized RepositoryUrl missing from $(basename "$pkg") nuspec — sanitize may have failed; aborting." >&2
+              exit 1
+            fi
+          done
+          NUPKG_COUNT=$(ls nupkgs-github/*.nupkg 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$NUPKG_COUNT" -ne 6 ]; then
+            echo "::error::Expected exactly 6 .nupkg files in nupkgs-github/, found ${NUPKG_COUNT}"
+            exit 1
+          fi
+          echo "Sanitized nupkgs ready (built from SANITIZED_SHA=${SANITIZED_SHA}):"
+          sha256sum nupkgs-github/*.nupkg
+
+      # #925 cross-vendor review finding 3: same partial-cohort check as the Gitea one
+      # above, against GitHub Packages' registry instead. Uses the standard NuGet V3
+      # protocol (same script, different service index + token), not a
+      # GitHub-Packages-specific API call.
+      - name: Verify version cohort not partially published (GitHub Packages)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          PKG_VERSION: ${{ steps.version.outputs.version }}
+          GH_PAT: ${{ secrets.GH_MIRROR_PAT }}
+        run: |
+          python3 scripts/check-package-cohort.py \
+            "https://nuget.pkg.github.com/cct08311github/index.json" "$PKG_VERSION" \
+            WalkingTec.Mvvm.Core WalkingTec.Mvvm.Mvc WalkingTec.Mvvm.TagHelpers.LayUI \
+            WalkingTec.Mvvm.WorkFlow WalkingTec.Mvvm.Etl WalkingTec.Mvvm.FileHandlers.S3 \
+            --token "$GH_PAT"
+
+      # ── Everything above this line is a CHECK. Nothing below is reversible. ──────────
+      # #925 cross-vendor review finding 3: this is now the FIRST place in the job that
+      # can have an irreversible, externally-visible effect — every local check (pack,
+      # smoke, vulnerability scan, artifact count, Gitea cohort) and, on a tag push,
+      # every sanitized-tree check (manifest lint, leak-gate x2, sanitized re-pack +
+      # nuspec check, GitHub cohort) has already passed by this point. Previously this
+      # push ran FIRST, before any of those; a failure partway through the checks below
+      # would have already left Gitea packages live with nothing to have caught it.
+
+      # Issue #678: common.props now sets IncludeSymbols/SymbolPackageFormat=snupkg, so
+      # `dotnet pack` above also emits a *.snupkg (symbol package, containing the PDB +
+      # SourceLink map) alongside each *.nupkg in nupkgs/. No separate push step is
+      # needed for it: `dotnet nuget push` auto-detects the adjacent *.snupkg for each
+      # *.nupkg it pushes and publishes it to the source's SymbolPackagePublish
+      # resource unless `--no-symbols` is passed (see `dotnet nuget push` docs). Gitea's
+      # NuGet service index (https://mac-mini.tailde842d.ts.net/api/packages/chiu0831/nuget/index.json)
+      # advertises `SymbolPackagePublish/4.9.0`, and this was confirmed live: pushing
+      # `*.nupkg` here also ships the matching `*.snupkg`. A prior revision added a
+      # dedicated "Push symbol packages" step on the (incorrect) premise that the glob
+      # below doesn't cover snupkgs — that step was a redundant duplicate push
+      # (harmless only via --skip-duplicate) and was removed. Do not re-add it; if the
+      # symbol endpoint ever needs independent failure isolation from the primary
+      # publish, that must be done via `--no-symbols` on this step plus a separate
+      # explicit `*.snupkg` push, verified end-to-end against Gitea before merging —
+      # not by re-adding a step that runs after (and depends on) this one having
+      # already pushed the symbols implicitly.
+      #
+      # #925 cross-vendor review finding 3 (mixed-cohort half): `--skip-duplicate`
+      # makes a re-run of an already-fully-published version a safe no-op, and the
+      # "Verify version cohort not partially published" step above already refused to
+      # reach this point if the registry held a PARTIAL cohort for this version. What
+      # `--skip-duplicate` cannot do on its own is distinguish those two cases — the
+      # cohort check is what makes that distinction before any package in this call is
+      # touched.
+      - name: Push to Gitea Packages
+        run: |
+          dotnet nuget push "nupkgs/*.nupkg" \
+            --api-key ${{ secrets.PAT_TOKEN }} \
+            --source ${{ env.PACKAGE_SOURCE }} \
+            --skip-duplicate
 
       - name: Push dotnet10 branch to GitHub
         if: startsWith(github.ref, 'refs/tags/')
@@ -345,6 +749,13 @@ jobs:
             git fetch github dotnet10
             # -X ours resolves content conflicts but leaves modify/delete conflicts
             # unresolved (merge exits non-zero). We handle those explicitly below.
+            #
+            # #925 cross-vendor review finding 2: this merge (and everything it may
+            # accept from github/dotnet10, conflicting or not) affects ONLY what gets
+            # pushed as the dotnet10 BRANCH below. The GitHub Packages artifacts were
+            # already built, before this step ever ran, from `git archive
+            # "$SANITIZED_SHA"` (see "Re-pack from sanitized source for GitHub
+            # Packages" above) — nothing in this merge can reach that pack.
             git merge github/dotnet10 \
               -X ours \
               --allow-unrelated-histories \
@@ -405,23 +816,52 @@ jobs:
             fi
           fi
 
+      # #925 cross-vendor review finding 5: this used to force-tag+force-push
+      # unconditionally on every run. A retry of the SAME release (the documented
+      # tag-object-dedup recovery SOP, docs/gitea-packages.md "tag-trigger 卡死的真正根因")
+      # legitimately needs to re-point this tag at a new sanitized commit whose CONTENT
+      # is identical — but blindly force-moving an EXISTING GitHub tag would just as
+      # happily overwrite a tag that some other, unrelated commit already legitimately
+      # owns (a provenance mixup, a human re-using a version number, a name collision)
+      # with no check at all. Only allow the force-move when the existing remote tag's
+      # TREE is byte-identical to the tree about to be pushed — i.e. this really is the
+      # same release being re-published, not a different one silently overwriting
+      # history other people may have already pulled.
       - name: Push release tag to GitHub
         if: startsWith(github.ref, 'refs/tags/')
         env:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          # Re-tag at the filtered sync commit so GitHub's tag SHA matches what
-          # GitHub has in its dotnet10 history (not the raw Gitea commit).
+          NEW_TREE="$(git rev-parse HEAD^{tree})"
+
+          if git fetch github "refs/tags/${TAG}" -q 2>/dev/null; then
+            EXISTING_SHA="$(git rev-parse FETCH_HEAD^{commit})"
+            EXISTING_TREE="$(git rev-parse "${EXISTING_SHA}^{tree}")"
+            if [ "$EXISTING_TREE" != "$NEW_TREE" ]; then
+              echo "::error::tag ${TAG} already exists on GitHub at ${EXISTING_SHA} (tree ${EXISTING_TREE}), which DIFFERS from the tree about to be published (${NEW_TREE}). Refusing to force-move a tag whose existing content differs -- this would silently overwrite a DIFFERENT release. If this is genuinely intentional, delete the GitHub tag manually first and re-run."
+              exit 1
+            fi
+            echo "tag ${TAG} already exists on GitHub at ${EXISTING_SHA} with an IDENTICAL tree -- safe idempotent re-tag (e.g. a Gitea tag-object-dedup retry produced a new commit object wrapping the same content)."
+          else
+            echo "tag ${TAG} does not exist on GitHub yet -- first publish."
+          fi
+
           git tag -f "$TAG" HEAD
           git push github "$TAG" --force
 
+      # #925 cross-vendor review finding 10: `is_prerelease` has been computed and
+      # emitted by scripts/reconcile-release-version.sh since it was introduced, but
+      # this step ignored it and hardcoded `"prerelease": false` unconditionally -- an
+      # RC tag (`v10.21.0-rc.1`) would have created a STABLE GitHub Release. Threaded
+      # through from steps.version.outputs.is_prerelease.
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_PAT: ${{ secrets.GH_MIRROR_PAT }}
           TAG: ${{ github.ref_name }}
           PKG_VERSION: ${{ steps.version.outputs.version }}
+          IS_PRERELEASE: ${{ steps.version.outputs.is_prerelease }}
         run: |
           set -euo pipefail
 
@@ -435,6 +875,15 @@ jobs:
             BODY="Release ${TAG}"
           fi
 
+          case "$IS_PRERELEASE" in
+            true) PRERELEASE_JSON=true ;;
+            false) PRERELEASE_JSON=false ;;
+            *)
+              echo "::error::steps.version.outputs.is_prerelease was '${IS_PRERELEASE}', expected exactly 'true' or 'false' -- refusing to guess for the GitHub Release payload."
+              exit 1
+              ;;
+          esac
+
           # Escape body for JSON without requiring jq.
           BODY_JSON=$(python3 -c "
           import sys, json
@@ -442,7 +891,7 @@ jobs:
           print(json.dumps(body))
           " <<< "$BODY")
 
-          PAYLOAD="{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"body\":${BODY_JSON},\"draft\":false,\"prerelease\":false}"
+          PAYLOAD="{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"body\":${BODY_JSON},\"draft\":false,\"prerelease\":${PRERELEASE_JSON}}"
 
           # Idempotent release creation: GET existing release → PATCH if found, POST if not.
           # curl -sS (no -f) so a 404 is captured rather than aborting with set -e.
@@ -485,39 +934,15 @@ jobs:
               -d "$PAYLOAD"
           fi
 
-      # Re-pack from the sanitized source tree so the published nuspec contains
-      # `internal.registry.invalid` instead of the internal tailnet hostname.
-      # At this point the working tree is still on sync-to-github-tmp with
-      # common.props already rewritten by github-sanitize.sed.
-      - name: Re-pack from sanitized source for GitHub Packages
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          PKG_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          mkdir -p nupkgs-github
-          dotnet pack src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj                             -c Release -o nupkgs-github /p:Version=$PKG_VERSION
-          dotnet pack src/WalkingTec.Mvvm.TagHelpers.LayUI/WalkingTec.Mvvm.TagHelpers.LayUI.csproj -c Release -o nupkgs-github /p:Version=$PKG_VERSION
-          dotnet pack src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj                              -c Release -o nupkgs-github /p:Version=$PKG_VERSION
-          dotnet pack src/WalkingTec.Mvvm.WorkFlow/WalkingTec.Mvvm.WorkFlow.csproj                    -c Release -o nupkgs-github /p:Version=$PKG_VERSION
-          dotnet pack src/WalkingTec.Mvvm.Etl/WalkingTec.Mvvm.Etl.csproj                              -c Release -o nupkgs-github /p:Version=$PKG_VERSION
-          dotnet pack src/WalkingTec.Mvvm.FileHandlers.S3/WalkingTec.Mvvm.FileHandlers.S3.csproj      -c Release -o nupkgs-github /p:Version=$PKG_VERSION
-          # Sanity-check: the sanitized placeholder MUST be present in EVERY nuspec.
-          # Loop over each .nupkg individually — passing a glob to unzip treats the
-          # first file as the archive and the rest as member-name filters, so without
-          # this loop only the first package would be checked.
-          for pkg in nupkgs-github/*.nupkg; do
-            if ! unzip -p "$pkg" '*.nuspec' 2>/dev/null | grep -q 'internal\.registry\.invalid'; then
-              echo "ERROR: sanitized RepositoryUrl missing from $(basename "$pkg") nuspec — sanitize may have failed; aborting." >&2
-              exit 1
-            fi
-          done
-          echo "Sanitized nupkgs ready:"
-          ls -lh nupkgs-github/
-
       # Issue #678: deliberately `*.nupkg` only here — GitHub Packages' NuGet registry
       # has never supported symbol packages (no snupkg endpoint), unlike Gitea. Do not
       # add a matching *.snupkg push for this source; it has nowhere to land.
+      #
+      # #925 cross-vendor review finding 2: nupkgs-github/ was built earlier in this
+      # job (see "Re-pack from sanitized source for GitHub Packages") from `git archive
+      # "$SANITIZED_SHA"` — never from this step's current working tree, which by now
+      # may hold a merge commit from "Push dotnet10 branch to GitHub" above. This step
+      # only pushes files that already exist on disk; it does not pack anything itself.
       - name: Push NuGet packages to GitHub Packages
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -528,20 +953,9 @@ jobs:
             --source "https://nuget.pkg.github.com/cct08311github/index.json" \
             --skip-duplicate
 
-      # ── Smoke test (runs after both Gitea and GitHub publish stages) ────────
-
-      - name: Smoke test package install
-        env:
-          PKG_VERSION: ${{ steps.version.outputs.version }}
-          NUPKG_DIR: ${{ github.workspace }}/nupkgs
-        run: |
-          set -euo pipefail
-          mkdir smoke && cd smoke
-          dotnet new console --framework net10.0
-          dotnet nuget add source "$NUPKG_DIR" --name local-nupkgs
-          dotnet add package WalkingTec.Mvvm.Core --version "$PKG_VERSION"
-          dotnet add package WalkingTec.Mvvm.Mvc --version "$PKG_VERSION"
-          dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version "$PKG_VERSION"
-          dotnet add package WalkingTec.Mvvm.WorkFlow --version "$PKG_VERSION"
-          dotnet restore
-          dotnet build -c Release --no-restore
+      # #925: the smoke test that used to run here (after both registries had already
+      # received the packages) now runs pre-publish, against all six packages, as the
+      # "Smoke test package install (all six packages)" step above -- see that step's
+      # comment for the full rationale. Nothing corresponding belongs at the end of the
+      # job anymore: by the time execution reaches here, the packages are already
+      # published and there would be nothing left to abort.

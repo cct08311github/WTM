@@ -42,11 +42,34 @@ jobs:
       run: |
         bash -n scripts/release-gitea-package.sh
         bash -n scripts/publish-to-gitea.sh
+        bash -n scripts/reconcile-release-version.sh
         python3 -m py_compile scripts/resolve-gitea-token.py scripts/check-gitea-token-not-sourced.py
+        # #925 cross-vendor review findings 1 & 3: the JSON-based vulnerability-scan
+        # parser and the version-cohort checker that replaced/hardened
+        # publish-nuget.yml's pre-publish gate.
+        python3 -m py_compile scripts/check-vulnerable-packages.py scripts/check-package-cohort.py
     - name: Run release script smoke tests
       run: bash test/release-script-tests.sh
     - name: Run publish-to-gitea smoke tests
       run: bash test/publish-to-gitea-tests.sh
+    # #925: unit-tests scripts/reconcile-release-version.sh -- the tag / version.props /
+    # CHANGELOG reconciliation publish-nuget.yml's "Determine and reconcile package
+    # version" step runs on every publish -- against fabricated fixtures, since a real
+    # publish can't be exercised here.
+    - name: Run release version reconciliation tests
+      run: bash test/reconcile-release-version-tests.sh
+    # #925 cross-vendor review finding 1: proves scripts/check-vulnerable-packages.py
+    # against fabricated `dotnet list package --vulnerable --format json` fixtures,
+    # including a ~3MB adversarial one reproducing the exact input size class that
+    # SIGPIPE-false-greened the pipeline this script replaced.
+    - name: Run vulnerable-package check tests
+      run: bash test/check-vulnerable-packages-tests.sh
+    # #925 cross-vendor review finding 3: proves scripts/check-package-cohort.py against
+    # a throwaway local NuGet V3 fixture server (real HTTP calls, no external network
+    # dependency) -- the partial-cohort scenario ("package N of 6 failed last time")
+    # the finding describes.
+    - name: Run package-cohort check tests
+      run: bash test/check-package-cohort-tests.sh
   build-and-test:
     runs-on: ubuntu-latest
     steps:

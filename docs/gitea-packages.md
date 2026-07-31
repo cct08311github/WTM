@@ -137,17 +137,19 @@ Release 組態下，最終 package version 直接等於 `VersionPrefix`。
 
 ---
 
-## 7. 本機手動發佈（fallback）
+## 7. 本機手動發佈（已停用 —— 僅供預覽）
 
-當 Gitea Actions runner 不可用或要快速測試時：
+**`scripts/publish-to-gitea.sh` 的真實發佈路徑已停用（#925 cross-vendor review finding 4）。** 它只 pack 6 個套件中的 3 個（Core/Mvc/TagHelpers.LayUI，永遠不含 WorkFlow/Etl/FileHandlers.S3），也不跑 `publish-nuget.yml` 的任何 gate（smoke test、本機 vulnerability scan、version-cohort 檢查）——曾經被本文件推薦為「runner 不可用時的 fallback」，等於官方教人在跳過所有這些檢查的情況下發佈不完整的一批套件。
 
 ```bash
-./scripts/publish-to-gitea.sh           # 穩定版
-./scripts/publish-to-gitea.sh --suffix beta.1   # 預發布版
-./scripts/publish-to-gitea.sh --dry-run         # 預覽，不執行
+./scripts/publish-to-gitea.sh --dry-run                # 預覽穩定版，不執行
+./scripts/publish-to-gitea.sh --dry-run --suffix beta.1  # 預覽預發布版，不執行
+./scripts/publish-to-gitea.sh                           # 一律拒絕（無 --dry-run）
 ```
 
-Token 來源（依序）：
+Runner 真的不可用時，優先修好 CI 觸發本身，而不是繞過它發布——見 `docs/ci-operations.md`「⚠️ 發版已知陷阱」一節的 tag-object 去重重建 SOP（`git tag -d` + 重新 `git tag -a` 幾乎都能解決）。
+
+Token 來源（依序，`--dry-run` 仍需要能解析出 token 才會執行到列印預覽）：
 
 1. `GITEA_TOKEN` 環境變數
 2. `~/.gitea-token` 檔案 — 用 `grep -oE '[a-f0-9]{40}' ~/.gitea-token` 擷取 40 碼
