@@ -21,6 +21,24 @@ on:
 jobs:
   integration-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md
+    # NOT bounded by any step-level timeout-minutes below (issue #926): the runner
+    # pulls this image and starts/health-checks the container as part of job setup,
+    # BEFORE the first step (`checkout`, below) ever begins executing. A step's
+    # timeout-minutes only wraps that step's own execution window, so it cannot reach
+    # backwards to cover something that already finished (or hung) before the step
+    # started. Considered replacing `services:` with a manually `docker run` step so
+    # a timeout could wrap it, and rejected it here: that would throw away the
+    # built-in --health-cmd/--health-interval/--health-retries gating below and the
+    # runner's own service-container networking (the `mssql` hostname alias steps
+    # rely on), for a startup phase that's already measured at ~6s on this host (see
+    # the #767 comment) -- a rearchitect to protect an already-fast, already-healthy-
+    # gated phase is a worse trade than documenting the gap plainly. If this phase
+    # actually hangs, the existing "Wait for MSSQL ready" step's 12-minute
+    # timeout-minutes (below) still bounds how long the JOB waits once its own step
+    # starts polling -- it just does not, and cannot, bound the pull/start phase
+    # itself. See docs/ci-operations.md's timeout-coverage section for the full
+    # accounting of what step-level timeout-minutes does and does not cover repo-wide.
     services:
       # Issue #767: mcr.microsoft.com/mssql/server has no linux/arm64 build, so on the
       # self-hosted ARM64 (Apple Silicon) mac-mini runner it ran under QEMU x64 emulation.
@@ -51,12 +69,15 @@ jobs:
           --health-start-period 5s
     steps:
       - uses: actions/checkout@v5
+        timeout-minutes: 5
 
       - uses: actions/setup-dotnet@v5
+        timeout-minutes: 10
         with:
           dotnet-version: '10.0.x'
 
       - name: Wait for MSSQL ready
+        timeout-minutes: 12
         run: |
           echo "Waiting for MSSQL to accept connections..."
           # Issue #767: azure-sql-edge boots in ~6s on this runner in normal
@@ -81,6 +102,7 @@ jobs:
           exit 1
 
       - name: Run integration tests
+        timeout-minutes: 15
         run: >-
           dotnet test
           test/WalkingTec.Mvvm.Integration.Test/WalkingTec.Mvvm.Integration.Test.csproj
@@ -96,6 +118,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         continue-on-error: true
+        timeout-minutes: 5
         with:
           name: integration-test-results
           path: "**/*.trx"

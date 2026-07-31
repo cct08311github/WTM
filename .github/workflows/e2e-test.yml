@@ -102,22 +102,31 @@ jobs:
     # to ubuntu-latest, that controller term simply has no users — it does
     # not break.
     runs-on: ubuntu-24.04
+    timeout-minutes: 45  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md
     env:
       WTM_E2E_KILLSWITCH: "0"
       UIOptions__UseSelectIslandRender: "false"
     steps:
       - uses: actions/checkout@v5
+        timeout-minutes: 5
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v5
+        timeout-minutes: 10
         with:
           dotnet-version: '10.0.x'
 
       - name: Build demo app
         run: dotnet build demo/WalkingTec.Mvvm.Demo/WalkingTec.Mvvm.Demo.csproj -c Release
+        timeout-minutes: 10
 
       - name: Start demo app
         working-directory: demo/WalkingTec.Mvvm.Demo
+        # This step only forks dotnet run into the background (`&`) and returns --
+        # it does not wait on the demo process. timeout-minutes here bounds the
+        # fork/redirect itself hanging before backgrounding, not app startup (that is
+        # "Wait for demo to be ready" below, which already has its own timeout).
+        timeout-minutes: 2
         env:
           WTM_E2E_KILLSWITCH: ${{ env.WTM_E2E_KILLSWITCH }}
           UIOptions__UseSelectIslandRender: ${{ env.UIOptions__UseSelectIslandRender }}
@@ -128,6 +137,7 @@ jobs:
           echo "DEMO_PID=$!" >> $GITHUB_ENV
 
       - name: Wait for demo to be ready
+        timeout-minutes: 5
         run: |
           echo "Waiting for demo app on port 52837..."
           for i in $(seq 1 90); do
@@ -142,12 +152,14 @@ jobs:
 
       - name: Show demo app log on readiness failure
         if: failure()
+        timeout-minutes: 2
         run: |
           echo "---- tail -50 demo-app.log ----"
           tail -50 "$GITHUB_WORKSPACE/demo-app.log" || echo "demo-app.log not found"
 
       - name: Setup Python
         uses: actions/setup-python@v5
+        timeout-minutes: 5
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -155,12 +167,15 @@ jobs:
 
       - name: Install Python dependencies
         run: pip install -r test/e2e/requirements.txt
+        timeout-minutes: 5
 
       - name: Install Playwright browsers
         run: playwright install chromium --with-deps
+        timeout-minutes: 10
 
       - name: Run E2E tests (baseline)
         working-directory: test/e2e
+        timeout-minutes: 30
         run: |
           python wtm_e2e_tests.py \
             --headless \
@@ -170,6 +185,7 @@ jobs:
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: e2e-screenshots-baseline
           path: test/e2e/screenshots/
@@ -180,6 +196,7 @@ jobs:
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: e2e-junit-report-baseline
           path: test/e2e/results/junit.xml
@@ -199,6 +216,7 @@ jobs:
     # run itself is cancelled.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 45  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md
     env:
       # Issue #681: second leg exercises the #627 legacy-script-rehydration kill-switch
       # (docs/csp-hardening.md). WTM_E2E_KILLSWITCH=1 is read by _Layout.cshtml to emit the
@@ -215,17 +233,25 @@ jobs:
       UIOptions__UseSelectIslandRender: "false"
     steps:
       - uses: actions/checkout@v5
+        timeout-minutes: 5
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v5
+        timeout-minutes: 10
         with:
           dotnet-version: '10.0.x'
 
       - name: Build demo app
         run: dotnet build demo/WalkingTec.Mvvm.Demo/WalkingTec.Mvvm.Demo.csproj -c Release
+        timeout-minutes: 10
 
       - name: Start demo app
         working-directory: demo/WalkingTec.Mvvm.Demo
+        # This step only forks dotnet run into the background (`&`) and returns --
+        # it does not wait on the demo process. timeout-minutes here bounds the
+        # fork/redirect itself hanging before backgrounding, not app startup (that is
+        # "Wait for demo to be ready" below, which already has its own timeout).
+        timeout-minutes: 2
         env:
           WTM_E2E_KILLSWITCH: ${{ env.WTM_E2E_KILLSWITCH }}
           UIOptions__UseSelectIslandRender: ${{ env.UIOptions__UseSelectIslandRender }}
@@ -236,6 +262,7 @@ jobs:
           echo "DEMO_PID=$!" >> $GITHUB_ENV
 
       - name: Wait for demo to be ready
+        timeout-minutes: 5
         run: |
           echo "Waiting for demo app on port 52837..."
           for i in $(seq 1 90); do
@@ -250,12 +277,14 @@ jobs:
 
       - name: Show demo app log on readiness failure
         if: failure()
+        timeout-minutes: 2
         run: |
           echo "---- tail -50 demo-app.log ----"
           tail -50 "$GITHUB_WORKSPACE/demo-app.log" || echo "demo-app.log not found"
 
       - name: Setup Python
         uses: actions/setup-python@v5
+        timeout-minutes: 5
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -263,12 +292,15 @@ jobs:
 
       - name: Install Python dependencies
         run: pip install -r test/e2e/requirements.txt
+        timeout-minutes: 5
 
       - name: Install Playwright browsers
         run: playwright install chromium --with-deps
+        timeout-minutes: 10
 
       - name: Run E2E tests (killswitch subset)
         working-directory: test/e2e
+        timeout-minutes: 20
         run: |
           python wtm_e2e_tests.py \
             --tc 1,4,6,7,26,32,33,34,35,36 \
@@ -279,6 +311,7 @@ jobs:
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: e2e-screenshots-killswitch
           path: test/e2e/screenshots/
@@ -289,6 +322,7 @@ jobs:
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: e2e-junit-report-killswitch
           path: test/e2e/results/junit.xml
@@ -301,6 +335,7 @@ jobs:
     # !cancelled(), not always() — same reasoning as e2e-killswitch above.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 45  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md
     env:
       # Issue #837: third leg exercises the #470 island-render opt-in
       # (WtmUIOptions.UseSelectIslandRender, default OFF — demo's own appsettings.json
@@ -325,17 +360,25 @@ jobs:
       UIOptions__UseSelectIslandRender: "true"
     steps:
       - uses: actions/checkout@v5
+        timeout-minutes: 5
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v5
+        timeout-minutes: 10
         with:
           dotnet-version: '10.0.x'
 
       - name: Build demo app
         run: dotnet build demo/WalkingTec.Mvvm.Demo/WalkingTec.Mvvm.Demo.csproj -c Release
+        timeout-minutes: 10
 
       - name: Start demo app
         working-directory: demo/WalkingTec.Mvvm.Demo
+        # This step only forks dotnet run into the background (`&`) and returns --
+        # it does not wait on the demo process. timeout-minutes here bounds the
+        # fork/redirect itself hanging before backgrounding, not app startup (that is
+        # "Wait for demo to be ready" below, which already has its own timeout).
+        timeout-minutes: 2
         env:
           WTM_E2E_KILLSWITCH: ${{ env.WTM_E2E_KILLSWITCH }}
           UIOptions__UseSelectIslandRender: ${{ env.UIOptions__UseSelectIslandRender }}
@@ -346,6 +389,7 @@ jobs:
           echo "DEMO_PID=$!" >> $GITHUB_ENV
 
       - name: Wait for demo to be ready
+        timeout-minutes: 5
         run: |
           echo "Waiting for demo app on port 52837..."
           for i in $(seq 1 90); do
@@ -360,12 +404,14 @@ jobs:
 
       - name: Show demo app log on readiness failure
         if: failure()
+        timeout-minutes: 2
         run: |
           echo "---- tail -50 demo-app.log ----"
           tail -50 "$GITHUB_WORKSPACE/demo-app.log" || echo "demo-app.log not found"
 
       - name: Setup Python
         uses: actions/setup-python@v5
+        timeout-minutes: 5
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -373,12 +419,15 @@ jobs:
 
       - name: Install Python dependencies
         run: pip install -r test/e2e/requirements.txt
+        timeout-minutes: 5
 
       - name: Install Playwright browsers
         run: playwright install chromium --with-deps
+        timeout-minutes: 10
 
       - name: Run E2E tests (island)
         working-directory: test/e2e
+        timeout-minutes: 30
         run: |
           python wtm_e2e_tests.py \
             --headless \
@@ -388,6 +437,7 @@ jobs:
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: e2e-screenshots-island
           path: test/e2e/screenshots/
@@ -398,6 +448,7 @@ jobs:
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: e2e-junit-report-island
           path: test/e2e/results/junit.xml

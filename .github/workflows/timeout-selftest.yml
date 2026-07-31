@@ -1,0 +1,102 @@
+name: Timeout Self-Test
+
+# Issue #926 positive control: proves that Gitea Actions' act_runner fork
+# (gitea.com/gitea/act) actually ENFORCES step-level `timeout-minutes` --
+# not just parses it. Same shape and purpose as mutation-gate.yml's
+# `meta-selftest` job, which exists to prove the mutation harness itself
+# works rather than the thing it gates -- this proves the timeout mechanism
+# every other workflow in this repo now depends on.
+#
+# What was verified before this file existed (source read, not guesswork):
+#
+#   - job.timeout-minutes is IGNORED by this runner. Confirmed absent from
+#     both pkg/runner/run_context.go and pkg/runner/job_executor.go in
+#     gitea.com/gitea/act; matches upstream nektos/act's own docs
+#     (nektosact.com/not_supported.html: "job.timeout-minutes ignored").
+#     Every job-level timeout-minutes: in this repo's workflows carries an
+#     explanatory comment saying exactly this.
+#
+#   - step.timeout-minutes IS enforced. gitea.com/gitea/act's
+#     pkg/runner/step.go has:
+#       func evaluateStepTimeout(ctx context.Context, exprEval ExpressionEvaluator,
+#           stepModel *model.Step) (context.Context, context.CancelFunc) {
+#         timeout := exprEval.Interpolate(ctx, stepModel.TimeoutMinutes)
+#         if timeout != "" {
+#           if timeOutMinutes, err := strconv.ParseInt(timeout, 10, 64); err == nil {
+#             return context.WithTimeout(ctx, time.Duration(timeOutMinutes)*time.Minute)
+#           }
+#         }
+#         return ctx, func() {}
+#       }
+#     called from runStepExecutor() as:
+#       timeoutctx, cancelTimeOut := evaluateStepTimeout(ctx, rc.ExprEval, stepModel)
+#       defer cancelTimeOut()
+#       err = executor(timeoutctx)
+#     and that context is threaded into the real execution call
+#     (JobContainer.Exec(sr.cmd, ...)(ctx) for Docker-backed steps,
+#     HostEnvironment.ExecWithCmdLine(...)(ctx) for host-backed steps).
+#     Identical in upstream nektos/act -- the fork did not touch this path.
+#     Full citation and reasoning: docs/ci-operations.md.
+#
+# This file proves that chain end to end on THIS runner, not just in
+# source -- a timeout the runner silently ignores is exactly the kind of
+# decorative guard this project has been burned by before
+# (strategy.matrix.max-parallel, docs/ci-operations.md).
+#
+# HOW TO READ A RUN:
+#
+# Read the STEP's own start-to-finish duration, not the run's dispatch-to-finish
+# duration (2026-07-31 correction, #926 cross-vendor review finding #14): this
+# workflow's job can queue behind other work on local-runner's capacity-2 host before
+# it is even dispatched to a runner slot -- that queueing time counts toward the RUN's
+# total wall-clock but has nothing to do with whether step-level timeout-minutes
+# fired. A queued run can show a multi-minute total duration even when the mechanism
+# is working perfectly. The job/step logs record each step's own start and end
+# timestamps independently of any queue wait before the job started -- use those.
+#
+#   Mechanism FIRES (expected, healthy):
+#     - The "Sleep past its own timeout" step is marked failed at roughly
+#       the 1-minute mark, not the 3-minute mark -- measuring from THIS STEP's own
+#       start timestamp, not from when the run was dispatched.
+#     - The step's own log shows the process being cut off partway through
+#       its 180s sleep (no "sleep finished" style completion), and/or a
+#       context-deadline/cancelled-style error from the runner.
+#
+#   Mechanism SILENTLY IGNORED (the failure mode this file exists to catch):
+#     - The step runs to completion (the full ~180s sleep finishes) -- again
+#       measured from the step's own start to its own end.
+#     - The job reports success/green.
+#     Per CLAUDE.md "CI red does not mean failed": for THIS workflow the
+#     inverse trap applies too -- a green run here is not reassuring, it is
+#     the specific signature of the mechanism NOT working. Judge this run
+#     by the step's own duration, not by the conclusion badge alone and not by
+#     the run's total dispatch-to-finish time (queue time can inflate that
+#     independently of whether the timeout mechanism fired).
+#
+# Deliberately dispatch-only: must never run automatically or compete for
+# the runner's 2 job slots outside an explicit, intentional check. No
+# checkout, no NuGet/npm/pip installs, no registry or mirror access --
+# nothing but a single sleep. Re-run this whenever the runner or its act
+# fork is upgraded, to confirm the mechanism still fires -- keep this file
+# permanently, do not delete it after one use (issue #926).
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  timeout-selftest:
+    runs-on: ubuntu-latest
+    # Backstop only, not the test: see the file header above. If a future
+    # runner upgrade ever starts honoring job-level timeouts too, this value
+    # keeps the job itself bounded; today it is inert.
+    timeout-minutes: 5
+    steps:
+      - name: Sleep past its own timeout
+        # This is the actual positive control: 1-minute timeout on a step
+        # that runs for 3 minutes unless cut off. See file header for how
+        # to read the result.
+        timeout-minutes: 1
+        run: sleep 180

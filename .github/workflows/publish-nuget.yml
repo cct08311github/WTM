@@ -17,6 +17,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 60  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md. Raised from 30 (2026-07-31, issue #926): 30 was already below a plausible successful-run total once every step below carries its own generous-but-bounded timeout-minutes -- this is a rough ceiling on normal end-to-end duration, not a promise this runner enforces it.
     # #925 cross-vendor review finding 3: this runner has capacity 2, so nothing
     # previously stopped two publish runs (a tag push racing a workflow_dispatch, or two
     # tag pushes from a retry) from executing concurrently and interleaving pushes to the
@@ -31,12 +32,18 @@ jobs:
       PACKAGE_SOURCE: https://mac-mini.tailde842d.ts.net/api/packages/chiu0831/nuget/index.json
 
     steps:
+      # fetch-depth: 0 (full history, not the shallow default) makes this heavier than
+      # this repo's other checkout steps -- "Push dotnet10 branch to GitHub" and "Push
+      # release tag to GitHub" below both need real ancestry (merge-base, fetch/merge)
+      # against the full branch history, which a shallow clone cannot provide.
       - uses: actions/checkout@v5
+        timeout-minutes: 10
         with:
           fetch-depth: 0
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v5
+        timeout-minutes: 10
         with:
           dotnet-version: '10.0.x'
 
@@ -63,6 +70,7 @@ jobs:
       # commit that was never dotnet10's tip, or on a feature-branch commit never merged
       # into dotnet10 at all.
       - name: Verify release ref integrity
+        timeout-minutes: 5
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
@@ -110,6 +118,7 @@ jobs:
       # real publish. A failure here aborts the job before ANY pack/push step runs.
       - name: Determine and reconcile package version
         id: version
+        timeout-minutes: 3
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
@@ -137,37 +146,49 @@ jobs:
       # check, sanitize/leak-gate/nuspec checks) runs against exactly these files before
       # the first `nuget push` anywhere (see "Push to Gitea Packages" below and #925
       # cross-vendor review finding 3).
+      # Core is packed first against whatever NuGet cache the runner started with --
+      # normally cold for the first restore of the job's transitive dependency set
+      # (EF Core, etc.), so it gets the largest individual budget; the five packs
+      # below reuse the same shared ~/.nuget/packages cache Core just warmed and are
+      # sized smaller accordingly.
       - name: Pack WalkingTec.Mvvm.Core
+        timeout-minutes: 15
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
         run: dotnet pack src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
 
       - name: Pack WalkingTec.Mvvm.TagHelpers.LayUI
+        timeout-minutes: 10
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
         run: dotnet pack src/WalkingTec.Mvvm.TagHelpers.LayUI/WalkingTec.Mvvm.TagHelpers.LayUI.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
 
       - name: Pack WalkingTec.Mvvm.Mvc
+        timeout-minutes: 10
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
         run: dotnet pack src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
 
       - name: Pack WalkingTec.Mvvm.WorkFlow
+        timeout-minutes: 10
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
         run: dotnet pack src/WalkingTec.Mvvm.WorkFlow/WalkingTec.Mvvm.WorkFlow.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
 
       - name: Pack WalkingTec.Mvvm.Etl
+        timeout-minutes: 10
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
         run: dotnet pack src/WalkingTec.Mvvm.Etl/WalkingTec.Mvvm.Etl.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
 
       - name: Pack WalkingTec.Mvvm.FileHandlers.S3
+        timeout-minutes: 10
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
         run: dotnet pack src/WalkingTec.Mvvm.FileHandlers.S3/WalkingTec.Mvvm.FileHandlers.S3.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
 
       - name: List packages
+        timeout-minutes: 2
         run: ls -lh nupkgs/
 
       # #925 cross-vendor review finding 3 (partial support): an auditable record of
@@ -176,6 +197,7 @@ jobs:
       # check -- if a pack step above silently produced the wrong count (e.g. a glob
       # picked up a stale file), fail here rather than downstream.
       - name: Verify package artifact count and manifest
+        timeout-minutes: 2
         run: |
           set -euo pipefail
           NUPKG_COUNT=$(ls nupkgs/*.nupkg 2>/dev/null | wc -l | tr -d ' ')
@@ -245,7 +267,12 @@ jobs:
       #    transitive dependencies) plus the just-built local nupkgs/ folder — never the
       #    Gitea or GitHub registries — so the six WTM packages under test can only ever
       #    resolve from the candidate build.
+      # Largest single budget in this job: the step body deliberately empties
+      # NUGET_PACKAGES (see the header comment's finding-6 explanation), so unlike
+      # the pack steps above every transitive dependency (EF Core, Quartz, ...) is
+      # downloaded fresh here with no cache to fall back on.
       - name: Smoke test package install (all six packages)
+        timeout-minutes: 20
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
           NUPKG_DIR: ${{ github.workspace }}/nupkgs
@@ -319,7 +346,12 @@ jobs:
       # closed (exit 2, distinct from the "real vulnerability found" exit 1) on ANY
       # output it does not recognise -- malformed JSON, an unexpected shape, `dotnet`
       # itself exiting non-zero -- so an unparseable scan can never be reported as clean.
+      # 18 min = the sum of ci-build.yml's security-scan job's two equivalent steps
+      # (dotnet restore WalkingTec.Mvvm.sln: 8 min; dotnet list ... --vulnerable: 10
+      # min) -- this step does both in one run: block against the same solution, so
+      # it is sized as their total rather than guessed independently.
       - name: Local vulnerability scan (release gate)
+        timeout-minutes: 18
         run: |
           set -euo pipefail
           dotnet restore WalkingTec.Mvvm.sln --verbosity quiet
@@ -351,6 +383,7 @@ jobs:
       # exercised, since a live Gitea/GitHub API call was out of scope for the session
       # that authored it).
       - name: Verify version cohort not partially published (Gitea)
+        timeout-minutes: 5
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
           PAT: ${{ secrets.PAT_TOKEN }}
@@ -392,6 +425,7 @@ jobs:
 
       - name: Configure GitHub remote
         if: startsWith(github.ref, 'refs/tags/')
+        timeout-minutes: 2
         env:
           GH_PAT: ${{ secrets.GH_MIRROR_PAT }}
         run: |
@@ -416,6 +450,7 @@ jobs:
       # src/dst and crash `cp -f "" ""`.
       - name: Sync manifest — lint github-replace.txt
         if: startsWith(github.ref, 'refs/tags/')
+        timeout-minutes: 2
         run: |
           set -euo pipefail
           # #696: also reject a trailing CR (CRLF line ending) and leading/
@@ -458,6 +493,7 @@ jobs:
 
       - name: Sync manifest — create temp branch
         if: startsWith(github.ref, 'refs/tags/')
+        timeout-minutes: 2
         run: |
           set -euo pipefail
           git checkout -b sync-to-github-tmp
@@ -513,6 +549,7 @@ jobs:
 
       - name: Sync manifest — apply github-replace.txt
         if: startsWith(github.ref, 'refs/tags/')
+        timeout-minutes: 3
         run: |
           set -euo pipefail
           # For each non-comment, non-empty line: copy source → dest, remove source.
@@ -534,6 +571,7 @@ jobs:
 
       - name: Sync manifest — apply github-excludes.txt
         if: startsWith(github.ref, 'refs/tags/')
+        timeout-minutes: 3
         run: |
           set -euo pipefail
           while IFS= read -r path; do
@@ -546,8 +584,12 @@ jobs:
             fi
           done < .sync/github-excludes.txt
 
+      # Heaviest LOCAL (no network) step in this job: `git grep`/`sed -i` over every
+      # tracked text file in the whole tree (~5200 files per the comment below), not
+      # a filtered subset.
       - name: Sync manifest — apply github-sanitize.sed and commit
         if: startsWith(github.ref, 'refs/tags/')
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           # Run sed in-place over every git-tracked file that is text (post
@@ -606,6 +648,7 @@ jobs:
       # at all.
       - name: Sync manifest — leak-gate scan
         if: startsWith(github.ref, 'refs/tags/')
+        timeout-minutes: 5
         run: bash "$RUNNER_TEMP/wtm-leak-gate.sh"
 
       # #925 cross-vendor review finding 2: this used to `dotnet pack` directly in the
@@ -638,8 +681,13 @@ jobs:
       # not one SourceLink derives from `git remote`) — so there is no repo metadata,
       # and therefore no PAT-bearing remote URL, anywhere near the `dotnet pack`
       # process.
+      # Six dotnet pack invocations in one run: block, plus the per-nupkg nuspec
+      # sanity loop -- sized as roughly the six individual Gitea pack steps' combined
+      # budget above, though restores here should mostly hit the now-warm shared
+      # NuGet cache those steps already populated.
       - name: Re-pack from sanitized source for GitHub Packages
         if: startsWith(github.ref, 'refs/tags/')
+        timeout-minutes: 15
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -683,8 +731,12 @@ jobs:
       # above, against GitHub Packages' registry instead. Uses the standard NuGet V3
       # protocol (same script, different service index + token), not a
       # GitHub-Packages-specific API call.
+      # A few points more generous than the Gitea cohort check above: this crosses
+      # the public internet to github.com rather than staying on the tailnet-local
+      # Gitea host.
       - name: Verify version cohort not partially published (GitHub Packages)
         if: startsWith(github.ref, 'refs/tags/')
+        timeout-minutes: 8
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
           GH_PAT: ${{ secrets.GH_MIRROR_PAT }}
@@ -729,15 +781,41 @@ jobs:
       # `--skip-duplicate` cannot do on its own is distinguish those two cases — the
       # cohort check is what makes that distinction before any package in this call is
       # touched.
+      # Issue #926 (2026-07-31, after #937 merged): this and "Push NuGet packages to
+      # GitHub Packages" below are the two genuinely irreversible network pushes in
+      # this job, and the ones this repo's cross-vendor review specifically flagged
+      # as unbounded -- a hang here previously held one of this runner's two job
+      # slots for up to the Gitea instance's 3-hour ENDLESS_TASK_TIMEOUT ceiling,
+      # since neither this step nor the job itself carried any real timeout.
+      # Deliberately generous, not tight: killing a `dotnet nuget push` mid-batch is
+      # NOT free of consequence (some of the six packages may already be live, others
+      # not), but it is a KNOWN, already-defended-against failure mode in this exact
+      # file -- "Verify version cohort not partially published (Gitea)" above exists
+      # specifically to detect that partial state on the NEXT run and refuse to
+      # proceed rather than silently re-publish over it. An indefinite hang has no
+      # such recovery path and a certain cost (denying the runner's other capacity
+      # slot to every other workflow in the repo for up to 3 hours); a bounded
+      # timeout has a bounded, understood worst case. 20 minutes is generous for a
+      # push of ~12 small files (6 nupkg + 6 snupkg) to a registry on the same
+      # tailnet-local host as the runner -- normal completion is expected in well
+      # under a minute; this is headroom for a genuinely stuck connection, not a
+      # realistic estimate of success-path duration.
       - name: Push to Gitea Packages
+        timeout-minutes: 20
         run: |
           dotnet nuget push "nupkgs/*.nupkg" \
             --api-key ${{ secrets.PAT_TOKEN }} \
             --source ${{ env.PACKAGE_SOURCE }} \
             --skip-duplicate
 
+      # git's own push protocol is atomic per-ref -- a killed push leaves the remote
+      # ref unchanged, not half-updated -- so bounding this is a bounded-retry
+      # situation, not a partial-corruption risk. Sized generously for the
+      # fetch+merge-conflict-resolution+retry fallback path (not just a bare
+      # fast-forward push), across the public internet to github.com.
       - name: Push dotnet10 branch to GitHub
         if: startsWith(github.ref, 'refs/tags/')
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           git fetch github --no-tags 2>/dev/null || true
@@ -829,6 +907,7 @@ jobs:
       # history other people may have already pulled.
       - name: Push release tag to GitHub
         if: startsWith(github.ref, 'refs/tags/')
+        timeout-minutes: 10
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -857,6 +936,7 @@ jobs:
       # through from steps.version.outputs.is_prerelease.
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
+        timeout-minutes: 10
         env:
           GH_PAT: ${{ secrets.GH_MIRROR_PAT }}
           TAG: ${{ github.ref_name }}
@@ -943,8 +1023,20 @@ jobs:
       # "$SANITIZED_SHA"` — never from this step's current working tree, which by now
       # may hold a merge commit from "Push dotnet10 branch to GitHub" above. This step
       # only pushes files that already exist on disk; it does not pack anything itself.
+      # The second of the two irreversible pushes flagged by issue #926's
+      # cross-vendor review (see "Push to Gitea Packages" above for the full
+      # reasoning on why bounding, not exempting, is the right call here). Sized
+      # even more generously than the Gitea push: this crosses the public internet
+      # to a third-party-hosted registry (github.com), not a tailnet-local host, and
+      # by this point in the job Gitea, the GitHub branch, and the GitHub tag are
+      # already durably published -- a timeout here loses only the GitHub Packages
+      # mirror copy, an independently retryable, low-blast-radius gap, not the
+      # release itself. "Verify version cohort not partially published (GitHub
+      # Packages)" above is this push's equivalent recovery mechanism for a partial
+      # multi-package push, same as the Gitea side.
       - name: Push NuGet packages to GitHub Packages
         if: startsWith(github.ref, 'refs/tags/')
+        timeout-minutes: 25
         env:
           GH_PAT: ${{ secrets.GH_MIRROR_PAT }}
         run: |

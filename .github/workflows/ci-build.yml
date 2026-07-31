@@ -36,9 +36,12 @@ jobs:
   release-tooling-test:
     if: github.repository != 'cct08311github/WTM'  # internal-tooling only, skipped on public GitHub mirror where scripts are excluded by .sync/ manifest
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md
     steps:
     - uses: actions/checkout@v5
+      timeout-minutes: 5
     - name: Validate release script syntax
+      timeout-minutes: 2
       run: |
         bash -n scripts/release-gitea-package.sh
         bash -n scripts/publish-to-gitea.sh
@@ -50,50 +53,64 @@ jobs:
         python3 -m py_compile scripts/check-vulnerable-packages.py scripts/check-package-cohort.py
     - name: Run release script smoke tests
       run: bash test/release-script-tests.sh
+      timeout-minutes: 5
     - name: Run publish-to-gitea smoke tests
       run: bash test/publish-to-gitea-tests.sh
+      timeout-minutes: 5
     # #925: unit-tests scripts/reconcile-release-version.sh -- the tag / version.props /
     # CHANGELOG reconciliation publish-nuget.yml's "Determine and reconcile package
     # version" step runs on every publish -- against fabricated fixtures, since a real
     # publish can't be exercised here.
     - name: Run release version reconciliation tests
       run: bash test/reconcile-release-version-tests.sh
+      timeout-minutes: 5
     # #925 cross-vendor review finding 1: proves scripts/check-vulnerable-packages.py
     # against fabricated `dotnet list package --vulnerable --format json` fixtures,
     # including a ~3MB adversarial one reproducing the exact input size class that
     # SIGPIPE-false-greened the pipeline this script replaced.
     - name: Run vulnerable-package check tests
       run: bash test/check-vulnerable-packages-tests.sh
+      timeout-minutes: 5
     # #925 cross-vendor review finding 3: proves scripts/check-package-cohort.py against
     # a throwaway local NuGet V3 fixture server (real HTTP calls, no external network
     # dependency) -- the partial-cohort scenario ("package N of 6 failed last time")
     # the finding describes.
     - name: Run package-cohort check tests
       run: bash test/check-package-cohort-tests.sh
+      timeout-minutes: 5
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 45  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md
     steps:
     - uses: actions/checkout@v5
+      timeout-minutes: 5
     - uses: actions/setup-dotnet@v5
+      timeout-minutes: 10
       with:
         dotnet-version: '10.0.x'
     # setup-dotnet's built-in `cache:` option requires a packages.lock.json, which this
     # repo does not commit — fall back to actions/cache keyed on the CPM version file and
     # every csproj. continue-on-error so a cache-backend hiccup on the self-hosted Gitea
     # runner (same class of issue as actions/upload-artifact@v4, #11) can only skip the
-    # speedup, never fail the job (#670).
+    # speedup, never fail the job (#670). timeout-minutes bounds the same backend hiccup
+    # from turning into a HANG that continue-on-error cannot catch on its own -- that
+    # flag only tolerates a step that *returns* an error, not one that never returns (#926).
     - name: Cache NuGet packages
       uses: actions/cache@v4
       continue-on-error: true
+      timeout-minutes: 5
       with:
         path: ~/.nuget/packages
         key: ${{ runner.os }}-nuget-${{ hashFiles('Directory.Packages.props', '**/*.csproj') }}
         restore-keys: |
           ${{ runner.os }}-nuget-
     - run: dotnet restore core.slnf
+      timeout-minutes: 10
     - run: dotnet build core.slnf --no-restore -c Release
+      timeout-minutes: 15
 
     - name: Test with coverage
+      timeout-minutes: 30
       run: |
         # #902: core.slnf spans 7 test projects. MSBuild's default -maxcpucount (4) was
         # starting 4 testhosts + 4 coverlet collectors in the same second on this runner's
@@ -130,11 +147,13 @@ jobs:
           --results-directory ./TestResults
 
     - name: Install ReportGenerator
+      timeout-minutes: 5
       run: |
         dotnet tool install -g dotnet-reportgenerator-globaltool
         echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
 
     - name: Generate coverage report
+      timeout-minutes: 5
       run: |
         reportgenerator \
           -reports:"TestResults/**/coverage.cobertura.xml" \
@@ -143,6 +162,7 @@ jobs:
           -title:"WTM Coverage Report"
 
     - name: Enforce Coverage Gate
+      timeout-minutes: 2
       run: |
         # Current baseline: ~20% line, ~16% branch (large legacy framework).
         # Target: Line 60%, Branch 40%.
@@ -168,6 +188,7 @@ jobs:
       uses: actions/upload-artifact@v4
       if: always()
       continue-on-error: true
+      timeout-minutes: 5
       with:
         name: test-results
         path: "TestResults/**/*.trx"
@@ -176,21 +197,28 @@ jobs:
       uses: actions/upload-artifact@v4
       if: always()
       continue-on-error: true
+      timeout-minutes: 5
       with:
         name: coverage-report
         path: TestResults/CoverageReport/
   js-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md
     steps:
     - uses: actions/checkout@v5
+      timeout-minutes: 5
     - uses: actions/setup-node@v5
+      timeout-minutes: 5
       with:
         node-version: '20'
     # continue-on-error per #670: a cache-backend failure must only cost the speedup,
-    # never fail the job (see NuGet cache comment above in build-and-test).
+    # never fail the job (see NuGet cache comment above in build-and-test). timeout-minutes
+    # bounds a cache-backend HANG the same way -- continue-on-error only tolerates a step
+    # that returns an error, not one that never returns (#926).
     - name: Cache npm packages
       uses: actions/cache@v4
       continue-on-error: true
+      timeout-minutes: 5
       with:
         path: ~/.npm
         key: ${{ runner.os }}-npm-${{ hashFiles('test/WalkingTec.Mvvm.Js.Tests/package-lock.json') }}
@@ -199,11 +227,14 @@ jobs:
     - name: Install JS test dependencies
       run: npm ci
       working-directory: test/WalkingTec.Mvvm.Js.Tests
+      timeout-minutes: 8
     - name: Run JS tests
       run: npm test
       working-directory: test/WalkingTec.Mvvm.Js.Tests
+      timeout-minutes: 5
   security-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 15  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md
     needs: [release-tooling-test, build-and-test]
     # release-tooling-test is if-gated off on the public GitHub mirror (see its own `if:`
     # above), which leaves it `skipped` there; a plain `needs:` treats a skipped dependency
@@ -220,16 +251,24 @@ jobs:
     if: ${{ !cancelled() && needs.build-and-test.result == 'success' }}
     steps:
     - uses: actions/checkout@v5
+      timeout-minutes: 5
     - uses: actions/setup-dotnet@v5
+      timeout-minutes: 10
       with:
         dotnet-version: '10.0.x'
+    # continue-on-error + timeout-minutes: same rationale as build-and-test's identically
+    # named step above -- continue-on-error only tolerates a step that returns an error,
+    # never one that hangs (#926).
     - name: Cache NuGet packages
       uses: actions/cache@v4
       continue-on-error: true
+      timeout-minutes: 5
       with:
         path: ~/.nuget/packages
         key: ${{ runner.os }}-nuget-${{ hashFiles('Directory.Packages.props', '**/*.csproj') }}
         restore-keys: |
           ${{ runner.os }}-nuget-
     - run: dotnet restore WalkingTec.Mvvm.sln
+      timeout-minutes: 8
     - run: dotnet list WalkingTec.Mvvm.sln package --vulnerable --include-transitive
+      timeout-minutes: 10

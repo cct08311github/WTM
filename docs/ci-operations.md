@@ -1,10 +1,10 @@
 # CI Operations
 
 > **適用版本**：10.5.1+
-> **最後更新**：2026-07-30
+> **最後更新**：2026-07-31
 > **CI 平台**：Gitea Actions（self-hosted at `mac-mini.tailde842d.ts.net`）。**至少三個已註冊 runner**（見下方「Runner 拓撲」，2026-07-29／#885 更正——原記錄的兩個之外還有一個先前沒記到的 `azure-overflow-runner`）：WTM 的 `ubuntu-latest` jobs 主要跑在本機 Docker `act_runner`（`local-runner`），但也可能被 Gitea 排到 `azure-overflow-runner`；另有一個 Homebrew runner 服務其他專案。
 
-本文件涵蓋 WTM CI 工作流總覽、Gitea Actions 與 GitHub Actions 的五大已知不相容點，以及排錯 SOP。完整修復脈絡見 [Issue #11](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/issues/11) / [PR #12](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/pulls/12)。
+本文件涵蓋 WTM CI 工作流總覽、Gitea Actions 與 GitHub Actions 的七大已知不相容點，以及排錯 SOP。完整修復脈絡見 [Issue #11](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/issues/11) / [PR #12](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/pulls/12)。
 
 ---
 
@@ -17,11 +17,11 @@
 | `.github/workflows/integration-test.yml` | push + PR（含 SQL Server container） | `integration-test` |
 | `.github/workflows/publish-nuget.yml` | `push` tag `v*` + `workflow_dispatch` | NuGet pack→Gitea registry **＋ GitHub mirror sync（清洗 + go-forward push）＋ 建立 GitHub Release＋推 GitHub Packages**（見「Runner 拓撲與發版」） |
 
-Gitea Actions 直接讀 `.github/workflows/*.yml` — 語法與 GitHub Actions 相容、不必搬到 `.gitea/`。但有些 action 版本（特別是 v4+ artifact action）不支援 Gitea 的 GHES API，見下方五大不相容點。
+Gitea Actions 直接讀 `.github/workflows/*.yml` — 語法與 GitHub Actions 相容、不必搬到 `.gitea/`。但有些 action 版本（特別是 v4+ artifact action）不支援 Gitea 的 GHES API，見下方七大不相容點。
 
 ---
 
-## 五大已知不相容點
+## 七大已知不相容點
 
 ### 1. `actions/upload-artifact@v4` 在 Gitea 拋 `GHESNotSupportedError`
 
@@ -147,6 +147,83 @@ Gitea 對 `pull_request` 事件 checkout 的是 **PR 分支自己的快照**（`
 
 **案例（#906）**：#882 合併後 `docs/production-readiness.md` 已把 #876 從「未修」節移除，`dotnet10` 上 `ProductionReadinessBaselineDriftTests863` 三支測試全綠；但開在 #882 之前的 PR #881、#904 仍各自紅在同一斷言（`Expected:<0>. Actual:<1>. ... lists #876 as unfixed`），因為它們的 checkout 停在合併前的快照——需要各自 rebase/merge 最新 `dotnet10` 並 push 才會變綠，不是在 `dotnet10` 上再改一次文件能解決的。
 
+### 6. `job.timeout-minutes` 被此 runner 忽略；真正生效的是 `step.timeout-minutes`（issue #926，2026-07-31 查證）
+
+**事實**：這個 Gitea 實例的 act_runner 執行的是 `gitea.com/gitea/act`（`nektos/act` 的 fork）。查證方式是直接讀原始碼，不是猜測：
+
+- **job-level 沒有任何消費端。** `pkg/runner/run_context.go` 與 `pkg/runner/job_executor.go` 全文搜尋 `Timeout`/`TimeoutMinutes` 均為零筆（`job_executor.go` 僅有兩個寫死的 infrastructure timeout：1 分鐘的 container cleanup、5 分鐘的 cancellation post-step，兩者都與 `Job.TimeoutMinutes` 無關）。這與上游 `nektos/act` 自己的文件一致——[nektosact.com/not_supported.html](https://nektosact.com/not_supported.html) 把 `job.timeout-minutes` 列在 "ignored" 清單。
+- **step-level 有真正的消費端。** `pkg/runner/step.go`：
+
+  ```go
+  func evaluateStepTimeout(ctx context.Context, exprEval ExpressionEvaluator, stepModel *model.Step) (context.Context, context.CancelFunc) {
+      timeout := exprEval.Interpolate(ctx, stepModel.TimeoutMinutes)
+      if timeout != "" {
+          if timeOutMinutes, err := strconv.ParseInt(timeout, 10, 64); err == nil {
+              return context.WithTimeout(ctx, time.Duration(timeOutMinutes)*time.Minute)
+          }
+      }
+      return ctx, func() {}
+  }
+  ```
+
+  由 `runStepExecutor()` 呼叫：`timeoutctx, cancelTimeOut := evaluateStepTimeout(ctx, rc.ExprEval, stepModel)` → `err = executor(timeoutctx)`，這個帶 deadline 的 context 會一路傳進真正的執行層（Docker-backed step 是 `JobContainer.Exec(sr.cmd, ...)(ctx)`；host-backed step 是 `HostEnvironment.ExecWithCmdLine(...)(ctx)`）。`nektos/act` 上游同一段程式碼一致，Gitea 的 fork 沒有動過這段。
+
+**修法**（已套用，issue #926；覆蓋範圍於 2026-07-31 的 cross-vendor review 更正——見下方「timeout-minutes 覆蓋率」小節）：每個 job 保留 `timeout-minutes:`（正確的 GitHub Actions schema、成本為零、未來 runner 若補上支援就自動生效），但每一處都**加註解**明講它在這個 runner 上不生效；真正的邊界是同一個 job 底下**每一個** `run:` step、以及**每一個** `uses:` step（不只 `actions/upload-artifact` / `actions/cache`——`actions/checkout` / `actions/setup-dotnet` / `actions/setup-node` / `actions/setup-python` 同樣是會打網路、可能掛住的呼叫）各自的 `timeout-minutes:`。不要看到 job 有 `timeout-minutes: 45` 就假設這個 job 真的被 45 分鐘框住——要往下找同一個 job 底下的 step-level 設定。
+
+**活體驗證（不必重讀原始碼就能確認）**：[`.github/workflows/timeout-selftest.yml`](../.github/workflows/timeout-selftest.yml)——`workflow_dispatch` 專用、單一 job、單一 step（`timeout-minutes: 1` + `sleep 180`）的 positive control，任何時候都能重跑，runner 升級後尤其該重跑一次。判讀方式（該檔案 header 註解也有記錄；2026-07-31 更正——原文寫「整個 run 總時長」，但 `local-runner` capacity 2 下 dispatch 到真正開始執行之間可能排隊，run 的**總**時長會把排隊時間也算進去，跟這個 step 本身有沒有被 timeout 掐斷是兩件事；要看的是**這個 step 自己**的起訖時間，不是整個 run 的 dispatch-to-finish）：
+- **機制生效**：該 step 自己的執行時間在約 1 分鐘處被標記失敗（不是從 run 被 dispatch 那刻起算）。
+- **機制被靜默忽略**：該 step 自己跑滿 3 分鐘（完整跑完 `sleep 180`）、job 回報成功/綠燈。
+
+**注意**：這個檔案是本文件「CI red does not mean failed」原則的一個特意反轉——對 `timeout-selftest.yml` 來說，**綠燈才是壞消息**（代表機制沒生效），紅燈在 ~1 分鐘處才是正常、健康的結果。
+
+**追蹤**：這是這份文件第二個「YAML 寫了但這個 Gitea 版本靜默不理」的案例（第一個見下方 #7）。未來升級 act_runner 版本後，重跑一次 `timeout-selftest.yml` 確認行為沒有意外改變。
+
+#### timeout-minutes 覆蓋率（2026-07-31 更正，issue #926 cross-vendor review）
+
+早先的提交訊息／PR 描述宣稱「64 個 real-work step 已檢查、13 個已記錄的例外、0 個未解釋的缺口」。獨立覆核發現這個分母是**挑出來讓宣稱成立**的：只算 `run:` step 加上 `actions/upload-artifact` / `actions/cache` 這兩種 `uses:`，把 27 個 `actions/checkout` / `actions/setup-dotnet` / `actions/setup-node` / `actions/setup-python` 呼叫整個排除在分母之外——即使這些同樣是會打網路、可能掛住的呼叫。以那個窄分母算，64 個裡仍有 13 個沒有自己的 timeout-minutes，其中 6 個是 `actions/cache@v4`；`continue-on-error: true`（cache step 都有）只能吞掉「回傳錯誤」的 step，對「永遠不回傳」的 step 完全沒用——而這正是 issue #926 本身要防的情境。
+
+**誠實分母、已修正**：分母改成「本 repo 每一個 workflow 檔案裡，每一個 `run:` step、每一個 `uses:` step」，只排除**整個檔案**、且排除理由寫明（`EXCLUDED_FILES`，一個模組層級的具名常數，理由字串直接附在旁邊，不是散在邏輯裡的隱性條件）。
+
+**2026-07-31 三次更正——`publish-nuget.yml` 排除已解除**：`EXCLUDED_FILES` 曾經暫時排除 `publish-nuget.yml`，理由是 PR #937 正在重構它的 step。#937 已合併（`3b894df80`）——排除已移除（`EXCLUDED_FILES` 現在是空字典，機制留著沒刪，供未來真的需要暫時排除某檔案時重用），該檔案的最終形狀已加上自己的 step-level timeout-minutes，與其他 6 個 workflow 檔案一視同仁。這一步本身就是 cross-vendor review 抓到的一個 HIGH finding：#937 合併後，整個「不可逆的發版 job」（29 個 real-work step：pack、smoke test、vulnerability scan、GitHub mirror sync、兩次 `nuget push`）曾經完全沒有真正生效的 timeout——只有一個被這個 runner 忽略的 job-level 值，一次 push 中途卡住的網路連線會佔住 capacity-2 runner 兩個 slot 之一，直到 Gitea 實例的 3 小時 `ENDLESS_TASK_TIMEOUT` 硬上限。
+
+**兩個 `nuget push` step 的 timeout 刻意設得寬**（`Push to Gitea Packages` 20 分鐘、`Push NuGet packages to GitHub Packages` 25 分鐘，後者更寬因為跨公網打 github.com 而非 tailnet-local 的 Gitea host）——這是本文件「timeout 該綁窄還是綁寬」少數需要論證取捨的地方，不是照抄慣例：中途砍斷一次多套件批次 push **不是零代價**（可能已經有幾個套件推上去、其他還沒），但這個檔案自己已經有對應的復原機制——`Push to Gitea Packages`/`Push NuGet packages to GitHub Packages` 之前各自的 `Verify version cohort not partially published` step，正是設計來在下一次執行時偵測「上次留下的部分批次」並拒絕在髒狀態上silently繼續。相對地，放著不 bound：確定的代價是佔住 runner 兩個 slot 之一長達 3 小時，讓 repo 其他所有 workflow 塞車；換來的只是「這次網路連線也許最終會自己恢復」的可能性，沒有對應的復原機制。兩相權衡，寬鬆但**有界**的 timeout 全面優於**無界**的等待——這個檔案裡沒有任何一個 step 被判定為「寧可讓它掛著」的例外。
+
+**2026-07-31 二次更正——腳本寫了但沒接進任何 workflow**：上一版只把 [`scripts/audit-workflow-timeouts.py`](../scripts/audit-workflow-timeouts.py) 寫成「隨時可手動重跑」，本身沒有掛進任何 CI 觸發點——會永遠印出綠燈，直到某天真的有一個新 step 漏加 timeout-minutes 才會被人發現，而那正是 issue #926 本來要防的情況：證明了一個性質、卻不在下一支 PR 上重新檢查，等於沒證明。已接進 `mutation-gate.yml` 的 `changes` job，緊接在既有三個 guard（`check-gitea-token-not-sourced.py` / `check-jwt-key-literal-blocklisted.py` / `check-mutant-entries-parse.py`）之後——`changes` 是這裡唯一兩個 trigger 都沒有 path filter 的 job，`ci-build.yml` 則不行：它的 `paths-ignore` 會讓一個只碰 `.github/workflows/**` 的 PR 可能完全不跑它，而 timeout regression 正好最容易從這種 PR 進來。這個新 guard step 自己也帶 `timeout-minutes:`，因此也被腳本自己算進分母——PASS 因此連帶證明了「這個 guard 沒有把自己排除在外」。
+
+```bash
+python3 scripts/audit-workflow-timeouts.py
+```
+
+2026-07-31 三次更正（`publish-nuget.yml` 排除解除）後的實際輸出——分母現在是**全部 7 個 workflow 檔案、0 個排除**：
+
+```
+DENOMINATOR: every `run:` step and every `uses:` step, in every job, across all 7 scanned workflow file(s) (ci-build.yml, e2e-test.yml, integration-test.yml, mutation-gate.yml, publish-nuget.yml, regression.yml, timeout-selftest.yml) -- 0 file excluded (see above).
+Total real-work steps in scope: 125
+  with timeout-minutes:    125
+  documented exemptions:   0
+  MISSING timeout-minutes: 0
+
+WORKFLOW_TIMEOUT_AUDIT_RESULT: PASS
+```
+
+即：**125 個 step（每個 `run:` + 每個 `uses:`，橫跨本 repo 全部 7 個 workflow 檔案，0 個檔案排除，含 `publish-nuget.yml` 29 個 step 與這個稽核 guard 自己）逐一檢查，125 個都有自己的 `timeout-minutes:`，0 個例外，0 個缺口，且這個檢查現在每次 `changes` job 跑就會重新驗證一次，不是只在寫這份文件的當下算過一次。** 不再需要「文件記錄的例外」清單——早期草稿的 13 個例外（cache step、`if: failure()` 診斷 step、背景啟動 step）現在全部直接補上自己的 timeout-minutes，而不是被記錄成例外後放行；`EXCLUDED_FILES` 目前也是空字典——沒有任何檔案被排除在分母之外。
+
+**這個腳本證明的範圍，以及它證明不了什麼**：`timeout-minutes:` 是 **step** 層級的邊界，只框住「這個 step 自己開始執行之後」的時間。它框不住：
+- **job 開始前的 runner 排隊時間**（`local-runner` capacity 2，忙碌時一個 job 可能等很久才輪到自己的 slot）——這不是 step 沒被 bound，是 step 還沒開始執行。
+- **`services:` container 的 pull + 啟動 + health-check**：`integration-test.yml` 的 `mssql` service 在**任何 step 執行之前**就由 runner 拉取映像、啟動容器、跑 health-check——這整段時間沒有任何 step 的 `timeout-minutes:` 能框住，因為它發生在第一個 step（`checkout`）開始之前。已在該 workflow 的 `services:` 區塊正上方加註解記錄這個缺口，並說明為什麼選擇「記錄」而非「改成手動 `docker run` 一個可被 timeout 框住的 step」——後者會丟掉 runner 內建的 health-check gating 與 service-container 網路別名，去保護一個已經量到約 6 秒、本來就很快的階段，划不來。真的卡住時，後面 "Wait for MSSQL ready" step 自己的 12 分鐘 timeout 仍會框住「這個 step 開始 poll 之後」的等待，只是框不住 poll 開始之前的 pull/啟動階段。
+
+**追蹤**：`scripts/audit-workflow-timeouts.py` 沒有 per-step 例外清單（`EXEMPT_STEPS` 目前是空字典）——未來如果真的出現一個不能加 timeout-minutes 的 step，把它加進那個字典並寫清楚理由，不要回頭窄化分母讓它從統計裡消失。
+
+### 7. `strategy.matrix.max-parallel` 被靜默忽略（#885，2026-07-29 發現）
+
+**症狀**：`e2e-test.yml` 曾用單一 matrix job + `strategy.matrix.max-parallel: 1` 想讓三條 leg 依序執行而非搶著並行——**這個設定完全沒有效果**：`workflow_dispatch` 重跑後，三條 leg 的 job container 依然在 6 秒內全部啟動、整段並行。
+
+**根因**：已知的 Gitea Actions 上游缺陷（[go-gitea/gitea#35561](https://github.com/go-gitea/gitea/issues/35561)："Cannot make steps run sequentially with matrix and max-parallel = 1"），不是設定寫錯。
+
+**修法**：拆掉 matrix，改成三個獨立 job（`e2e-baseline` / `e2e-killswitch` / `e2e-island`）用 `needs:` 串接——這是本 repo 其他 workflow 已經在用、確定有效的基本功能，現場重跑驗證確實依序執行而非並行。完整量測數據、五種失敗形狀、`needs:` 改法的代價分析，見下方「e2e 三條 matrix leg 並行導致的時序性失敗（#885）」小節。
+
+**追蹤**：不要在這個 repo 的任何 workflow 用 `strategy.matrix.max-parallel` 期待它限制並行度——目前這個 Gitea 版本會靜默忽略它。若未來 host 容量提升、Gitea 修好 #35561，可重新評估。
+
 ---
 
 ## 重複觸發：feature-branch push 曾讓整套測試並行跑兩遍（#640，2026-07-10 修正）
@@ -179,6 +256,8 @@ pull_request-event 的 job。修正後 feature 分支只會有 pull_request-even
 ---
 
 ## e2e 三條 matrix leg 並行導致的時序性失敗（#885，2026-07-29 修正）
+
+> `strategy.matrix.max-parallel` 被靜默忽略的核心事實與上游 issue 連結已收錄進上方「七大已知不相容點」#7；本節保留完整的量測數據與代價分析（run 5835/5837 的實測結果），供需要細節時查閱。
 
 `#837` 為 `e2e-test.yml` 加了第三條 matrix leg（`island`）之後，同一天內出現五種不同的
 時序敏感失敗（`Page.screenshot` timeout、`Target crashed`、並行競態測試、TOCTOU 測試、
@@ -275,7 +354,7 @@ grep -nE "Test Run Successful\.|Failed!|Total tests:" /tmp/job.log
 
 ### 4. 確認是 infrastructure 還是 code regression
 
-對照本文「五大已知不相容點」逐一比對 — 若 failure pattern 是其中之一 → infrastructure 問題，不是你的 PR 引入的 regression。
+對照本文「七大已知不相容點」逐一比對 — 若 failure pattern 是其中之一 → infrastructure 問題，不是你的 PR 引入的 regression。
 
 若不是其中之一 → 看 test output 找真正的 code regression。
 

@@ -86,11 +86,13 @@ jobs:
   # answer, never to the cheap, unsafe one.
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md
     outputs:
       relevant: ${{ steps.check.outputs.relevant }}
       total_entries: ${{ steps.check.outputs.total_entries }}
     steps:
     - uses: actions/checkout@v5
+      timeout-minutes: 5
       with:
         fetch-depth: 0
     # #924: `source`/`.` applied directly to a bare-token file makes the shell execute the
@@ -126,6 +128,7 @@ jobs:
     # wrapper to get backwards.
     - name: "Guard: never source a gitea-token file (#924)"
       run: python3 scripts/check-gitea-token-not-sourced.py
+      timeout-minutes: 3
     # #931 (cross-vendor review of #923's own JWT weak-key fix): #923 fixed the demo
     # appsettings.json values that shipped a padded/known-weak SecurityKey, but the same
     # review found four more fixed 32+-byte SecurityKey literals still in the tree -- three
@@ -149,6 +152,7 @@ jobs:
     # variable and used indirectly). Its exit code becomes this step's exit code directly.
     - name: "Guard: no unblocklisted fixed JWT signing-key literal >= 32 bytes (#931)"
       run: python3 scripts/check-jwt-key-literal-blocklisted.py
+      timeout-minutes: 3
     # #931 follow-up: two mutant entry files were committed containing an invalid JSON
     # escape (`\'`, a bash single-quote-escaping idiom pasted verbatim from console
     # output instead of being reduced to the one character it represents). run_mutant.py's
@@ -171,9 +175,36 @@ jobs:
     # directly.
     - name: "Guard: every mutant entry file parses and validates (#931)"
       run: python3 scripts/check-mutant-entries-parse.py
+      timeout-minutes: 3
+    # #926 cross-vendor review, finding 7 follow-up (2026-07-31): the honest-denominator
+    # coverage audit (scripts/audit-workflow-timeouts.py) was committed but never wired
+    # into any workflow -- it would report 92/92 forever and silently drift the moment a
+    # future step landed without its own timeout-minutes, which is the exact condition
+    # that produced issue #926 in the first place. A script that proves a property but
+    # never runs proves nothing on the next PR. This step lives in `changes`, not
+    # ci-build.yml, for the identical reason the three guards above do: ci-build.yml's
+    # trigger carries `paths-ignore: docs/**, **/*.md, .claude/**, .gitea/**`, so a PR
+    # that only touches `.github/workflows/**` -- exactly the shape a timeout regression
+    # arrives in -- might never run it there. `changes` has no path filter on either
+    # trigger and is guaranteed to run.
+    #
+    # The scan itself lives in scripts/audit-workflow-timeouts.py, not inline here, for
+    # the same reason as the other three: see its own docstring for the full rule (every
+    # `run:`/`uses:` step across every workflow file must declare its own
+    # timeout-minutes, with a single named, reasoned file-level exclusion for
+    # publish-nuget.yml while PR #937 restructures it), its exit codes (0 clean / 1
+    # missing timeout / 2 scanner error), and its EXEMPT_STEPS mechanism for the day a
+    # step genuinely cannot carry one. Its exit code becomes this step's exit code
+    # directly. This step itself is one of the steps the script counts -- it declares its
+    # own timeout-minutes below like every other step in scope, so the audit's PASS
+    # includes proving it is not exempting itself.
+    - name: "Guard: every real-work workflow step declares its own timeout-minutes (#926)"
+      run: python3 scripts/audit-workflow-timeouts.py
+      timeout-minutes: 3
     - name: Determine whether a gated path changed
       id: check
       shell: bash
+      timeout-minutes: 5
       env:
         EVENT_NAME: ${{ github.event_name }}
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -256,16 +287,24 @@ jobs:
     needs: changes
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 100  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md. Kept >= the "Run every security mutant" step's own 90-minute budget plus this job's setup steps, purely for schema consistency -- see that step's comment for the derivation.
     outputs:
       security_count: ${{ steps.run.outputs.security_count }}
     env:
       # DOTNET_gcServer=0: use workstation GC instead of server GC. Server GC sizes its
       # heap budget against the WHOLE container (here: act_runner's 4 CPU / 3.8GiB Docker
       # VM), which is the primary driver of this job's OOM kills (issue #900) -- this job
-      # evaluates roughly 30-35 mutant entries per run (security-kind, see
-      # test/mutants/entries/; the three incident runs behind issue #900 -- 12743/12813/
-      # 12940 -- executed 32/33/30 of them), of which a small subset (currently 10, those
-      # targeting the demo tree under demo/) additionally trigger the largest/most
+      # evaluates every security-kind entry under test/mutants/entries/ (currently 45 --
+      # STALE-COMMENT WARNING, issue #926 cross-vendor review: this used to read "roughly
+      # 30-35 mutant entries", a count from before this suite grew, and the discrepancy
+      # between that stale number and the actual 45 is exactly what made the "Run every
+      # security mutant" step's old 55-minute timeout too tight for a legitimate run.
+      # Recount at any time with:
+      #   python3 test/mutants/gate_lib.py ids --kind security | grep -c .
+      # and re-derive that step's timeout-minutes from the new count using the formula in
+      # its own comment -- do not let this number drift out of sync with reality again),
+      # of which a small subset (currently 10, those targeting the demo tree under demo/)
+      # additionally trigger the largest/most
       # expensive compiles (~2 Demo builds each, since evaluate_mutant() in
       # test/mutants/run_mutant.py builds the test project once for the clean baseline
       # and once more after the patch is applied). Across the whole job that's on the
@@ -294,17 +333,24 @@ jobs:
       MSBUILDDISABLENODEREUSE: "1"
     steps:
     - uses: actions/checkout@v5
+      timeout-minutes: 5
     - uses: actions/setup-dotnet@v5
+      timeout-minutes: 10
       with:
         dotnet-version: '10.0.x'
     - uses: actions/setup-python@v5
+      timeout-minutes: 5
       with:
         python-version: '3.12'
     # See ci-build.yml for the rationale on this cache shape (no packages.lock.json
     # committed, so setup-dotnet's built-in cache: option cannot be used).
+    # continue-on-error + timeout-minutes: a cache-backend failure must only cost the
+    # speedup, never fail the job -- but continue-on-error alone cannot catch a HANG,
+    # only a returned error (#926).
     - name: Cache NuGet packages
       uses: actions/cache@v4
       continue-on-error: true
+      timeout-minutes: 5
       with:
         path: ~/.nuget/packages
         key: ${{ runner.os }}-nuget-${{ hashFiles('Directory.Packages.props', '**/*.csproj') }}
@@ -314,6 +360,30 @@ jobs:
     - name: Run every security mutant
       id: run
       shell: bash
+      # Budget derivation (issue #926 cross-vendor review finding #11): this used to be a
+      # flat 55 minutes that did not scale with the number of entries and was already
+      # tight even for the stale "30-35 entries" estimate above. run_mutant.py's
+      # evaluate_mutant() does 2 incremental builds + 3 filtered test runs per normal
+      # entry (baseline build+test, patched build, green test, red test) -- measured at
+      # ~73s/entry on an otherwise-idle host. This job forces workstation GC
+      # (DOTNET_gcServer=0 above) specifically because server GC's peak causes OOM kills
+      # under this runner's 4 CPU / 3.8GiB co-tenancy (issue #900); the same env comment
+      # documents that workstation GC costs 10-30% slower compiles as the tradeoff. At the
+      # current 45 security-kind entries (recount: `python3 test/mutants/gate_lib.py ids
+      # --kind security | grep -c .`) and the WORST-CASE 30% slowdown:
+      #   45 entries * 73s * 1.3 = 4270s = ~71 minutes
+      # A 55-minute cap is therefore already insufficient at today's entry count using
+      # only the slowdown this job's own comments already document -- before even
+      # accounting for CPU contention from a concurrently scheduled sibling job on this
+      # runner's capacity-2 host (the risk this finding raised: a legitimate run cut off
+      # under co-tenancy). 90 minutes below adds ~25% headroom on top of the 71-minute
+      # worst-case estimate for that contention, without a live measured p95 (this repo's
+      # CI cannot be triggered from this fix to obtain one). This is a static budget re-
+      # derived from a documented formula, not an empirical p95 -- if the entry count or
+      # the per-entry cost materially changes, recompute
+      # entries * 73s * 1.3 / 60 * 1.25 and update both this value and the job-level
+      # timeout-minutes above. Do not let this drift stale the way "30-35 entries" did.
+      timeout-minutes: 90
       run: |
         set -o pipefail
         mkdir -p mutant-results
@@ -392,6 +462,7 @@ jobs:
       uses: actions/upload-artifact@v4
       if: always()
       continue-on-error: true
+      timeout-minutes: 5
       with:
         name: mutants
         path: mutant-results/
@@ -424,6 +495,7 @@ jobs:
     needs: [changes, mutants]
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md
     outputs:
       selftest_count: ${{ steps.run.outputs.selftest_count }}
     env:
@@ -461,15 +533,24 @@ jobs:
       MSBUILDDISABLENODEREUSE: "1"
     steps:
     - uses: actions/checkout@v5
+      timeout-minutes: 5
     - uses: actions/setup-dotnet@v5
+      timeout-minutes: 10
       with:
         dotnet-version: '10.0.x'
     - uses: actions/setup-python@v5
+      timeout-minutes: 5
       with:
         python-version: '3.12'
+    # See ci-build.yml for the rationale on this cache shape (no packages.lock.json
+    # committed, so setup-dotnet's built-in cache: option cannot be used).
+    # continue-on-error + timeout-minutes: a cache-backend failure must only cost the
+    # speedup, never fail the job -- but continue-on-error alone cannot catch a HANG,
+    # only a returned error (#926).
     - name: Cache NuGet packages
       uses: actions/cache@v4
       continue-on-error: true
+      timeout-minutes: 5
       with:
         path: ~/.nuget/packages
         key: ${{ runner.os }}-nuget-${{ hashFiles('Directory.Packages.props', '**/*.csproj') }}
@@ -479,6 +560,7 @@ jobs:
     - name: Run every selftest fixture
       id: run
       shell: bash
+      timeout-minutes: 12
       run: |
         set -o pipefail
         mkdir -p mutant-results
@@ -545,6 +627,7 @@ jobs:
       uses: actions/upload-artifact@v4
       if: always()
       continue-on-error: true
+      timeout-minutes: 5
       with:
         name: selftest
         path: mutant-results/
@@ -576,8 +659,10 @@ jobs:
     # cancellation.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md
     steps:
     - name: Summarize mutation gate result
+      timeout-minutes: 2
       env:
         CHANGES_RESULT: ${{ needs.changes.result }}
         CHANGES_RELEVANT: ${{ needs.changes.outputs.relevant }}
