@@ -65,8 +65,9 @@ WTM 設計為「快速 CRUD 開發框架」，**不**是高流量 SaaS 平台或
 **已驗證、每次 publish 執行**：
 - 觸發來源完整性：`workflow_dispatch` 必須打在 `dotnet10` 分支本身；tag push 的 tag 必須指到 `origin/dotnet10` 歷史上的一個 commit（用 `git merge-base --is-ancestor`，不要求等於當下 tip——刻意相容既有的 tag-object 去重重建 SOP）。
 - 版本一致性：tag/`version_suffix` 與 `version.props`/`CHANGELOG.md` 的三方協調（`scripts/reconcile-release-version.sh`），穩定版額外要求 CHANGELOG 最新標題有**合法曆法日期**（不只是形狀對）。
-- 本機 vulnerability scan 改走 `dotnet list package --vulnerable --format json` 直接寫檔 + 結構化解析（`scripts/check-vulnerable-packages.py`），不再靠 `echo | grep -q` 這種在 `set -o pipefail` 下會被 SIGPIPE 誤判成乾淨的管線。
+- 本機 vulnerability scan 改走 `dotnet list package --vulnerable --format json` 直接寫檔 + 結構化解析（`scripts/check-vulnerable-packages.py`），不再靠 `echo | grep -q` 這種在 `set -o pipefail` 下會被 SIGPIPE 誤判成乾淨的管線。**（#934，2026-07-31 追加）這支掃描跑在 `WalkingTec.Mvvm.sln` 上，不是消費端安裝到的東西**——同一個 job 現在額外對 smoke-install 步驟裝好六個套件的那個 consumer 專案，重跑一次同一支 `scripts/check-vulnerable-packages.py`（見下一條），兩邊分別覆蓋「solution 乾不乾淨」與「出貨物乾不乾淨」，不能互相取代。
 - 六個套件的 smoke test 在**任何 push 之前**執行，對 `WalkingTec.Mvvm.Etl` 的 13 個 #883 changed members 做的是**執行期 reflection 斷言**（`ParameterInfo` 逐一比對名稱／型別／順序／`IsOptional`／`DefaultValue`／`IsVirtual`），不是編譯期呼叫——後者曾經誤稱自己證明了 optionality/順序/virtuality，實際上四者都證明不了（見 `test/smoke/publish-nuget-fixture/Program.cs` 的檔頭說明與 PR 描述裡的實測）。**這個 fixture 證明的是編譯期 metadata 與文件相符，不證明任何執行期行為**——`declaredSystemQuery: true` 真的會繞過租戶過濾這件事，由 `test/WalkingTec.Mvvm.Etl.Test` 涵蓋，不是這支 smoke fixture。
+- **（#934，2026-07-31 新增）Consumer-graph vulnerability scan**：對 smoke-install 步驟已裝好六個套件（從候選 nupkgs 安裝，兩個 registry 都還沒看過）的同一個 consumer 專案，跑 `dotnet list package --vulnerable --include-transitive` 並沿用同一支 `scripts/check-vulnerable-packages.py`。修復前對六個未修的 nupkg 本機實測：8 個 HIGH finding（`System.Security.Cryptography.Xml` 8.0.2）；對修復後的 nupkg 實測：0 finding——兩個方向都跑過，不是只驗證了「綠」那一半。
 - Gitea/GitHub Packages 各自的 version-cohort 檢查（`scripts/check-package-cohort.py`，NuGet V3 標準協定）：同一版本若只有部分套件已存在，直接拒絕，不會用 `--skip-duplicate` 悄悄補齊、混進兩個不同 commit 的產物。
 - GitHub mirror 的 sanitize/leak-gate/nuspec 檢查全部在**第一個 push（Gitea）之前**跑完；GitHub Packages 的重新 pack 改成從 `git archive` 對一個在任何 merge-fallback 分支跑之前就先釘住的 commit SHA 抽取到一個沒有 `.git` 的乾淨目錄——merge 產生的內容不可能進到打包輸入。
 - 既有 GitHub 上的同名 tag 若要被 force-move，先比對兩邊的 tree hash 是否相同；不同就拒絕，不再無條件 force-push。
@@ -193,9 +194,15 @@ NPOI 2.7.6（也包含最新 2.8.0）transitive 拉 vulnerable `System.Security.
 
 當前緩解：`Core.csproj` 顯式 reference 覆蓋（本批次隨 MS 套件群對齊至 10.0.9，pin 隨之提升以維持 >= group）。**這條 reference 絕對不能因為 NU1510 informational warning 而誤刪**（已有 XML 註解警示）。同類 override 也已擴及 Benchmarks 專案（#674：新 ProjectReference 會透過 NPOI 拉回漏洞版，對抗式審查在合併前攔下）。
 
+**2026-07-31 追加發現與修復（#934）——上面這條 override 本身有效，但下游收不到。** `dotnet restore`/`dotnet list package --vulnerable` 這類對 solution 的檢查裡，override 一直有效；問題出在 `dotnet pack`。.NET 10 SDK 的 package-reference pruning 判準與觸發 NU1510 的判準相同（pin 版本落在 SDK 認定「framework 已提供」的基準內），一旦命中就把該 `PackageReference` 標成 `PrivateAssets=all`/`IncludeAssets=none`，從打包出的 nuspec `<dependencies>` 整條砍掉。實測：`dotnet pack src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj -c Release` 產出的 nuspec 有 13 個依賴，`NPOI 2.7.6` 在，`System.Security.Cryptography.Xml` 不在——從 registry 安裝的下游因此拿到的是 NPOI 自己宣告的 8.0.2（GHSA-37gx-xxp4-5rgx、GHSA-w3x6-4m5h-cxqf，兩個 HIGH），本 repo 自己的 solution-scoped 掃描結構上看不到這個落差（掃的是 solution，那裡 override 還是活的 `PackageReference`；掃描目標不是出貨物）。已有下游數月前獨立踩到這個問題，自行在自己的專案裡重複同一條 override 繞過——是已觀察到的分發缺陷，不是理論風險。
+
+修法：`WalkingTec.Mvvm.Core.csproj` 加 `<RestoreEnablePackagePruning>false</RestoreEnablePackagePruning>`，只作用於該專案。驗證後 nuspec 恢復 14 個依賴，`System.Security.Cryptography.Xml 10.0.10` 回來，其餘依賴不變。曾先試兩個更窄的做法、實測後放棄：在 `PackageReference` 上顯式標 `IncludeAssets="all" PrivateAssets="none"`（pruning 無條件覆蓋使用者自設的 asset metadata，實測仍被裁）；寫一個 MSBuild target 在 `CollectPrunePackageReferences` 執行前把該套件從 SDK 產生的 `PrunePackageReference` item 清單移除（diagnostic log 可見該 target 確實跑在正確時機，但 restore 內部的 pruning 計算仍套用 SDK 基準，實測仍被裁）。逐一 pack 六個套件重新盤點其餘的 override：`SQLitePCLRaw.bundle_e_sqlite3` 3.0.3（Core，#393）、`Microsoft.OpenApi` 2.7.5（Mvc，#528）、`Common.Logging`／`Common.Logging.Core` 3.4.1（Etl）皆未被裁剪，未變動——只有 `System.Security.Cryptography.Xml` 命中 SDK 的 framework-provided 基準。
+
+`publish-nuget.yml` 新增「Consumer-graph vulnerability scan」步驟，對 smoke-install 步驟已經裝好六個套件的同一個 consumer 專案跑 `dotnet list package --vulnerable --include-transitive`，沿用既有的 `scripts/check-vulnerable-packages.py`（對無法辨識的輸出 fail-closed）。修復前對六個未修的 nupkg 實測：8 個 HIGH finding（`System.Security.Cryptography.Xml` 8.0.2）；對修復後的 nupkg 實測：0 finding。這關掉的是結構性盲點本身——之後任何一條 override 被 pruning 裁掉，這個 gate 會紅，不必等下一次人工複查才發現；solution-scoped 掃描維持乾淨不再等於「消費端拿到的東西也乾淨」。
+
 完整背景見 [`docs/dependency-management.md`](./dependency-management.md)。
 
-**意義**：上游沒修，本 fork 在打補丁。可接受，但你需要在 deployment 與 dep update 流程中明確紀錄這個 pin 不能動。
+**意義**：上游沒修，本 fork 在打補丁；打包管線本身也曾經悄悄漏掉這個補丁，現已加上專屬的 consumer-graph gate 監控。可接受，但你需要在 deployment 與 dep update 流程中明確紀錄這個 pin 不能動，也不能只信任 solution-scoped 的漏洞掃描結果。
 
 ---
 

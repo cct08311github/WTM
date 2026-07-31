@@ -326,6 +326,55 @@ jobs:
           dotnet build -c Release --no-restore
           dotnet run -c Release --no-build
 
+      # #934: "Local vulnerability scan (release gate)" below scans
+      # WalkingTec.Mvvm.sln -- the SOLUTION, where every override in
+      # Directory.Packages.props (System.Security.Cryptography.Xml 10.0.10 overriding
+      # NPOI's transitive 8.0.2 pull, etc.) is a live direct PackageReference and so is
+      # visible and effective. That is not what a consumer installs. Starting with the
+      # .NET 10 SDK, package-reference pruning can silently exclude a direct
+      # PackageReference from the PACKED .nuspec's <dependencies> at pack time whenever
+      # its pinned version matches the SDK's "framework already provides this"
+      # baseline for the target framework (confirmed against this exact repo: with
+      # pruning enabled, WalkingTec.Mvvm.Core's packed nuspec carried NPOI 2.7.6 but
+      # NOT System.Security.Cryptography.Xml at all) -- the solution-level scan cannot
+      # see this because the override is still a live PackageReference IN the
+      # solution; only the packed artifact shows the gap. #934 is the post-mortem: a
+      # downstream consumer independently hit exactly this months ago and had to
+      # re-pin the same override in their own project.
+      #
+      # This step scans the SAME consumer project the smoke-install step above just
+      # restored -- the six packages exactly as `dotnet add package` resolves them
+      # from the nupkgs under test, nuspec pruning and all -- which is what a real
+      # consumer's dependency graph actually looks like. It reuses
+      # scripts/check-vulnerable-packages.py (fails closed -- exit 2 -- on any output
+      # it does not recognise, per its own header comment) rather than a second ad hoc
+      # parser; it is the same script "Local vulnerability scan (release gate)" below
+      # already uses against the solution. A finding here and a clean solution-level
+      # scan are not a contradiction -- they are exactly the two different graphs this
+      # gate exists to reconcile.
+      - name: Consumer-graph vulnerability scan (#934 — scans what ships, not the solution)
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          SMOKE_DIR="${RUNNER_TEMP}/smoke"
+          cd "$SMOKE_DIR"
+          VULN_JSON="${RUNNER_TEMP}/consumer-vuln-scan.json"
+          VULN_STDERR="${RUNNER_TEMP}/consumer-vuln-scan.stderr"
+          set +e
+          dotnet list package --vulnerable --include-transitive \
+            --format json --output-version 1 > "$VULN_JSON" 2> "$VULN_STDERR"
+          DOTNET_EXIT=$?
+          set -e
+          cat "$VULN_STDERR" >&2 || true
+          if [ "$DOTNET_EXIT" -ne 0 ]; then
+            echo "::error::'dotnet list package --vulnerable' on the consumer project itself exited ${DOTNET_EXIT} -- treating as a gate failure, not a clean scan (see stderr above)."
+            exit 1
+          fi
+          if ! python3 "$GITHUB_WORKSPACE/scripts/check-vulnerable-packages.py" "$VULN_JSON"; then
+            echo "::error::Vulnerable package(s) found in the CONSUMER-INSTALLED dependency graph -- the six packages exactly as a real downstream consumer would restore them from these nupkgs (see output above). A clean solution-level scan does not prove this is clean; this is what actually ships. Aborting before anything is published."
+            exit 1
+          fi
+
       # #925 cross-vendor review finding 1: the PREVIOUS version of this step piped
       # `echo "$VULN_OUTPUT" | grep -q "..."` under `set -o pipefail`. `grep -q` exits
       # the instant it finds a match and closes its end of the pipe; if VULN_OUTPUT is

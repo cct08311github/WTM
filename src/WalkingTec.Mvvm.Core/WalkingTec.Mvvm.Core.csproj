@@ -6,6 +6,38 @@
     <Title>$(AssemblyName)</Title>
     <IsPackable>true</IsPackable>
     <Nullable>enable</Nullable>
+    <!--
+      Issue #934 — the .NET 10 SDK's package-reference pruning silently defeats the
+      System.Security.Cryptography.Xml override below at PACK time, not restore time.
+      `System.Security.Cryptography.Xml` 10.0.10 matches the SDK's "framework already
+      provides this" baseline for net10.0 (that match IS what raises NU1510 on this
+      PackageReference), so as of .NET 10, `dotnet pack` marks it PrivateAssets=all /
+      IncludeAssets=none and drops it from the shipped .nuspec's <dependencies> —
+      confirmed empirically: with pruning enabled, WalkingTec.Mvvm.Core's packed
+      nuspec lists NPOI 2.7.6 but NOT System.Security.Cryptography.Xml at all. A
+      consumer installing from the registry then gets NPOI's own vulnerable transitive
+      pull (8.0.2, GHSA-37gx-xxp4-5rgx / GHSA-w3x6-4m5h-cxqf) with nothing overriding
+      it — the override still "works" in THIS repo's own solution-scoped vulnerability
+      scan only because the direct PackageReference is still present there; the scan's
+      target (the solution) is not what ships (the packed nuspec).
+      RestoreEnablePackagePruning=false disables pruning for this project only — every
+      other transitively-prunable package (Microsoft.Extensions.* pulled in via EF
+      Core, etc.) is unaffected at the consumer side either way, since those were
+      never direct PackageReferences here and so never appeared in this nuspec's
+      <dependencies> regardless of this setting; this property only changes whether
+      THIS project's own direct references get force-excluded from ITS OWN nuspec.
+      Tried first and rejected: explicit IncludeAssets="all" PrivateAssets="none" on
+      the PackageReference itself (pruning overrides user-set asset metadata
+      unconditionally — verified, still pruned); an MSBuild target removing this
+      package from the SDK-populated PrunePackageReference item list before
+      CollectPrunePackageReferences runs (the removal is visible in a diagnostic
+      build log but restore's internal pruning computation still applied the SDK's
+      baseline "maximum prunable version" regardless — verified, still pruned).
+      Do not remove this property based on a future NU1510 "cleanup" pass; verify
+      against the PACKED nuspec (`dotnet pack ... ; unzip -p *.nupkg '*.nuspec'`),
+      not `dotnet list package`/NU1510 text, before touching it again.
+    -->
+    <RestoreEnablePackagePruning>false</RestoreEnablePackagePruning>
   </PropertyGroup>
 
   <Import Project="..\..\common.props" />
