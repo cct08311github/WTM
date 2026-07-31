@@ -1,6 +1,6 @@
 # 更新日志
 
-## [Unreleased]
+## [10.21.0] - 2026-07-31
 
 ### Fixed — publish-nuget.yml release-gate cross-vendor review (#925, #937)
 
