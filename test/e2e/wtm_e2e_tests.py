@@ -411,16 +411,26 @@ async def tc_02_sql_injection(page, **_):
 
 async def tc_03_csrf_token(page, **_):
     """
-    TC-03: CSRF Token 驗證
+    TC-03: CSRF Token 驗證（characterization test — issue #917）
     優先度: P0
     預估執行: 3s
 
     確認 WTM form 頁面包含 Anti-Forgery Token。
 
-    預期結果：
-    - POST form 包含 __RequestVerificationToken
+    預期結果（characterization，不是規格）：
+    - __RequestVerificationToken 數量為 0
+    - 無 token 的 POST 回應 HTTP 200（成功提交，未被拒絕）
 
-    注意：WTM 目前未實作 CSRF token，此測試記錄為已知安全缺口。
+    這兩個斷言記錄的是「WTM 目前未實作 CSRF token」這個已知安全缺口的*現狀*，
+    不是我們想要的行為 —— 命名沿用 test/WalkingTec.Mvvm.WorkFlow.Test/
+    TenantFilterInvariantTests.cs 的 WfDemoShapedObsoleteContext 同一種誠實作法：
+    釘住觀察到的現狀，而不是假裝現狀是規格。一旦 CSRF 保護被實作，這兩個斷言
+    會如預期地變紅，逼著這個測試被重寫成真正驗證 CSRF 保護生效（而不是驗證
+    CSRF 保護仍然不存在）——這是刻意的，紅燈就是這個測試存在的目的。
+
+    在此之前（issue #917 之前）這個函式沒有任何 assert，只印
+    "[KNOWN-GAP]" 訊息後無條件回傳 PASS —— scripts/check-e2e-test-integrity.py
+    現在會擋下這種「不可能失敗」的 TC。
     """
     print("[TC-03] 開始執行...")
 
@@ -434,9 +444,13 @@ async def tc_03_csrf_token(page, **_):
     token = page.locator("input[name='__RequestVerificationToken']")
     token_count = await token.count()
     print(f"  __RequestVerificationToken 數量: {token_count}")
-    if token_count == 0:
-        # WTM 未實作 CSRF，這是已知安全缺口，不阻斷測試
-        print("  [KNOWN-GAP] WTM 未實作 CSRF Anti-Forgery Token — 已知安全缺口")
+    assert token_count == 0, (
+        f"__RequestVerificationToken 數量為 {token_count}，預期 0 "
+        "（characterization：WTM 目前未實作 CSRF token；若這個斷言變紅，"
+        "代表 CSRF token 已經出現在頁面上，這個測試需要被重寫成驗證 CSRF "
+        "保護本身，而不是驗證它不存在）"
+    )
+    print("  [KNOWN-GAP] WTM 未實作 CSRF Anti-Forgery Token — 已知安全缺口")
 
     # 嘗試無 token 的 POST
     response = await page.request.post(f"{BASE_URL}/Student/Create", form={
@@ -444,9 +458,15 @@ async def tc_03_csrf_token(page, **_):
         "Entity.Password": "test123",
     })
     print(f"  無 Token POST 回應: HTTP {response.status}")
+    assert response.status == 200, (
+        f"無 token 的 POST 回應 HTTP {response.status}，預期 200 "
+        "（characterization：WTM 目前不會拒絕缺少 CSRF token 的 POST；若這個"
+        "斷言變紅，代表提交已被擋下，這個測試需要被重寫成驗證拒絕行為，而不是"
+        "驗證缺乏保護）"
+    )
     print(f"  [KNOWN-GAP] POST 無 token 成功提交（HTTP {response.status}）— WTM 缺乏 CSRF 保護")
 
-    print("[TC-03] PASS -- CSRF 檢查完成（結果記錄為已知安全缺口）")
+    print("[TC-03] PASS -- CSRF 檢查完成（結果記錄為已知安全缺口，兩項觀察皆已 assert）")
 
 
 # ─── TC-04: Analysis Mode 頁面測試 ───────────────────────────────────────────

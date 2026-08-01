@@ -91,7 +91,7 @@ grep -n '^\s*- name:' .github/workflows/publish-nuget.yml | \
 `test/e2e/wtm_e2e_tests.py`（36 個 TC，見上方「已驗證」的 35 pass/1 skip 數字）裡有兩類站點在改動前**不論被測行為是否真的成立都會回報 PASS**：12 個吞掉例外後直接繼續、完全沒有下游 assert 保護的 catch 分支（#898），以及 3 個安全主題測試（TC-09/10/12）全程只 print、從未 assert（#905）。CHANGELOG 對這批改動的描述不得超出以下清單——每一條斷言都在真的把對應行為打破後觀察到 FAIL，才算數。
 
 **改動前後的狀態**：
-- 用 `grep -c "_screenshot_on_failure(page, [0-9]"` 重新推導 #898 的「12 個站點」，逐一核對後**與 issue 標題吻合**：TC-04(1)、TC-24(3)、TC-25(1)、TC-26(1)、TC-27(1)、TC-28(3)、TC-29(2)。但同時發現 issue 標題沒有涵蓋的第二個問題：TC-25/26/27/28/29 這幾個函式除了那個吞例外的分支之外，**整個函式從頭到尾沒有任何 `assert`**——修好 catch 分支本身不足以讓這些測試真的可能失敗。額外找到 TC-30（零 assert，但沒有 catch 分支，不在 12 個站點清單內，其 docstring 早已引用 #898）也一併修，TC-03（CSRF，零 assert）**維持不動**——那是刻意記錄「WTM 未實作 CSRF」這個已知安全缺口的測試，不是被吞掉的例外。
+- 用 `grep -c "_screenshot_on_failure(page, [0-9]"` 重新推導 #898 的「12 個站點」，逐一核對後**與 issue 標題吻合**：TC-04(1)、TC-24(3)、TC-25(1)、TC-26(1)、TC-27(1)、TC-28(3)、TC-29(2)。但同時發現 issue 標題沒有涵蓋的第二個問題：TC-25/26/27/28/29 這幾個函式除了那個吞例外的分支之外，**整個函式從頭到尾沒有任何 `assert`**——修好 catch 分支本身不足以讓這些測試真的可能失敗。額外找到 TC-30（零 assert，但沒有 catch 分支，不在 12 個站點清單內，其 docstring 早已引用 #898）也一併修，TC-03（CSRF，零 assert）**維持不動**——那是刻意記錄「WTM 未實作 CSRF」這個已知安全缺口的測試，不是被吞掉的例外。（**#917 後續**：TC-03 這個零 assert 缺口本身，已由下方「e2e 測試完整性 AST lint（#917）」章節改為 characterization assertions 修復。）
 - 12 個 catch 分支全數把 `except Exception:` narrow 成 `except PlaywrightTimeoutError:`，其餘例外型別（真正的 JS crash、頁面已死等）現在會如實變成 ERROR 而不是被吞掉再繼續。
 - 每個受影響的測試函式都補上綁定該測試自己命名行為的真斷言（面板是否真的開啟、grid 是否真的渲染出資料列、表單欄位是否真的存在、分頁元件是否真的出現……），而不是只補一個「有沒有拋例外」的空殼判定。
 - TC-09（Session Fixation）重寫為真正模擬攻擊手法：登入前用探測到的驗證 cookie 名稱植入攻擊者已知的固定值，登入後斷言該值已被輪替；不是原本「印出登入前後 cookie 名稱」的空判定。
@@ -114,7 +114,7 @@ grep -n '^\s*- name:' .github/workflows/publish-nuget.yml | \
 **仍未涵蓋、明講不假裝**：
 - TC-10/TC-12 只驗證「demo 目前刻意關閉這兩個 opt-in 保護的既知狀態沒有意外漂移」，**不驗證**這兩個 middleware 真的啟用時的行為是否正確——那需要另一個對已啟用該 middleware 的部署跑的測試，不在本次範圍。
 - TC-24 的拖放（drag-and-drop）路徑仍保留環境性容忍：逾時不直接判 FAIL（headless CI 上 Sortable.js 的已知時序脆弱性），但拖放失敗不再讓整個 TC 靜默 PASS——面板開啟、欄位存在、以及查詢結果都改為透過與拖放互相獨立的直接 API 呼叫做無條件斷言。
-- TC-03（CSRF）維持原樣：WTM 目前沒有 CSRF token 保護，這是已知、刻意記錄的缺口，不是本次修復範圍。
+- TC-03（CSRF）維持原樣：WTM 目前沒有 CSRF token 保護，這是已知、刻意記錄的缺口，不是本次修復範圍。（**#917 後續**：已改為 characterization assertions，見下方新章節。）
 - TC-29 的 EtlJob 部分是有明確根因記錄的 KNOWN-GAP（見上方），不是偷懶的軟性檢查，但也確實沒有斷言到。
 
 **可重跑的盤點指令**：
@@ -180,6 +180,41 @@ for idx in range(len(starts) - 1):
 **Mutation gate**：`test/mutants/entries/etl970-cancellation-classification-guard-neutralize.json`，移除修法核心的 `cancellationToken.ThrowIfCancellationRequested();`（`:760`）呼叫（compile-preserving——`cancellationToken` 在同方法其餘兩處仍被使用，不會產生未使用變數警告）。`VERDICT: KILLED`。**`kind` 選擇與理由**：本缺陷是「cancellation 分類錯誤」的可觀測性／正確性問題，不涉及未授權存取、injection、租戶隔離或憑證——不是傳統意義的安全漏洞。但 `run_mutant.py` 的 `VALID_KINDS` 目前只接受 `security`／`selftest` 兩種，`selftest` 明文保留給測試 runner 自身邏輯（見 `test/mutants/manifest.json` 的 `$comment`），不適用於一個真實的 production mutant。在現有 schema 下 `security` 是唯一能讓這個 mutant 被 CI 的 `mutants` job 實際執行、且非 KILLED 會擋 gate 的功能性選項，因此選了 `security`，但誠實記錄：這會把 `security`-kind entry 數從 60 推到 61，讓 #968（gate 逐項 timeout budget 是照 45 個 entry 的公式推導，在 60 個時已經吃緊）的落差再拉大一點——本次修復沒有動 #968 本身（scope 之外），值得另開一個「幫非安全性 mutant 加一個新 kind」的 issue，但 HARD CONSTRAINT 禁止本次呼叫任何 Gitea API 開票，故僅在此與 CHANGELOG 明講，留待 user 自行決定是否開票。
 
 **已知、本次沒有稽核／沒有動的相關路徑（誠實揭露，不是缺陷清單的延伸）**：`EtlPipelineExecutor.cs` 裡另外三個 dead-letter 清理／flush 呼叫（`:157` 執行前清理、`:344` 週期性 flush、`:448`/`:460` 成功後 flush）全部包在會吞下**所有**例外（含 `OperationCanceledException`）且從不 rethrow 的 best-effort try/catch 裡——cancellation 若剛好撞上這幾個呼叫，不會立刻讓這次 run 中止，但也不會被永久遺失，下一個會檢查 token 的地方（例如下一輪 `:198` 的 `ThrowIfCancellationRequested()`）仍然會抓到；這是修復前就存在、刻意設計的 best-effort 語意，本次修復沒有觸碰。另外，`:412`–`:435` 的 `AddLineageRecordAsync`（僅 `EnableLineage=true` 時執行）沒有包在任何吞例外的 catch 裡——如果 cancellation 剛好在 merge 與 watermark commit 都已經成功之後、寫 lineage 記錄的當下才被要求，整個 run 會回報 `Aborted=true`，即使實際的資料載入已經完全成功；這條路徑機制上正確收斂到 `:479`（跟第 1/3 條路徑同一機制，不是本次修復動過的程式碼），但「run 明明成功了卻回報 Aborted」是不是正確的語意，是本次 issue 沒有要求、也沒有稽核過的獨立問題，這裡只誠實點名，不宣稱已經處理。
+
+---
+
+## e2e 測試完整性 AST lint（#917，2026-08-01）
+
+`#898`/`#905`（見上方章節）用手動盤點修掉了兩類「TC 不論被測行為是否成立都回報 PASS」的既有站點。這一項是同一個設計審查裁定的機制化跟進：**加一個 CI-enforced 的 AST lint，把同一個缺陷類別變成合併前一定會擋下的錯誤，而不是靠下一次手動盤點才發現**。裁定明講這是**絕對規則，不是 ratchet**——沒有 baseline 檔、沒有 exemption 清單、沒有凍結違規數；理由是 count-based ratchet 有 swap hole（刪一個舊違規、加一個新違規，計數不變、gate 照樣綠），而且本 repo 自己的 coverage ratchet 已經證明過人工調高的門檻只會停滯不動。
+
+**新腳本 `scripts/check-e2e-test-integrity.py`**（Python stdlib `ast`，零第三方依賴，只讀 AST、從不 `import` 目標檔案）對 `test/e2e/wtm_e2e_tests.py` 做四項檢查：(1) 每個註冊在 `TC_REGISTRY` 裡的 TC function 自己的 body 裡（含 if/for/while/with/try 內部，但不跨進巢狀 def/lambda/class）至少要有一個 `assert`；(2) 唯一的豁免是**結構**辨識、不是名單——body 恰好是一段 docstring 加一個無條件 `raise TestSkipped(...)`（tc_36 現在的形狀）；(3) 任何 `try` 的 body 裡有 literal assert 時，能接住 `AssertionError` 的 handler（bare except／`except Exception`／`except AssertionError`／上述任一的 tuple 形式）必須以 bare `raise` 重新拋出，否則判定違規——特別會抓 `except AssertionError: raise TestSkipped(...)` 這種把 FAIL 洗成 SKIP 的形狀；(4) 每個頂層 `tc_*` function 必須真的被 `TC_REGISTRY` 引用到（#855 defect 4 的 e2e 版本：寫了但沒接上）。額外獨立一條：`assert <constant truthy>`（例如 `assert True`）本身就是違規，不論出現在哪裡。Exit code 比照本 repo `changes` job 既有四個 guard 的慣例：0 乾淨、1 有違規、2 無法分析（parse 失敗／檔案不存在／找不到 `TC_REGISTRY`）。
+
+**這支 lint 刻意不抓的東西，明講不假裝完整**：非常數的 tautological assert（例如剛設完值就斷言同一個值，或 `assert x == x`）——這需要資料流分析，靜態語法做不到；一個 helper function 裡有 assert、但呼叫它的 TC 自己 body 裡沒有——check (1) 只看 TC 自己的 scope，不追呼叫圖，刻意如此（修法維持「補一個 assert」這種低摩擦動作，不逼人重構 helper）；多層間接吞例外（內層 try 乾淨 re-raise，外層 try 又吞掉）——check (3) 只看每個 `try` node 自己的 body，不追蹤例外跨多層 try 的傳播路徑，本 repo 目前找到的每一起事故（#898、#905）都是單層；以及作者在同一個 PR 裡同時改這支 lint 跟它自己的 `--selftest` fixture——PR diff 裡看得到，沒有任何 lint 機制能防住審查者不看 diff 這件事。
+
+**重新推導的違規盤點（本次工作獨立重新掃描全檔，不沿用先前盤點）**：對 PR 修復前的 `test/e2e/wtm_e2e_tests.py`（36 個 TC，36 個都有註冊）跑這支 lint，checks (3)/(4)/加碼 constant-assert 檢查全數乾淨（0 違規）；check (1)/(2) 找到**恰好一個**違規：`tc_03_csrf_token`（line 412），零 assert、不符合 `tc_36` 的結構豁免。沒有找到清單之外的額外違規。
+
+**驗證這支 lint 真的會擋下違規——兩個獨立證明，皆可重跑**：
+
+1. **`--selftest`，每次 CI 執行都會重新驗證**（embedded fixture，無外部檔案）：zero-assert TC → exit 1，訊息點名 `tc_01_no_assert`；bare-except 吞掉一個真 assert 的 handler → exit 1；`except AssertionError: raise TestSkipped(...)` 洗白形狀 → exit 1，訊息含 `TestSkipped`；一個定義了但沒接進 `TC_REGISTRY` 的 `tc_*` function → exit 1，訊息點名 `tc_02_orphan`；**clean fixture（positive control）→ exit 0**——沒有這條，一支永遠回傳 1 的假 lint 會通過上面每一個負面案例；unparseable input → exit 2，與 0/1 明確有別。六個 case 全部通過（`python3 scripts/check-e2e-test-integrity.py --selftest`，本機實測 exit 0）。
+2. **對一個真實歷史 commit 的永久可重跑 replay**：`git show 59444a657:test/e2e/wtm_e2e_tests.py > /tmp/old.py && python3 scripts/check-e2e-test-integrity.py /tmp/old.py` 對 commit `59444a657`（`origin/test/898-905-e2e-cannot-fail` 分支的 tip，該分支仍在 Gitea 上，任何人都能重新 fetch）——這個 commit 的 `tc_03_csrf_token` 仍是零 assert（含 `#898`/`#905` 那次修復也刻意沒動它，見上方章節）——本機實測：exit 1，違規訊息點名 `tc_03_csrf_token`。對本 PR head（含下方 tc_03 修復）跑同一支 lint：`OK: no e2e test integrity violations found`，exit 0。
+
+**CI 接線**：加進 `.github/workflows/mutation-gate.yml` 的 `changes` job——本 repo唯一兩個 trigger 都沒有 path filter、且已透過 `gate` job 掛成 required check 的 job，跟既有四個 guard（#924/#931×2/#926）同一種形狀。這步驟先跑 `--selftest`、`set -e` 確保 selftest 失敗會擋下後面的真掃描，再跑對 `test/e2e/wtm_e2e_tests.py` 的真掃描，兩者的 exit code 直接變成這個 step 的 exit code。**沒有新增 required-check context**（#838/#844 的教訓：workflow trigger 本身沒有 path filter，所以不會出現「永遠 expected、卡住合併鍵」的陷阱）——這一項只是在既有 `changes` job 裡多加一個 step。**這裡沒有、也不能宣稱「已在 Gitea CI 上跑過一次綠燈」**：這次工作階段的硬性限制禁止呼叫任何 Gitea/GitHub API、禁止開 PR，所以 CI 真的觸發、`gate` job 真的把這個 step 的結果算進最終判定，要等這個分支真正開 PR 之後才會是第一次生產驗證；本機驗證只到「`python3 -c "import yaml"` 剖析整份 workflow 檔案成功、新 step 出現在 `changes` job 的正確位置」與「`scripts/audit-workflow-timeouts.py`（本身也是 `changes` job 的既有 guard之一）對修改後的 `mutation-gate.yml` 判定全部 127 個 real-work step（含這個新 step 自己）都有 `timeout-minutes`，PASS」這兩層靜態確認。
+
+**`tc_03_csrf_token` 的修復（唯一違規，P0，本 PR 內修復）**：原本這個函式只 print `[KNOWN-GAP]` 訊息、無條件回傳，記錄「WTM 未實作 CSRF token」這個已知安全缺口但完全沒有 assert 保護——不論 CSRF 有沒有被實作，這個 TC 永遠 PASS。改為 **characterization assertions**（比照 `test/WalkingTec.Mvvm.WorkFlow.Test/TenantFilterInvariantTests.cs` 的 `WfDemoShapedObsoleteContext` 同一種誠實作法：釘住觀察到的現狀，不是宣稱現狀是規格）：`assert token_count == 0`（頁面上沒有 `__RequestVerificationToken`）、`assert response.status == 200`（無 token 的 POST 被無條件接受，不是被拒絕）。**這兩個 marker 字串/數值皆對著本機真的起的 demo app 實測過，不是照抄 sibling 測試假設存在**——本機以 dotnet 10 + Playwright + headless Chromium 起 demo app（`dotnet run -c Release --no-build --urls http://0.0.0.0:52837`），單獨跑 `python3 wtm_e2e_tests.py --tc 3`，實際觀察輸出：`  __RequestVerificationToken 數量: 0` 與 `  無 Token POST 回應: HTTP 200`，兩者與新增的斷言完全一致，TC-03 本身 PASS。一旦 CSRF 保護被實作，這兩個斷言會如預期地變紅——這是刻意設計，紅燈本身就是這個測試存在的意義，需要被重寫成驗證保護生效，而不是驗證保護不存在。
+
+**e2e 全套件本機重跑（before/after，非 CI 執行，明講原因）**：這次工作階段的硬性限制禁止呼叫任何 Gitea/GitHub API，所以無法觸發 Gitea Actions 上的真實 e2e workflow；改為本機起 demo app（同上）與全 36 個 TC，兩次都在同一台機器、同一個本機 demo app 實例上跑：
+
+- **修復前**（`tc_03` 仍是零 assert）：`Total: 36 | PASS: 35 | FAIL: 0 | ERROR: 0 | SKIP: 1`
+- **修復後**（`tc_03` 改為 characterization assertions，且加了 lint 但目標檔案本身乾淨）：`Total: 36 | PASS: 35 | FAIL: 0 | ERROR: 0 | SKIP: 1`——與修復前逐位元組相同，`tc_03` 本身也維持 PASS（1.4s~1.9s，兩次執行時間微幅浮動屬正常），因為新斷言釘住的正是本機實測到的現狀，不是改變了任何行為。這證明**這次修復沒有改變任何一個 TC 的最終判定**，只是讓 `tc_03` 從「不可能失敗」變成「現在會如實反映現狀，且現狀改變時會變紅」。
+
+**可重跑的盤點指令**：
+```bash
+python3 scripts/check-e2e-test-integrity.py --selftest   # 六個 embedded fixture，見上方
+python3 scripts/check-e2e-test-integrity.py               # 對 test/e2e/wtm_e2e_tests.py 的真掃描，PR head 上應為 exit 0
+git show 59444a657:test/e2e/wtm_e2e_tests.py > /tmp/old_wtm_e2e.py
+python3 scripts/check-e2e-test-integrity.py /tmp/old_wtm_e2e.py   # 應 exit 1，點名 tc_03_csrf_token
+python3 scripts/audit-workflow-timeouts.py                 # 確認新 step 也有 timeout-minutes（#926 既有 guard）
+```
 
 ---
 

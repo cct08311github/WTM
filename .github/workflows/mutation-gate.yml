@@ -201,6 +201,55 @@ jobs:
     - name: "Guard: every real-work workflow step declares its own timeout-minutes (#926)"
       run: python3 scripts/audit-workflow-timeouts.py
       timeout-minutes: 3
+    # #917: this repo's e2e suite has repeatedly reported PASS when the thing under
+    # test was broken -- 12 sites swallowed an exception and passed unconditionally
+    # (#898), three security-themed TCs asserted nothing at all (#905), and #886's own
+    # fix for a DIFFERENT swallowing bug made a zero-tests-executed abort read as
+    # "Total: 0 | FAIL: 0 | ERROR: 0", satisfying this repo's own CI-reading rule.
+    # #898/#905 fixed the individual instances by hand; this guard exists to catch the
+    # CLASS mechanically, on every PR, so the next instance doesn't wait for someone to
+    # notice a green run that proved nothing. This is an ABSOLUTE rule, not a ratchet
+    # (2026-07 design review): no baseline file, no exemption list, no frozen violation
+    # count -- a count-based ratchet has a swap hole (delete one old violation, add one
+    # new, count unchanged) and this repo's own coverage ratchet has already shown a
+    # manually-raised threshold just stagnates. This step lives in `changes`, not
+    # e2e-test.yml, for the identical reason the four guards above do: e2e-test.yml only
+    # triggers on `src/**`, `demo/**`, `test/e2e/**` changes, and a lint that scans
+    # `test/e2e/wtm_e2e_tests.py` needs to run on every PR that COULD touch it, not only
+    # ones e2e-test.yml's own path filter happens to catch. `changes` has no path filter
+    # on either trigger and is guaranteed to run.
+    #
+    # The scan itself lives in scripts/check-e2e-test-integrity.py, not inline here --
+    # it AST-parses (never imports) test/e2e/wtm_e2e_tests.py and checks: every
+    # registered TC has its own assert (or matches tc_36's structural
+    # docstring+`raise TestSkipped(...)` exemption, matched by shape, not by name); no
+    # exception handler that can catch AssertionError fails to re-raise with a bare
+    # `raise` when its try's own body contains an assert (this is what would have
+    # caught `except AssertionError: raise TestSkipped(...)` laundering a FAIL into a
+    # SKIP); every top-level `tc_*` function is actually wired into TC_REGISTRY (the
+    # e2e counterpart of #855 defect 4); and `assert <constant truthy>` is flagged
+    # anywhere it appears. See that script's own module docstring for the full rule,
+    # its exit codes (0 clean / 1 violation / 2 scanner error -- distinct so a scanner
+    # failure can never read as a clean tree), and the bypasses it deliberately does
+    # NOT catch (non-constant tautologies, a helper's assert not credited to its TC
+    # caller, multi-level indirect swallowing, and an author editing this lint and its
+    # own selftest in the same PR -- none of those have been observed in this repo;
+    # the four checks above match every incident found so far).
+    #
+    # `--selftest` runs FIRST against embedded fixtures (no external files) covering a
+    # zero-assert TC, a swallowed-assert handler, the AssertionError-laundered-into-
+    # TestSkipped shape, an unregistered tc_* function, a clean fixture (the positive
+    # control -- without it a lint that always exits 1 would pass every negative case
+    # above), and unparseable input -- so the proof that this guard actually fires is
+    # re-verified by machine on every PR, not asserted once in a PR body and left to
+    # rot. `set -e` makes a selftest failure stop the step before the real scan runs;
+    # the real scan's exit code becomes this step's exit code directly.
+    - name: "Guard: e2e TCs can actually fail -- no zero-assert/swallowed/unwired TCs (#917)"
+      run: |
+        set -e
+        python3 scripts/check-e2e-test-integrity.py --selftest
+        python3 scripts/check-e2e-test-integrity.py
+      timeout-minutes: 3
     - name: Determine whether a gated path changed
       id: check
       shell: bash
