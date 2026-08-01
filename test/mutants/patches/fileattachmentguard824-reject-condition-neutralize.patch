@@ -1,0 +1,16 @@
+diff --git a/src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs b/src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs
+index 2ac3b714b..dcdd0bc93 100644
+--- a/src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs
++++ b/src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs
+@@ -560,7 +560,10 @@ namespace WalkingTec.Mvvm.Core
+                 {
+                     continue;
+                 }
+-                if (!outcome.ResolvedIds.Contains(candidate.Id))
++                // MUTANT test/mutants fileattachmentguard824-reject-condition-neutralize:
++                // condition neutralized (compile-preserving, `&& false`) so the sync guard can
++                // never reject an unresolvable candidate. See test/mutants/manifest.json.
++                if (!outcome.ResolvedIds.Contains(candidate.Id) && false)
+                 {
+                     LogRejection(candidate);
+                     throw new UnresolvableFileAttachmentReferenceException(candidate.EntityClrType, candidate.PropertyName, candidate.Id);

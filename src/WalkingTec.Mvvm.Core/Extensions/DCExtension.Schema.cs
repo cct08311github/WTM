@@ -116,10 +116,32 @@ namespace WalkingTec.Mvvm.Core.Extensions
         /// <summary>
         /// Issue #824 shared predicate: true if <paramref name="propertyName"/> on
         /// <paramref name="entityType"/> is the FK scalar for a relationship whose PRINCIPAL
-        /// entity type is <see cref="FileAttachment"/>, decided purely from EF Core's own
-        /// relationship metadata (<see cref="IDataContext.Model"/>) — never a hardcoded
-        /// field-name list, so it automatically covers downstream-defined attachment FKs (e.g. a
-        /// consumer app's own <c>School.PhotoId</c>) without any change here.
+        /// entity type IS <see cref="FileAttachment"/> OR a class DERIVED from it, decided
+        /// purely from EF Core's own relationship metadata (<see cref="IDataContext.Model"/>) —
+        /// never a hardcoded field-name list, so it automatically covers downstream-defined
+        /// attachment FKs (e.g. a consumer app's own <c>School.PhotoId</c>, or one pointing at a
+        /// downstream <c>SignedFile : FileAttachment</c> subclass) without any change here.
+        ///
+        /// <para>
+        /// <b>Cross-vendor review Finding 1 (fixed here, not introduced by Issue #824):</b> this
+        /// predicate used to compare <c>fk.PrincipalEntityType.ClrType</c> against
+        /// <see cref="FileAttachment"/> with EXACT-type equality (<c>!=</c>). EF Core supports a
+        /// relationship whose PRINCIPAL is a class DERIVED from <see cref="FileAttachment"/> (a
+        /// downstream TPH or TPT subclass, e.g. <c>SignedFile : FileAttachment</c>). Under the old
+        /// exact-type check, a scalar FK typed as the DERIVED class (<c>Invoice.SignedFileId ->
+        /// SignedFile</c>) was invisible to this predicate: <c>fk.PrincipalEntityType.ClrType</c>
+        /// is <c>SignedFile</c>, not <see cref="FileAttachment"/>, so the comparison excluded it,
+        /// this helper reported "not an attachment FK", and every caller that trusts this
+        /// predicate to decide whether a posted FK needs tenant-scoped resolution skipped it
+        /// entirely — the DB's own FK constraint is satisfied by the shared base-table
+        /// <see cref="FileAttachment"/> row underneath ANY tenant's <c>SignedFile</c>, so the
+        /// write lands. This was a live gap in the ALREADY-SHIPPED consumer of this predicate
+        /// (<c>_FrameworkController.UpdateModelProperty</c>'s #824 Part 1 gate, added by an
+        /// earlier PR on this same issue) for as long as that gate has existed, not something the
+        /// SaveChanges-level guard added alongside this fix introduced. The predicate now uses
+        /// <see cref="Type.IsAssignableFrom(Type)"/>, matching <see cref="FileAttachment"/> itself
+        /// and every subclass.
+        /// </para>
         ///
         /// <para>
         /// This is the ONE decision every #824 write-path gate is meant to share:
@@ -174,7 +196,19 @@ namespace WalkingTec.Mvvm.Core.Extensions
                 }
                 foreach (var fk in efEntityType.GetForeignKeys())
                 {
-                    if (fk.PrincipalEntityType?.ClrType != typeof(FileAttachment))
+                    // Issue #824 Finding 1, cross-vendor review follow-up (PR #978): this used to
+                    // repeat its own inline `IsAssignableFrom` check here, and
+                    // FileAttachmentSaveChangesGuard.BuildMap had a SECOND, independent copy of
+                    // the exact same comparison — the two vendor-review round Finding 1 was fixed
+                    // in THIS method only, and the guard's own copy (never touched) meant the
+                    // guard's protection against a derived-principal (TPH/TPT) attachment FK was
+                    // completely unproven by the existing mutant, which only targets this shared
+                    // predicate in isolation, not the guard's actual code path. Routing BOTH
+                    // consumers through IsFileAttachmentPrincipal below is the fix this class's
+                    // own doc comment already argues for: "two independently-written
+                    // implementations would inevitably drift" — this was that drift, one PR after
+                    // the doc comment was written.
+                    if (!IsFileAttachmentPrincipal(fk.PrincipalEntityType?.ClrType))
                     {
                         continue;
                     }
@@ -192,6 +226,28 @@ namespace WalkingTec.Mvvm.Core.Extensions
             {
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Issue #824 Finding 1: the ONE comparison that decides "is this relationship's
+        /// principal a <see cref="FileAttachment"/> (or a class derived from it)". Extracted so
+        /// <see cref="IsFileAttachmentForeignKeyProperty(IDataContext?, Type?, string?)"/> above
+        /// and <see cref="WalkingTec.Mvvm.Core.FileAttachmentSaveChangesGuard"/>'s own model-wide
+        /// FK map (which walks <em>every</em> foreign key in the model rather than testing one
+        /// caller-supplied (type, property) pair, so it cannot simply call the method above) share
+        /// a single implementation instead of two independently-maintained copies that silently
+        /// drifted once already (see the doc comment on the call site above). Deliberately takes
+        /// the already-resolved <see cref="Type"/> rather than an <see cref="IForeignKey"/> — the
+        /// guard's map-building loop and this method's per-property loop reach it from different
+        /// EF metadata shapes, and the only thing they actually share is this one comparison.
+        /// </summary>
+        /// <param name="principalClrType">
+        /// <c>fk.PrincipalEntityType?.ClrType</c> for the relationship being tested — may be
+        /// <see langword="null"/> for a relationship EF could not resolve a CLR type for.
+        /// </param>
+        internal static bool IsFileAttachmentPrincipal(Type? principalClrType)
+        {
+            return principalClrType != null && typeof(FileAttachment).IsAssignableFrom(principalClrType);
         }
 
         /// <summary>

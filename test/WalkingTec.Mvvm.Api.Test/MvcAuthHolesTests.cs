@@ -665,6 +665,71 @@ public class MvcAuthHolesTests
             "#824: the positive control's edit must actually persist");
     }
 
+    /// <summary>
+    /// #824 Part 2 review (PR #978 CI): the test above can no longer isolate Part 1's
+    /// UpdateModelProperty field-level gate as a mutation target, because Part 2's
+    /// FileAttachmentSaveChangesGuard boundary now catches the SAME forged write independently —
+    /// neutralizing Part 1 alone still produces an indistinguishable 400 with an equivalent
+    /// message ("FileAttachment foreign key ..."), so a mutant that removes ONLY Part 1's
+    /// `dc.IsFileAttachmentForeignKeyProperty(...)` check survives that test undetected (defence
+    /// in depth from the caller's point of view, but useless as a Part-1-specific regression
+    /// signal).
+    ///
+    /// This test isolates Part 1 by disabling Part 2 via its own kill switch
+    /// (<see cref="FileAttachmentSaveChangesGuard.Enabled"/> = false) for its duration, so a
+    /// mutant that neutralizes Part 1's own check has nothing left to catch the forged write —
+    /// the request would succeed (200) instead of failing (400) — while the REAL, unmutated code
+    /// still rejects it (400) purely on Part 1's own gate, proving Part 1 still works on its own
+    /// merits, not merely "something downstream happened to also catch this."
+    /// </summary>
+    [TestMethod]
+    public async Task UpdateModelProperty_FileAttachmentForeignKey_Part1GateAlone_RejectedWithBoundaryGuardDisabled()
+    {
+        FileAttachmentSaveChangesGuard.Enabled = false;
+        try
+        {
+            var user = SeedFrameworkUser();
+            var file = DbTestHelpers.Seed(_strictFactory, new FileAttachment
+            {
+                ID = Guid.NewGuid(),
+                FileName = "victim-824-part1.png",
+                FileExt = ".png",
+                Length = 42,
+                UploadTime = DateTime.UtcNow,
+                TenantCode = "TENANT_VICTIM_824_PART1",
+            });
+            var client = await NewAuthClientAsync();
+
+            var negForm = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["_DONOT_USE_VMNAME"] = FrameworkUserVm,
+                ["id"] = user.ID.ToString(),
+                ["field"] = "PhotoId",
+                ["value"] = file.ID.ToString(),
+            });
+            var negResp = await client.PostAsync("/_Framework/UpdateModelProperty", negForm);
+            var negBody = await negResp.Content.ReadAsStringAsync();
+
+            Assert.AreEqual(HttpStatusCode.BadRequest, negResp.StatusCode,
+                $"#824 Part 1 alone (boundary guard disabled): a FileAttachment FK (PhotoId) must " +
+                $"still be rejected by Part 1's own field-level gate. Got {(int)negResp.StatusCode}: {negBody}");
+            Assert.IsTrue(negBody.Contains("FileAttachment foreign key", StringComparison.OrdinalIgnoreCase),
+                $"#824 Part 1 alone: the 400 must come from Part 1's own gate, not from an unrelated " +
+                $"400 a garbage id could also produce — this test uses a REAL, persisted (just " +
+                $"cross-tenant) FileAttachment id specifically so a deleted/neutralized Part 1 gate " +
+                $"with the boundary guard ALSO disabled would let the write through to a genuine 200, " +
+                $"never a differently-worded 400. Got body: {negBody}");
+
+            var persistedUser = DbTestHelpers.ReadBack<FrameworkUser>(_strictFactory, user.ID);
+            Assert.IsNotNull(persistedUser, "#824 Part 1 alone: the seeded row must still exist.");
+            Assert.IsNull(persistedUser!.PhotoId, "#824 Part 1 alone: the rejected PhotoId edit must not be persisted");
+        }
+        finally
+        {
+            FileAttachmentSaveChangesGuard.Enabled = true;
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // GAP-01: PrivilegeFilter RBAC — unauthenticated → redirect/401,
     //         authenticated admin → 200

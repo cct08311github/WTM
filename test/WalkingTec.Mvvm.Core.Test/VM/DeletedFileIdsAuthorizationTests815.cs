@@ -73,6 +73,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             using (var seedCtx = new DataContext(seed, DBTypeEnum.Memory))
             {
                 seedCtx.Database.EnsureCreated();
+                seedCtx.SetTenantCode("TENANT_A"); // Issue #824: the seed context must be scoped to the same tenant as the FileAttachment it links a dependent row to, or FileAttachmentSaveChangesGuard rejects the seed write itself (this repo's convention: null-tenant seeding only for FK-free rows).
                 var fileA = SeedFile(seedCtx, "TENANT_A");
                 var fileB = SeedFile(seedCtx, "TENANT_B");
                 fileAId = fileA.ID;
@@ -120,6 +121,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             using (var seedCtx = new DataContext(seed, DBTypeEnum.Memory))
             {
                 seedCtx.Database.EnsureCreated();
+                seedCtx.SetTenantCode("TENANT_A"); // Issue #824: the seed context must be scoped to the same tenant as the FileAttachment it links a dependent row to, or FileAttachmentSaveChangesGuard rejects the seed write itself (this repo's convention: null-tenant seeding only for FK-free rows).
                 var fileA = SeedFile(seedCtx, "TENANT_A");
                 var fileB = SeedFile(seedCtx, "TENANT_B");
                 fileAId = fileA.ID;
@@ -166,6 +168,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             using (var seedCtx = new DataContext(seed, DBTypeEnum.Memory))
             {
                 seedCtx.Database.EnsureCreated();
+                seedCtx.SetTenantCode("TENANT_A"); // Issue #824: the seed context must be scoped to the same tenant as the FileAttachment it links a dependent row to, or FileAttachmentSaveChangesGuard rejects the seed write itself (this repo's convention: null-tenant seeding only for FK-free rows).
                 var fileA = SeedFile(seedCtx, "TENANT_A");
                 fileAId = fileA.ID;
                 var student = SeedStudent(seedCtx, fileA.ID);
@@ -468,6 +471,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             using (var seedCtx = new DataContext(seed, DBTypeEnum.Memory))
             {
                 seedCtx.Database.EnsureCreated();
+                seedCtx.SetTenantCode("TENANT_VICTIM"); // Issue #824: the seed context must be scoped to the same tenant as the FileAttachment it links a dependent row to, or FileAttachmentSaveChangesGuard rejects the seed write itself (this repo's convention: null-tenant seeding only for FK-free rows).
                 var victim = SeedFile(seedCtx, "TENANT_VICTIM");
                 victimFileId = victim.ID;
                 // Bypasses the VM layer entirely — simulates data that already carries a
@@ -513,6 +517,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             using (var seedCtx = new DataContext(seed, DBTypeEnum.Memory))
             {
                 seedCtx.Database.EnsureCreated();
+                seedCtx.SetTenantCode("TENANT_VICTIM"); // Issue #824: the seed context must be scoped to the same tenant as the FileAttachment it links a dependent row to, or FileAttachmentSaveChangesGuard rejects the seed write itself (this repo's convention: null-tenant seeding only for FK-free rows).
                 var victim = SeedFile(seedCtx, "TENANT_VICTIM");
                 victimFileId = victim.ID;
                 var student = SeedStudent(seedCtx, victim.ID);
@@ -566,6 +571,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             using (var seedCtx = new DataContext(seed, DBTypeEnum.Memory))
             {
                 seedCtx.Database.EnsureCreated();
+                seedCtx.SetTenantCode("TENANT_VICTIM"); // Issue #824: the seed context must be scoped to the same tenant as the FileAttachment it links a dependent row to, or FileAttachmentSaveChangesGuard rejects the seed write itself (this repo's convention: null-tenant seeding only for FK-free rows).
                 var victim = SeedFile(seedCtx, "TENANT_VICTIM");
                 victimFileId = victim.ID;
                 var student = SeedStudent(seedCtx, victim.ID);
@@ -612,6 +618,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             using (var seedCtx = new DataContext(seed, DBTypeEnum.Memory))
             {
                 seedCtx.Database.EnsureCreated();
+                seedCtx.SetTenantCode("TENANT_VICTIM"); // Issue #824: the seed context must be scoped to the same tenant as the FileAttachment it links a dependent row to, or FileAttachmentSaveChangesGuard rejects the seed write itself (this repo's convention: null-tenant seeding only for FK-free rows).
                 var victim = SeedFile(seedCtx, "TENANT_VICTIM");
                 victimFileId = victim.ID;
                 var student = SeedStudent(seedCtx, victim.ID);
@@ -651,6 +658,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             using (var seedCtx = new DataContext(seed, DBTypeEnum.Memory))
             {
                 seedCtx.Database.EnsureCreated();
+                seedCtx.SetTenantCode("TENANT_VICTIM"); // Issue #824: the seed context must be scoped to the same tenant as the FileAttachment it links a dependent row to, or FileAttachmentSaveChangesGuard rejects the seed write itself (this repo's convention: null-tenant seeding only for FK-free rows).
                 var victim = SeedFile(seedCtx, "TENANT_VICTIM");
                 victimFileId = victim.ID;
                 var student = SeedStudent(seedCtx, victim.ID);
@@ -692,6 +700,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             using (var seedCtx = new DataContext(seed, DBTypeEnum.Memory))
             {
                 seedCtx.Database.EnsureCreated();
+                seedCtx.SetTenantCode("TENANT_VICTIM"); // Issue #824: the seed context must be scoped to the same tenant as the FileAttachment it links a dependent row to, or FileAttachmentSaveChangesGuard rejects the seed write itself (this repo's convention: null-tenant seeding only for FK-free rows).
                 var victim = SeedFile(seedCtx, "TENANT_VICTIM");
                 victimFileId = victim.ID;
                 // StudentTop (plain TopBasePoco, not IPersistPoco) so DoBatchDelete takes the
@@ -740,6 +749,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             using (var seedCtx = new DataContext(seed, DBTypeEnum.Memory))
             {
                 seedCtx.Database.EnsureCreated();
+                seedCtx.SetTenantCode("TENANT_VICTIM"); // Issue #824: the seed context must be scoped to the same tenant as the FileAttachment it links a dependent row to, or FileAttachmentSaveChangesGuard rejects the seed write itself (this repo's convention: null-tenant seeding only for FK-free rows).
                 var victim = SeedFile(seedCtx, "TENANT_VICTIM");
                 victimFileId = victim.ID;
                 var student = new StudentTop

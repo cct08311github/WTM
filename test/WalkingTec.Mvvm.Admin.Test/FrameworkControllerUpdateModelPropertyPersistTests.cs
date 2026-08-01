@@ -623,5 +623,85 @@ namespace WalkingTec.Mvvm.Admin.Test
                     "#824: the positive control's edit must actually persist");
             }
         }
+
+        /// <summary>
+        /// #824 Part 2 review (PR #978 CI): the test above can no longer isolate Part 1's
+        /// UpdateModelProperty field-level gate as a mutation target — Part 2's
+        /// FileAttachmentSaveChangesGuard boundary now catches the same forged write
+        /// independently, with an equivalent message, so neutralizing Part 1 alone no longer
+        /// changes that test's observable outcome. This test disables Part 2 via its own kill
+        /// switch (<see cref="FileAttachmentSaveChangesGuard.Enabled"/> = false) for its
+        /// duration, isolating Part 1's own gate: a mutant that neutralizes it has nothing left
+        /// to catch the forged write (the edit would succeed instead of 400), while the real,
+        /// unmutated code still rejects it on Part 1's own merits.
+        /// </summary>
+        [TestMethod]
+        public void UpdateModelProperty_FileAttachmentForeignKey_Part1GateAlone_RejectedWithBoundaryGuardDisabled()
+        {
+            FileAttachmentSaveChangesGuard.Enabled = false;
+            try
+            {
+                var frameworkUserVmFullName = typeof(FrameworkUserVM).AssemblyQualifiedName!;
+                const string itCode = "u824p1";
+                Guid userId;
+                Guid fileId;
+
+                using (var seedDc = new DataContext(_seed, DBTypeEnum.Memory))
+                {
+                    var user = new FrameworkUser
+                    {
+                        ITCode = itCode,
+                        Password = "pwd12345678901234567890123456789",
+                        Name = "Issue824Part1User",
+                        IsValid = true,
+                    };
+                    seedDc.Set<FrameworkUser>().Add(user);
+
+                    var file = new FileAttachment
+                    {
+                        FileName = "victim-part1.png",
+                        FileExt = ".png",
+                        Length = 42,
+                        UploadTime = DateTime.UtcNow,
+                        TenantCode = "TENANT_VICTIM_824_PART1",
+                    };
+                    seedDc.Set<FileAttachment>().Add(file);
+                    seedDc.SaveChanges();
+                    userId = user.ID;
+                    fileId = file.ID;
+                }
+
+                using (var editDc = new DataContext(_seed, DBTypeEnum.Memory))
+                {
+                    var controller = CreateController(editDc);
+
+                    var result = controller.UpdateModelProperty(frameworkUserVmFullName, userId, "PhotoId", fileId.ToString());
+
+                    Assert.IsInstanceOfType(
+                        result,
+                        typeof(BadRequestObjectResult),
+                        "#824 Part 1 alone (boundary guard disabled): PhotoId is a FileAttachment FK and must still be rejected");
+                    var body = (result as BadRequestObjectResult)?.Value?.ToString() ?? string.Empty;
+                    StringAssert.Contains(
+                        body,
+                        "FileAttachment foreign key",
+                        "#824 Part 1 alone: the 400 must come from Part 1's own field-level gate — " +
+                        "this test uses a REAL, persisted (just cross-tenant) FileAttachment id " +
+                        "specifically so a neutralized Part 1 gate, with the boundary guard ALSO " +
+                        $"disabled, would let the write through to a genuine success, never a " +
+                        $"differently-worded 400. Got body: {body}");
+                }
+
+                using (var verifyDc = new DataContext(_seed, DBTypeEnum.Memory))
+                {
+                    var reloaded = verifyDc.Set<FrameworkUser>().Single(u => u.ID == userId);
+                    Assert.IsNull(reloaded.PhotoId, "#824 Part 1 alone: the rejected PhotoId edit must not be persisted");
+                }
+            }
+            finally
+            {
+                FileAttachmentSaveChangesGuard.Enabled = true;
+            }
+        }
     }
 }

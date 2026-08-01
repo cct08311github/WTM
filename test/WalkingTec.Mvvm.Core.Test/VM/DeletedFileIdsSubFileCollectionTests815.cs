@@ -94,6 +94,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             using (var seedCtx = new DataContext(seed, DBTypeEnum.Memory))
             {
                 seedCtx.Database.EnsureCreated();
+                seedCtx.SetTenantCode("TENANT_VICTIM"); // Issue #824: scope the seed context to the file's own tenant so seeding the dependent ProductAttachment does not itself trip FileAttachmentSaveChangesGuard.
                 var victim = SeedFile(seedCtx, "TENANT_VICTIM");
                 victimFileId = victim.ID;
                 var product = SeedProduct(seedCtx);
@@ -138,6 +139,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             using (var seedCtx = new DataContext(seed, DBTypeEnum.Memory))
             {
                 seedCtx.Database.EnsureCreated();
+                seedCtx.SetTenantCode("TENANT_VICTIM"); // Issue #824: scope the seed context to the file's own tenant so seeding the dependent ProductAttachment does not itself trip FileAttachmentSaveChangesGuard.
                 var victim = SeedFile(seedCtx, "TENANT_VICTIM");
                 victimFileId = victim.ID;
                 var product = SeedProduct(seedCtx);

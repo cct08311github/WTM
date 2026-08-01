@@ -570,26 +570,52 @@ namespace WalkingTec.Mvvm.Core
 
         public override int SaveChanges()
         {
+            // Issue #824 (cross-vendor review of PR #978): the guard must NOT be called here.
+            // DbContext.SaveChanges() (the base class's own no-arg implementation, entered via
+            // base.SaveChanges() below) internally calls SaveChanges(acceptAllChangesOnSuccess:
+            // true) as an ordinary (non-base-qualified) instance method call — which, because
+            // SaveChanges(bool) is virtual and WE override it below, undergoes normal virtual
+            // dispatch and re-enters EmptyContext.SaveChanges(bool), NOT DbContext's own bool-arg
+            // implementation. So a caller of this no-arg overload already reaches
+            // SaveChanges(bool) exactly once, further down this same call stack; calling the guard
+            // here too would run it — and its batched resolution query — TWICE per save. Confirmed
+            // empirically (SaveChanges_NoArgOverload_QueriesResolutionExactlyOnce, Core.Test) by
+            // counting FileAttachment resolution SELECTs via a DbCommandInterceptor.
             ApplyAuditFields();
             return base.SaveChanges();
         }
 
         public override int SaveChanges(bool acceptAllChangesOnSuccess)
         {
+            // Issue #824: the guard runs FIRST, before ApplyAuditFields — see
+            // FileAttachmentSaveChangesGuard's class doc comment for why this is placed on
+            // EmptyContext's own SaveChanges overrides (not a SavingChanges interceptor) and why
+            // it must come before any other SaveChanges-time logic in this method. This is the
+            // ONLY override that calls the guard — see the no-arg overload's comment above for why
+            // the other three overloads must not duplicate it.
+            FileAttachmentSaveChangesGuard.Guard(this);
             ApplyAuditFields();
             return base.SaveChanges(acceptAllChangesOnSuccess);
         }
 
-        public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+        public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
         {
+            // Issue #824: see SaveChanges(bool)'s comment above — this is the async twin that
+            // actually owns the guard call, for the exact same virtual-redispatch reason
+            // documented on SaveChangesAsync(CancellationToken) below.
+            await FileAttachmentSaveChangesGuard.GuardAsync(this, cancellationToken).ConfigureAwait(false);
             ApplyAuditFields();
-            return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+            return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken).ConfigureAwait(false);
         }
 
-        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
         {
+            // Issue #824: see SaveChanges()'s comment above — DbContext.SaveChangesAsync(CancellationToken)
+            // internally calls SaveChangesAsync(acceptAllChangesOnSuccess: true, cancellationToken),
+            // which virtual-dispatches back into our SaveChangesAsync(bool, CancellationToken)
+            // override above. The guard must not run here too.
             ApplyAuditFields();
-            return base.SaveChangesAsync(cancellationToken);
+            return await base.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         }
 
         public void EnsureCreate()

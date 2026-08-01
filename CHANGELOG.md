@@ -2,7 +2,137 @@
 
 ## [10.21.0] - 2026-07-31
 
-### Fixed — LookupCache RefreshAsync: DistributedLookupCacheService's timeout bypass, LookupCacheService's missing registry check (#943, #944)
+### Security — `EmptyContext.SaveChanges`/`SaveChangesAsync` guard against forged `FileAttachment` foreign keys, closing the five remaining #824 write-path sinks + a cross-vendor-review fix to the Part 1 (#849) predicate itself (#824 Part 2)
+
+**Full mechanics, the four cross-vendor review findings and how each was addressed, and the test
+evidence are in `docs/production-readiness.md`'s three new "#824 Part 2" rows — this entry does
+not repeat or exceed those claims.**
+
+Five rounds of per-sink gates (#815's `BaseCRUDVM.DoAddPrepare`/`DoEditPrepare`; #849's
+`_FrameworkController.UpdateModelProperty`) each found a NEW code path that structurally bypassed
+the previous ones and let an authenticated caller write a `FileAttachment`-typed foreign key
+pointing at another tenant's row. `FileAttachmentSaveChangesGuard` is the architectural fix Issue
+#824 itself asked for: one decision point, on `EmptyContext`'s own `SaveChanges`/`SaveChangesAsync`
+(not a `SavingChanges` interceptor — WTM commonly constructs contexts by reflection with no DI
+container involved, so a DI-registered interceptor would fail open silently), that every
+EF-tracked write through an `EmptyContext`-derived context passes through. Closes the five sinks
+Part 1 left open: `BasePagedListVM.UpdateEntityList`, `BaseBatchVM.DoBatchEdit`/`Async`,
+`BaseImportVM.BatchSaveData`'s Excel column mapping, a grandchild `IEnumerable<ISubFile>`
+collection two levels below the root `TModel`, and a direct `DbSet.Add`/`Update` writer.
+
+**Cross-vendor review Finding 1 (HIGH, fixed in a separate commit, and predates Part 2):** the
+shared predicate both Part 1 and Part 2 consume (`DCExtension.IsFileAttachmentForeignKeyProperty`)
+compared the FK relationship's principal type against `FileAttachment` with exact-type equality,
+so a relationship whose principal is a class DERIVED from `FileAttachment` (a downstream TPH/TPT
+subclass) was invisible to it — a hole in the ALREADY-SHIPPED `UpdateModelProperty` gate since it
+shipped, not something Part 2 introduced. Fixed with `Type.IsAssignableFrom`.
+
+**Kill switch:** `FileAttachmentSaveChangesGuard.Enabled`, a plain static `bool` (not
+`IOptions<T>` — reflection-constructed contexts have no DI to source one from), **default
+`true`**. Turning it off reopens #824: every one of the six write-path sinks above, plus the
+`UpdateModelProperty` sink Part 1 already closed independently of this switch, once again accepts
+a `FileAttachment`/`ISubFile.FileId` reference the caller cannot resolve for their own tenant.
+
+Rejection is a dedicated `UnresolvableFileAttachmentReferenceException : InvalidOperationException`
+— deliberately **not** `DbUpdateException`, so existing catch blocks that treat that type as a
+transient store failure never misclassify this security decision as one. The message says only
+"not resolvable in current scope" and never states whether the id exists under a different
+tenant.
+
+**Narrowing (see Finding 3 in production-readiness.md for the full statement):** this covers every
+EF-tracked write through an `EmptyContext`-derived `DbContext`'s own `SaveChanges`/
+`SaveChangesAsync` — not every write path, and not every `IDataContext` implementation. See
+Migration below for the one production consequence this narrowing has today.
+
+Tests: `test/WalkingTec.Mvvm.Core.Test` 5001 → 5015 (3 Finding-1 predicate tests + 11 guard
+tests: one regression test per named bypass path, bisected against the pre-guard tree and
+confirmed RED before/GREEN after; must-not-reject controls for a same-tenant legitimate write and
+a same-unit-of-work-created attachment; a kill-switch demonstration; and a Finding 2 mutation test
+proving — not merely asserting — that a `SavingChanges` interceptor mutating a trusted attachment
+entry after the guard runs defeats it, with an explicit statement that no in-tree production
+interceptor does this). `test/WalkingTec.Mvvm.Api.Test` 102 passed + 1 skipped, unchanged from
+baseline. Of nine pre-existing #815/#828/#875 test fixtures affected, seven needed a one-line
+seed-context tenant fix; two needed a second, larger change as well — see production-readiness.md's
+test-evidence row for the full breakdown and for why these are test fixes, not a guard weakening.
+
+### Migration
+
+- **A background job that writes a `FileAttachment`-typed foreign key must construct its
+  `IDataContext` scoped to that entity's own tenant — `Wtm.CreateDC(currentTenant: "...")` —
+  before this guard's resolution query runs, or the write will be rejected even when the FK is
+  legitimate.** This is the same rule #899 already established for the WorkFlow module's read
+  side (`WalkingTec.Mvvm.WorkFlow.ServiceCollectionExtensions.ResolveDataContext` stamps the
+  caller's tenant via `SetTenantCode` after `CreateDC()` specifically so its own `ITenant` query
+  filter resolves correctly) — the guard's resolution query uses the exact same `ITenant` filter,
+  so a context left at its default (usually null) tenant cannot resolve a real, same-tenant
+  `FileAttachment` any more than it could resolve a forged cross-tenant one. A background/timer
+  service that uploads or links files on a tenant's behalf without stamping that tenant onto its
+  own `DataContext` will see previously-silent writes start failing with
+  `UnresolvableFileAttachmentReferenceException` after upgrading.
+
+- **Wholesale-attach edits of legacy-polluted rows will now be rejected — loud, not silent.** WTM's
+  edit path is detached-attach (`EmptyContext.UpdateEntity` sets the whole entity to `Modified`),
+  so this guard re-validates EVERY `FileAttachment`-typed FK on an edited row against the editing
+  caller's own tenant scope, including one that did not change in this request and was written
+  before this guard existed (or by a caller from a different tenant than the file's own owner).
+  Before this guard, such a row could be edited freely as long as nothing else checked the
+  pre-existing FK's resolvability; after it, the same edit is rejected until the offending FK is
+  corrected or cleared. Run the following BEFORE upgrading to find rows this affects — adapt the
+  table/column names to every `FileAttachment`-typed foreign key your own models declare (the
+  columns EF Core's own relationship metadata resolves for you at runtime are exactly the ones
+  `DCExtension.IsFileAttachmentForeignKeyProperty`/`FileAttachmentSaveChangesGuard` check; there is
+  no single query that discovers them across an arbitrary schema without also walking that same
+  metadata):
+
+  ```sql
+  -- Repeat once per FileAttachment-typed FK column you have (e.g. Students.PhotoId,
+  -- Products.PhotoId, ...). Finds rows whose FK does not resolve to an existing FileAttachment
+  -- under that row's OWN tenant — exactly what FileAttachmentSaveChangesGuard will reject the
+  -- next time that row is wholesale-edited.
+  SELECT t.Id, t.PhotoId, t.TenantCode AS RowTenant
+  FROM YourTable t
+  LEFT JOIN FileAttachments fa
+    ON fa.Id = t.PhotoId
+   AND (fa.TenantCode = t.TenantCode OR (fa.TenantCode IS NULL AND t.TenantCode IS NULL))
+  WHERE t.PhotoId IS NOT NULL
+    AND fa.Id IS NULL;
+  ```
+
+  A row returned by this query is either (a) a genuinely forged/legacy cross-tenant reference —
+  the exact thing #824 exists to reject — or (b) a false positive from a schema whose tenant
+  comparison is not a simple equality (adapt the `ON` clause accordingly). Either way, resolve it
+  (clear the FK, or re-point it at a same-tenant file) before the row is next edited through any
+  path that calls `SaveChanges`, or the edit will fail loud instead of the silent acceptance it had
+  before this guard shipped.
+
+**Adversarial review of PR #978 (8 findings, all addressed — 5 fixed, 3 disclosed via a throttled
+log or a corrected comment rather than fixed): full reasoning, what was fixed vs. disclosed and
+why, and the empirical evidence for each are in `docs/production-readiness.md`'s two new rows —
+this entry does not repeat or exceed those claims.** In outline: the guard's own FK-shape map now
+consumes the same shared predicate `UpdateModelProperty`'s gate uses (was a second, driftable
+copy); the guard no longer runs twice per `SaveChanges()` call (`DbContext`'s own virtual-dispatch
+redispatch through `SaveChanges(bool)`); every rejection and every resolution-query failure now
+logs a throttled warning (there was previously no server-side signal at all, and `BaseBatchVM`'s
+own exception handling silently discards the message on two of the six original sinks); an
+over-rejection of an *unchanged* `FileAttachment` FK on a non-`ITenant` row or a null-tenant file
+is fixed by generalizing the trust-the-persisted-value precedent #815 already established, down to
+this boundary; a caller-cancellation no longer gets laundered into a security-shaped rejection;
+`Table-Per-Concrete-Type` mapping no longer defeats the same-unit-of-work trust exception; a
+`FileAttachment`-principal FK whose own CLR type is not `Guid` (only reachable via a non-standard
+`HasPrincipalKey` configuration nothing in this repository uses today) is now disclosed via a
+one-time log instead of silently unenforced; and two stale comments/claims (one in a test file, one
+in this CHANGELOG's own prior wording above) are corrected.
+
+**One of this PR's own mutants was invalidated by this PR's own later edits to the same file**
+(`fileattachmentguard824-reject-condition-neutralize`, anchored on the guard's synchronous
+reject condition) — `git apply --check` started failing once the Finding 1 and Finding 3 fixes
+above shifted its target lines, and CI caught it as `INVALID_MUTANT_PATCH_DID_NOT_APPLY`. Patch
+regenerated against the final committed source (temp-edit + `git diff` + revert, this repo's
+standard method — never hand-written) and re-verified `KILLED`/`GATE: PASS` twice against the same
+tree the rest of this PR ships as; see production-readiness.md's row on this for the same-behaviour
+argument and the process lesson.
+
+
 
 Both are the two follow-up issues #804's own fix explicitly filed rather than silently fixing inline. **Full defect analysis, code comparison against #804, RED-before-fix messages, negative controls, mutation-gate verdicts, and what was deliberately left out of scope are in `docs/production-readiness.md` § "LookupCache RefreshAsync 的兩個姊妹缺陷：#943（DistributedLookupCacheService 逾時繞過）與 #944（LookupCacheService 遺漏 registry 檢查）" — this entry does not repeat or exceed those claims.**
 

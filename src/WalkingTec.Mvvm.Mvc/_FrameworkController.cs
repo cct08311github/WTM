@@ -23,6 +23,7 @@ using SixLabors.ImageSharp.Drawing.Processing;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.Exceptions;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Models;
 using WalkingTec.Mvvm.Core.Services;
@@ -787,6 +788,37 @@ namespace WalkingTec.Mvvm.Mvc
             catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException)
             {
                 vm.MSD?.AddModelError(" ", Wtm.Localizer?["Sys.ConcurrencyConflict"] ?? "The record was modified by another user. Please reload and try again.");
+            }
+            catch (UnresolvableFileAttachmentReferenceException)
+            {
+                // #824 Part 2: the line above only ever throws this when the field being edited
+                // is itself a FileAttachment FK whose posted id the FileAttachmentSaveChangesGuard
+                // boundary rejected (the field-level pre-check above this method already refuses
+                // EVERY FileAttachment FK unconditionally, so in normal operation this branch is a
+                // backstop, not the primary path — but it exists precisely so a future caller that
+                // reaches SaveChanges some other way still gets the SAME distinguishable outcome
+                // instead of falling into the generic catch below). A caught-and-generic
+                // "Sys.EditFailed" here would be indistinguishable from any other edit failure
+                // (a genuine DB error, a timeout, ...) — the same "error state collapsing into a
+                // value the caller cannot tell apart from another" shape this codebase has hit
+                // before. The message is a plain string, not routed through Wtm.Localizer, on
+                // purpose and matching the field-level gate above (also a plain string): the
+                // Wtm.Localizer?["key"] ?? "fallback" pattern used elsewhere in this same method
+                // (Sys.ConcurrencyConflict/Sys.EditFailed) only falls back to its literal text
+                // when Wtm.Localizer itself is null — IStringLocalizer's indexer never returns
+                // null for a key it cannot resolve, it returns the KEY NAME itself (confirmed
+                // empirically: the pre-fix "Sys.EditFailed" body this whole investigation started
+                // from was literally the resource key, not its "Edit failed" fallback text), so a
+                // ??-fallback after that indexer is unreachable dead code whenever a localizer IS
+                // configured but simply lacks this key — exactly the shape the test harness hits.
+                // Text is copied close to the field-level gate above ("FileAttachment foreign
+                // key") specifically so a caller cannot tell whether the rejection came from that
+                // unconditional field-level check or from this SaveChanges-level backstop — both
+                // must look identical to the caller, since distinguishing them would itself be a
+                // signal. It stays tenant-silent, matching UnresolvableFileAttachmentReferenceException's
+                // own message contract: it never states whether the posted id exists at all, or
+                // under a different tenant.
+                vm.MSD?.AddModelError(" ", "This field is a FileAttachment foreign key reference that could not be resolved and was rejected.");
             }
             catch
             {

@@ -124,6 +124,9 @@ namespace WalkingTec.Mvvm.Core.Test.VM
 
             using (var ctx = new ShadowFkContext(ConnectionString, DBTypeEnum.SQLite))
             {
+                // Issue #824: scope the seed context to legitFileId's own tenant, or seeding the
+                // child (which references it) trips FileAttachmentSaveChangesGuard itself.
+                ctx.SetTenantCode("TENANT_EDITOR");
                 legitFileId = SeedFile(ctx, "TENANT_EDITOR").ID;
                 victimFileId = SeedFile(ctx, "TENANT_VICTIM").ID;
 

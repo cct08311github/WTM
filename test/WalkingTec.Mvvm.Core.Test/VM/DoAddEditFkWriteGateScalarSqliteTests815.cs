@@ -241,6 +241,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             Guid productId, existingChildId, legitFileId, victimFileId;
             using (var ctx = new ProductSubFileContext(ConnectionString, DBTypeEnum.SQLite))
             {
+                ctx.SetTenantCode("TENANT_EDITOR"); // Issue #824: scope the seed context to the file(s)' own tenant so seeding a dependent row that references them does not itself trip FileAttachmentSaveChangesGuard.
                 var legit = SeedFile(ctx, "TENANT_EDITOR");
                 legitFileId = legit.ID;
                 var victim = SeedFile(ctx, "TENANT_VICTIM");
@@ -257,11 +258,32 @@ namespace WalkingTec.Mvvm.Core.Test.VM
                 existingChildId = child.ID;
             }
 
-            var attackerDc = new ProductSubFileContext(ConnectionString, DBTypeEnum.SQLite);
-            attackerDc.SetTenantCode("TENANT_ATTACKER");
+            // Issue #824: this is the row's OWN legitimate editor (same tenant as legitFileId,
+            // matching the seed above) attempting to sneak a forged cross-tenant FileId into ONE
+            // sub-item of the SAME request that also contains their own legitimate scalar rename
+            // — #815's restore-in-place is what this test proves.
+            //
+            // Corrected (#824 adversarial review of PR #978, Finding 8(a)): an earlier version of
+            // this comment claimed a caller from a genuinely DIFFERENT tenant than legitFileId's
+            // owner "cannot reach this code path" because FileAttachmentSaveChangesGuard's own
+            // re-resolution of the restored value "would reject the whole edit for such a caller".
+            // That described the guard's PRE-Finding-4 behaviour, which re-validated every
+            // Modified-and-IsModified candidate unconditionally. Finding 4 (this class's own
+            // FileAttachmentSaveChangesGuard.cs) generalized #815's own "trust an unchanged,
+            // already-persisted value" precedent to the guard's boundary: it now SKIPS
+            // re-validating a Modified candidate whose posted value already matches what is
+            // persisted, regardless of the editing caller's tenant. The restored value here IS
+            // exactly that row's own persisted value, so this scenario is now exempted the same
+            // way — empirically verified, not merely reasoned about, by
+            // DoEdit_MixedRepost_ExistingChildSameIdForgedFileId_DifferentTenantEditor_RestoredValueNotRevalidated
+            // below (TENANT_ATTACKER as the editing caller): the edit succeeds. Neither Product
+            // nor ProductAttachment is ITenant, so #824's own threat model — a NEW cross-tenant
+            // reference — is not implicated: the file reference itself never changes.
+            var editorDc = new ProductSubFileContext(ConnectionString, DBTypeEnum.SQLite);
+            editorDc.SetTenantCode("TENANT_EDITOR");
             var vm = new BaseCRUDVM<Product>
             {
-                Wtm = MockWtmContext.CreateWtmContext(attackerDc, "attacker")
+                Wtm = MockWtmContext.CreateWtmContext(editorDc, "editor")
             };
             vm.Entity = new Product
             {
@@ -303,12 +325,80 @@ namespace WalkingTec.Mvvm.Core.Test.VM
         }
 
         [TestMethod]
+        [Description("#824 Finding 8(a) (adversarial review of PR #978): the SAME mixed-repost restore-in-place as the test above, but the editing caller is a DIFFERENT tenant than legitFileId's owner. Replaces a superseded comment on the test above that claimed this shape 'would reject the whole edit' under a NEW, broader #824 rejection 'exercised separately (not by this test)' -- that claim described pre-Finding-4 behaviour and is false post-Finding-4: FileAttachmentSaveChangesGuard now skips re-validating a Modified candidate whose posted value already matches what is PERSISTED for that row, and the restored value here (legitFileId) is exactly that row's own persisted value -- unchanged by this edit, regardless of which tenant the caller belongs to. Neither Product nor ProductAttachment is ITenant, so #824's own threat model (a NEW cross-tenant reference) is not implicated: the file reference itself never changes.")]
+        public void DoEdit_MixedRepost_ExistingChildSameIdForgedFileId_DifferentTenantEditor_RestoredValueNotRevalidated()
+        {
+            Guid productId, existingChildId, legitFileId, victimFileId;
+            using (var ctx = new ProductSubFileContext(ConnectionString, DBTypeEnum.SQLite))
+            {
+                ctx.SetTenantCode("TENANT_EDITOR");
+                var legit = SeedFile(ctx, "TENANT_EDITOR");
+                legitFileId = legit.ID;
+                var victim = SeedFile(ctx, "TENANT_VICTIM");
+                victimFileId = victim.ID;
+
+                var product = new Product { Name = "Widget" };
+                ctx.Set<Product>().Add(product);
+                ctx.SaveChanges();
+                productId = product.ID;
+
+                var child = new ProductAttachment { ProductId = productId, FileId = legitFileId, Order = 1 };
+                ctx.Set<ProductAttachment>().Add(child);
+                ctx.SaveChanges();
+                existingChildId = child.ID;
+            }
+
+            // A DIFFERENT tenant than legitFileId's own owner (TENANT_EDITOR) -- the shape the
+            // superseded comment on the test above described as triggering "a NEW, broader
+            // rejection". #815's restore-in-place reverts the child's FileId to its own persisted
+            // value (legitFileId) BEFORE this reaches FileAttachmentSaveChangesGuard, by reading
+            // the row's OWN prior state directly, not through a tenant-scoped query -- so this
+            // restore happens the same way regardless of the editing caller's tenant.
+            var editorDc = new ProductSubFileContext(ConnectionString, DBTypeEnum.SQLite);
+            editorDc.SetTenantCode("TENANT_ATTACKER");
+            var vm = new BaseCRUDVM<Product>
+            {
+                Wtm = MockWtmContext.CreateWtmContext(editorDc, "editor")
+            };
+            vm.Entity = new Product
+            {
+                ID = productId,
+                Name = "Renamed",
+                Attachments = new List<ProductAttachment>
+                {
+                    new ProductAttachment { ID = existingChildId, FileId = victimFileId, Order = 1 }
+                }
+            };
+
+            vm.DoEdit(updateAllFields: true);
+
+            Assert.IsFalse(vm.IsConcurrencyConflict, "#824 Finding 8(a): must not surface as a concurrency conflict");
+            Assert.IsTrue(vm.MSD == null || vm.MSD.Count == 0,
+                "#824 Finding 8(a): the restored value equals what was already persisted for this " +
+                "row, so FileAttachmentSaveChangesGuard's Finding 4 narrowing skips re-validating " +
+                "it -- this must succeed, not reject, regardless of the editing caller's own " +
+                "tenant. (This documents current, intentional behaviour; it is not asserting this " +
+                "is the only correct design -- see the class's own doc comment on Finding 4's " +
+                "generalization of #815's precedent.)");
+
+            using var checkCtx = new ProductSubFileContext(ConnectionString, DBTypeEnum.SQLite);
+            var reloadedProduct = checkCtx.Set<Product>()
+                .Include(x => x.Attachments)
+                .First(x => x.ID == productId);
+            Assert.AreEqual("Renamed", reloadedProduct.Name);
+            var reloadedChild = reloadedProduct.Attachments!.Single();
+            Assert.AreEqual(legitFileId, reloadedChild.FileId,
+                "#824 Finding 8(a): the child's ORIGINAL FileId must be restored, never the forged victim FileId");
+        }
+
+        [TestMethod]
         [Description("#815 sixth round async: same mixed re-post scenario as above, through DoEditAsync")]
         public async Task DoEditAsync_MixedRepost_ExistingChildSameIdForgedFileId_ChildRowSurvivesWithOriginalFileId()
         {
             Guid productId, existingChildId, legitFileId, victimFileId;
             using (var ctx = new ProductSubFileContext(ConnectionString, DBTypeEnum.SQLite))
             {
+                ctx.SetTenantCode("TENANT_EDITOR"); // Issue #824: scope the seed context to the file(s)' own tenant so seeding a dependent row that references them does not itself trip FileAttachmentSaveChangesGuard.
                 var legit = SeedFile(ctx, "TENANT_EDITOR");
                 legitFileId = legit.ID;
                 var victim = SeedFile(ctx, "TENANT_VICTIM");
@@ -325,11 +415,13 @@ namespace WalkingTec.Mvvm.Core.Test.VM
                 existingChildId = child.ID;
             }
 
-            var attackerDc = new ProductSubFileContext(ConnectionString, DBTypeEnum.SQLite);
-            attackerDc.SetTenantCode("TENANT_ATTACKER");
+            // Issue #824: see the matching comment in the sync test above — this is the row's own
+            // legitimate editor (same tenant as legitFileId), not a genuinely cross-tenant caller.
+            var editorDc = new ProductSubFileContext(ConnectionString, DBTypeEnum.SQLite);
+            editorDc.SetTenantCode("TENANT_EDITOR");
             var vm = new BaseCRUDVM<Product>
             {
-                Wtm = MockWtmContext.CreateWtmContext(attackerDc, "attacker")
+                Wtm = MockWtmContext.CreateWtmContext(editorDc, "editor")
             };
             vm.Entity = new Product
             {

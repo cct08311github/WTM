@@ -2167,8 +2167,15 @@ namespace WalkingTec.Mvvm.Core
         /// (timeout, connection drop, a future EF/provider change, ...) safe. That safety comes
         /// from <see cref="RejectUnresolvableFileAttachmentReferences"/> rejecting the whole
         /// request when resolution does not succeed, regardless of why.
+        /// <para>
+        /// Issue #824: kept here as an alias of <see cref="DCExtension.FileAttachmentResolutionBatchSize"/>
+        /// — the ACTUAL batching now lives in that shared helper (see
+        /// <see cref="ResolveFileAttachmentIdsForCaller"/>'s doc comment) so this VM-level gate and
+        /// <see cref="FileAttachmentSaveChangesGuard"/>'s SaveChanges-level backstop never drift
+        /// on batch size.
+        /// </para>
         /// </summary>
-        private const int FileAttachmentResolutionBatchSize = 500;
+        private const int FileAttachmentResolutionBatchSize = DCExtension.FileAttachmentResolutionBatchSize;
 
         /// <summary>
         /// Issue #828: the result of a batched <see cref="FileAttachment"/> resolution attempt.
@@ -2195,65 +2202,46 @@ namespace WalkingTec.Mvvm.Core
         /// cref="RejectUnresolvableFileAttachmentReferences"/> never uses it when
         /// <c>Succeeded</c> is <see langword="false"/> anyway, and keeping it around risks a
         /// future caller mistakenly treating "resolved so far" as "resolved, full stop".
+        /// <para>
+        /// Issue #824: the batched query itself now lives in
+        /// <see cref="DCExtension.ResolveFileAttachmentIds(IDataContext, ICollection{Guid})"/> —
+        /// shared with <see cref="FileAttachmentSaveChangesGuard"/>'s SaveChanges-level backstop
+        /// so the two never re-derive independent (and inevitably drifting) versions of "does
+        /// this id resolve under the caller's own tenant scope". This method is now a thin
+        /// wrapper that adapts the shared helper's outcome to this class's own
+        /// <see cref="FileAttachmentResolutionResult"/> shape and keeps this class's own log
+        /// message text unchanged.
+        /// </para>
         /// </summary>
         private FileAttachmentResolutionResult ResolveFileAttachmentIdsForCaller(ICollection<Guid> candidateIds)
         {
-            if (candidateIds.Count == 0)
+            var outcome = DC!.ResolveFileAttachmentIds(candidateIds);
+            if (!outcome.Succeeded)
             {
-                return new FileAttachmentResolutionResult(true, []);
-            }
-            var resolved = new HashSet<Guid>();
-            try
-            {
-                foreach (var batch in candidateIds.Chunk(FileAttachmentResolutionBatchSize))
-                {
-                    foreach (var id in DC!.Set<FileAttachment>().Where(x => batch.Contains(x.ID)).Select(x => x.ID))
-                    {
-                        resolved.Add(id);
-                    }
-                }
-                return new FileAttachmentResolutionResult(true, resolved);
-            }
-            catch (Exception ex)
-            {
-                Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(ex,
+                Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(outcome.Failure,
                     "RejectUnresolvableFileAttachmentReferences: batched resolution query failed for {Count} candidate FileAttachment id(s); resolution FAILED, not narrowed (Issue #828)",
                     candidateIds.Count);
-                return new FileAttachmentResolutionResult(false, []);
             }
+            return new FileAttachmentResolutionResult(outcome.Succeeded, outcome.ResolvedIds);
         }
 
         /// <summary>
         /// Async counterpart of <see cref="ResolveFileAttachmentIdsForCaller"/> — same batched
         /// queries, awaited instead of run synchronously so
         /// <c>DoAddAsync</c>/<c>DoEditAsync</c>/<c>DoDeleteAsync</c> never block a ThreadPool
-        /// thread on it.
+        /// thread on it. See <see cref="ResolveFileAttachmentIdsForCaller"/>'s doc comment for the
+        /// shared-helper rationale (Issue #824).
         /// </summary>
         private async Task<FileAttachmentResolutionResult> ResolveFileAttachmentIdsForCallerAsync(ICollection<Guid> candidateIds)
         {
-            if (candidateIds.Count == 0)
+            var outcome = await DC!.ResolveFileAttachmentIdsAsync(candidateIds);
+            if (!outcome.Succeeded)
             {
-                return new FileAttachmentResolutionResult(true, []);
-            }
-            var resolved = new HashSet<Guid>();
-            try
-            {
-                foreach (var batch in candidateIds.Chunk(FileAttachmentResolutionBatchSize))
-                {
-                    foreach (var id in await DC!.Set<FileAttachment>().Where(x => batch.Contains(x.ID)).Select(x => x.ID).ToListAsync())
-                    {
-                        resolved.Add(id);
-                    }
-                }
-                return new FileAttachmentResolutionResult(true, resolved);
-            }
-            catch (Exception ex)
-            {
-                Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(ex,
+                Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseCRUDVM")?.LogWarning(outcome.Failure,
                     "RejectUnresolvableFileAttachmentReferences: batched resolution query failed for {Count} candidate FileAttachment id(s); resolution FAILED, not narrowed (Issue #828)",
                     candidateIds.Count);
-                return new FileAttachmentResolutionResult(false, []);
             }
+            return new FileAttachmentResolutionResult(outcome.Succeeded, outcome.ResolvedIds);
         }
 
         /// <summary>

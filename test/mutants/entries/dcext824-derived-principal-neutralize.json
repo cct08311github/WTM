@@ -1,0 +1,22 @@
+{
+  "id": "dcext824-derived-principal-neutralize",
+  "kind": "security",
+  "description": "Issue #824 cross-vendor review Finding 1: neutralizes DCExtension.IsFileAttachmentPrincipal -- the ONE shared comparison both IsFileAttachmentForeignKeyProperty and FileAttachmentSaveChangesGuard.BuildMap call (extracted in the PR #978 review follow-up specifically so the two consumers cannot drift again) -- with a compile-preserving revert to the pre-fix exact-type comparison (`principalClrType == typeof(FileAttachment)`, never a deletion), so a relationship whose principal is a class DERIVED from FileAttachment (TPH/TPT subclass) is no longer recognized as an attachment FK by EITHER consumer. This entry checks it against FileAttachmentForeignKeyPredicateDerivedPrincipalTests824's TPH predicate-level test; the sibling entry dcext824-derived-principal-neutralize-guard-kill checks the SAME patch against the guard's own end-to-end SaveChanges test, proving one shared implementation protects both code paths. green_tests is the sibling unrelated-property test in the same file, proving the mutation's blast radius is scoped to the derived-principal comparison and does not collaterally affect the ID-is-not-an-attachment-FK case.",
+  "target_file": "src/WalkingTec.Mvvm.Core/Extensions/DCExtension.Schema.cs",
+  "target_symbol": "DCExtension.IsFileAttachmentPrincipal(Type?) -- the shared derived-principal IsAssignableFrom comparison, line ~250",
+  "patch": "patches/dcext824-derived-principal-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Extensions.FileAttachmentForeignKeyPredicateDerivedPrincipalTests824.IsFileAttachmentForeignKeyProperty_TphDerivedPrincipal_ReturnsTrue",
+  "red_tests": [
+    "WalkingTec.Mvvm.Core.Test.Extensions.FileAttachmentForeignKeyPredicateDerivedPrincipalTests824.IsFileAttachmentForeignKeyProperty_TphDerivedPrincipal_ReturnsTrue"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Core.Test.Extensions.FileAttachmentForeignKeyPredicateDerivedPrincipalTests824.IsFileAttachmentForeignKeyProperty_TphDerivedPrincipal_ReturnsTrue": "#824 Finding 1: a FK whose principal is a TPH-derived FileAttachment subclass \\(SignedFileTph824\\) must be recognized as an attachment FK"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first, Release build) with the mutant patch applied: 'Assert.IsTrue failed. #824 Finding 1: a FK whose principal is a TPH-derived FileAttachment subclass (SignedFileTph824) must be recognized as an attachment FK'. Confirmed identical on a second independent run_mutant.py invocation (determinism check).",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Extensions.FileAttachmentForeignKeyPredicateDerivedPrincipalTests824.IsFileAttachmentForeignKeyProperty_UnrelatedProperty_ReturnsFalse",
+  "green_tests": [
+    "WalkingTec.Mvvm.Core.Test.Extensions.FileAttachmentForeignKeyPredicateDerivedPrincipalTests824.IsFileAttachmentForeignKeyProperty_UnrelatedProperty_ReturnsFalse"
+  ]
+}

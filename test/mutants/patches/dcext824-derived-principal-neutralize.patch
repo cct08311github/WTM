@@ -1,0 +1,17 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Extensions/DCExtension.Schema.cs b/src/WalkingTec.Mvvm.Core/Extensions/DCExtension.Schema.cs
+index b6e4847dd..24e80da0e 100644
+--- a/src/WalkingTec.Mvvm.Core/Extensions/DCExtension.Schema.cs
++++ b/src/WalkingTec.Mvvm.Core/Extensions/DCExtension.Schema.cs
+@@ -247,7 +247,11 @@ namespace WalkingTec.Mvvm.Core.Extensions
+         /// </param>
+         internal static bool IsFileAttachmentPrincipal(Type? principalClrType)
+         {
+-            return principalClrType != null && typeof(FileAttachment).IsAssignableFrom(principalClrType);
++            // MUTANT test/mutants dcext824-derived-principal-neutralize: reverted
++            // (compile-preserving) to the pre-Finding-1-fix exact-type comparison, so a
++            // FileAttachment-derived principal (TPH/TPT subclass) is no longer recognized by
++            // EITHER consumer of this shared helper. See test/mutants/manifest.json.
++            return principalClrType != null && principalClrType == typeof(FileAttachment);
+         }
+ 
+         /// <summary>

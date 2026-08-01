@@ -1,0 +1,22 @@
+{
+  "id": "fileattachmentguard824-reject-condition-neutralize",
+  "kind": "security",
+  "description": "Issue #824: neutralizes FileAttachmentSaveChangesGuard.Guard's core rejection condition (compile-preserving operator: `!outcome.ResolvedIds.Contains(candidate.Id) && false`, never a deletion) so the synchronous SaveChanges guard can never reject an unresolvable FileAttachment FK candidate, while every cheap-exit and resolution-query codepath around it still runs unchanged. Checked against FileAttachmentSaveChangesGuardBypassPathTests824's direct-DbSet-writer regression test, which posts a real, persisted FileAttachment id seeded under a DIFFERENT tenant -- with the guard's reject condition neutralized, the FK constraint is satisfied (the row genuinely exists) and the write succeeds instead of throwing. green_tests is the same file's same-tenant-legitimate-write positive control, proving this mutation's blast radius is scoped to the reject decision and does not collaterally break an ordinary, resolvable FK write.",
+  "target_file": "src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs",
+  "target_symbol": "FileAttachmentSaveChangesGuard.Guard(EmptyContext) -- the per-candidate reject condition, line ~563 (was ~267 before the Finding 1 shared-predicate refactor and the Finding 3 LogRejection call shifted this file's line numbers; same condition, regenerated against the file's final committed state -- see this entry's own commit message)",
+  "patch": "patches/fileattachmentguard824-reject-condition-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.VM.FileAttachmentSaveChangesGuardBypassPathTests824.DirectDbSetAdd_ForgedCrossTenantPhotoFK_RejectedByGuard_NotPersisted",
+  "red_tests": [
+    "WalkingTec.Mvvm.Core.Test.VM.FileAttachmentSaveChangesGuardBypassPathTests824.DirectDbSetAdd_ForgedCrossTenantPhotoFK_RejectedByGuard_NotPersisted"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Core.Test.VM.FileAttachmentSaveChangesGuardBypassPathTests824.DirectDbSetAdd_ForgedCrossTenantPhotoFK_RejectedByGuard_NotPersisted": "Assert\\.ThrowsException failed\\. Expected exception type:<WalkingTec\\.Mvvm\\.Core\\.Exceptions\\.UnresolvableFileAttachmentReferenceException> but no exception was thrown"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first, Release build) with the mutant patch applied: 'Assert.ThrowsException failed. Expected exception type:<WalkingTec.Mvvm.Core.Exceptions.UnresolvableFileAttachmentReferenceException> but no exception was thrown.'. Confirmed identical on a second independent run_mutant.py invocation (determinism check). Patch regenerated after the Finding 1 shared-predicate refactor and the Finding 3 LogRejection call shifted the surrounding context lines (git apply --check was failing at :264 against the final tree, caught by CI as INVALID_MUTANT_PATCH_DID_NOT_APPLY) -- same mutated condition (`!outcome.ResolvedIds.Contains(candidate.Id) && false`) on the same statement, only the line offset and one extra line of unrelated trailing context (the Finding 3 LogRejection(candidate) call, now inside the guarded block) changed. Re-run twice against the regenerated patch on the final committed tree (HEAD c2e8ad402 and after): both KILLED with the identical assertion message above, confirming the regenerated mutant still neutralizes the same reject decision, not a different one.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.VM.FileAttachmentSaveChangesGuardBypassPathTests824.DirectDbSetAdd_SameTenantLegitimateFileFK_Persists",
+  "green_tests": [
+    "WalkingTec.Mvvm.Core.Test.VM.FileAttachmentSaveChangesGuardBypassPathTests824.DirectDbSetAdd_SameTenantLegitimateFileFK_Persists"
+  ]
+}

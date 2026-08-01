@@ -1,0 +1,22 @@
+{
+  "id": "dcext824-derived-principal-neutralize-guard-kill",
+  "kind": "security",
+  "description": "The SAME production patch as dcext824-derived-principal-neutralize (DCExtension.IsFileAttachmentPrincipal reverted to exact-type equality), checked instead against FileAttachmentSaveChangesGuardDerivedPrincipalTests824.SaveChanges_ForgedCrossTenantDerivedPrincipalFK_Tph_RejectedByGuard_NotPersisted, which drives a real SaveChanges call through FileAttachmentSaveChangesGuard.BuildMap end to end (a forged Invoice.SignedFileId pointing at a different tenant's TPH-derived SignedFileTph824 row) rather than calling the predicate directly. Included specifically because, before this predicate was shared, BuildMap had an independent, unproven copy of this comparison -- a cross-vendor review reverted BuildMap's own line and found the whole assembly (5015 tests) had nothing that caught it. This entry is that missing signal: the same mutation the predicate-level test structurally cannot see (it never calls BuildMap) IS caught here because this test reaches the guard's actual code path directly. Note the sibling TPT guard-level test is NOT a valid green_test for this mutant -- it also depends on the derived-principal comparison and would go red too, since this mutation targets the SHARED helper both TPH and TPT consumers call. green_tests is instead FileAttachmentSaveChangesGuardBypassPathTests824's direct-DbSet-writer test, whose principal is FileAttachment itself (exact type, not derived) and therefore stays correctly protected under this exact-type-only mutation -- proving the mutation's blast radius is scoped to the derived-principal comparison and does not collaterally disable the guard's ordinary, non-derived case.",
+  "target_file": "src/WalkingTec.Mvvm.Core/Extensions/DCExtension.Schema.cs",
+  "target_symbol": "DCExtension.IsFileAttachmentPrincipal(Type?) -- the shared derived-principal IsAssignableFrom comparison, line ~250",
+  "patch": "patches/dcext824-derived-principal-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.Extensions.FileAttachmentSaveChangesGuardDerivedPrincipalTests824.SaveChanges_ForgedCrossTenantDerivedPrincipalFK_Tph_RejectedByGuard_NotPersisted",
+  "red_tests": [
+    "WalkingTec.Mvvm.Core.Test.Extensions.FileAttachmentSaveChangesGuardDerivedPrincipalTests824.SaveChanges_ForgedCrossTenantDerivedPrincipalFK_Tph_RejectedByGuard_NotPersisted"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Core.Test.Extensions.FileAttachmentSaveChangesGuardDerivedPrincipalTests824.SaveChanges_ForgedCrossTenantDerivedPrincipalFK_Tph_RejectedByGuard_NotPersisted": "Assert\\.ThrowsException failed\\. Expected exception type:<WalkingTec\\.Mvvm\\.Core\\.Exceptions\\.UnresolvableFileAttachmentReferenceException> but no exception was thrown"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against a clean checkout (stale demo.db under bin/ removed first, Release build, #959) with the mutant patch applied: 'Assert.ThrowsException failed. Expected exception type:<WalkingTec.Mvvm.Core.Exceptions.UnresolvableFileAttachmentReferenceException> but no exception was thrown.'. Confirmed identical on a second independent run_mutant.py invocation (determinism check).",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Core.Test.VM.FileAttachmentSaveChangesGuardBypassPathTests824.DirectDbSetAdd_ForgedCrossTenantPhotoFK_RejectedByGuard_NotPersisted",
+  "green_tests": [
+    "WalkingTec.Mvvm.Core.Test.VM.FileAttachmentSaveChangesGuardBypassPathTests824.DirectDbSetAdd_ForgedCrossTenantPhotoFK_RejectedByGuard_NotPersisted"
+  ]
+}

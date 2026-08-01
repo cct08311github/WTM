@@ -308,6 +308,11 @@ namespace WalkingTec.Mvvm.Core.Test.VM
 
             using (var ctx = new RequiredFkGateContext(ConnectionString, DBTypeEnum.SQLite))
             {
+                // Issue #824: scope the seed context to the tenant that legitimately owns
+                // legitFileId, or FileAttachmentSaveChangesGuard rejects THIS seed write (the
+                // child ProductAttachment below references legitFileId) before the test's own
+                // attacker-forges-victimFileId scenario ever runs.
+                ctx.SetTenantCode("TENANT_ATTACKER");
                 legitFileId = SeedFile(ctx, "TENANT_ATTACKER").ID;
                 victimFileId = SeedFile(ctx, "TENANT_VICTIM").ID;
 
@@ -400,6 +405,10 @@ namespace WalkingTec.Mvvm.Core.Test.VM
 
             using (var ctx = new RequiredFkGateContext(ConnectionString, DBTypeEnum.SQLite))
             {
+                // Issue #824: see the matching comment in the ADD-path test above — the seed
+                // context must be scoped to the tenant that legitimately owns legitFileA before
+                // childA (which references it) can be seeded.
+                ctx.SetTenantCode("TENANT_EDITOR");
                 legitFileA = SeedFile(ctx, "TENANT_EDITOR").ID;
                 victimFileId = SeedFile(ctx, "TENANT_VICTIM").ID;
 

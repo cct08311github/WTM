@@ -75,6 +75,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             Guid productId, victimFileId;
             using (var ctx = new ProductSubFileContext(ConnectionString, DBTypeEnum.SQLite))
             {
+                ctx.SetTenantCode("TENANT_VICTIM"); // Issue #824: scope the seed context to the file's own tenant so seeding the dependent ProductAttachment does not itself trip FileAttachmentSaveChangesGuard.
                 var victim = SeedVictimFile(ctx);
                 victimFileId = victim.ID;
 
@@ -128,6 +129,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             Guid productId, victimFileId;
             using (var ctx = new ProductSubFileContext(ConnectionString, DBTypeEnum.SQLite))
             {
+                ctx.SetTenantCode("TENANT_VICTIM"); // Issue #824: scope the seed context to the file's own tenant so seeding the dependent ProductAttachment does not itself trip FileAttachmentSaveChangesGuard.
                 var victim = SeedVictimFile(ctx);
                 victimFileId = victim.ID;
 
