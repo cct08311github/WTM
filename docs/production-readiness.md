@@ -86,6 +86,55 @@ grep -n '^\s*- name:' .github/workflows/publish-nuget.yml | \
 
 ---
 
+## E2E 測試可靠度修正（#898/#905，2026-07-31）
+
+`test/e2e/wtm_e2e_tests.py`（36 個 TC，見上方「已驗證」的 35 pass/1 skip 數字）裡有兩類站點在改動前**不論被測行為是否真的成立都會回報 PASS**：12 個吞掉例外後直接繼續、完全沒有下游 assert 保護的 catch 分支（#898），以及 3 個安全主題測試（TC-09/10/12）全程只 print、從未 assert（#905）。CHANGELOG 對這批改動的描述不得超出以下清單——每一條斷言都在真的把對應行為打破後觀察到 FAIL，才算數。
+
+**改動前後的狀態**：
+- 用 `grep -c "_screenshot_on_failure(page, [0-9]"` 重新推導 #898 的「12 個站點」，逐一核對後**與 issue 標題吻合**：TC-04(1)、TC-24(3)、TC-25(1)、TC-26(1)、TC-27(1)、TC-28(3)、TC-29(2)。但同時發現 issue 標題沒有涵蓋的第二個問題：TC-25/26/27/28/29 這幾個函式除了那個吞例外的分支之外，**整個函式從頭到尾沒有任何 `assert`**——修好 catch 分支本身不足以讓這些測試真的可能失敗。額外找到 TC-30（零 assert，但沒有 catch 分支，不在 12 個站點清單內，其 docstring 早已引用 #898）也一併修，TC-03（CSRF，零 assert）**維持不動**——那是刻意記錄「WTM 未實作 CSRF」這個已知安全缺口的測試，不是被吞掉的例外。
+- 12 個 catch 分支全數把 `except Exception:` narrow 成 `except PlaywrightTimeoutError:`，其餘例外型別（真正的 JS crash、頁面已死等）現在會如實變成 ERROR 而不是被吞掉再繼續。
+- 每個受影響的測試函式都補上綁定該測試自己命名行為的真斷言（面板是否真的開啟、grid 是否真的渲染出資料列、表單欄位是否真的存在、分頁元件是否真的出現……），而不是只補一個「有沒有拋例外」的空殼判定。
+- TC-09（Session Fixation）重寫為真正模擬攻擊手法：登入前用探測到的驗證 cookie 名稱植入攻擊者已知的固定值，登入後斷言該值已被輪替；不是原本「印出登入前後 cookie 名稱」的空判定。
+- TC-10（Security Headers）與 TC-12（Rate Limiting）調查後發現 WTM **確實有**對應的保護機制（`WtmSecureHeadersMiddleware`/`WtmRateLimitAttribute`），但都是 opt-in、demo 沒有呼叫——因此改為斷言「目前這個已知、刻意的缺席狀態」（六個 header 全數缺席／連續 10 次錯誤登入皆乾淨回應 200 不 500），而不是斷言一個 demo 從未啟用過的保護；drift（任何一個 header 意外出現、任何一次請求變成非 200）現在會被抓到。
+
+**每個受影響測試都用「刻意打破、觀察 FAIL、還原」的方式證明過至少一條斷言真的可達**（本機 dotnet 10 + Playwright + Chromium，對著本機起的 demo app 實測，2026-07-31）：
+- TC-04：暫時把 `.analysis-field-pool` 選擇器改成不存在的字串 → `analysis-panel 不存在！`。
+- TC-09：暫時在斷言前把登入後 cookie 值強制覆寫回攻擊者植入的固定值 → `[Session Fixation] 驗證 cookie ... 登入後仍是攻擊者登入前植入的固定值`。
+- TC-10：**真的**在 demo `Startup.cs` 暫時加一行 `app.UseWtmSecureHeaders()`（真實 middleware，非測試檔本身的 mutation）、重建、重啟 demo → `[KNOWN-GAP] demo 目前未呼叫 UseWtmSecureHeaders()...預期六個安全 header 全數缺席，但實際缺席清單為 [...]`；驗證完立刻還原、重建、重啟，`git diff` 確認 `demo/` 目錄零殘留變更。
+- TC-12：暫時把其中一次請求的狀態碼結果竄改成 500 → `連續嘗試第 3 次錯誤登入時收到非預期狀態碼 500`。
+- TC-24：暫時把 API payload 的 dimension 改成一個真的會被 `/_analysis/query` 拒絕的欄位名（借用 TC-20 已驗證的 400 語意）→ `Analysis API 查詢失敗：HTTP 400`。
+- TC-25/26/27/28/29/30：各自暫時把一個代表性斷言的選擇器改成不存在的字串，逐一觀察到對應的 FAIL 訊息（分頁元件、表單欄位、grid、DataPrivilege 表單、EtlRunLog 篩選欄位、EtlJob 的 Searcher.Name、下載範本按鈕）。
+- 沒有逐一 mutation-test 每一條新增的斷言（例如 TC-24 的 dim/msr pill 數量、TC-28 的 FrameworkMenu 選單列數）——這些與已驗證過的斷言同一種形狀（`locator(...).count() > 0`，binding 到同一類已證實可達的 DOM 結構），視為同類已覆蓋，但沒有逐條重複實測，此處明講不誇大。
+- run_tests() 的彙總報告邏輯（`_compute_stats`、"Total: N \| PASS: n \| FAIL: n \| ERROR: n \| SKIP: n" 那一行、synthetic SUITE-ABORT 路徑）本次**沒有修改**；上面 11 次刻意製造的 FAIL 全部正確反映在該行的 FAIL 欄位裡（每次都手動核對過 `--tc <N>` 單獨執行的彙總輸出），沒有一次被吞掉或算成 PASS。
+
+**過程中發現、但本 PR 刻意不動的兩個既有缺陷**（皆超出 #898/#905「只改 test/e2e」的授權範圍，需要另外開 issue 才能動 `src/`）：
+1. TC-26/27/28/29/30 原本用 `page.goto()` 直接導覽到多個 grid/表單頁面（`/Student/Create`、`/_Admin/FrameworkUser/Index` 等）——實測確認這些是 PartialView-only 端點（伺服器一律回傳不含 `<html>`/`<script>` 的裸片段），繞過 layuiadmin 的 AJAX tab 載入機制會讓 `layui`/`xmSelect` 完全沒有載入（console 可觀察到 `layui is not defined`）。這是本次修復的一部分（改用 `open_grid_via_sidebar()`/`open_toolbar_dialog()`/新增的 `open_grid_via_direct_tab()`），不是遺留缺口。
+2. `/_EtlJob/Index` 的「執行記錄」自訂工具列動作有一個真實、可重現的 JS 語法錯誤——根因定位到 `src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.cs` 第 1284 行 `actionScript = $"{item.OnClickFunc}(ids,ff.GetSelectionData('{Id}'));"` 沒有把 `item.OnClickFunc` 包在括號裡，產生不合法的 IIFE（`function(ids,data){...}(ids,...)`），導致整個 `<script>` 區塊解析失敗、grid 從未渲染成功。透過 `page.goto()` 與透過 layuiadmin 真正的 tab 載入路徑都會重現，與導覽方式無關。**沒有修這個缺陷**——需要改 `src/` 下的框架程式碼，沒有對應 issue 授權；TC-29 改為只斷言「頁面路由正確、不受此 bug 影響的純 HTML 欄位存在」，grid 本身與受影響的篩選欄位維持只記錄、不斷言（KNOWN-GAP，見 TC-29 docstring 的完整根因記錄）。
+
+**仍未涵蓋、明講不假裝**：
+- TC-10/TC-12 只驗證「demo 目前刻意關閉這兩個 opt-in 保護的既知狀態沒有意外漂移」，**不驗證**這兩個 middleware 真的啟用時的行為是否正確——那需要另一個對已啟用該 middleware 的部署跑的測試，不在本次範圍。
+- TC-24 的拖放（drag-and-drop）路徑仍保留環境性容忍：逾時不直接判 FAIL（headless CI 上 Sortable.js 的已知時序脆弱性），但拖放失敗不再讓整個 TC 靜默 PASS——面板開啟、欄位存在、以及查詢結果都改為透過與拖放互相獨立的直接 API 呼叫做無條件斷言。
+- TC-03（CSRF）維持原樣：WTM 目前沒有 CSRF token 保護，這是已知、刻意記錄的缺口，不是本次修復範圍。
+- TC-29 的 EtlJob 部分是有明確根因記錄的 KNOWN-GAP（見上方），不是偷懶的軟性檢查，但也確實沒有斷言到。
+
+**可重跑的盤點指令**：
+```bash
+grep -n "_screenshot_on_failure(page, [0-9]" test/e2e/wtm_e2e_tests.py   # 12 個站點清單
+python3 -c "
+import re
+lines = open('test/e2e/wtm_e2e_tests.py').readlines()
+starts = [(i, re.match(r'async def (tc_\d+_\w+)\(page', l).group(1))
+          for i, l in enumerate(lines) if re.match(r'async def tc_\d+_\w+\(page', l)]
+starts.append((len(lines), 'EOF'))
+for idx in range(len(starts) - 1):
+    s, name = starts[idx]; e = starts[idx + 1][0]
+    n = len(re.findall(r'\n\s*assert ', ''.join(lines[s:e])))
+    print(f'{name:40s} asserts={n}')
+"
+```
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。

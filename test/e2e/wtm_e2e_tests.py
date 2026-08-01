@@ -67,6 +67,17 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
+# Issue #898: several tc_ functions below narrow a bare `except Exception:` down to
+# this specific Playwright timeout type, so a genuine unrelated failure (JS crash,
+# network error) is no longer swallowed alongside the "element not rendered yet" case
+# the catch was actually written for. NOT imported at module scope on purpose: `--list`
+# (see module docstring) must keep working with zero external dependencies beyond the
+# stdlib, and playwright is only ever guaranteed installed for an actual test run.
+# run_tests() below assigns this name into the module globals before any tc_ function
+# can execute, mirroring how it already lazy-imports `async_playwright` for the same
+# reason.
+PlaywrightTimeoutError = None
+
 # ─── 常數（優先從環境變數讀取）──────────────────────────────────────────────────
 
 BASE_URL = os.environ.get("WTM_E2E_BASE_URL", "http://localhost:52837")
@@ -209,6 +220,41 @@ async def open_grid_via_sidebar(page, lay_href_path: str):
         await page.wait_for_selector(".layui-table-tool", state="attached", timeout=TIMEOUT)
     except Exception:
         pass  # toolbar may be absent on some grids; caller decides if that's fatal
+
+
+async def open_grid_via_direct_tab(page, path: str):
+    """
+    透過 layuiadmin 的 tab 載入機制導覽到一個「側邊選單沒有連結」的 grid 頁面
+    （issue #898，TC-29 的 EtlJob/EtlRunLog）。
+
+    open_grid_via_sidebar() 需要 DOM 中已經存在一個 `a[lay-href="..."]` 元素才能
+    點擊；ETL 相關頁面不在本 demo 的側邊選單樹中（未見任何 lay-href 對應項目），
+    但 layuiadmin 的 tab 載入其實是靠事件代理達成的通用機制——demo/WalkingTec.Mvvm.
+    Demo/wwwroot/layuiadmin/lib/admin.js 對整個 body 委派了
+    `o.on("click","*[lay-href]",function(){ location.hash = correctRouter(t) })`，
+    任何帶 lay-href 屬性的元素被點擊都會觸發同一條路徑，不限於側邊選單裡的既有連結。
+    因此這裡動態建立一個帶正確 lay-href 屬性的隱藏元素並點擊它，達成與側邊選單連結
+    完全相同的載入路徑（已對照 /Student/Index 等既有側邊選單項目實測比對過，行為
+    一致：table.cache 正確填入、無 console 錯誤），只是不需要該連結真的出現在選單裡。
+    """
+    await page.evaluate(
+        """(href) => {
+            const a = document.createElement('a');
+            a.setAttribute('lay-href', href);
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+        }""",
+        path,
+    )
+    await page.wait_for_function(
+        """() => {
+            const caches = window.layui?.table?.cache || {};
+            return Object.keys(caches).length > 0;
+        }""",
+        timeout=TIMEOUT,
+    )
+    await page.wait_for_load_state("networkidle", timeout=TIMEOUT)
 
 
 async def open_toolbar_dialog(page, button_text: str):
@@ -498,12 +544,21 @@ async def tc_04_analysis_mode_page(page, **_):
     # 等待 meta API 載入和面板渲染
     try:
         await page.wait_for_selector("[id^='analysis-panel-']", state="visible", timeout=5000)
-    except Exception:
+    except PlaywrightTimeoutError:
         # issue #886 review: this wait is swallowed and the assert below can still
         # PASS if the panel shows up late, so capture the moment of the timeout —
         # otherwise a silently-slow panel leaves no trace at all. Round 2: use the
         # non-throwing helper — a capture failure here must not replace this
         # swallowed timeout with a different, unintended exception.
+        #
+        # issue #898: narrowed from bare `except Exception:` to this specific timeout
+        # type. The downstream `assert panel_count > 0` / `assert panel_visible` below
+        # still fire either way (this branch's only job is to get a screenshot before
+        # they run), but a bare catch here previously meant ANY exception — a real JS
+        # crash, a detached page, an actual bug in the panel-open code path — would
+        # silently fall through to those same two asserts instead of surfacing as
+        # itself. Anything that isn't a plain "panel not visible within 5s yet" now
+        # propagates as an ERROR instead of being swallowed and re-interpreted.
         await _screenshot_on_failure(page, 4, "03-analysis-panel-open", full_page=True)
 
     # 確認面板已顯示
@@ -686,28 +741,71 @@ async def tc_09_session_fixation(page, **_):
 
     預期結果：
     - 登入前後的 session cookie 值不同
+
+    issue #905（重寫）：原版本只印出登入前後的 cookie 名稱、完全沒有 assert——不論
+    WTM 是否真的核發全新的驗證 cookie 都一律 PASS。改寫後的版本模擬 session fixation
+    攻擊的實際手法：攻擊者在受害者登入「之前」就先把驗證 cookie 的值固定成一個攻擊者
+    已知的值（例如透過同網域下的另一個頁面、或誘騙受害者點擊帶有該值的連結），賭的是
+    「身分驗證通過後，這個攻擊者已知的固定值會變成合法憑證」。因此本測試：
+      1. 先用一個拋棄式的瀏覽器 context 跑一次完整登入，只為了取得驗證 cookie的「名稱」
+         （名稱組成見 src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs 的
+         `CookieAuthenticationDefaults.CookiePrefix + conf.CookiePre + "." +
+         AuthConstants.CookieAuthName`，不同部署可能不同，因此不寫死字串，改為執行期
+         探測），探測完立即關閉，不影響本測試主體的登入前後比較。
+      2. 在真正要測試的 page/context 上，登入「之前」用 add_cookies() 把該驗證 cookie
+         的名稱固定成一個已知的假值（模擬攻擊者的固定值植入）。
+      3. 執行真正的登入。
+      4. 斷言：登入後，每一個驗證 cookie 的值都不等於攻擊者植入的固定值——這就是
+         session fixation 防護的核心語意：身分驗證必須核發全新的憑證，不能讓登入前已
+         存在（可能是攻擊者控制）的值在登入後變成有效身分。這綁定的是「保護本身」
+         （憑證是否真的被輪替），不是任何狀態碼。
     """
     print("[TC-09] 開始執行...")
 
+    # Step 1: 用拋棄式 context 跑一次登入，只為了探測驗證 cookie 的實際名稱。
+    probe_ctx = await page.context.browser.new_context()
+    probe_page = await probe_ctx.new_page()
+    await login(probe_page)
+    probe_cookies = await probe_ctx.cookies()
+    auth_cookie_names = sorted({c["name"] for c in probe_cookies if "AspNetCore" in c["name"]})
+    await probe_ctx.close()
+    print(f"  探測到的驗證 cookie 名稱: {auth_cookie_names}")
+    assert auth_cookie_names, (
+        "無法從一次正常登入中探測到任何驗證用 cookie（.AspNetCore.* 系列）——"
+        "後續無法驗證 session fixation 防護，這本身就代表登入流程可能已經改變"
+    )
+
+    # Step 2: 在「登入前」植入攻擊者已知的固定值（session fixation 攻擊模擬）。
     await page.goto(f"{BASE_URL}/Login/Login")
     await page.wait_for_load_state("networkidle")
+    fixed_value = "e2e-fixation-probe-" + datetime.now().strftime("%H%M%S%f")
+    await page.context.add_cookies([
+        {"name": name, "value": fixed_value, "url": BASE_URL} for name in auth_cookie_names
+    ])
+    print(f"  已植入攻擊者固定值（模擬 fixation）: {fixed_value!r}")
 
-    # 取得登入前 cookies
-    cookies_before = await page.context.cookies()
-    session_before = {c["name"]: c["value"] for c in cookies_before}
-    print(f"  登入前 cookie 名稱: {list(session_before.keys())}")
-
+    # Step 3: 執行真正的登入。
     await login(page)
 
+    # Step 4: 核心斷言——登入後每個驗證 cookie 都必須是全新的值，不能是攻擊者植入的
+    # 固定值。若這裡失敗，代表身分驗證核發（或至少不排斥）了登入前已存在的憑證值，
+    # 也就是 session fixation 漏洞本身。
     cookies_after = await page.context.cookies()
-    session_after = {c["name"]: c["value"] for c in cookies_after}
-    print(f"  登入後 cookie 名稱: {list(session_after.keys())}")
+    auth_cookies_after = [c for c in cookies_after if c["name"] in auth_cookie_names]
+    print(f"  登入後驗證 cookie: {[(c['name'], len(c['value'])) for c in auth_cookies_after]}")
+    assert auth_cookies_after, (
+        "登入後找不到任何驗證用 cookie（.AspNetCore.* 系列）——"
+        f"預期名稱: {auth_cookie_names}"
+    )
+    for c in auth_cookies_after:
+        assert c["value"] != fixed_value, (
+            f"[Session Fixation] 驗證 cookie {c['name']} 登入後仍是攻擊者登入前植入的"
+            f"固定值（{fixed_value!r}）——代表身分驗證未核發全新的憑證，"
+            "攻擊者可利用登入前已知的值在受害者登入後直接取得該身分"
+        )
 
-    # 檢查是否有 auth cookie（ASP.NET Core 預設 .AspNetCore.Cookies）
-    auth_cookie = [c for c in cookies_after if "AspNetCore" in c["name"] or "cookie" in c["name"].lower()]
-    print(f"  Auth cookies: {[c['name'] for c in auth_cookie]}")
-
-    print("[TC-09] PASS -- Session Cookie 測試完成")
+    print("[TC-09] PASS -- Session Fixation 防護驗證通過"
+          "（登入後所有驗證 cookie 皆核發全新值，攻擊者植入的固定值已失效）")
 
 
 # ─── TC-10: HTTP Headers 安全測試 ────────────────────────────────────────────
@@ -722,10 +820,31 @@ async def tc_10_security_headers(page, **_):
 
     預期結果：
     - 記錄各 header 的存在狀態（部分可能未設定但不影響功能）
+
+    issue #905（重寫）：原版本只印出六個 header 的存在狀態、完全沒有 assert——不論
+    demo 回應裡有沒有這些 header 都一律 PASS。
+
+    調查後確認（2026-07-31，對照本機跑起來的 demo 實測）：WTM 其實有實作這些防護，
+    只是以 opt-in middleware 的形式存在——src/WalkingTec.Mvvm.Mvc/Helper/
+    WtmSecureHeadersMiddleware.cs + WtmSecureHeadersExtension.cs 的
+    `UseWtmSecureHeaders()`——但 demo/WalkingTec.Mvvm.Demo/Program.cs 沒有呼叫它。
+    這與 repo 的「新功能一律 opt-in、不得默默改變預設行為」原則一致，不是本測試要抓
+    的迴歸對象；也不是本測試可以單方面決定要不要幫 demo 打開的東西（那是另一個獨立
+    的決策，需要另開 issue 討論是否要把 demo 設成示範這個 middleware 的預設環境）。
+
+    #905 真正要修的是「不論結果如何都印 PASS」，不是「demo 應該要有這些 header」。
+    因此這裡改為對「目前唯一可驗證的事」設防：既然六個 header 目前的真實狀態是
+    全數缺席（demo 未啟用 UseWtmSecureHeaders()），就把這個已知狀態變成可斷言、
+    可被打破的事實——如果任何一個 header 未來意外出現（例如 middleware 被啟用、
+    或前面多了一層 reverse proxy 加上它），這個斷言會失敗，逼著維護者回來確認新出現
+    的值是不是安全的設定並更新本測試，而不是繼續靜默地宣稱「已檢查」。
     """
     print("[TC-10] 開始執行...")
 
     response = await page.goto(f"{BASE_URL}/Login/Login")
+    assert response is not None and response.status == 200, (
+        f"登入頁應正常回傳 200，實際 {response.status if response else None}"
+    )
     headers = response.headers
 
     security_headers = {
@@ -737,12 +856,33 @@ async def tc_10_security_headers(page, **_):
         "referrer-policy": "...",
     }
 
-    for header, expected in security_headers.items():
-        value = headers.get(header, "NOT SET")
-        status_icon = "OK" if value != "NOT SET" else "MISSING"
-        print(f"  {header}: {value} [{status_icon}]")
+    missing = []
+    present = {}
+    for header in security_headers:
+        value = headers.get(header)
+        if value is None:
+            missing.append(header)
+        else:
+            present[header] = value
+        status_icon = "OK" if value is not None else "MISSING"
+        print(f"  {header}: {value or 'NOT SET'} [{status_icon}]")
 
-    print("[TC-10] PASS -- Security Headers 檢查完成")
+    if present:
+        print(f"  [INFO] 以下 header 已出現於回應中：{present} —— demo 可能已啟用 "
+              "UseWtmSecureHeaders()，下面的斷言會檢查其值是否安全")
+
+    # 目前已知、刻意的 opt-in 缺席狀態：全部六個 header 都應該缺席。這個斷言把「已知
+    # 狀態」變成可被打破的事實，而不是繼續放任這個 TC 對任何結果都一律 PASS。
+    assert missing == list(security_headers.keys()), (
+        "[KNOWN-GAP] demo 目前未呼叫 UseWtmSecureHeaders()（opt-in middleware，見 "
+        "src/WalkingTec.Mvvm.Mvc/Helper/WtmSecureHeadersExtension.cs），預期六個安全 "
+        f"header 全數缺席，但實際缺席清單為 {missing}（也就是 {present} 這幾個已出現）"
+        "——若這是因為該 middleware 剛被啟用，請確認上面印出的值是否安全，"
+        "並更新本測試改為驗證其值，而不是繼續假設全數缺席"
+    )
+
+    print("[TC-10] PASS -- Security Headers 檢查完成"
+          "（已知 opt-in 缺席狀態經斷言確認，未意外出現任何 header）")
 
 
 # ─── TC-11: Cookie Flags 測試 ────────────────────────────────────────────────
@@ -792,6 +932,25 @@ async def tc_12_rate_limiting(page, **_):
     預期結果：
     - 記錄每次回應時間和狀態碼
     - 觀察是否出現 429 或延遲
+
+    issue #905（重寫）：原版本只印出每次的狀態碼、完全沒有 assert——即使某次請求
+    回傳 500 或連線中斷，這個 TC 依然一律 PASS。
+
+    調查後確認（2026-07-31，對照本機跑起來的 demo 實測）：WTM 有實作 rate limiting
+    基礎設施——src/WalkingTec.Mvvm.Mvc/Helper/WtmRateLimitAttribute.cs +
+    WtmRateLimitingExtension.cs——但 demo 沒有任何 controller 套用 [WtmRateLimit]，
+    Program.cs 也沒有呼叫 UseWtmRateLimiting()／AddWtmRateLimiting()。連續 10 次對
+    /Login/Login 送出錯誤登入，實測全部回 200，沒有任何一次 429。這與 TC-10 的
+    security headers 是同一種狀況：opt-in 功能存在，demo 沒有啟用它，是刻意的部署
+    設定，不是本測試要抓的迴歸對象。
+
+    #905 真正要修的是「不論結果如何都印 PASS」，不是「demo 應該要有 rate limiting」。
+    因此這裡改為對「目前唯一可驗證、且與此端點直接相關的不變量」設防：連續 10 次錯誤
+    登入，每一次都必須乾淨地回應 200（重新顯示登入頁），不可以有任何一次變成 500 或
+    其他非預期狀態碼——那才是目前這個端點在缺乏 rate limiting 的情況下，仍然應該維持
+    的最低保證（大量重複請求不能把登入端點打壞）。429 的出現與否維持原樣只記錄、不
+    斷言，因為那本來就是目前刻意關閉的 opt-in 行為，斷言它出現只會讓這個 TC 對現在的
+    demo 組態永遠紅燈，不會抓到任何真正的迴歸。
     """
     print("[TC-12] 開始執行...")
 
@@ -807,13 +966,24 @@ async def tc_12_rate_limiting(page, **_):
         results.append({"attempt": i, "status": response.status, "elapsed": elapsed})
         print(f"  嘗試 {i}: HTTP {response.status}, {elapsed:.2f}s")
 
-    # 檢查是否有 429 回應
+    # 檢查是否有 429 回應（目前 demo 未啟用 WtmRateLimitingExtension，opt-in，見
+    # src/WalkingTec.Mvvm.Mvc/Helper/WtmRateLimitingExtension.cs——記錄用，不斷言）。
     has_429 = any(r["status"] == 429 for r in results)
     print(f"  是否觸發 429: {has_429}")
     if not has_429:
-        print("  [WARN] 未偵測到 Rate Limiting（可能未啟用）")
+        print("  [KNOWN-GAP] 未偵測到 Rate Limiting —— demo 未啟用 opt-in 的 "
+              "WtmRateLimitingExtension，此為目前刻意的部署設定，非本測試涵蓋的迴歸")
 
-    print("[TC-12] PASS -- Rate Limiting 測試完成")
+    # 目前唯一可驗證、與此端點直接相關的不變量：連續大量錯誤登入不能把端點打壞。
+    for r in results:
+        assert r["status"] == 200, (
+            f"連續嘗試第 {r['attempt']} 次錯誤登入時收到非預期狀態碼 {r['status']}"
+            "（應為 200，重新顯示登入頁；即使沒有 rate limiting，也不應該是 500 "
+            "或其他錯誤狀態碼）"
+        )
+
+    print("[TC-12] PASS -- Rate Limiting 測試完成"
+          "（10 次連續錯誤登入皆正常回應 200；429 為已知未啟用的 opt-in 功能，僅記錄）")
 
 
 # ─── TC-13: 驗證碼圖片存在測試 ──────────────────────────────────────────────
@@ -1338,8 +1508,14 @@ async def tc_24_analysis_full_flow(page, **_):
     - 查詢後 analysis-result-section 顯示
     - 有 canvas（ECharts 圖表）或 table
 
-    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
-    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
+    issue #898（重寫）：原版本完全沒有 assert，PASS 只代表流程走完沒有拋出例外——
+    連 grid toolbar 逾時未 attach、分析按鈕逾時未出現、面板逾時未開啟這幾個路徑都各自
+    有 except 吞掉例外後悄悄印一句 WARN/SKIP 就繼續，最後仍然 PASS。改寫後把「toolbar
+    attach / 按鈕出現 / 面板開啟 / 欄位 pill 存在」都變成真斷言；只有「拖放（drag_to）
+    本身」保留環境性容忍——headless CI 上 Sortable.js 的拖放模擬確實有已知的時序脆弱性
+    （見下方 except 分支），但拖放逾時不再讓整個 TC 直接 PASS：後面透過直接呼叫
+    /_analysis/query API 驗證同一個查詢功能的部分，不受拖放是否成功影響，且現在真的有
+    斷言（之前這段只是印出 HTTP 狀態碼，不論 200 與否都不斷言）。
     """
     print("[TC-24] 開始執行...")
 
@@ -1363,110 +1539,128 @@ async def tc_24_analysis_full_flow(page, **_):
     # Replace hardcoded sleep — wait for toolbar DOM attachment as readiness signal
     try:
         await page.wait_for_selector(".layui-table-tool", state="attached", timeout=3000)
-    except Exception:
-        # issue #886 review: TC-24 has no assert on this path — a swallowed timeout
-        # here is otherwise completely invisible, so capture it. Round 2: non-throwing
-        # helper — a capture failure must not replace the swallowed timeout.
+    except PlaywrightTimeoutError:
+        # issue #886 review: capture the moment of the timeout for diagnostics.
         await _screenshot_on_failure(page, 24, "01-student-grid", full_page=True)
+    # issue #898: toolbar not attaching within budget is exactly "the feature under test
+    # is broken" (TC-04/TC-25 reach this same grid reliably within this window), not an
+    # environmental hiccup — assert instead of silently continuing to a 0-button state.
+    assert await page.locator(".layui-table-tool").count() > 0, (
+        "Student/Index grid toolbar 逾時未 attach（見上方截圖，若有）"
+    )
 
     # Step 1: 開啟分析面板
     analysis_btn = page.locator("button:has-text('分析模式')")
-    if await analysis_btn.count() > 0:
-        # Wait for the Analysis button to be fully actionable before clicking.
-        # LayUI admin layout has a CSS fade-in animation (visibility:hidden → visible)
-        # that can leave the button DOM-visible but still covered by a transitioning
-        # overlay in headless CI. Strategy: wait for visible (10s budget to account for
-        # slow /_analysis/meta API on a cold CI runner), scroll into view, then click
-        # with a generous targeted timeout rather than the global default.
-        btn_visible = False
+    btn_count = await analysis_btn.count()
+    print(f"  「分析模式」按鈕數量: {btn_count}")
+    assert btn_count > 0, "找不到「分析模式」按鈕！"
+
+    # Wait for the Analysis button to be fully actionable before clicking.
+    # LayUI admin layout has a CSS fade-in animation (visibility:hidden → visible)
+    # that can leave the button DOM-visible but still covered by a transitioning
+    # overlay in headless CI. Strategy: wait for visible (10s budget to account for
+    # slow /_analysis/meta API on a cold CI runner), scroll into view, then click
+    # with a generous targeted timeout rather than the global default.
+    try:
+        await analysis_btn.first.wait_for(state="visible", timeout=10000)
+    except PlaywrightTimeoutError:
+        await _screenshot_on_failure(page, 24, "02a-btn-not-visible", full_page=True)
+    assert await analysis_btn.first.is_visible(), (
+        "「分析模式」按鈕逾時仍未變為可見（見上方截圖，若有）"
+    )
+
+    # Explicit timeout on scroll: element is confirmed visible above, but
+    # scroll_into_view_if_needed can still timeout without its own budget (issue #475)
+    await analysis_btn.first.scroll_into_view_if_needed(timeout=10000)
+    # Targeted 30s click timeout: accounts for /meta API fetch + panel animation
+    # on a slow CI runner (CI showed "Locator.click: Timeout 20000ms exceeded"
+    # against the 20s Playwright default — issue #328).
+    await analysis_btn.first.click(timeout=30000)
+    try:
+        await page.wait_for_selector(".analysis-field-pool", state="visible", timeout=5000)
+    except PlaywrightTimeoutError:
+        await _screenshot_on_failure(page, 24, "02-panel-open")
+    panel_pool = page.locator(".analysis-field-pool")
+    assert await panel_pool.count() > 0 and await panel_pool.first.is_visible(), (
+        "點擊「分析模式」後 .analysis-field-pool 未出現/未顯示（見上方截圖，若有）"
+    )
+
+    # Step 2: 確認欄位載入
+    pills = page.locator(".analysis-pill")
+    pill_count = await pills.count()
+    print(f"  欄位 pill 數量: {pill_count}")
+    assert pill_count > 0, "分析面板已開啟，但沒有任何欄位 pill！"
+
+    # Step 3: 嘗試透過頁面操作拖放
+    # 找到維度區的 pill 和拖放區
+    dim_pills = page.locator(".analysis-pill[data-kind='Dimension']")
+    msr_pills = page.locator(".analysis-pill[data-kind='Measure']")
+    dim_zone = page.locator(".analysis-dropzone--dim")
+    msr_zone = page.locator(".analysis-dropzone--msr")
+
+    dim_count = await dim_pills.count()
+    msr_count = await msr_pills.count()
+    print(f"  Dimension pills: {dim_count}, Measure pills: {msr_count}")
+    assert dim_count > 0 and msr_count > 0, (
+        f"分析面板中找不到可拖放的 Dimension/Measure pills"
+        f"（Dimension={dim_count}, Measure={msr_count}）"
+    )
+
+    # 嘗試拖放第一個 Dimension pill 到 dim zone。這裡保留原有的環境性容忍：headless CI
+    # 上 Sortable.js 的拖放模擬有已知的時序脆弱性，逾時不直接判 FAIL——但（見下方）不再
+    # 因此讓整個 TC 靜默 PASS，查詢功能仍會透過下面的直接 API 呼叫獨立驗證一次。
+    drag_ok = True
+    try:
+        await dim_pills.first.drag_to(dim_zone)
+        await page.wait_for_load_state("networkidle")
+        await msr_pills.first.drag_to(msr_zone)
+        await page.wait_for_load_state("networkidle")
+    except PlaywrightTimeoutError as e:
+        drag_ok = False
+        print(f"  [WARN] 拖放操作逾時（可能是 Sortable.js 在此 runner 上的已知限制）: {e}")
+        await _screenshot_on_failure(page, 24, "04-drag-failed")
+
+    if drag_ok:
+        # Step 4: 點擊查詢按鈕
+        query_btn = page.locator("button:has-text('查詢'), button:has-text('執行'), .analysis-btn-query")
+        query_btn_count = await query_btn.count()
+        assert query_btn_count > 0, "拖放完成後找不到查詢按鈕（'查詢'/'執行'/.analysis-btn-query）"
+
+        # Ensure query button is actionable (drag-and-drop may trigger a loading state
+        # that covers the button briefly). Must confirm visible BEFORE
+        # scroll_into_view_if_needed to avoid #475 flake.
         try:
-            await analysis_btn.first.wait_for(state="visible", timeout=10000)
-            btn_visible = True
-        except Exception:
-            await page.screenshot(path=sc(24, "02a-btn-not-visible"), full_page=True)
+            await query_btn.first.wait_for(state="visible", timeout=10000)
+        except PlaywrightTimeoutError:
+            await _screenshot_on_failure(page, 24, "05a-query-btn-not-visible", full_page=True)
+        assert await query_btn.first.is_visible(), "查詢按鈕逾時仍未變為可見（見上方截圖，若有）"
 
-        if btn_visible:
-            # Explicit timeout on scroll: element is confirmed visible above, but
-            # scroll_into_view_if_needed can still timeout without its own budget (issue #475)
-            await analysis_btn.first.scroll_into_view_if_needed(timeout=10000)
-            # Targeted 30s click timeout: accounts for /meta API fetch + panel animation
-            # on a slow CI runner (CI showed "Locator.click: Timeout 20000ms exceeded"
-            # against the 20s Playwright default — issue #328).
-            await analysis_btn.first.click(timeout=30000)
-            try:
-                await page.wait_for_selector(".analysis-field-pool", state="visible", timeout=5000)
-            except Exception:
-                # issue #886 review: no assert follows this on the swallow path — capture
-                # it. Round 2: non-throwing helper (see _screenshot_on_failure docstring).
-                await _screenshot_on_failure(page, 24, "02-panel-open")
+        await query_btn.first.scroll_into_view_if_needed(timeout=10000)
+        await query_btn.first.click(timeout=10000)
+        try:
+            await page.wait_for_selector(
+                ".analysis-result-section, canvas, .analysis-result-section table",
+                state="visible", timeout=5000)
+        except PlaywrightTimeoutError:
+            await _screenshot_on_failure(page, 24, "06-query-result")
 
-            # Step 2: 確認欄位載入
-            pills = page.locator(".analysis-pill")
-            pill_count = await pills.count()
-            print(f"  欄位 pill 數量: {pill_count}")
+        # 確認結果區顯示
+        result_section = page.locator(".analysis-result-section")
+        result_visible = await result_section.count() > 0 and await result_section.first.is_visible()
+        print(f"  result-section visible: {result_visible}")
 
-            # Step 3: 嘗試透過頁面操作拖放
-            # 找到維度區的 pill 和拖放區
-            dim_pills = page.locator(".analysis-pill[data-kind='Dimension']")
-            msr_pills = page.locator(".analysis-pill[data-kind='Measure']")
-            dim_zone = page.locator(".analysis-dropzone--dim")
-            msr_zone = page.locator(".analysis-dropzone--msr")
+        # 確認圖表或表格
+        canvas_count = await page.locator("canvas").count()
+        table_count = await page.locator(".analysis-result-section table").count()
+        print(f"  Canvas 數量: {canvas_count}")
+        print(f"  Result table 數量: {table_count}")
+        assert result_visible, "點擊查詢後 .analysis-result-section 未顯示（見上方截圖，若有）"
+        assert canvas_count > 0 or table_count > 0, (
+            "查詢後 .analysis-result-section 已顯示，但既沒有 canvas（圖表）也沒有 table"
+        )
 
-            dim_count = await dim_pills.count()
-            msr_count = await msr_pills.count()
-            print(f"  Dimension pills: {dim_count}, Measure pills: {msr_count}")
-
-            if dim_count > 0 and msr_count > 0:
-                # 嘗試拖放第一個 Dimension pill 到 dim zone
-                try:
-                    await dim_pills.first.drag_to(dim_zone)
-                    await page.wait_for_load_state("networkidle")
-
-                    await msr_pills.first.drag_to(msr_zone)
-                    await page.wait_for_load_state("networkidle")
-
-                    # Step 4: 點擊查詢按鈕
-                    query_btn = page.locator("button:has-text('查詢'), button:has-text('執行'), .analysis-btn-query")
-                    if await query_btn.count() > 0:
-                        # Ensure query button is actionable (drag-and-drop may trigger a
-                        # loading state that covers the button briefly). Must confirm
-                        # visible BEFORE scroll_into_view_if_needed to avoid #475 flake.
-                        query_btn_visible = False
-                        try:
-                            await query_btn.first.wait_for(state="visible", timeout=10000)
-                            query_btn_visible = True
-                        except Exception:
-                            await page.screenshot(path=sc(24, "05a-query-btn-not-visible"), full_page=True)
-                        if query_btn_visible:
-                            await query_btn.first.scroll_into_view_if_needed(timeout=10000)
-                            await query_btn.first.click(timeout=10000)
-                        try:
-                            await page.wait_for_selector(".analysis-result-section, canvas, .analysis-result-section table", state="visible", timeout=5000)
-                        except Exception:
-                            # issue #886 review: no assert follows this on the swallow path — capture
-                            # it. Round 2: non-throwing helper (see _screenshot_on_failure docstring).
-                            await _screenshot_on_failure(page, 24, "06-query-result")
-
-                        # 確認結果區顯示
-                        result_section = page.locator(".analysis-result-section")
-                        if await result_section.count() > 0:
-                            visible = await result_section.first.is_visible()
-                            print(f"  result-section visible: {visible}")
-
-                        # 確認圖表或表格
-                        canvas = page.locator("canvas")
-                        table = page.locator(".analysis-result-section table")
-                        print(f"  Canvas 數量: {await canvas.count()}")
-                        print(f"  Result table 數量: {await table.count()}")
-                except Exception as e:
-                    print(f"  拖放操作失敗（可能是 Sortable.js 限制）: {e}")
-                    await page.screenshot(path=sc(24, "04-drag-failed"))
-            else:
-                print("  [WARN] 無法找到 Dimension/Measure pills")
-    else:
-        print("  [SKIP] 找不到分析模式按鈕")
-
-    # 也透過 API 驗證一次
+    # 也透過 API 驗證一次——這段與上面的 UI 拖放互相獨立，不受 Sortable.js flake 影響。
+    # issue #898：這段先前完全沒有斷言，HTTP 狀態碼不論是不是 200 都只是印出來。
     payload = {
         "listVmType": STUDENT_LIST_VM,
         "dimensions": ["Sex"],
@@ -1477,12 +1671,15 @@ async def tc_24_analysis_full_flow(page, **_):
         data=json.dumps(payload),
         headers={"Content-Type": "application/json"},
     )
+    body = await resp.text()
     print(f"  API 查詢: HTTP {resp.status}")
-    if resp.status == 200:
-        data = json.loads(await resp.text())
-        print(f"  API rows: {len(data.get('rows', []))}")
+    assert resp.status == 200, f"Analysis API 查詢失敗：HTTP {resp.status}: {body[:200]}"
+    data = json.loads(body)
+    assert "rows" in data, f"Analysis API 回應缺少 rows 欄位: {body[:200]}"
+    print(f"  API rows: {len(data.get('rows', []))}")
 
-    print("[TC-24] PASS -- Analysis 完整流程檢查完成")
+    print("[TC-24] PASS -- Analysis 完整查詢流程驗證通過"
+          + ("" if drag_ok else "（UI 拖放逾時，已改用 API 獨立驗證查詢功能）"))
 
 
 # ─── TC-25: Grid 分頁功能 ───────────────────────────────────────────────────
@@ -1498,6 +1695,11 @@ async def tc_25_grid_paging(page, **_):
     預期結果：
     - .layui-table-page 存在
     - 分頁選擇器（每頁 N 筆）可用
+
+    issue #898（重寫）：原版本完全沒有 assert——分頁元件存不存在、select 有沒有
+    option、表格有沒有任何一列，全部只是印出來，一律 PASS。demo 的 Student 種子
+    資料固定有 250 筆（遠大於預設每頁筆數），因此分頁元件、每頁筆數 select 與非零
+    表格列數在正常情況下都是必然出現、可以斷言的行為，不是「可能有可能沒有」。
     """
     print("[TC-25] 開始執行...")
 
@@ -1522,47 +1724,49 @@ async def tc_25_grid_paging(page, **_):
     # Wait for grid rows to render
     try:
         await page.wait_for_selector(".layui-table-body tr[data-index]", state="attached", timeout=3000)
-    except Exception:
-        # issue #886 review: TC-25 has no assert on this path — capture the swallow.
-        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+    except PlaywrightTimeoutError:
+        # issue #886 review: capture the moment of the timeout for diagnostics.
         await _screenshot_on_failure(page, 25, "01-grid-initial")
 
-    # 確認分頁元件存在
-    pager = page.locator(".layui-table-page")
-    pager_count = await pager.count()
-    print(f"  .layui-table-page 數量: {pager_count}")
-
-    if pager_count > 0:
-
-        # LayUI 分頁的「每頁 N 條」select
-        page_select = page.locator(".layui-table-page select")
-        select_count = await page_select.count()
-        print(f"  分頁 select 數量: {select_count}")
-
-        # 列出 select options
-        if select_count > 0:
-            options = page.locator(".layui-table-page select option")
-            opt_count = await options.count()
-            for i in range(opt_count):
-                text = await options.nth(i).text_content()
-                val = await options.nth(i).get_attribute("value")
-                print(f"    option: {text} (value={val})")
-
-        # 確認分頁文字資訊
-        page_info = page.locator(".layui-laypage-count, .layui-table-page .layui-laypage")
-        if await page_info.count() > 0:
-            info_text = await page_info.first.text_content()
-            print(f"  分頁資訊: {info_text!r}")
-
-    else:
-        print("  [WARN] 分頁元件不存在（可能資料筆數不足）")
-
-    # 確認表格行數
+    # 確認表格行數 —— issue #898：demo 種子資料固定 250 筆 Student，這裡不再是
+    # "可能沒有資料"的軟性檢查，而是斷言 grid 真的渲染出資料列。
     rows = page.locator(".layui-table-body tr[data-index]")
     row_count = await rows.count()
     print(f"  表格行數: {row_count}")
+    assert row_count > 0, (
+        "Student/Index grid 未渲染出任何資料列（見上方截圖，若有；"
+        "demo 種子資料固定有 250 筆 Student，理論上不該是 0）"
+    )
 
-    print("[TC-25] PASS -- Grid 分頁功能檢查完成")
+    # 確認分頁元件存在 —— 250 筆資料遠超過預設每頁筆數，分頁元件必然出現。
+    pager = page.locator(".layui-table-page")
+    pager_count = await pager.count()
+    print(f"  .layui-table-page 數量: {pager_count}")
+    assert pager_count > 0, "分頁元件（.layui-table-page）不存在！"
+
+    # LayUI 分頁的「每頁 N 條」select
+    page_select = page.locator(".layui-table-page select")
+    select_count = await page_select.count()
+    print(f"  分頁 select 數量: {select_count}")
+    assert select_count > 0, "分頁「每頁 N 條」select 不存在！"
+
+    # 列出 select options，並斷言至少有一個可選項
+    options = page.locator(".layui-table-page select option")
+    opt_count = await options.count()
+    assert opt_count > 0, "分頁 select 沒有任何 option！"
+    for i in range(opt_count):
+        text = await options.nth(i).text_content()
+        val = await options.nth(i).get_attribute("value")
+        print(f"    option: {text} (value={val})")
+
+    # 確認分頁文字資訊
+    page_info = page.locator(".layui-laypage-count, .layui-table-page .layui-laypage")
+    page_info_count = await page_info.count()
+    assert page_info_count > 0, "分頁文字資訊（.layui-laypage-count）不存在！"
+    info_text = await page_info.first.text_content()
+    print(f"  分頁資訊: {info_text!r}")
+
+    print("[TC-25] PASS -- Grid 分頁功能驗證通過")
 
 
 # ─── TC-26: CRUD 完整流程 ───────────────────────────────────────────────────
@@ -1575,24 +1779,71 @@ async def tc_26_crud_flow(page, **_):
 
     Student Create → Edit → Details → Delete 完整流程。
 
-    WTM CRUD 使用 LayUI layer 彈出層載入 PartialView。
-    直接導覽到各 action URL 測試。
+    WTM CRUD 使用 LayUI layer 彈出層載入 PartialView，透過 grid toolbar 按鈕開啟
+    （見 open_grid_via_sidebar/open_toolbar_dialog 的說明：直接 page.goto() 到這些
+    PartialView URL 不會載入 framework_layui.js／jQuery／xm-select）。
 
     預期結果：
     - Create form 有所有必要欄位
     - Edit form 載入正確
     - Delete 有確認訊息
 
-    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
-    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
+    issue #898（重寫，兩個問題一起修）：
+      1. 原版本完全沒有 assert——表單欄位存不存在、grid 有沒有列、搜尋面板/按鈕
+         存不存在，全部只是印出來，一律 PASS。
+      2. 原版本用 page.goto() 直接導覽到 /Student/Create 與 /Student/Index，這是
+         PartialView-only 端點（伺服器端一律回傳裸片段，不含 <html>/<script> 標籤，
+         實測確認），繞過 layuiadmin 的 AJAX tab 載入機制會讓 layui/xmSelect 完全
+         沒有載入。表單欄位的「存在」檢查剛好因為那些欄位是純 server-rendered
+         `<input>`（不需要 JS 就能出現在 DOM 中）而沒有暴露這個問題，但 grid 那段
+         就會踩雷（.layui-table-body 恆為 0，因為 table.render() 從未真正執行）。
+         改寫後全程透過 open_grid_via_sidebar()/open_toolbar_dialog() 走 layuiadmin
+         真正的 tab 載入路徑，Create 表單也改成透過 grid toolbar 的「新建」按鈕以
+         layer 對話框開啟（與 TC-33/34/35 相同、已驗證可行的模式），而不是直接
+         page.goto()——這兩者一旦混用會互相破壞（goto() 是整頁導覽，會把
+         layuiadmin 的 shell 連同 layui.js 一起丟棄，之後任何 lay-href 側邊欄連結
+         都點不到），因此本測試全程留在同一個 shell 內。
     """
     print("[TC-26] 開始執行...")
 
     await login(page)
 
-    # Step 1: Create 表單
-    await page.goto(f"{BASE_URL}/Student/Create")
-    await page.wait_for_load_state("networkidle")
+    # Step 1: 先進入 Student/Index grid（走 layuiadmin 真正的 tab 載入路徑，而非
+    # page.goto()——理由見上方 docstring）。
+    await open_grid_via_sidebar(page, "/Student/Index")
+    try:
+        await page.wait_for_selector(".layui-table-body tr[data-index]", state="visible", timeout=3000)
+    except PlaywrightTimeoutError:
+        # issue #886 review: capture the moment of the timeout for diagnostics.
+        await _screenshot_on_failure(page, 26, "03-student-list")
+
+    rows = page.locator(".layui-table-body tr[data-index]")
+    row_count = await rows.count()
+    print(f"  Student grid 行數: {row_count}")
+    assert row_count > 0, (
+        "Student/Index grid 未渲染出任何資料列（見上方截圖，若有；"
+        "demo 種子資料固定有 250 筆 Student，理論上不該是 0）"
+    )
+
+    # Step 2: 搜尋面板與搜尋按鈕（真正渲染出的搜尋按鈕是 <a id="wtSearchBtn_...">，
+    # 不是 <button>，原版本的 `button:has-text('搜索')` 選擇器永遠不會命中任何元素——
+    # 這裡一併修正選擇器）。
+    search_panel = page.locator(".layui-form[id^='wtForm_']")
+    sp_count = await search_panel.count()
+    print(f"  搜尋面板: {sp_count}")
+    assert sp_count > 0, "Student/Index 缺少搜尋面板（.layui-form[id^='wtForm_']）"
+
+    search_btn = page.locator("[id^='wtSearchBtn_']")
+    sb_count = await search_btn.count()
+    print(f"  搜尋按鈕: {sb_count}")
+    assert sb_count > 0, "Student/Index 缺少搜尋按鈕（[id^='wtSearchBtn_']）"
+
+    # Step 3: 透過 grid toolbar 的「新建」按鈕開啟 Create 對話框。layer 外殼變為
+    # visible 不代表裡面的 PartialView 表單內容已經渲染完成，這裡沿用 TC-33/34/35
+    # 已驗證過的固定 settle wait（1500ms），不然欄位檢查會在表單內容還沒填入 DOM 時
+    # 就搶跑，誤判成欄位缺少（本次改寫時實測踩到過一次）。
+    await open_toolbar_dialog(page, "新建")
+    await page.wait_for_timeout(1500)
 
     # 確認表單欄位
     form_fields = {
@@ -1603,22 +1854,19 @@ async def tc_26_crud_flow(page, **_):
         "Entity.CellPhone": "input[name='Entity.CellPhone']",
         "Entity.Address": "input[name='Entity.Address']",
         "Entity.ZipCode": "input[name='Entity.ZipCode']",
+        "Entity.EnRollDate": "input[name='Entity.EnRollDate']",
     }
-
     for name, selector in form_fields.items():
         count = await page.locator(selector).count()
         print(f"  {name}: {'存在' if count > 0 else '缺少'}")
+        assert count > 0, f"Create 表單缺少必要欄位 {name}（{selector}）"
 
-    # Sex 是 combobox，LayUI 渲染為 hidden select + dd 列表
-    sex_select = page.locator("select[name='Entity.Sex']")
-    sex_count = await sex_select.count()
-    print(f"  Entity.Sex select: {'存在' if sex_count > 0 else '缺少'}")
+    # Sex 是 combobox，這個 WTM 版本以 xmSelect.render() 渲染（隱藏 input，不是
+    # <select>），因此這裡只記錄、不斷言型別為 select——斷言真正存在的 hidden input。
+    sex_hidden = page.locator("input[name='Entity.Sex']")
+    print(f"  Entity.Sex hidden input: {'存在' if await sex_hidden.count() > 0 else '缺少'}")
 
-    # EnRollDate 是 datetime picker
-    enroll = page.locator("input[name='Entity.EnRollDate']")
-    print(f"  Entity.EnRollDate: {'存在' if await enroll.count() > 0 else '缺少'}")
-
-    # Step 2: 填寫表單
+    # Step 4: 填寫表單
     test_id = f"e2e_test_{datetime.now().strftime('%H%M%S')}"
     await page.locator("input[name='Entity.ID']").fill(test_id)
     await page.locator("input[name='Entity.Password']").fill("test123456")
@@ -1626,29 +1874,13 @@ async def tc_26_crud_flow(page, **_):
 
     # 提交按鈕 — WTM <wt:submitbutton /> 渲染為 layui-btn 帶 lay-submit
     submit_btn = page.locator("button[lay-submit], a[lay-submit]")
-    print(f"  Submit 按鈕數量: {await submit_btn.count()}")
+    submit_count = await submit_btn.count()
+    print(f"  Submit 按鈕數量: {submit_count}")
+    assert submit_count > 0, "Create 表單缺少 submit 按鈕（[lay-submit]）"
 
-    # Step 3: 測試 Student Index Grid
-    await page.goto(f"{BASE_URL}/Student/Index")
-    await page.wait_for_load_state("networkidle")
-    # Wait for grid to render instead of hardcoded sleep
-    try:
-        await page.wait_for_selector(".layui-table-body tr[data-index]", state="visible", timeout=3000)
-    except Exception:
-        # issue #886 review: TC-26 has no assert on this path — capture the swallow.
-        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
-        await _screenshot_on_failure(page, 26, "03-student-list")
+    await close_layer_dialog(page)
 
-    # Step 4: 搜尋面板
-    search_panel = page.locator(".layui-form[id^='wtForm_']")
-    sp_count = await search_panel.count()
-    print(f"  搜尋面板: {sp_count}")
-
-    # 搜尋按鈕
-    search_btn = page.locator("button:has-text('搜索'), button:has-text('Search')")
-    print(f"  搜尋按鈕: {await search_btn.count()}")
-
-    print("[TC-26] PASS -- CRUD 流程檢查完成")
+    print("[TC-26] PASS -- CRUD 流程驗證通過")
 
 
 # ─── TC-27: 使用者管理頁面 ──────────────────────────────────────────────────
@@ -1666,49 +1898,60 @@ async def tc_27_user_management(page, **_):
     - /_Admin/FrameworkUser/Index 可存取
     - 顯示使用者 grid
 
-    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
-    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
+    issue #898（重寫，兩個問題一起修）：
+      1. 原版本完全沒有 assert——grid 存不存在、有沒有列，全部只是印出來，一律 PASS。
+      2. 原版本用 page.goto() 直接導覽到 /_Admin/FrameworkUser/Index。實測確認這是
+         PartialView-only 端點（伺服器端一律回傳裸片段，不含 <html>/<script> 標籤），
+         繞過 layuiadmin 的 AJAX tab 載入機制會讓 layui/xmSelect 完全沒有載入
+         （console 可觀察到 "layui is not defined"），.layui-table-body 因此恆為 0——
+         這正是 #898 所指的「防護/行為不存在時照樣 PASS」在另一種形式下的體現：不是
+         swallow 例外，而是斷言永遠找不到東西也無所謂，因為根本沒斷言。
+         改寫後改用 open_grid_via_sidebar()（與 TC-25/33/34/35 相同、已驗證可行的
+         路徑——/_Admin/FrameworkUser/Index 在側邊欄選單確實有 lay-href 連結）。
     """
     print("[TC-27] 開始執行...")
 
     await login(page)
 
-    # 直接導覽到 Admin User 頁面
-    # WTM 框架的 Admin area 使用 _Admin prefix
-    await page.goto(f"{BASE_URL}/_Admin/FrameworkUser/Index")
-    await page.wait_for_load_state("networkidle")
+    await open_grid_via_sidebar(page, "/_Admin/FrameworkUser/Index")
     try:
         await page.wait_for_selector(".layui-table-body", state="visible", timeout=3000)
-    except Exception:
-        # issue #886 review: TC-27 has no assert on this path (table_count==0 still
-        # PASSes below) — capture the swallow, it's the only trace we'd otherwise have.
-        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+    except PlaywrightTimeoutError:
+        # issue #886 review: capture the moment of the timeout for diagnostics.
         await _screenshot_on_failure(page, 27, "01-user-list")
 
     # 確認 grid 存在
     table = page.locator(".layui-table-body")
     table_count = await table.count()
     print(f"  .layui-table-body 數量: {table_count}")
+    assert table_count > 0, (
+        "FrameworkUser/Index grid（.layui-table-body）未渲染（見上方截圖，若有）"
+    )
 
-    if table_count > 0:
-        rows = page.locator(".layui-table-body tr[data-index]")
-        row_count = await rows.count()
-        print(f"  使用者列數: {row_count}")
+    rows = page.locator(".layui-table-body tr[data-index]")
+    row_count = await rows.count()
+    print(f"  使用者列數: {row_count}")
+    assert row_count > 0, (
+        "FrameworkUser/Index grid 未渲染出任何使用者列（demo 種子資料至少應有 admin 帳號）"
+    )
 
-        # 確認表頭
-        headers = page.locator(".layui-table-header th")
-        header_count = await headers.count()
-        print(f"  表頭欄位數: {header_count}")
-        for i in range(min(header_count, 10)):
-            text = await headers.nth(i).text_content()
-            if text.strip():
-                print(f"    欄位: {text.strip()}")
+    # 確認表頭
+    headers = page.locator(".layui-table-header th")
+    header_count = await headers.count()
+    print(f"  表頭欄位數: {header_count}")
+    assert header_count > 0, "FrameworkUser/Index grid 缺少表頭欄位"
+    for i in range(min(header_count, 10)):
+        text = await headers.nth(i).text_content()
+        if text.strip():
+            print(f"    欄位: {text.strip()}")
 
     # 搜尋面板
     search = page.locator(".layui-form")
-    print(f"  搜尋面板: {await search.count()}")
+    search_count = await search.count()
+    print(f"  搜尋面板: {search_count}")
+    assert search_count > 0, "FrameworkUser/Index 缺少搜尋面板（.layui-form）"
 
-    print("[TC-27] PASS -- 使用者管理頁面檢查完成")
+    print("[TC-27] PASS -- 使用者管理頁面驗證通過")
 
 
 # ─── TC-28: 角色管理 + 權限設定 ─────────────────────────────────────────────
@@ -1723,61 +1966,72 @@ async def tc_28_role_management(page, **_):
     - 角色列表可存取
     - grid 可載入
 
-    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
-    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
+    issue #898（重寫，兩個問題一起修，理由與 TC-27 相同）：
+      1. 原版本完全沒有 assert（角色列表就算 table_count==0 也只印一句 [WARN] 就
+         繼續，最後仍 PASS）。
+      2. 原版本用 page.goto() 直接導覽三個 _Admin 頁面，實測確認這些都是
+         PartialView-only 端點，繞過 layuiadmin 的 tab 載入機制會讓 layui 完全沒
+         載入。改寫後改用 open_grid_via_sidebar()——FrameworkRole/DataPrivilege/
+         FrameworkMenu 三者在側邊欄選單都確實有 lay-href 連結。
+
+    DataPrivilege 的資料列數量預期為 0（demo 種子資料沒有配置任何資料權限規則），
+    因此只斷言 grid 結構本身有渲染（.layui-table-body 存在），不斷言列數 > 0——
+    與 FrameworkRole/FrameworkMenu（種子資料非空，可以斷言列數 > 0）不同。
     """
     print("[TC-28] 開始執行...")
 
     await login(page)
 
-    await page.goto(f"{BASE_URL}/_Admin/FrameworkRole/Index")
-    await page.wait_for_load_state("networkidle")
+    # --- FrameworkRole ---
+    await open_grid_via_sidebar(page, "/_Admin/FrameworkRole/Index")
     try:
         await page.wait_for_selector(".layui-table-body", state="visible", timeout=3000)
-    except Exception:
-        # issue #886 review: TC-28 has no assert anywhere — capture the swallow.
-        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+    except PlaywrightTimeoutError:
+        # issue #886 review: capture the moment of the timeout for diagnostics.
         await _screenshot_on_failure(page, 28, "01-role-list")
 
-    # 確認 grid
     table = page.locator(".layui-table-body")
     table_count = await table.count()
     print(f"  .layui-table-body 數量: {table_count}")
+    assert table_count > 0, "FrameworkRole/Index grid（.layui-table-body）未渲染（見上方截圖，若有）"
 
-    if table_count > 0:
-        rows = page.locator(".layui-table-body tr[data-index]")
-        row_count = await rows.count()
-        print(f"  角色列數: {row_count}")
-    else:
-        print("  [WARN] 角色列表未渲染")
+    rows = page.locator(".layui-table-body tr[data-index]")
+    row_count = await rows.count()
+    print(f"  角色列數: {row_count}")
+    assert row_count > 0, "FrameworkRole/Index grid 未渲染出任何角色列（demo 種子資料應至少有 admin 角色）"
 
-    # 嘗試進入權限設定（需要有角色 ID）
-    # DataPrivilege 頁面
-    await page.goto(f"{BASE_URL}/_Admin/DataPrivilege/Index")
-    await page.wait_for_load_state("networkidle")
+    # --- DataPrivilege（需要有角色 ID 才能進一步設定，這裡只驗證頁面結構存在；
+    # 資料權限規則的列數預期為 0，見上方 docstring） ---
+    await open_grid_via_sidebar(page, "/_Admin/DataPrivilege/Index")
     try:
         await page.wait_for_selector(".layui-table-body, .layui-form", state="visible", timeout=3000)
-    except Exception:
-        # issue #886 review: TC-28 has no assert anywhere — capture the swallow.
-        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+    except PlaywrightTimeoutError:
         await _screenshot_on_failure(page, 28, "02-data-privilege")
 
-    # FrameworkMenu
-    await page.goto(f"{BASE_URL}/_Admin/FrameworkMenu/Index")
-    await page.wait_for_load_state("networkidle")
+    dp_table_count = await page.locator(".layui-table-body").count()
+    dp_form_count = await page.locator(".layui-form").count()
+    print(f"  DataPrivilege .layui-table-body: {dp_table_count}, .layui-form: {dp_form_count}")
+    assert dp_table_count > 0, "DataPrivilege/Index grid（.layui-table-body）未渲染（見上方截圖，若有）"
+    assert dp_form_count > 0, "DataPrivilege/Index 缺少搜尋/設定表單（.layui-form）"
+
+    # --- FrameworkMenu ---
+    await open_grid_via_sidebar(page, "/_Admin/FrameworkMenu/Index")
     try:
         await page.wait_for_selector(".layui-table-body, .layui-nav", state="visible", timeout=3000)
-    except Exception:
-        # issue #886 review: TC-28 has no assert anywhere — capture the swallow.
-        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+    except PlaywrightTimeoutError:
         await _screenshot_on_failure(page, 28, "03-menu-list")
 
     menu_table = page.locator(".layui-table-body")
-    if await menu_table.count() > 0:
-        menu_rows = page.locator(".layui-table-body tr[data-index]")
-        print(f"  選單項目數: {await menu_rows.count()}")
+    menu_table_count = await menu_table.count()
+    print(f"  FrameworkMenu .layui-table-body: {menu_table_count}")
+    assert menu_table_count > 0, "FrameworkMenu/Index grid（.layui-table-body）未渲染（見上方截圖，若有）"
 
-    print("[TC-28] PASS -- 角色管理檢查完成")
+    menu_rows = page.locator(".layui-table-body tr[data-index]")
+    menu_row_count = await menu_rows.count()
+    print(f"  選單項目數: {menu_row_count}")
+    assert menu_row_count > 0, "FrameworkMenu/Index grid 未渲染出任何選單項目（demo 種子資料應有預設選單樹）"
+
+    print("[TC-28] PASS -- 角色管理 + 權限設定驗證通過")
 
 
 # ─── TC-29: ETL 管理頁面 ────────────────────────────────────────────────────
@@ -1796,53 +2050,107 @@ async def tc_29_etl_management(page, **_):
     - /_EtlRunLog/Index 可存取
     - 各頁面有搜尋面板和 grid
 
-    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
-    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
+    issue #898（重寫）：原版本完全沒有 assert，且用 page.goto() 直接導覽（PartialView-
+    only 端點，繞過 layuiadmin 的 tab 載入機制，layui 完全不會載入——理由與 TC-27/28
+    相同）。改寫後改用 open_grid_via_direct_tab()——_EtlJob/_EtlRunLog 不在側邊選單樹
+    中（未見任何 lay-href 對應項目，與有選單項目的 TC-27/28 不同），因此不能用
+    open_grid_via_sidebar()，改用能處理「頁面沒有側邊選單連結」情境的版本（見其
+    docstring）。
+
+    篩選欄位選擇器修正（本次改寫時發現的既有 bug）：原版本用 `select[name='Searcher.
+    Result']` 之類的選擇器，但這些篩選欄位實際上是 xmSelect 渲染的 `<div name="...">`
+    （與 Student 表單的 Sex 欄位同一種模式），從來就不是 `<select>` 標籤——原版本因為
+    沒有斷言，這個選錯標籤的 bug 從未被發現。這裡改用不限定標籤的屬性選擇器
+    `[name='...']`。
+
+    執行順序（EtlRunLog 在前、EtlJob 在後）：本次改寫時實測發現，先導覽到下面
+    KNOWN-GAP 段落描述的壞掉的 EtlJob 頁面，會讓同一個 page/session 內「之後」的
+    EtlRunLog 導覽也遭殃——EtlRunLog 的篩選欄位跟著找不到、並出現一個新的 400
+    Bad Request（很可能是 layuiadmin 的 router/全域狀態被 EtlJob 那個解析失敗的
+    <script> 搞壞，殃及後續導覽）。因此本測試刻意先測完全正常的 EtlRunLog，再測
+    已知有問題的 EtlJob，確保 EtlRunLog 的斷言不會被 EtlJob 的既有缺陷污染。
+
+    KNOWN-GAP（本次改寫過程中發現，2026-07-31 對照本機跑起來的 demo 實測確認，與
+    #898/#905 兩個 issue 本身無關）：_EtlJob/Index 透過真正的 tab 載入路徑開啟時，
+    grid 從未渲染成功（table.cache 恆不填入，跨越多次重跑、不論導覽順序皆一致），
+    console 會拋出 "Function statements require a function name"。根因已定位到
+    src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.cs 第 1284 行：
+    `actionScript = $"{item.OnClickFunc}(ids,ff.GetSelectionData('{Id}'));";` 沒有把
+    `item.OnClickFunc` 包在括號裡；當 EtlJob 的 ListVM 把這個自訂動作的 OnClickFunc
+    設成一段行內函式字面值（而非具名函式參照）時，產生的 JS 會是
+    `function(ids,data){...}(ids,...)`——這是不合法的 IIFE 寫法（少了外層括號），
+    整個 <script> 區塊因此完全解析失敗，殃及同一區塊裡真正的 table.render() 呼叫。
+    這是一個真實、可重現的既有缺陷，不是本測試的導覽方式造成的假象（直接
+    page.goto() 也會拋出同一個例外）。修這個缺陷需要改 src/ 下的框架程式碼，超出
+    本 PR「只改 test/e2e」的範圍，也沒有對應的 issue 授權這個改動——這裡只據實記錄、
+    不動框架程式碼，並把它報告給使用者評估是否要另開 issue 追蹤。
+
+    Status/SourceDbType 這兩個篩選欄位（獨立的 xmSelect.render() <script> 區塊，
+    document order 排在壞掉的那個區塊之前）則觀察到會隨導覽順序變化——EtlRunLog
+    排在 EtlJob 之前時穩定渲染成功（3 次重跑一致），EtlJob 是本次 session 第一個
+    造訪的 ETL 頁面時則不會渲染。這種跨頁面的順序依賴性沒有進一步追查根因（同樣
+    超出本 PR 範圍），因此這裡選擇保守：grid 與這兩個篩選欄位都只記錄、不斷言，
+    避免斷言綁在一個本身就不穩定、原因未明的行為上。只斷言「頁面路由正確、搜尋
+    面板的純 HTML 欄位存在」（Searcher.Name 是一般 <input>，不需要 JS 就會出現在
+    DOM 中，不受這個 bug 影響，且跨導覽順序都穩定）。EtlRunLog 沒有這個問題，
+    因此照常做完整斷言——但仍然刻意排在 EtlJob 之前執行，見下方「執行順序」說明。
     """
     print("[TC-29] 開始執行...")
 
     await login(page)
 
-    # ETL Job 列表
-    await page.goto(f"{BASE_URL}/_EtlJob/Index")
-    await page.wait_for_load_state("networkidle")
+    # --- ETL Run Log 先測（見上方 docstring：必須排在 EtlJob 之前，避免被
+    # EtlJob 的既有缺陷污染同一個 page/session） ---
+    await open_grid_via_direct_tab(page, "/_EtlRunLog/Index")
     try:
-        await page.wait_for_selector(".layui-table-body, input[name='Searcher.Name']", state="visible", timeout=3000)
-    except Exception:
-        # issue #886 review: TC-29 has no assert anywhere — capture the swallow.
-        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
-        await _screenshot_on_failure(page, 29, "01-etl-job-list")
-
-    # 確認搜尋面板欄位
-    name_input = page.locator("input[name='Searcher.Name']")
-    status_select = page.locator("select[name='Searcher.Status']")
-    db_select = page.locator("select[name='Searcher.SourceDbType']")
-    print(f"  ETL 搜尋欄位: Name={await name_input.count()}, "
-          f"Status={await status_select.count()}, "
-          f"SourceDbType={await db_select.count()}")
-
-    table = page.locator(".layui-table-body")
-    if await table.count() > 0:
-        rows = page.locator(".layui-table-body tr[data-index]")
-        print(f"  ETL Job 列數: {await rows.count()}")
-
-    # ETL Run Log
-    await page.goto(f"{BASE_URL}/_EtlRunLog/Index")
-    await page.wait_for_load_state("networkidle")
-    try:
-        await page.wait_for_selector("select[name='Searcher.Result'], .layui-table-body", state="visible", timeout=3000)
-    except Exception:
-        # issue #886 review: TC-29 has no assert anywhere — capture the swallow.
-        # Round 2: non-throwing helper (see _screenshot_on_failure docstring).
+        await page.wait_for_selector("[name='Searcher.Result'], .layui-table-body", state="visible", timeout=3000)
+    except PlaywrightTimeoutError:
+        # issue #886 review: capture the moment of the timeout for diagnostics.
         await _screenshot_on_failure(page, 29, "02-etl-runlog")
 
-    # Run Log 搜尋面板
-    result_select = page.locator("select[name='Searcher.Result']")
-    trigger_select = page.locator("select[name='Searcher.Trigger']")
-    print(f"  RunLog 搜尋: Result={await result_select.count()}, "
-          f"Trigger={await trigger_select.count()}")
+    table_count = await page.locator(".layui-table-body").count()
+    print(f"  RunLog .layui-table-body: {table_count}")
+    assert table_count > 0, "_EtlRunLog/Index grid（.layui-table-body）未渲染（見上方截圖，若有）"
 
-    print("[TC-29] PASS -- ETL 管理頁面檢查完成")
+    result_count = await page.locator("[name='Searcher.Result']").count()
+    trigger_count = await page.locator("[name='Searcher.Trigger']").count()
+    print(f"  RunLog 搜尋: Result={result_count}, Trigger={trigger_count}")
+    assert result_count > 0, "_EtlRunLog/Index 缺少 Result 篩選欄位（[name='Searcher.Result']）"
+    assert trigger_count > 0, "_EtlRunLog/Index 缺少 Trigger 篩選欄位（[name='Searcher.Trigger']）"
+
+    # --- ETL Job 後測（見上方 docstring 的 KNOWN-GAP：grid/下拉選單目前不會渲染） ---
+    await page.evaluate(
+        """(href) => {
+            const a = document.createElement('a');
+            a.setAttribute('lay-href', href);
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+        }""",
+        "/_EtlJob/Index",
+    )
+    await page.wait_for_load_state("networkidle", timeout=TIMEOUT)
+    await page.wait_for_timeout(1000)
+
+    # 確認搜尋面板欄位——只斷言不需要 JS 就會出現的純 HTML 欄位（Name 是一般
+    # <input>）。Status/SourceDbType 是 xmSelect 渲染的篩選欄位，目前受 KNOWN-GAP
+    # 影響不會渲染，因此只記錄、不斷言。
+    name_input = page.locator("input[name='Searcher.Name']")
+    name_count = await name_input.count()
+    status_count = await page.locator("[name='Searcher.Status']").count()
+    db_count = await page.locator("[name='Searcher.SourceDbType']").count()
+    print(f"  ETL Job 搜尋欄位: Name={name_count}, Status={status_count}(KNOWN-GAP), "
+          f"SourceDbType={db_count}(KNOWN-GAP)")
+    assert name_count > 0, (
+        "/_EtlJob/Index 連純 HTML 的 Searcher.Name 欄位都沒有渲染——"
+        "代表頁面路由本身出了問題，不只是 KNOWN-GAP 影響的 JS 元件"
+    )
+    if status_count == 0 or db_count == 0:
+        print("  [KNOWN-GAP] Status/SourceDbType 篩選欄位未渲染，"
+              "根因見本函式 docstring（DataTableTagHelper.cs:1284 IIFE 少括號）")
+
+    print("[TC-29] PASS -- ETL 管理頁面驗證通過"
+          "（EtlRunLog 完整驗證；EtlJob 的 grid/篩選欄位為已記錄根因的 KNOWN-GAP）")
 
 
 # ─── TC-30: 匯入功能流程 ────────────────────────────────────────────────────
@@ -1866,58 +2174,59 @@ async def tc_30_import_flow(page, **_):
     - 下載範本按鈕存在
     - 上傳控制項存在
 
-    issue #886 review：本 TC 沒有任何 assert，PASS 只代表流程走完沒有拋出例外，
-    不是真的驗證了任何行為——見 #898（12 個站點吞掉例外後無條件 PASS）。
+    issue #898（重寫，兩個問題一起修，理由與 TC-26 相同）：
+      1. 原版本完全沒有 assert。
+      2. 原版本用 page.goto() 直接導覽到 /Student/Import。這不是側邊選單項目，
+         而是 Student/Index grid toolbar 上的「导入」按鈕以 layer 對話框開啟的
+         PartialView（與 Create 對話框同一種機制）——實測確認直接 page.goto() 一樣
+         繞過 layuiadmin，layui 完全不會載入。改寫後改用 open_grid_via_sidebar() +
+         open_toolbar_dialog()（與 TC-26 的 Create 對話框、TC-33/34/35 相同、已驗證
+         可行的模式）。
     """
     print("[TC-30] 開始執行...")
 
     await login(page)
 
-    # 直接存取 Import PartialView
-    await page.goto(f"{BASE_URL}/Student/Import")
-    await page.wait_for_load_state("networkidle")
+    # 透過 Student/Index grid toolbar 的「导入」按鈕開啟 Import 對話框。與 TC-26 相同
+    # 理由：layer 外殼 visible 不代表裡面的內容已經渲染完成，沿用 TC-33/34/35 已驗證
+    # 過的固定 settle wait（1500ms）。
+    await open_grid_via_sidebar(page, "/Student/Index")
+    await open_toolbar_dialog(page, "导入")
+    await page.wait_for_timeout(1500)
 
-    # 確認下載範本按鈕
-    # wt:downloadTemplateButton 渲染為 <a> 或 <button> 帶下載連結
-    download_btn = page.locator("a:has-text('下载'), a:has-text('Download'), button:has-text('下载'), button:has-text('Download'), a:has-text('模板')")
+    # 確認下載範本按鈕（wt:downloadTemplateButton 渲染為 <a>，實測文字為「下载模板」）
+    download_btn = page.locator("a:has-text('下载模板')")
     dl_count = await download_btn.count()
     print(f"  下載範本按鈕數量: {dl_count}")
+    assert dl_count > 0, "Import 對話框缺少下載範本按鈕（a:has-text('下载模板')）"
 
-    # 也尋找含有 downloadTemplate 的連結
-    dl_link = page.locator("a[href*='GetImportData'], a[onclick*='download'], a[href*='Template']")
-    dl_link_count = await dl_link.count()
-    print(f"  Template 連結數量: {dl_link_count}")
-
-    # 上傳控制項
-    # wt:upload 渲染為 LayUI upload 元件
-    upload_area = page.locator("button:has-text('上传'), button:has-text('Upload'), .layui-upload")
-    upload_count = await upload_area.count()
-    print(f"  上傳控制項數量: {upload_count}")
-
-    # file input（可能是 hidden）
+    # 上傳控制項：wt:upload 渲染為觸發原生檔案選擇器的按鈕 + <input type="file">
     file_input = page.locator("input[type='file']")
     fi_count = await file_input.count()
     print(f"  file input 數量: {fi_count}")
+    assert fi_count > 0, "Import 對話框缺少上傳用的 file input（input[type='file']）"
 
-    # 錯誤列表 Grid（初始應為空）
+    # 錯誤列表 Grid（初始應為空，但 grid 結構本身要存在）
     error_grid = page.locator(".layui-table")
-    print(f"  錯誤列表 grid: {await error_grid.count()}")
+    error_grid_count = await error_grid.count()
+    print(f"  錯誤列表 grid: {error_grid_count}")
+    assert error_grid_count > 0, "Import 對話框缺少錯誤列表 grid（.layui-table）"
 
     # Submit 按鈕
     submit = page.locator("button[lay-submit], a[lay-submit]")
-    print(f"  Submit 按鈕: {await submit.count()}")
+    submit_count = await submit.count()
+    print(f"  Submit 按鈕: {submit_count}")
+    assert submit_count > 0, "Import 對話框缺少 submit 按鈕（[lay-submit]）"
 
-    # Close 按鈕
-    close = page.locator("button:has-text('关闭'), button:has-text('Close'), a:has-text('关闭')")
-    print(f"  Close 按鈕: {await close.count()}")
+    # Close 按鈕（layer 對話框標準的關閉按鈕）
+    close = page.locator(".layui-layer-close")
+    close_count = await close.count()
+    print(f"  Close 按鈕: {close_count}")
+    assert close_count > 0, "Import 對話框缺少關閉按鈕（.layui-layer-close）"
 
-    # 嘗試下載範本（不實際下載，只確認 API 可存取）
-    template_response = await page.request.get(
-        f"{BASE_URL}/Student/Import"  # GET 取得頁面
-    )
-    print(f"  Import 頁面 HTTP: {template_response.status}")
+    await close_layer_dialog(page)
 
-    print("[TC-30] PASS -- 匯入功能流程檢查完成")
+    print("[TC-30] PASS -- 匯入功能流程驗證通過")
 
 
 # ─── TC-31: WorkFlow 設計器完整創作流程 (T-DSN-18 e2e smoke) ─────────────────
@@ -2796,6 +3105,14 @@ async def run_tests(tc_nums=None, headless=None, slow_mo=0, report_path=None):
         report_path: JUnit XML 報告輸出路徑（None=不輸出）
     """
     from playwright.async_api import async_playwright
+    from playwright.async_api import TimeoutError as _RealPlaywrightTimeoutError
+
+    # Issue #898: bind the real type into module globals now that playwright is
+    # actually available, so every tc_ function's `except PlaywrightTimeoutError:`
+    # resolves correctly once run_tests() starts calling them below. See the
+    # `PlaywrightTimeoutError = None` placeholder near the top of this file for why
+    # this isn't a plain module-level import.
+    globals()["PlaywrightTimeoutError"] = _RealPlaywrightTimeoutError
 
     if headless is None:
         headless = HEADLESS
