@@ -1,0 +1,87 @@
+name: Vue3Demo ClientApp Build
+
+# Issue #941 -- demo/WalkingTec.Mvvm.Vue3Demo/ClientApp (a self-contained Vite/Vue3
+# frontend the .NET solution build never touches) had NO build gate anywhere in CI.
+# That is the reason two always-reproducible defects sat in the tree at the same time
+# with nothing to catch either one:
+#   - #939: `npm ci` fails outright -- Dependabot bumped `vite` to ^7.3.2 (PR from
+#     4.5.14) without bumping its peer `@vitejs/plugin-vue`, which was still ^4.1.0
+#     and only accepts `vite ^4.0.0`.
+#   - #940: `vite build` fails outright -- DashboardView.vue imported via a bare `@/`
+#     prefix, but vite.config.ts / tsconfig.json only register the `/@/` alias (every
+#     other file under src/ uses the leading-slash form).
+# This job actually BUILDS the ClientApp (`npm ci` then `npm run build`), not merely
+# `npm install`s it -- an install-only gate would not have caught #940. It is path-
+# filtered to the ClientApp directory so it does not add cost to PRs that never touch
+# it: CI capacity on this self-hosted runner (4 CPU, concurrency 2) is a binding
+# constraint (#885/#900/#902/#903/#907/#910, docs/ci-operations.md).
+#
+# What this gate does NOT cover: the ClientApp has no Vue/JS test suite today, and
+# this job does not add one, and does not lint. It only proves that `npm ci && npm
+# run build` -- the two commands that failed on this tree before #939/#940 were
+# fixed -- still succeed.
+
+on:
+  pull_request:
+    branches: [dotnet10]
+    paths:
+      - 'demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/**'
+  push:
+    branches: [dotnet10]
+    paths:
+      - 'demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Same self-hosted-runner rationale as ci-build.yml/e2e-test.yml (#640, #670): cancel a
+# superseded PR run of this workflow, but never cancel one push run in favor of another.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  vue3demo-build:
+    name: Build Vue3Demo ClientApp
+    runs-on: ubuntu-latest
+    timeout-minutes: 15  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        timeout-minutes: 5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        timeout-minutes: 5
+        with:
+          node-version: '20'
+
+      # Caches npm's own download cache (~/.npm), keyed on the committed lockfile --
+      # NOT node_modules, and NOT skipping `npm ci` itself. This can only save re-
+      # downloading tarballs already verified against package-lock.json; it never
+      # skips npm ci's own dependency-tree resolution, which is exactly the step
+      # #939's peer-dependency conflict fails at. A cache hit here cannot mask a
+      # broken lockfile. continue-on-error keeps a cache-backend hiccup from failing
+      # the job (same rationale as this repo's other npm/NuGet caches); timeout-
+      # minutes bounds a cache-backend HANG the same way continue-on-error alone
+      # cannot (#926).
+      - name: Cache npm download cache
+        uses: actions/cache@v4
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-vue3demo-${{ hashFiles('demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-vue3demo-
+
+      - name: npm ci
+        run: npm ci
+        working-directory: demo/WalkingTec.Mvvm.Vue3Demo/ClientApp
+        timeout-minutes: 8
+
+      - name: npm run build
+        run: npm run build
+        working-directory: demo/WalkingTec.Mvvm.Vue3Demo/ClientApp
+        timeout-minutes: 10

@@ -218,6 +218,58 @@ python3 scripts/audit-workflow-timeouts.py                 # 確認新 step 也�
 
 ---
 
+## Vue3Demo ClientApp CI 建置閘門（#941/#939/#940，2026-08-01）
+
+`#941` 主張 `demo/WalkingTec.Mvvm.Vue3Demo/ClientApp`（獨立的 Vite/Vue3 前端，.NET 方案本身的建置完全不會碰到它）**在 CI 裡從來沒有任何建置閘門**，標題稱這是「三個必現缺陷同時存活」的唯一解釋。這次工作**先加閘門、對著修復前的樹實測確認會紅、再修**，而不是先修再補閘門（後者無法證明閘門真的會抓到這一類缺陷）。
+
+**重新推導與 issue 標題比對**：
+- **`#939`**（`npm ci` 因 Dependabot 把 `vite` 升到 `^7.3.2` 但沒有同步升 `@vitejs/plugin-vue`〔仍 `^4.1.0`〕而直接失敗，peer 衝突）——**本機重現，與標題完全一致**。對修復前的樹跑 `npm ci`，實際輸出：`npm error ERESOLVE could not resolve` / `peer vite@"^4.0.0" from @vitejs/plugin-vue@4.4.0` / `Found: vite@7.3.5`，exit 1。`git log -S vite -- .../package.json` 確認正是 Dependabot commit `a6e9a32ec`（`4.5.14` → `7.3.1`）造成，未動 `@vitejs/plugin-vue`。
+- **`#940`**（`DashboardView.vue` 用裸 `@/` 前綴，但 `vite.config.ts`/`tsconfig.json` 只註冊 `/@/`〔前導斜線〕alias，`vite build` 解析失敗）——**本機重現，與標題完全一致**。修好 `#939` 後跑 `npm run build`，實際輸出：`[vite]: Rollup failed to resolve import "@/utils/dashboard/responsive" from ".../DashboardView.vue?vue&type=script&setup=true&lang.ts"`，exit 1。`grep -rlE "from ['\"]@/" src` 全樹搜尋確認：117 個檔案正確使用 `/@/`，只有 `DashboardView.vue` 這一個檔案的兩行（原 53、54 行）用裸 `@/`。
+- **`#941`**（三個必現缺陷同時存活）——這次工作階段只拿到 `#939`/`#940` 兩個具名 issue 的**標題**，且硬性限制禁止呼叫任何 Gitea API，**無法讀取任一張 issue 的完整內文**，所以無法逐字確認標題裡「三個」具體所指是否就是下面獨立發現的第三類缺陷。可以確認的是：把 `#939` 單獨修好後，`npm ci` **並未變綠**——連續浮現三個先前完全被 `#939` 擋住、從未被任何人或任何 CI 跑到過的額外 peer-dependency 衝突（見下）。這與標題「三個缺陷」的計數相符，但這是本次工作獨立重新推導出來的，不是對 issue 內文的確認，在此誠實記錄這個落差。
+
+**修 `#939` 之後才浮現、原本被同一個 `#939` 擋住的額外衝突（不在原三個 issue 編號內，誠實揭露，非本次任務原始範圍但阻擋 gate 變綠、因此一併處理）**：
+
+1. **`echarts-gl`**：`package-lock.json` 鎖定的 `2.0.9` 版 peer 只接受 `echarts@^5.1.2`，但 `echarts@^6.1.0`（Dependabot 早於本次工作合併，commit `6108812e9`）已經在同一份 lockfile 裡——`npm ci` 因此在 `#939` 修好後立刻報第二個 ERESOLVE（`Found: echarts@6.1.0` / `peer echarts@"^5.1.2" from echarts-gl@2.0.9`）。`npm view echarts-gl@2.1.0 peerDependencies` 顯示同一個 semver 範圍（package.json 宣告的 `^2.0.9`）內已有相容版本（`{echarts: '^5.1.2 || ^6.0.0'}`），純粹是 lockfile 從未刷新過，不是 package.json 版本範圍的問題。
+2. **`echarts-wordcloud`**：最新已發布版本（`2.1.0`，也是目前鎖定的版本）peer 仍只接受 `echarts@^5.0.1`——**沒有任何已發布版本支援 echarts 6**，這不是刷新 lockfile 能解決的，是上游套件尚未跟上。
+3. **`@types/node`**：`^18.15.11`（package.json 原值）vs. `vite@7.3.5` 的 `peerOptional @types/node@"^20.19.0 || >=22.12.0"`——`vite@7.3.5` 自己的 `engines.node` 也要求同一個下限，代表 Dependabot 升 `vite` 到 `7` 那次 commit，已經把這個專案「建置所需的最低 Node 版本」從 package.json 宣稱的 `>=16.0.0` 悄悄拉到 `^20.19.0 || >=22.12.0`，只是從未被任何 CI 步驟驗證過，`engines.node` 欄位本身這次沒有一併更正（範圍外，留待日後）。
+
+**修法（全部落在 devDependency／未使用 dependency 層級，沒有動任何 `src/` 執行邏輯，除了 `#940` 那兩行 import 路徑）**：
+- `grep -rn "echarts-gl\|echarts-wordcloud"` 全樹搜尋（含 `.vue`/`.ts`），確認這兩個套件除了 `src/utils/build.ts` 裡被整段註解掉（`//` 開頭）的 CDN 設定清單外，**完全沒有任何 import 站點、沒有任何其他套件透過 transitive dependency 需要它們**（`package-lock.json` 的 `packages` 圖確認唯一 consumer 是根專案自己）——直接從 `package.json` 移除，`package-lock.json` 隨 `npm install` 自然刷新（`echarts-gl`、其專屬 transitive dep `claygl`、`echarts-wordcloud` 三個 node_modules 條目一併消失）。`src/utils/build.ts` 裡的註解殘留沒有清理（見下方「沒有涵蓋的部分」）。
+- `@types/node` 從 `^18.15.11` 升到 `^20.19.0`——純型別宣告套件，不影響任何 runtime 行為；範圍選在 vite 7 peer 允許的下限，也對齊本次新增 CI gate 用的 `actions/setup-node@v5` 的 `node-version: '20'`。
+- `@vitejs/plugin-vue` 從 `^4.1.0` 升到 `^6.0.8`（`#939` 本身的修法）——`npm view @vitejs/plugin-vue@6.0.8 peerDependencies` 確認 `vite: '^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0'`，涵蓋既有的 `vite@^7.3.2`。
+- `DashboardView.vue` 兩行 import 的 `@/utils/dashboard/responsive` 改成 `/@/utils/dashboard/responsive`（`#940` 本身的修法）——與 `vite.config.ts` 的 `alias: {'/@': pathResolve('./src/')}`、`tsconfig.json` 的 `"paths": {"/@/*": ["src/*"]}` 對齊，也與樹上其餘 117 個既有正確用法一致。
+- `package.json` 是 CRLF 檔案（`git ls-files --eol` 確認）；上述每一處修改都用 binary-safe（`open("rb")`/`open("wb")`）字串替換完成，逐位元組核對過改動前後只有目標那一行的版本號不同、換行符沒被 LF 化。
+
+**Gate 本身（`#941`）**：新增 `.github/workflows/vue3demo-build.yml`。`pull_request`/`push`（限 `dotnet10`）都用 `paths: ['demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/**']` 限定；另保留 `workflow_dispatch` 供手動觸發。單一 job `vue3demo-build`：checkout → setup-node（Node 20）→ 快取 `~/.npm`（`continue-on-error: true`，key 綁 `package-lock.json` hash）→ `npm ci`（`working-directory` 限定在 `ClientApp`）→ `npm run build`。**快取只蓋 npm 自己的下載暫存（`~/.npm`），不快取 `node_modules`、也不會讓 `npm ci` 本身被跳過**——`npm ci` 每次都會對著 committed lockfile 重新做一次完整的 peer-dependency 解析，這正是 `#939` 失敗的那一步；快取命中只省下重新下載已驗證過的 tarball，不會、也不能讓這一步被略過。
+
+**RED-before-fix（gate 的兩個指令分別對 pre-fix 樹實測，不是推導）**：
+- `npm ci`：`git stash` 暫時擋住 `#939`/`#940` 的修法後，`npm ci` exit 1，輸出 `Conflicting peer dependency: vite@4.5.14` / `peer vite@"^4.0.0" from @vitejs/plugin-vue@4.4.0`。
+- `npm run build`：用 `--legacy-peer-deps` 跳過 peer 檢查把套件裝進 `node_modules`（僅為了越過 `#939` 去獨立驗證 `#940` 這一步本身，gate 本身的 `npm ci` 從不加這個 flag），`npm run build` exit 1，輸出 `[vite]: Rollup failed to resolve import "@/utils/dashboard/responsive" from ".../DashboardView.vue..."`。
+
+**GREEN-after-fix（同樣兩個指令，對修復後的樹實測）**：`rm -rf node_modules dist && npm ci` exit 0（361 個套件裝妥，0 個 ERESOLVE）；`npm run build` exit 0，產出 `dist/index.html` 與完整 `assets/`（`vite v7.3.5 building client environment for production... ✓ 2615 modules transformed. ... built in 7.21s`）。
+
+**Path filter 雙向證明（用 workflow 檔案裡實際的 filter 字串，非改寫）**：filter 為 `demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/**`。用 Python `fnmatch` 模擬 GitHub Actions 的路徑 glob 語意（官方文件：`**` 比對任意字元、含路徑分隔符，等價於把這個 pattern 裡唯一的 `**` 換成單一 `*`）本機驗證：這次 PR 實際修改的三個 ClientApp 內檔案（`package.json`／`package-lock.json`／`DashboardView.vue`）全部 MATCH；`.github/workflows/vue3demo-build.yml` 自己、`CHANGELOG.md`、`docs/production-readiness.md`、以及**同一個 demo 專案內、僅僅在 `ClientApp/` 之外的手足檔案**（`demo/WalkingTec.Mvvm.Vue3Demo/Program.cs`、`.csproj`、`DataContext.cs`）與完全不同的 demo（`WalkingTec.Mvvm.Demo`）全部 NO MATCH。這特別驗證了「filter 差一點就整個不會觸發」這個已知陷阱（本 repo 已有 lint 活在 `paths-ignore` 排除範圍內、從未真的跑過的先例）——最接近的反例（同目錄樹但在 `ClientApp/` 之外的 `.cs`/`.csproj`）也正確地不觸發。
+
+**Timeout 稽核**：`python3 scripts/audit-workflow-timeouts.py` 在新增 `vue3demo-build.yml`（5 個 real-work step：checkout／setup-node／cache／`npm ci`／`npm run build`，全部帶 `timeout-minutes`）後，全庫 8 個 workflow 檔案、132 個 real-work step，132 個都有 `timeout-minutes`，`WORKFLOW_TIMEOUT_AUDIT_RESULT: PASS`（新增前為 127 個 step 全過）。
+
+**新增的每次觸發 wall-clock 成本**：本機（非目標的 4-CPU self-hosted Gitea runner，warm npm cache）量測：`npm ci` 3.67s、`npm run build` 7.05s（vite 自報 `built in 7.21s`）。**這不能直接當作 runner 端實測值**——checkout／setup-node／cache 還原、以及 runner 上冷的 npm registry 下載都會另外加時間，而這次工作階段的硬性限制（禁止呼叫任何 Gitea/GitHub API、禁止開 PR）代表這支 workflow **從未在真實 Gitea Actions 上跑過一次**，無法給出 runner 端實測數字。硬上限是各 step `timeout-minutes` 總和 33 分鐘（5+5+5+8+10），這是超時就會被砍掉的天花板，不是預期耗時；保守推算單次觸發落在 1–3 分鐘量級，但這是推算、不是實測，且只在 PR 的 diff 真的碰到 `demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/**` 時才會觸發（見上方 path filter 證明）。
+
+**這個 gate 沒有涵蓋的部分（誠實揭露）**：ClientApp 目前沒有任何 Vue/JS 測試套件，這次也沒有新增一個——gate 只證明 `npm ci && npm run build` 這兩個指令仍然成功，**不驗證任何執行期行為**（沒有 unit test、沒有 e2e、沒有 lint、不驗證 `dist/` 產物在瀏覽器裡實際能跑）。`src/utils/build.ts` 裡註解掉的 CDN 設定清單仍保留對 `echarts-gl`／`echarts-wordcloud` 的字串引用（純註解，`//` 開頭，不影響任何建置或執行），本次沒有清理，屬於低風險文件殘留，未另開 issue。`npm audit` 回報 4 個 high severity 漏洞——這是既有狀態，本次工作只移除套件、沒有新增任何 runtime dependency，沒有處理也沒有加劇，屬於未經本次工作稽核的既有技術債。
+
+**未驗證/無法驗證**：這支 workflow 從未在真實 Gitea Actions runner 上執行過一次（見上，硬性限制禁止開 PR／呼叫 API）；上述「額外浮現的三個衝突」是否恰好就是 `#941` 標題所稱的「三個必現缺陷」，無法對照 issue 原文確認。
+
+**可重跑的盤點指令**：
+```bash
+cd demo/WalkingTec.Mvvm.Vue3Demo/ClientApp
+rm -rf node_modules dist
+npm ci        # 應 exit 0（fix 前 exit 1，見上方 RED-before-fix）
+npm run build # 應 exit 0，產出 dist/index.html（fix 前 exit 1，見上方 RED-before-fix）
+cd ../../../..
+python3 scripts/audit-workflow-timeouts.py   # 應 PASS，132 個 real-work step 全帶 timeout-minutes
+```
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。

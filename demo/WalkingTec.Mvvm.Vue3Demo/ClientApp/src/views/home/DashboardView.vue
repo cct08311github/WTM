@@ -50,8 +50,8 @@
 <script lang="ts" setup>
 import { ref, computed } from 'vue'
 import { Monitor, Iphone, Cellphone } from '@element-plus/icons-vue'
-import type { DeviceType, LayoutItem } from '@/utils/dashboard/responsive'
-import { getSpanForDevice, getColProps, previewDeviceWidths, getDeviceLabel } from '@/utils/dashboard/responsive'
+import type { DeviceType, LayoutItem } from '/@/utils/dashboard/responsive'
+import { getSpanForDevice, getColProps, previewDeviceWidths, getDeviceLabel } from '/@/utils/dashboard/responsive'
 
 // Demo layout items with responsive breakpoints
 const layoutItems = ref<LayoutItem[]>([

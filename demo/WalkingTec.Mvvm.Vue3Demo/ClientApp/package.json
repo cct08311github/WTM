@@ -20,8 +20,6 @@
     "countup.js": "^2.6.0",
     "cropperjs": "^1.5.13",
     "echarts": "^6.1.0",
-    "echarts-gl": "^2.0.9",
-    "echarts-wordcloud": "^2.1.0",
     "element-plus": "^2.13.5",
     "js-cookie": "^3.0.7",
     "js-table2excel": "^1.0.3",
@@ -43,12 +41,12 @@
     "vue-router": "^4.1.6"
   },
   "devDependencies": {
-    "@types/node": "^18.15.11",
+    "@types/node": "^20.19.0",
     "@types/nprogress": "^0.2.0",
     "@types/sortablejs": "^1.15.1",
     "@typescript-eslint/eslint-plugin": "^5.58.0",
     "@typescript-eslint/parser": "^5.58.0",
-    "@vitejs/plugin-vue": "^4.1.0",
+    "@vitejs/plugin-vue": "^6.0.8",
     "@vue/compiler-sfc": "^3.2.47",
     "eslint": "^8.38.0",
     "eslint-plugin-vue": "^9.10.0",
