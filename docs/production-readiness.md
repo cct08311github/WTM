@@ -304,6 +304,68 @@ python3 scripts/audit-workflow-timeouts.py   # 應 PASS，132 個 real-work step
 
 ---
 
+## Dashboard/ETL REST widget 的 header 值透過鏈結例外洩漏進應用程式日誌（#961，P1，2026-08-01）
+
+**先重新推導、不採信 issue 文字**：`RestWidgetDataSource.FetchJsonAsync`（送出 REST widget 請求前把 `options.Headers` 逐一 `req.Headers.Add(h.Key, h.Value)`）確實把 `catch (Exception ex) when (ex is FormatException || ex is InvalidOperationException)` 抓到的原始例外，原封不動當成 `InnerException` 鏈到自己丟出的新 `InvalidOperationException` 上；`_DashboardController.GetWidgetData`/`PostWidgetData` 與 `_DashboardDesignerController.Preview` 三處都 `catch (InvalidOperationException ex)` 後直接 `_logger.LogWarning(ex, ...)`，把整個例外物件（含 `InnerException`）交給 logger。
+
+**用自己的探針、對 .NET 10 實測，而非採信 issue 描述的行為**（`dotnet run -c Release`，見下方指令）：
+
+```
+THROW Authorization :: FormatException: The format of value 'Bearer my-real-secret-token
+X-Injected: 1' is invalid.
+THROW X-Api-Key     :: FormatException: New-line or NUL characters are not allowed in header values.
+```
+
+`Authorization`（parser-backed header，用 `AuthenticationHeaderValue` 解析）的 `FormatException.Message` 把**完整原始值**（含 secret）嵌進訊息；未知 header（如 `X-Api-Key`）走的是通用值驗證，訊息是固定文字、不含值。`_logger.LogWarning(ex, ...)` 收到的 `ex` 就是那個鏈了 `InnerException` 的 `InvalidOperationException`——絕大多數 logging sink（含 .NET 內建 console/file provider 的預設格式化器）在收到帶 exception 的 log 呼叫時，會另外印出 `exception.ToString()`，而該方法會遞迴印出整條 `InnerException` 鏈，於是原始 `FormatException.Message` 裡的 secret 就進了應用程式日誌。**觸發不需要攻擊**——任何會讓 .NET 驗證失敗的值都會觸發，例如貼上時夾帶的換行、操作員手滑打錯一個字元。
+
+**與最初懷疑的觸發條件不同，親自驗證後更正（不是照抄 issue 描述）**：單純非 ASCII 文字（中文字、全形空白、Latin-1 補充字元）、單獨的控制字元 `0x01`、`DEL`（`0x7F`）、TAB，在 .NET 10 上**都不會**丟出 `FormatException`——擴充探針測試逐一證實：這些值全部 `NO-THROW`。`HttpRequestHeaders.Add` 的值驗證實際上只拒絕內嵌 CR、LF、NUL 三種字元（與未知 header 那則固定訊息文字「New-line or NUL characters are not allowed in header values.」完全對應）。因此迴歸測試的「非 ASCII」情境改用「非 ASCII 文字 + 內嵌 NUL」的組合值（`"Bearer 機密憑證A1B2C3\0trailer"`）——NUL 才是真正觸發 `FormatException` 的原因，非 ASCII 文字只是確認洩漏內容裡真的帶有非 ASCII 片段，兩者缺一都無法同時滿足「RED-before-fix 必須真的紅」與「值仍含非 ASCII 內容」兩個條件。
+
+**修法**：header-adding 的 `catch` 區塊不再把 `ex` 當作 `InnerException` 鏈上去。保留 header **名稱**（`h.Key`，本來就在外層訊息裡——操作員看不到是哪個 header 被拒絕就無法修正設定）與例外**型別**（`ex.GetType().Name`，純診斷用途），完全捨棄值本身與原始例外物件：
+
+```csharp
+throw new InvalidOperationException(
+    $"REST widget: header '{h.Key}' was rejected by the HTTP stack " +
+    $"(possible invalid characters or CRLF in name/value; underlying error: {ex.GetType().Name}).");
+```
+
+`src/WalkingTec.Mvvm.Etl/Pipeline/Sources/RestEtlSource.cs`（`FetchPageAsync`）逐字同形狀，同步套用相同修法——它丟出的 `InvalidOperationException` 被 `EtlPipelineExecutor` 的多處 `catch (Exception ex)` 接住後整個交給 `_logger?.LogError(ex, ...)`，是同一種洩漏、只是多隔了一層。
+
+**全樹掃描同形狀缺陷，指令與結果原文列出，不是複述 issue 已知的兩個檔案**：
+
+```
+grep -rn "Headers\.Add(" src --include="*.cs"
+grep -rln "FormatException" src --include="*.cs"
+```
+
+第一條指令找到的所有 `req.Headers.Add(name, value)`／`client.DefaultRequestHeaders.Add(name, value)` 呼叫點中，**只有兩處**符合「迴圈跑過呼叫端可控的 header 字典、外面包一層專門 catch `FormatException`/`InvalidOperationException` 再 rethrow」這個確切形狀——就是上面已修的 `RestWidgetDataSource.cs`/`RestEtlSource.cs` 兩處。
+
+**掃描另外發現、根因相同但程式碼形狀不同、本次刻意不修的兩處**：`src/WalkingTec.Mvvm.Core/WTMContext.CallApi.cs`（`CallAPI<T>`）與 `src/WalkingTec.Mvvm.Core/Services/WtmApiClient.cs`（`CallAPI<T>`）都在迴圈裡呼叫 `client.DefaultRequestHeaders.Add(item.Key, item.Value)`，`item` 來自呼叫端傳入、可能帶 Authorization 的 `headers` 字典——但這兩處**沒有**針對 header 的專屬 try/catch，`FormatException` 會直接穿透到整個方法外層那個涵蓋「發 HTTP 請求＋讀回應＋反序列化 JSON」全流程的廣義 `catch (Exception ex)`，該 catch 本來就把 `ex` 整個交給 `LogError`/`WtmDiagnosticLogger?.LogError`——沒有任何鏈結需要拆，缺陷是「完全沒有窄化」而非「窄化後又鏈回去」。修這兩處需要在既有的廣義 catch 裡面**新增**一段 header 專屬的窄 catch（而非只刪掉建構子的第三個參數），影響面與風險輪廓跟本次修法不同，且會讓一個 P1 修復的 diff 範圍偏離原始回報的兩個確切檔案。刻意不在本次一併修，留給後續獨立處理——不是漏掉沒發現。
+
+**測試**：`test/WalkingTec.Mvvm.Core.Test/Dashboard/RestWidgetHeaderValueLogLeakTests961.cs` 透過真正的 `RestWidgetDataSource`（mock HTTP handler 證實從未被呼叫——header 拒絕發生在任何位元組送出之前）驅動 `_DashboardController.GetWidgetData`，用一個同時記錄格式化訊息「與」exception 物件本身的 `CapturingLogger`（模擬真實 sink 會另外印 `exception.ToString()`，不是只檢查訊息樣板——訊息樣板本身從未內嵌 `{Exception}`，只查樣板會完全漏掉這個洩漏）。兩條 RED-before-fix 洩漏測試（內嵌換行；非 ASCII + NUL 組合），逐字捕捉的紅燈訊息：
+
+```
+Did not expect string "[Dashboard] Widget data fetch failed. ...
+System.InvalidOperationException: REST widget: header 'Authorization' was rejected ...
+ ---> System.FormatException: The format of value 'Bearer s3cr3t-A1B2C3-do-not-log-me
+X-Injected: evil' is invalid. ..." to contain "s3cr3t-A1B2C3-do-not-log-me" because the secret must never reach the log, ...
+```
+
+外加一條正控組（`GetWidgetData_still_logs_the_rejected_header_name`）證明修復後 header 名稱仍留在日誌裡——沒有這條，一個「整個例外都吞掉、什麼都不記」的過度修法也會讓前兩條變綠。`test/WalkingTec.Mvvm.Etl.Test/Pipeline/RestEtlSourceHeaderValueLogLeakTests961.cs` 直接對 `RestEtlSource` 丟出的例外斷言同一件事（`ex.ToString()` 不含 secret、`ex.Message` 含 header 名稱），因為 `RestEtlSource` 本身沒有自己的 logger、真正記錄的是它的呼叫方 `EtlPipelineExecutor`。
+
+**Mutation gate**：`test/mutants/entries/961-restwidget-header-exception-chain-reintroduce.json`（patch 把 `throw new InvalidOperationException(...)` 補回 `, ex`，一行、compile-preserving）。**`red_expected_assertion_patterns` 取自一次真的跑過 `run_mutant.py`（`-c Release` build，對應 #959 的 Debug/Release 差異）且結果 PASS 的執行**，而非事先猜測——第一次嘗試用可跨行的 `.*` pattern 因為 Python 預設 `re` 旗標下 `.` 不吃換行，實際跑出 `VERDICT: UNEXPECTED_RED`（pattern 沒對到、不是抓錯原因），改成錨定在 FluentAssertions 固定尾綴文字的較窄 pattern 後重跑變 `VERDICT: KILLED`。**寫入 entry JSON 前確認決定性**：同一個修好的 pattern 連續執行三次，三次皆 `VERDICT: KILLED` / `GATE: PASS`，且每次執行後 `git status` 確認目標檔案都乾淨還原。**`kind` 選擇 `security`**：本案是貨真價實的機密外洩（非強制分類的邊緣案例），符合 `VALID_KINDS` 的字面定義。
+
+**驗證（原始，對 base commit `origin/dotnet10` tip `7a1695f80`）**：`find . -name 'demo.db*' -path '*bin*' -delete && dotnet build WalkingTec.Mvvm.sln`——1 個已知、跟本次修改無關的錯誤：`NETSDK1082`（`BlazorDemo.Client` 缺 `browser-wasm` runtime pack），**直接對 base commit 單獨重建同一個專案確認過同一個錯誤存在**，不是修法造成的新問題。`dotnet test test/WalkingTec.Mvvm.Core.Test/`：base **5001 passed, 0 failed**（在乾淨 worktree、修改任何檔案之前跑過確認），修復後 **5004 passed, 0 failed**（5001 + 本次新增的 3 個測試方法）。`dotnet test test/WalkingTec.Mvvm.Etl.Test/`：**699 passed, 17 skipped（既有 Oracle 相關，非本次修改造成）, 0 failed**（含本次新增的 2 個測試方法）。
+
+**Rebase 重新驗證（2026-08-01，#824/#978 合併後，`dotnet10` 推進到 `3887d7b11`）**：**先確認、非假設**目標檔案在 rebase 範圍內是否被動過——`git log --oneline 7a1695f80..3887d7b11 -- src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs` 空輸出，`git diff --stat 7a1695f80 3887d7b11 -- <同檔案>` 也空輸出，確認 #978 完全沒碰這個檔案——因此 mutant 的驗證**沒有**過期，不需要重新產生 entry JSON（先跑驗證、只有真的碰到目標檔案才重新產生，順序不能反過來）。`git rebase origin/dotnet10` 全程 **零手動衝突解決**——git 的 3-way merge 自動處理了 `CHANGELOG.md`／`docs/production-readiness.md` 兩處插入點（#978 也改了這兩個檔案，但插入的 context 位置跟本次修法沒有重疊到需要人工介入的程度）；`test/mutants/` 底下 #978 新增／修改的五個檔案跟本次新增的兩個檔案（`961-restwidget-header-exception-chain-reintroduce.json`/`.patch`）互不相同名，目錄層級也不衝突。Rebase 後逐項核對：`grep -c "^<<<<<<<\|^=======$\|^>>>>>>>"` 對 `CHANGELOG.md`/`docs/production-readiness.md`/兩個修改過的原始碼檔案全部 0；`docs/production-readiness.md` 逐一核對「每個 `## ` 標題前恰好一個 `---` 分隔線」（17 個標題對 17 個分隔線，一一對應，含本節自己前後），排除「naive keep-both-sides 少一條分隔線」與「先前 fix 補兩條」這兩種已知失敗模式。
+
+**更正（原始報告誤判工具，實際是本文件自己的缺陷）**：上面那次 `grep` 檢查最初需要加 `-a` 才會有輸出——`docs/production-readiness.md` 不加 `-a` 直接印出空字串、連 exit code 都是「沒找到」而非「執行失敗」。原始報告把這歸因為「macOS 內建 BSD `grep` 對含中日文的 UTF-8 檔案的環境特有假訊號」，這個歸因是錯的，而且沒有實際查證就寫進報告。coordinator 複查後指出：CJK 文字本身不會讓 BSD `grep` 出這個問題（一個含中文與衝突標記的檔案不加 `-a` 照樣正常 grep）；會讓它出問題的是**這份文件自己在 rebase 前的某次編輯裡混進了一個真正的 NUL byte（`0x00`）**——本節上方「非 ASCII + 內嵌 NUL」測試向量的說明文字裡，`"Bearer 機密憑證A1B2C3` 後面原本寫的不是文字轉義，而是一個真的 `\x00` 位元組，直到 `trailer"` 才繼續。用 `python3 -c "print(open(f,'rb').read().count(b'\x00'))"` 逐檔核對：`docs/production-readiness.md` 當時是 **1**（缺陷），`CHANGELOG.md` 與兩個原始碼檔案是 **0**，兩個新增的 C# 測試檔（`RestWidgetHeaderValueLogLeakTests961.cs`/`RestEtlSourceHeaderValueLogLeakTests961.cs`）各是 **1**（兩者皆刻意、正確——測試方法本體真的需要一個位元組級的 NUL 才能觸發 `FormatException`，跟文件散文裡出現 NUL 是完全不同的情況）。**修法**：把文件裡那個真的 `0x00` 位元組換成純文字轉義 `\0`（兩個字元：反斜線、零），使文件用文字**描述**這個向量而不是**包含**它；換掉之後，同一條 `grep` 指令不加 `-a` 也能正常執行、正確印出 `0`——證實根因是這個 NUL byte，不是 BSD `grep` 對 CJK 的通用限制。教訓：工具在剛編輯過的檔案上出現非預期行為時，第一嫌疑對象是那個檔案，不是工具。
+
+Rebase 後重新測量（`origin/dotnet10` 新 tip `3887d7b11`，非原本的 `7a1695f80`）：`dotnet build WalkingTec.Mvvm.sln`——同一個 `NETSDK1082` browser-wasm 錯誤，重新對新 base commit 單獨重建同一個專案再次確認存在，非本次改動造成。`dotnet test test/WalkingTec.Mvvm.Core.Test/`：新 base **5032 passed, 0 failed**（#824/#978 淨增 31 個測試，5001→5032，與本次修法無關）→ 本分支 **5035 passed, 0 failed**（5032 + 本次新增的 3 個測試方法，數量不變）。`dotnet test test/WalkingTec.Mvvm.Etl.Test/`：**699 passed, 17 skipped（既有 Oracle 相關）, 0 failed**（含本次新增的 2 個測試方法，跟 rebase 前一致——#978 沒有動到 Etl.Test）。Mutant `961-restwidget-header-exception-chain-reintroduce`：rebase 後**連續重跑三次**，三次皆 `VERDICT: KILLED` / `GATE: PASS`，每次執行後 `git status` 確認目標檔案乾淨還原——entry JSON 本身在 rebase 前後**完全沒有編輯**，因為驗證顯示不需要。
+
+**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這兩個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。`WTMContext.CallApi.cs`/`Services/WtmApiClient.cs` 兩處同根因缺陷已由使用者另立 **#979** 追蹤，本文件僅記錄「找到了、為何不修」，不宣稱「已修」或「全樹已無殘留同形狀缺陷」——後者需要的是「同根因、不同形狀」的窮舉，本次的 grep 指令只窮舉了「同形狀」那一個維度。
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。

@@ -1,0 +1,19 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs b/src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs
+index 5215b7121..d090368e7 100644
+--- a/src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs
++++ b/src/WalkingTec.Mvvm.Core/Dashboard/RestWidgetDataSource.cs
+@@ -833,9 +833,13 @@ public class RestWidgetDataSource : IWidgetDataSource
+                     // Keep the header NAME (an operator needs it to find the misconfigured
+                     // entry) and the exception TYPE (diagnostic value); never the value, and
+                     // never the original exception object.
++                    // MUTANT test/mutants 961-restwidget-header-exception-chain-reintroduce:
++                    // the trailing `, ex` re-chains the original exception as InnerException,
++                    // reintroducing the #961 leak this fix removed. See test/mutants/entries/
++                    // 961-restwidget-header-exception-chain-reintroduce.json.
+                     throw new InvalidOperationException(
+                         $"REST widget: header '{h.Key}' was rejected by the HTTP stack " +
+-                        $"(possible invalid characters or CRLF in name/value; underlying error: {ex.GetType().Name}).");
++                        $"(possible invalid characters or CRLF in name/value; underlying error: {ex.GetType().Name}).", ex);
+                 }
+             }
+         }

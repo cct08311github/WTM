@@ -502,9 +502,21 @@ public sealed class RestEtlSource : IEtlSource
             }
             catch (Exception ex) when (ex is FormatException || ex is InvalidOperationException)
             {
+                // #961: do NOT chain `ex` as InnerException. For a parser-backed header
+                // (Authorization is the notable one) .NET's own FormatException.Message
+                // embeds the FULL raw attempted value — e.g. "The format of value 'Bearer
+                // <secret>' is invalid." — and this exception is later handed whole to a
+                // logger by EtlPipelineExecutor's catch (Exception ex) blocks. A logging
+                // sink that renders Exception.ToString() (the .NET default) walks the
+                // InnerException chain, so chaining `ex` here would put the secret value in
+                // application logs — reachable with no attack at all, just an operator
+                // mistyping a credential (an embedded newline from a paste, a stray control
+                // character). Keep the header NAME (an operator needs it to find the
+                // misconfigured entry) and the exception TYPE (diagnostic value); never the
+                // value, and never the original exception object.
                 throw new InvalidOperationException(
                     $"RestEtlSource: header '{kv.Key}' was rejected by the HTTP stack " +
-                    "(possible invalid characters or CRLF in name/value).", ex);
+                    $"(possible invalid characters or CRLF in name/value; underlying error: {ex.GetType().Name}).");
             }
         }
 
