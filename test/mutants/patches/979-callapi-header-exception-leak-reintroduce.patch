@@ -1,0 +1,21 @@
+diff --git a/src/WalkingTec.Mvvm.Core/WTMContext.CallApi.cs b/src/WalkingTec.Mvvm.Core/WTMContext.CallApi.cs
+index 76aa711..1fd9401 100644
+--- a/src/WalkingTec.Mvvm.Core/WTMContext.CallApi.cs
++++ b/src/WalkingTec.Mvvm.Core/WTMContext.CallApi.cs
+@@ -65,9 +65,13 @@ namespace WalkingTec.Mvvm.Core
+                                 // catch itself. Keep the header NAME (needed to find the
+                                 // misconfigured entry) and the exception TYPE (diagnostic value);
+                                 // drop the value and the original exception object entirely.
+-                                throw new InvalidOperationException(
+-                                    $"CallAPI: header '{item.Key}' was rejected by the HTTP stack " +
+-                                    $"(possible invalid characters or CRLF in name/value; underlying error: {ex.GetType().Name}).");
++                                // MUTANT test/mutants 979-callapi-header-exception-leak-reintroduce:
++                                // rethrowing the ORIGINAL FormatException (whose Message carries
++                                // the raw header value for a parser-backed header) instead of the
++                                // sanitized InvalidOperationException reopens the #979 leak this
++                                // fix removed. See test/mutants/entries/
++                                // 979-callapi-header-exception-leak-reintroduce.json.
++                                throw;
+                             }
+                         }
+                     }

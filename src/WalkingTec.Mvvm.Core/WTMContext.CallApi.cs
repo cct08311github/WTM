@@ -42,7 +42,33 @@ namespace WalkingTec.Mvvm.Core
                     {
                         if (client.DefaultRequestHeaders.Any(x => x.Key == item.Key) == false)
                         {
-                            client.DefaultRequestHeaders.Add(item.Key, item.Value);
+                            try
+                            {
+                                client.DefaultRequestHeaders.Add(item.Key, item.Value);
+                            }
+                            catch (FormatException ex)
+                            {
+                                // #979: do NOT let the original FormatException reach the broad
+                                // `catch (Exception ex)` below. For a parser-backed header
+                                // (Authorization is the notable one) .NET's own
+                                // FormatException.Message embeds the FULL raw attempted value,
+                                // and that broad catch hands `ex` whole to
+                                // WtmDiagnosticLogger.LogError(...), which a logging sink renders
+                                // via Exception.ToString() (the .NET default), leaking the secret
+                                // into application logs from nothing more than an operator
+                                // mistyping a header value (e.g. an embedded newline from a
+                                // paste). Same root cause and same fix shape as #961 (which
+                                // fixed RestWidgetDataSource/RestEtlSource, two sites that
+                                // already had a header-specific catch to chain-fix); here there
+                                // was no header-specific catch at all, so we add a narrow one
+                                // INSIDE the existing broad catch rather than widen the broad
+                                // catch itself. Keep the header NAME (needed to find the
+                                // misconfigured entry) and the exception TYPE (diagnostic value);
+                                // drop the value and the original exception object entirely.
+                                throw new InvalidOperationException(
+                                    $"CallAPI: header '{item.Key}' was rejected by the HTTP stack " +
+                                    $"(possible invalid characters or CRLF in name/value; underlying error: {ex.GetType().Name}).");
+                            }
                         }
                     }
                 }

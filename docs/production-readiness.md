@@ -364,6 +364,115 @@ Rebase 後重新測量（`origin/dotnet10` 新 tip `3887d7b11`，非原本的 `7
 
 **未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這兩個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。`WTMContext.CallApi.cs`/`Services/WtmApiClient.cs` 兩處同根因缺陷已由使用者另立 **#979** 追蹤，本文件僅記錄「找到了、為何不修」，不宣稱「已修」或「全樹已無殘留同形狀缺陷」——後者需要的是「同根因、不同形狀」的窮舉，本次的 grep 指令只窮舉了「同形狀」那一個維度。
 
+**更新（2026-08-01，#979）**：上面「刻意不修」的兩處已在 #979 修復——不是留待「後續獨立處理」的空話，這次真的關閉了。細節、探針證據（含對 #979 issue 文字本身一處描述錯誤的實測更正）、修法、掃描出的第三個同根因站點（同樣刻意不修）、測試與 mutation gate，見下一節「`WTMContext.CallApi`／`WtmApiClient` 的 header 值透過廣義例外洩漏進應用程式日誌（#979）」。
+
+---
+
+## `WTMContext.CallApi`／`WtmApiClient` 的 header 值透過廣義例外洩漏進應用程式日誌（#979，2026-08-01）
+
+**先重新推導、不採信 issue 文字**：`WTMContext.CallApi.cs`（`CallAPI<T>`）與 `Services/WtmApiClient.cs`（`CallAPI<T>`）都在迴圈裡對呼叫端傳入的 `headers` 字典逐一呼叫 `client.DefaultRequestHeaders.Add(item.Key, item.Value)`，**確實沒有任何 header 專屬的 try/catch**——這與 #961 修的 `RestWidgetDataSource`/`RestEtlSource`（已有專屬 catch，只是把原始例外鏈上去）是不同的形狀：#961 是「窄化後又鏈回去」，#979 是「完全沒有窄化」。`FormatException` 會直接穿透到整個方法外層那個涵蓋「發 HTTP 請求＋讀回應＋反序列化 JSON」全流程的既有廣義 `catch (Exception ex)`，該 catch 把 `ex` 整個交給 `WtmDiagnosticLogger?.LogError(...)`（`WTMContext.CallApi.cs`）或 `_logger?.LogError(...)`（`WtmApiClient.cs`）。
+
+**用自己的探針、對 .NET 10 實測，而非採信 issue 文字給的表格**（`dotnet run -c Release`）：
+
+```
+CRLF-embedded (Authorization)       :: THROW FormatException: The format of value 'Bearer secret-token\nX-Injected: 1' is invalid.
+CR-only-embedded (Authorization)    :: THROW FormatException: The format of value 'Bearer secret-tokenX-Injected: 1' is invalid.
+LF-only-embedded (Authorization)    :: THROW FormatException: ...
+NUL-embedded (Authorization)        :: THROW FormatException: The format of value 'Bearer secret-token trailer' is invalid.
+Chinese-text (Authorization)        :: NO-THROW
+Fullwidth-space (Authorization)     :: THROW FormatException: The format of value 'Bearer　secrettoken' is invalid.
+Latin1-supplement (Authorization)   :: NO-THROW
+Control-0x01 (Authorization)        :: THROW FormatException: ...
+DEL-0x7F (Authorization)            :: THROW FormatException: ...
+TAB (Authorization)                 :: NO-THROW
+CRLF-embedded (X-Api-Key)           :: THROW FormatException: New-line or NUL characters are not allowed in header values.
+NUL-embedded (X-Api-Key)            :: THROW FormatException: New-line or NUL characters are not allowed in header values.
+Chinese-text (X-Api-Key)            :: NO-THROW
+Fullwidth-space (X-Api-Key)         :: NO-THROW
+Control-0x01 (X-Api-Key)            :: NO-THROW
+DEL-0x7F (X-Api-Key)                :: NO-THROW
+TAB (X-Api-Key)                     :: NO-THROW
+```
+
+**與交辦時給的表格不完全相符，親自驗證後如實回報（不是照抄）**：CR/LF、NUL 會 THROW，純非 ASCII 文字（中文字、Latin-1 補充字元）NO-THROW——這兩點與給定表格一致。但表格宣稱「bare 控制字元 `0x01`、`DEL`、全形空白」在 `Authorization` 上 NO-THROW，**實測是 THROW**。追查原因：`Authorization` 是 parser-backed header，`HttpRequestHeaders.Add` 對它會用 `AuthenticationHeaderValue` 的 scheme/token 語法解析，比一般 header 的「只擋 CR/LF/NUL」驗證嚴格得多——同一批值（全形空白、`0x01`、`DEL`）改用一個未知/一般 header（`X-Api-Key`）测试則全部 NO-THROW，與表格相符。也就是說**表格對「一般 header」成立，但對 `Authorization` 本身不成立**——這正是 issue 文字裡「Authorization 是 parser-backed header」這句話沒有講完整的地方。這個差異不影響修法本身（`catch (FormatException)` 不分是哪一種驗證失敗都會抓到），但因為交辦訊息明確要求「不一致就如實回報，不要為了對表格而讓程式碼將就」，故記錄於此。回歸測試沿用「內嵌換行」這個 issue 本身點名的「realistic trigger」，不受這個差異影響。
+
+**修法**：在既有的廣義 `catch (Exception ex)` **裡面**新增一段 header 專屬的窄 `catch (FormatException)`，包住 `client.DefaultRequestHeaders.Add(item.Key, item.Value)` 這一行——不是把窄 catch 疊在廣義 catch 前面（那樣會連 `UriFormatException` 之類其他 `FormatException` 子類別的既有行為都一起改到），而是只包住這一個呼叫點：
+
+```csharp
+try
+{
+    client.DefaultRequestHeaders.Add(item.Key, item.Value);
+}
+catch (FormatException ex)
+{
+    throw new InvalidOperationException(
+        $"CallAPI: header '{item.Key}' was rejected by the HTTP stack " +
+        $"(possible invalid characters or CRLF in name/value; underlying error: {ex.GetType().Name}).");
+}
+```
+
+保留 header **名稱**（`item.Key`）與例外**型別**（`ex.GetType().Name`），捨棄值本身與原始例外物件——與 #961 相同精神，但套用位置不同：#961 是「刪掉既有窄 catch 裡鏈結原始例外的 `, ex`」，#979 是「在既有廣義 catch 裡面新增一段從未存在過的窄 catch」。合成出的 `InvalidOperationException` 繼續往外傳，落進**完全沒有改動過**的既有廣義 `catch (Exception ex)`——外層 catch 本身的程式碼一個字元都沒動，這是「新窄 catch 不改變廣義 catch 對其他例外的既有行為」這個驗收條件成立的結構性理由，不是靠測試才碰運氣證明。`Services/WtmApiClient.cs` 逐字同形狀，同步套用相同修法（訊息前綴改成 `WtmApiClient.CallAPI:` 以便日誌區分兩個呼叫路徑）。
+
+**全樹掃描同形狀缺陷，指令與結果原文列出，涵蓋整個 repo 而非只有 `src/`**：
+
+```
+grep -rn "Headers\.Add(" --include="*.cs" . | grep -v '/bin/\|/obj/'
+```
+
+結果：`src/`、`demo/`、`test/` 三處都有命中。`demo/WalkingTec.Mvvm.BlazorDemo/.../ServiceExtension.cs` 兩處與 `src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs`／`src/WalkingTec.Mvvm.Core/Helper/IServiceExtension.cs` 各兩處，都是框架啟動時註冊的固定字面值（`Cache-Control: no-cache`、寫死的 User-Agent 字串），不是呼叫端可控輸入，跟本次缺陷的「呼叫端提供的字典/字串」前提不成立，不在風險範圍。`test/` 底下的命中全部是測試程式碼本身在建構請求（`X-Forwarded-For`、`Idempotency-Key` 等），不是生產路徑。生產路徑上，`req.Headers.Add(name, value)`／`client.DefaultRequestHeaders.Add(name, value)` 搭配「呼叫端可控值、無 header 專屬 catch」這個確切形狀，**只有本次修的兩處**（`WTMContext.CallApi.cs:47`、`WtmApiClient.cs:63`）。
+
+**掃描另外發現、根因相同、本次刻意不修的第三個/第四個站點**：同一輪掃描發現 `WTMContext.CallApi.cs:77` 與 `WtmApiClient.cs:93` 各有一行 `client.DefaultRequestHeaders.Add("Authorization", "Bearer " + LoginUserInfo?.RemoteToken)` / `... + authToken)`——不是迴圈跑 `headers` 字典，而是**單一固定 header 名稱**、值來自 `LoginUserInfo.RemoteToken`（遠端 token，可能是格式不正確的憑證）或 `authToken` 參數。這兩處同樣落在**同一個**、本次已修過的方法內、**同一個**既有廣義 catch 之內，理論上如果 `RemoteToken`/`authToken` 帶有 CR/LF/NUL，一樣會讓 `FormatException.Message`（含完整 Bearer token）穿透到 `LogError`。但這兩處**不是 #979 issue 文字點名的形狀**（issue 明確講的是 `item.Key`/`item.Value` 這個迴圈），header 名稱固定為 `"Authorization"` 也代表「記錄 header 名稱」這個診斷手段在這裡沒有意義（永遠都是 Authorization，不需要靠名稱去定位是哪個 header）。刻意不在本次一併修——跟 #961 對 `WTMContext.CallApi.cs`/`WtmApiClient.cs` 的處理方式一致：找到了、記錄下來、不擴大這次 P1 修復的 diff 範圍去涵蓋 issue 沒有點名的程式碼。**這是本文件第二次記錄這個模式的殘留站點；建議下一輪安全掃描直接把「固定 header 名稱、值來自可能不受信任的來源字串、無 header 專屬 catch」列為自己的檢查項，不要等下一個 issue 再重新用 grep 發現一次。**
+
+**測試**：`test/WalkingTec.Mvvm.Core.Test/Security/WtmContextCallApiHeaderLogLeakTests979.cs`（對應 `WTMContext.CallApi.cs`）與 `test/WalkingTec.Mvvm.Core.Test/Services/WtmApiClientHeaderLogLeakTests979.cs`（對應 `WtmApiClient.cs`），各三條測試，結構相同：
+
+1. **洩漏測試**：`Authorization` header 值帶內嵌換行（`"Bearer {secret}\nX-Injected: evil"`），驅動真正的 `CallAPI<T>`（mock `IHttpClientFactory`/`HttpMessageHandler`，並用 callCount 斷言「header 拒絕發生在任何 HTTP 請求送出之前」），用一個同時記錄格式化訊息「與」exception 物件本身的 `CapturingLogger`（模擬真實 sink 另外印 `exception.ToString()` 的行為），斷言 `logger.FullRenderedOutput` 不含 secret 片段。RED-before-fix（對未修的程式碼跑，逐字擷取）：
+
+   ```
+   WTMContext.CallApi.cs 版本：
+   Did not expect logger.FullRenderedOutput "CallAPI failed to 'http://test/api'
+   System.FormatException: The format of value 'Bearer s3cr3t-A1B2C3-do-not-log-me
+   X-Injected: evil' is invalid.
+      at System.Net.Http.Headers.HttpHeaderParser.ParseValue(...)
+      at System.Net.Http.Headers.HttpHeaders.ParseAndAddValue(...)
+      at System.Net.Http.Headers.HttpHeaders.Add(...)
+      at WalkingTec.Mvvm.Core.WTMContext.CallAPI[T](...) in .../WTMContext.CallApi.cs:line 45"
+   to contain "s3cr3t-A1B2C3-do-not-log-me" because the secret must never reach the log, ...
+
+   WtmApiClient.cs 版本：
+   Did not expect logger.FullRenderedOutput "API call failed to http://test/api
+   System.FormatException: The format of value 'Bearer s3cr3t-A1B2C3-do-not-log-me
+   X-Injected: evil' is invalid.
+      ...
+      at WalkingTec.Mvvm.Core.Services.WtmApiClient.CallAPI[T](...) in .../WtmApiClient.cs:line 61"
+   to contain "s3cr3t-A1B2C3-do-not-log-me" because the secret must never reach the log, ...
+   ```
+
+   刪掉哪一行會讓它變紅：把新增的 `try { client.DefaultRequestHeaders.Add(item.Key, item.Value); } catch (FormatException ex) { throw new InvalidOperationException(...); }` 整段換回原本的 `client.DefaultRequestHeaders.Add(item.Key, item.Value);` 單行（或如 mutant 所證，只把 `throw new InvalidOperationException(...)` 換成 `throw;` 就夠）。
+
+2. **正控組**：同樣的內嵌換行值，斷言 `logger.FullRenderedOutput` 仍含 `"Authorization"`。RED-before-fix（同一次未修程式碼上的執行）：
+
+   ```
+   Expected logger.FullRenderedOutput "...FormatException: The format of value 'Bearer irrelevant-value
+   X-Injected: evil' is invalid. ..." to contain "Authorization" because an operator must still be able to tell WHICH header was rejected.
+   ```
+
+   這條紅燈本身是個發現：.NET 對 `Authorization` 的 `FormatException.Message` **從來不提header 名稱**（訊息固定是 "The format of value '...' is invalid."），所以未修的程式碼不只洩漏密鑰，連「是哪個 header 被拒絕」這個診斷資訊都給不出來——正控組在 RED 階段就同時證明了這兩件事。刪掉哪一行會讓它變紅：把合成訊息 `$"CallAPI: header '{item.Key}' was rejected..."` 裡的 `{item.Key}` 拿掉（或整段換成不含 header 名稱的通用文字）——這是跟洩漏測試不同的一行/token，證明正控組驗證的是獨立於洩漏本身的另一個性質，不是同一斷言的重複包裝。
+
+3. **廣義 catch 迴歸測試**：不帶 `headers` 參數，改用會丟 `HttpRequestException("connection-refused-sentinel-42")` 的 mock handler（#979 的修法完全不會碰到這條路徑），斷言 (a) `result.ErrorMsg` 仍是修法前就存在的固定通用文字，(b) logger 仍完整收到含 sentinel 字串的例外。這條測試在未修的程式碼上**本來就是綠燈**（不是 RED-before-fix 的一員），刪掉哪一行會讓它變紅：既有的 `WtmDiagnosticLogger?.LogError(ex, ...)`（`WTMContext.CallApi.cs:126`）或 `_logger?.LogError(ex, ...)`（`WtmApiClient.cs:145`）——這兩行跟 #979 的修法完全無關，說明這條測試的角色是「證明新窄 catch 沒有動到廣義 catch 的既有行為」，不是「驗證新程式碼有沒有寫對」，兩者角色不同必須分開報。
+
+**Mutation gate**：`test/mutants/entries/979-callapi-header-exception-leak-reintroduce.json`（patch 把 `WTMContext.CallApi.cs` 裡合成的 `throw new InvalidOperationException(...)` 換成裸的 `throw;`，重新讓原始 `FormatException` 不受影響地穿透到廣義 catch，一行、compile-preserving）。**`kind` 選 `security`**：這是貨真價實的機密外洩，不是邊緣案例，符合 `VALID_KINDS` 的字面定義。
+
+過程中兩個值得記錄的迭代（都是靠實際跑 `run_mutant.py` 才發現，不是先驗猜到）：
+
+- **第一次選的 green_test（positive control）是錯的**：一開始選 2 號測試（「header 名稱仍留在日誌裡」的正控組）當作這個 mutant 的 green_test，實際跑出 `VERDICT: POSITIVE_CONTROL_FAILED`——不是 bug，是真的：這個 mutant 的 `throw;` 會讓原始 `FormatException`（訊息裡從不含 header 名稱，見上方「正控組」小節）取代合成訊息，所以 2 號測試在這個 mutant 底下**本來就該紅**，跟 1 號洩漏測試紅的是同一行程式碼、不是獨立性質，不能當 positive control。改用 3 號「廣義 catch 迴歸測試」（完全不同的程式路徑，這個 mutant 的 patch 根本沒碰到）當 green_test 後，`VERDICT` 變成預期的 `KILLED`。
+- **`red_expected_assertion_patterns` 取自一次真的跑過 `run_mutant.py`（`-c Release` build，對應 #959 的 Debug/Release 差異）的執行**，而非先猜測——先用一個佔位字串跑，正確得到 `VERDICT: UNEXPECTED_RED`（pattern 沒對到，不是抓錯原因），改成錨定在 FluentAssertions 固定尾綴文字（`to contain "s3cr3t-A1B2C3-do-not-log-me" because the secret must never reach the log`，跟多行的例外堆疊分開，避免 Python `re` 預設 `.` 不吃換行的老問題——#961 已經記過一次這個教訓，這次直接套用而非重踩）後重跑變 `VERDICT: KILLED`。
+
+**寫入 entry JSON 前確認決定性**：修正 green_test 與 pattern 之後，同一份 entry 連續執行 **三次**，三次皆 `VERDICT: KILLED` / `GATE: PASS`，且每次執行後 `git status --porcelain -- src/WalkingTec.Mvvm.Core/WTMContext.CallApi.cs` 皆為空輸出，確認目標檔案乾淨還原。**`Services/WtmApiClient.cs` 的同形狀缺陷刻意不另開第二個 mutant entry**——`run_mutant.py` 的 scope 檢查限制一個 patch 只能動一個 `target_file`，而 `WtmApiClientHeaderLogLeakTests979.cs` 已經對該檔案的修法做了同樣三條直接測試（洩漏／正控組／廣義 catch 迴歸），第二個 mutant 只會增加 gate 執行時間、不會增加這條直接測試沒有涵蓋到的證據。
+
+**驗證**：`find . -name 'demo.db*' -path '*bin*' -delete && dotnet build WalkingTec.Mvvm.sln`——1 個已知、跟本次修改無關的錯誤：`NETSDK1082`（`BlazorDemo.Client` 缺 `browser-wasm` runtime pack），**直接對本次 base commit（`origin/dotnet10` tip `46d5bc576`）單獨重建同一個專案確認過同一個錯誤存在**，不是修法造成的新問題。`dotnet test test/WalkingTec.Mvvm.Core.Test/`：base **5035 passed, 0 failed**（在乾淨 worktree、修改任何檔案之前跑過確認），修復後 **5041 passed, 0 failed**（5035 + 本次新增的 6 個測試方法，數量吻合）。
+
+**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。`WTMContext.CallApi.cs:77`/`WtmApiClient.cs:93`（Authorization header 透過 `RemoteToken`/`authToken` 組成）兩處同根因缺陷本文件僅記錄「找到了、為何不修」，不宣稱「已修」；全樹掃描指令這次涵蓋了整個 repo（不只 `src/`），但只窮舉了「呼叫 `Headers.Add`」這一個 API 形狀，不證明沒有其他方式（例如 `TryAddWithoutValidation` 之後在別處被驗證/記錄、或非 `HttpRequestHeaders` 的其他 header 表示方式）可能存在結構不同但根因相同的洩漏路徑。
+
 ---
 
 ## 安全姿態（2026-07 重評）
