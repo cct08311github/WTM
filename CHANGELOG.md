@@ -57,29 +57,72 @@ test-evidence row for the full breakdown and for why these are test fixes, not a
 
 ### Migration
 
-- **A background job that writes a `FileAttachment`-typed foreign key must construct its
-  `IDataContext` scoped to that entity's own tenant — `Wtm.CreateDC(currentTenant: "...")` —
-  before this guard's resolution query runs, or the write will be rejected even when the FK is
-  legitimate.** This is the same rule #899 already established for the WorkFlow module's read
-  side (`WalkingTec.Mvvm.WorkFlow.ServiceCollectionExtensions.ResolveDataContext` stamps the
-  caller's tenant via `SetTenantCode` after `CreateDC()` specifically so its own `ITenant` query
-  filter resolves correctly) — the guard's resolution query uses the exact same `ITenant` filter,
-  so a context left at its default (usually null) tenant cannot resolve a real, same-tenant
-  `FileAttachment` any more than it could resolve a forged cross-tenant one. A background/timer
-  service that uploads or links files on a tenant's behalf without stamping that tenant onto its
-  own `DataContext` will see previously-silent writes start failing with
-  `UnresolvableFileAttachmentReferenceException` after upgrading.
+- **A background job that writes a `FileAttachment`-typed foreign key referencing a file that
+  already exists must construct its `IDataContext` scoped to that entity's own tenant before this
+  guard's resolution query runs, or the write will be rejected even when the FK is legitimate.**
+  **Correction (#984): an earlier draft of this entry named `Wtm.CreateDC(currentTenant: "...")` —
+  that method does not exist. `WTMContext.CreateDC` (`WTMContext.CreateDC.cs:14`) is
+  `CreateDC(bool isLog = false, string? cskey = null, bool logerror = true)`; it has no
+  `currentTenant` parameter, and code written that way does not compile.** The `currentTenant`
+  parameter lives on `IWtmDataContextFactory.CreateDC`
+  (`src/WalkingTec.Mvvm.Core/Services/IWtmDataContextFactory.cs`), resolved from DI — this is the
+  same rule #899 already established for the WorkFlow module's read side
+  (`WalkingTec.Mvvm.WorkFlow.ServiceCollectionExtensions.ResolveDataContext` stamps the caller's
+  tenant via `SetTenantCode` **after** a parameterless `CreateDC()` — deliberately never via
+  `CreateDC(currentTenant: ...)`, because for a tenant with `IsUsingDB == true` and no explicit
+  connection-string key that parameter reroutes the whole context to a *different physical
+  database* instead of merely tagging the tenant — `WtmDataContextFactory.CreateDC`'s `IsUsingDB`
+  branch calls `CreateTenantDC`; see `ResolveDataContext`'s own doc comment for the full
+  reasoning). The guard's resolution query uses the exact same `ITenant` filter, so a context left
+  at its default (usually null) tenant cannot resolve a real, same-tenant `FileAttachment` any
+  more than it could resolve a forged cross-tenant one.
 
-- **Wholesale-attach edits of legacy-polluted rows will now be rejected — loud, not silent.** WTM's
-  edit path is detached-attach (`EmptyContext.UpdateEntity` sets the whole entity to `Modified`),
-  so this guard re-validates EVERY `FileAttachment`-typed FK on an edited row against the editing
-  caller's own tenant scope, including one that did not change in this request and was written
-  before this guard existed (or by a caller from a different tenant than the file's own owner).
-  Before this guard, such a row could be edited freely as long as nothing else checked the
-  pre-existing FK's resolvability; after it, the same edit is rejected until the offending FK is
-  corrected or cleared. Run the following BEFORE upgrading to find rows this affects — adapt the
-  table/column names to every `FileAttachment`-typed foreign key your own models declare (the
-  columns EF Core's own relationship metadata resolves for you at runtime are exactly the ones
+  **This fixes only linking to a file that already exists — it does NOT fix a background job that
+  itself uploads a new file on a tenant's behalf, and is not sufficient advice for that case.**
+  `WtmFileProvider.Upload` (`WtmFileProvider.cs:135`) and `WtmDataBaseFileHandler.UploadToDB`
+  (`WtmDataBaseFileHandler.cs:58`, which takes no `IDataContext` parameter to scope at all) both
+  stamp the new `FileAttachment.TenantCode` from ambient `WTMContext.LoginUserInfo?.CurrentTenant`
+  — never from the caller-scoped `IDataContext`. A background/timer service has no logged-in
+  identity, so `LoginUserInfo` is null and anything it uploads still gets `TenantCode = null`
+  no matter how carefully its `IDataContext` was scoped via the factory above. Tracked separately
+  as **#988**; not fixed in this release.
+
+- **Correction (#984): the previous wording of this bullet had the guard's behaviour backwards.**
+  It claimed every edit re-validates EVERY `FileAttachment`-typed FK on the row, "including one
+  that did not change in this request," and that a legacy-polluted row would therefore be
+  "rejected — loud, not silent" on its next edit. That describes the guard's behaviour BEFORE it
+  was narrowed to fix an over-rejection bug found in adversarial review (Finding 4, see the
+  `### Security` entry above and `docs/production-readiness.md`'s matching row); the CHANGELOG
+  wording was never updated to match.
+
+  **The actual rule: the guard only rejects a `FileAttachment`-typed FK whose POSTED VALUE
+  DIFFERS from what is currently persisted for that exact row.** WTM's edit path is
+  detached-attach (`EmptyContext.UpdateEntity` sets the whole entity to `Modified`, so EF marks
+  every scalar property `IsModified = true` regardless of whether the caller's request actually
+  touched it), but `IsModified` alone does not trigger re-validation: for each such FK on a
+  Modified entry, the guard additionally reads the row's actually-persisted value via
+  `EntityEntry.GetDatabaseValues()` and skips validation entirely when the posted value already
+  equals it (`FileAttachmentSaveChangesGuard.cs:430-433` — `if (persistedId == modifiedId) {
+  continue; }`) — nothing new is being introduced. Only a posted value that genuinely differs from
+  what is persisted (a real new reference — the actual #824 attack shape, and any legitimate
+  change too) is resolved against the editing caller's own tenant scope and rejected if it does
+  not resolve. **A row with a pre-existing, unresolvable (legacy-polluted or forged) FK is NOT
+  rejected merely by being edited** — a plain rename, or any edit that leaves that FK untouched,
+  persists exactly as it did before this guard shipped; the pollution is carried forward silently,
+  not surfaced. (`test/WalkingTec.Mvvm.Core.Test/VM/FileAttachmentSaveChangesGuardBypassPathTests824.cs`'s
+  `DoEdit_NonTenantRow_UnchangedCrossTenantPhotoFK_RenameSucceeds` and
+  `DoEdit_NullTenantFileFK_UnchangedByRealTenantCaller_RenameSucceeds` are the regression tests
+  for this — both assert the edit MUST succeed; deleting the `if (persistedId == modifiedId)`
+  check above turns both red. `UpdateProperty_ChangedFromExistingLegitimatePhotoFK_StillRejectedByGuard_NotPersisted`
+  in the same file is the matching non-regression control: a FK actually CHANGED to an
+  unresolvable value is still rejected.)
+
+  Run the following at any time — this is **not** an upgrade blocker, since an unresolvable
+  pre-existing FK does not by itself cause a rejection — to find out how much polluted data
+  exists today and which rows will be rejected the next time each row's OWN FK is actually changed
+  to a (still-unresolvable) value. Adapt the table/column names to every `FileAttachment`-typed
+  foreign key your own models declare (the columns EF Core's own relationship metadata resolves
+  for you at runtime are exactly the ones
   `DCExtension.IsFileAttachmentForeignKeyProperty`/`FileAttachmentSaveChangesGuard` check; there is
   no single query that discovers them across an arbitrary schema without also walking that same
   metadata):
@@ -87,8 +130,9 @@ test-evidence row for the full breakdown and for why these are test fixes, not a
   ```sql
   -- Repeat once per FileAttachment-typed FK column you have (e.g. Students.PhotoId,
   -- Products.PhotoId, ...). Finds rows whose FK does not resolve to an existing FileAttachment
-  -- under that row's OWN tenant — exactly what FileAttachmentSaveChangesGuard will reject the
-  -- next time that row is wholesale-edited.
+  -- under that row's OWN tenant. This is an INVENTORY of existing pollution, not a list of rows
+  -- that will fail on their next save -- a row here is only rejected once a caller actually
+  -- CHANGES its own FK to a new (still-unresolvable) value; re-saving it unchanged succeeds.
   SELECT t.Id, t.PhotoId, t.TenantCode AS RowTenant
   FROM YourTable t
   LEFT JOIN FileAttachments fa
@@ -99,11 +143,11 @@ test-evidence row for the full breakdown and for why these are test fixes, not a
   ```
 
   A row returned by this query is either (a) a genuinely forged/legacy cross-tenant reference —
-  the exact thing #824 exists to reject — or (b) a false positive from a schema whose tenant
-  comparison is not a simple equality (adapt the `ON` clause accordingly). Either way, resolve it
-  (clear the FK, or re-point it at a same-tenant file) before the row is next edited through any
-  path that calls `SaveChanges`, or the edit will fail loud instead of the silent acceptance it had
-  before this guard shipped.
+  the exact thing #824 exists to reject on a NEW write — or (b) a false positive from a schema
+  whose tenant comparison is not a simple equality (adapt the `ON` clause accordingly). Resolving
+  (a) proactively (clear the FK, or re-point it at a same-tenant file) is still recommended: the
+  moment any caller posts a genuinely different value for that FK, the edit will fail loud instead
+  of the silent acceptance it always had for an untouched one.
 
 **Adversarial review of PR #978 (8 findings, all addressed — 5 fixed, 3 disclosed via a throttled
 log or a corrected comment rather than fixed): full reasoning, what was fixed vs. disclosed and
