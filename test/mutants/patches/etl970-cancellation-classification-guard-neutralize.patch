@@ -1,0 +1,12 @@
+diff --git a/src/WalkingTec.Mvvm.Etl/Pipeline/EtlPipelineExecutor.cs b/src/WalkingTec.Mvvm.Etl/Pipeline/EtlPipelineExecutor.cs
+index d83c0b310..4df6bc90d 100644
+--- a/src/WalkingTec.Mvvm.Etl/Pipeline/EtlPipelineExecutor.cs
++++ b/src/WalkingTec.Mvvm.Etl/Pipeline/EtlPipelineExecutor.cs
+@@ -757,7 +757,6 @@ public class EtlPipelineExecutor
+                 // OperationCanceledException, so it always converges on the same
+                 // catch (OperationCanceledException) that the delay-time cancellation
+                 // path (Task.Delay below, caught above) already uses.
+-                cancellationToken.ThrowIfCancellationRequested();
+ 
+                 if (attempt >= maxRetries)
+                 {

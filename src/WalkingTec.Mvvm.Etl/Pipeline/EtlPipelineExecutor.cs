@@ -739,8 +739,33 @@ public class EtlPipelineExecutor
                 // Don't swallow — caller's outer try/catch handles abort.
                 throw;
             }
-            catch when (attempt < maxRetries && !cancellationToken.IsCancellationRequested)
+            catch (Exception)
             {
+                // #970: cancellation can already be requested at the exact instant the
+                // loader throws a TRANSIENT (non-cancellation) failure — not only later,
+                // during the backoff delay below. The old
+                // `catch when (attempt < maxRetries && !cancellationToken.IsCancellationRequested)`
+                // filter treated "cancellation already requested" as "this catch does not
+                // match", so the transient exception's OWN type propagated untouched —
+                // past the OperationCanceledException-only catch above, which can't match
+                // it — all the way to the caller's general `catch (Exception ex)`. That
+                // reported an operator-cancelled run as an ordinary data failure
+                // (Aborted=false, a sanitized data-error message) instead of an abort.
+                //
+                // Checking cancellation FIRST here — before deciding retry vs. give up —
+                // converts every cancellation observed at this point into
+                // OperationCanceledException, so it always converges on the same
+                // catch (OperationCanceledException) that the delay-time cancellation
+                // path (Task.Delay below, caught above) already uses.
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (attempt >= maxRetries)
+                {
+                    // Retries exhausted and NOT cancelled: genuine data failure —
+                    // rethrow unchanged, same shape as before this fix.
+                    throw;
+                }
+
                 attempt++;
                 onRetryStarted();
                 // Exponential w/ full jitter; attempt is capped at 50 so

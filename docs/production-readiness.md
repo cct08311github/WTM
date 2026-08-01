@@ -153,6 +153,36 @@ for idx in range(len(starts) - 1):
 
 ---
 
+## ETL 批次重試 backoff catch 把「cancellation 恰好撞上 transient 例外」誤判成資料失敗（#970，2026-08-01）
+
+`EtlPipelineExecutor.BulkLoadWithRetryAsync`（每個 batch 的重試-with-backoff 邏輯）原本用一個 `catch when (attempt < maxRetries && !cancellationToken.IsCancellationRequested)` 過濾器決定「這次失敗要不要重試」。這個 `when` 過濾器是在 loader 拋出 transient 例外的**當下**被評估——如果 cancellation 在那個瞬間**已經**被要求，過濾器算出 false，這個 catch 就不吃這個例外；由於例外本身不是 `OperationCanceledException`，它上面的 `catch (OperationCanceledException) { throw; }` 也接不住，於是這個 transient 例外原封不動往外傳，一路傳到 `ExecuteAsync` 最外層的一般 `catch (Exception ex)`，回報 `Success=false`、**`Aborted=false`**、`ErrorMessage` 是經過 sanitize 的資料錯誤訊息——呼叫端因此把一次操作者主動取消的 run，誤判成一次普通的資料失敗（無法用字串比對補救，因為 `ErrorMessage` 根本不是 `"Job was aborted"`）。
+
+**五條 cancellation 路徑窮舉（`EtlPipelineExecutor.cs` 行號為修復後的版本）：**
+
+| 情境 | 命中的 catch | 修復前 `Aborted` | 修復後 `Aborted` |
+|---|---|---|---|
+| 1. 重試 backoff 的 `Task.Delay`（`:778`）中收到 cancellation | `:737 catch (OperationCanceledException) → throw` → 外層 `:479` | **true**（本來就對） | true（未變） |
+| **2. loader 拋出 transient 例外的當下，cancellation 已經被要求** | 修復前：`:742` 的 `when` 過濾器算出 false，兩個 catch 都不吃，例外原樣外傳到 `:502`。修復後：`:742 catch (Exception)` 不再有 `when`，進入後先呼叫 `:760 cancellationToken.ThrowIfCancellationRequested()` 轉成 OCE → 外層 `:479` | **false（缺陷）** | **true（本次修復）** |
+| 3. 其他 `OperationCanceledException`（`:198` 主迴圈 extract、`:864` dry-run extract、`EnsureStagingTableAsync`/`TruncateStagingAsync`/`ReplaceAsync`/`MergeAsync` 等尊重傳入 token 的呼叫） | 外層 `:479`（主 pipeline）或 dry-run 自己的 `:938` | true | true（未變） |
+| 4. Dry-run 路徑（`ExecuteDryRunAsync`，完全不呼叫 `BulkLoadWithRetryAsync`） | `:938 catch (OperationCanceledException)` | true，`"Dry-run aborted."` | true（未變） |
+| 5.（負控組）重試預算用盡、**從未**收到 cancellation 的真實資料失敗 | 修復前後都落到 `:502`（`if (attempt >= maxRetries) throw;`） | false | false（未變，負控組通過） |
+
+**修法**：把第 2 條路徑的判斷從「進 catch 前的 `when` 過濾器」搬進 catch 本體——`catch (Exception)` 不再用 `when` 篩選，進入後**先**呼叫 `cancellationToken.ThrowIfCancellationRequested()`，cancellation 一旦已經被要求就在這裡直接轉成 `OperationCanceledException`（收斂到跟第 1 條路徑同一個外層 `catch (OperationCanceledException)`）；沒有 cancellation 時才照舊判斷 `attempt >= maxRetries`（用盡預算就原樣 `throw;`，真實資料失敗的分類完全不變）。**沒有**放寬 `:479` 的外層 catch 去吃更多例外類型——那會讓第 5 條（真實資料失敗）也被誤判成 Aborted，是同一種缺陷的鏡像版本。
+
+**測試**：`test/WalkingTec.Mvvm.Etl.Test/Pipeline/RetryWithBackoffTests.cs` 新增 `MockBulkLoader.OnBeforeTransientFailureThrown`（`src/WalkingTec.Mvvm.Etl/Testing/MockBulkLoader.cs`，隨框架發布的測試輔助類別新增的 event，在模擬的 transient 例外離開該方法前**同步**觸發）取代舊測試唯一依賴的 `cts.CancelAfter(100)` 對抗 1000ms base delay 的 wall-clock 賽跑——**這條賽跑本身就是 flake 的來源，不是單純的計時巧合**：full-jitter backoff 抽 `Random.Shared.NextInt64(0, ceilingMs + 1)`，早期嘗試若抽到很小的 jitter，100ms 內可能已經跑過好幾次重試，剛好在某次 throw 的瞬間被取消，直接撞上第 2 條路徑的缺陷。
+
+- `Cancellation_during_retry_backoff_aborts_immediately`（既有，重寫）——用 `TaskCompletionSource`＋`RunContinuationsAsynchronously` 等待第一次 transient 失敗「已經拋出」的訊號才呼叫 `cts.Cancel()`，並把 base/max delay 拉大到 1,000,000/2,000,000ms，讓 full-jitter 抽到剛好 0（會整段跳過 `Task.Delay`）的機率從原本的約 1/2001 降到約 1/2,000,001。修復前後都綠，驗證第 1 條路徑未受影響（修復前單獨跑過，見下）。
+- `Cancellation_already_requested_when_transient_thrown_aborts_immediately`（新增）——在 `OnBeforeTransientFailureThrown` 事件內**同步**呼叫 `cts.Cancel()`，決定性地重現「cancellation 已經被要求、loader 才拋出 transient 例外」這個瞬間，不靠任何計時。`MaxBatchRetries = 0` 是刻意選擇，不是隨手帶的參數：跑 mutation gate 時第一版用 `MaxBatchRetries = 3` 曾經讓移除 `ThrowIfCancellationRequested()` 的 mutant 判定成 `UNEXPECTED_RED`（`Assert.IsFalse failed.`，即整個 run 意外成功）——原因是拿掉檢查後程式碼會落到 `attempt++`/`Task.Delay`，而 `Task.Delay` 對「呼叫當下 token 已經被取消」自己就會短路成已取消的 Task，讓 mutant 有機率仍然意外收斂到 `Aborted=true`（或若 full-jitter 剛好抽到 0、整段跳過 `Task.Delay`，甚至讓重試無聲成功）——兩種情形都不是決定性地證明這個測試真的在測 `ThrowIfCancellationRequested()` 這一行。改成 `MaxBatchRetries = 0` 後，`attempt >= maxRetries` 立刻成立，能讓程式碼走到 `Aborted=true` 的唯一路徑就只剩 `ThrowIfCancellationRequested()` 本身，mutant 才會每次確定性地被抓到。**RED-before-fix**（暫時把 production 修法還原、只保留測試改動後實測）：`Assert.IsTrue failed. Cancellation already requested when the transient exception is thrown must still surface as Aborted.`——同一輪跑其餘 8 個既有測試全綠（含上面的 `Cancellation_during_retry_backoff_aborts_immediately`），證明缺陷只影響第 2 條路徑，不是測試環境或 mock 改動本身的問題。同一個 `MaxBatchRetries = 0` 形狀也補進了既有的 `Default_no_retry_first_failure_aborts_job`（新增 `Assert.IsFalse(result.Aborted, ...)`），跟這條新測試組成一組乾淨的最小對照組：相同設定下，唯一的差異是有沒有 cancellation。
+- `Failures_beyond_budget_abort_job_with_retry_count`（既有，新增一行負控組斷言）——`Assert.IsFalse(result.Aborted, ...)`：重試預算用盡、全程沒有 cancellation 的真實資料失敗必須維持 `Aborted=false`。沒有這條斷言，一個把 `Aborted` 無條件設成 true 的錯誤修法會同時通過前兩條測試卻仍然是錯的。
+
+**穩定性**：`RetryWithBackoffTests` 整個測試類別（10 個測試方法，含上述兩個 cancellation 測試）連續執行 **50 次，50/50 全綠**，0 flake——驗證新的訊號式同步機制（而非計時）確實消除了原本的 wall-clock 賽跑。
+
+**Mutation gate**：`test/mutants/entries/etl970-cancellation-classification-guard-neutralize.json`，移除修法核心的 `cancellationToken.ThrowIfCancellationRequested();`（`:760`）呼叫（compile-preserving——`cancellationToken` 在同方法其餘兩處仍被使用，不會產生未使用變數警告）。`VERDICT: KILLED`。**`kind` 選擇與理由**：本缺陷是「cancellation 分類錯誤」的可觀測性／正確性問題，不涉及未授權存取、injection、租戶隔離或憑證——不是傳統意義的安全漏洞。但 `run_mutant.py` 的 `VALID_KINDS` 目前只接受 `security`／`selftest` 兩種，`selftest` 明文保留給測試 runner 自身邏輯（見 `test/mutants/manifest.json` 的 `$comment`），不適用於一個真實的 production mutant。在現有 schema 下 `security` 是唯一能讓這個 mutant 被 CI 的 `mutants` job 實際執行、且非 KILLED 會擋 gate 的功能性選項，因此選了 `security`，但誠實記錄：這會把 `security`-kind entry 數從 60 推到 61，讓 #968（gate 逐項 timeout budget 是照 45 個 entry 的公式推導，在 60 個時已經吃緊）的落差再拉大一點——本次修復沒有動 #968 本身（scope 之外），值得另開一個「幫非安全性 mutant 加一個新 kind」的 issue，但 HARD CONSTRAINT 禁止本次呼叫任何 Gitea API 開票，故僅在此與 CHANGELOG 明講，留待 user 自行決定是否開票。
+
+**已知、本次沒有稽核／沒有動的相關路徑（誠實揭露，不是缺陷清單的延伸）**：`EtlPipelineExecutor.cs` 裡另外三個 dead-letter 清理／flush 呼叫（`:157` 執行前清理、`:344` 週期性 flush、`:448`/`:460` 成功後 flush）全部包在會吞下**所有**例外（含 `OperationCanceledException`）且從不 rethrow 的 best-effort try/catch 裡——cancellation 若剛好撞上這幾個呼叫，不會立刻讓這次 run 中止，但也不會被永久遺失，下一個會檢查 token 的地方（例如下一輪 `:198` 的 `ThrowIfCancellationRequested()`）仍然會抓到；這是修復前就存在、刻意設計的 best-effort 語意，本次修復沒有觸碰。另外，`:412`–`:435` 的 `AddLineageRecordAsync`（僅 `EnableLineage=true` 時執行）沒有包在任何吞例外的 catch 裡——如果 cancellation 剛好在 merge 與 watermark commit 都已經成功之後、寫 lineage 記錄的當下才被要求，整個 run 會回報 `Aborted=true`，即使實際的資料載入已經完全成功；這條路徑機制上正確收斂到 `:479`（跟第 1/3 條路徑同一機制，不是本次修復動過的程式碼），但「run 明明成功了卻回報 Aborted」是不是正確的語意，是本次 issue 沒有要求、也沒有稽核過的獨立問題，這裡只誠實點名，不宣稱已經處理。
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。

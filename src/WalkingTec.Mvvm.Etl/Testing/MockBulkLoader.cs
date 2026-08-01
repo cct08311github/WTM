@@ -38,6 +38,23 @@ public class MockBulkLoader : IBulkLoader
     /// <summary>每次 BulkLoad 完成後觸發</summary>
     public event EventHandler? OnBatchLoaded;
 
+    /// <summary>
+    /// #970: fires synchronously — on the same call stack, immediately before the
+    /// exception object leaves this method — right before a simulated transient
+    /// failure is thrown. Lets a test deterministically observe "the loader is about
+    /// to throw its transient failure" and react (e.g. request cancellation) without
+    /// depending on wall-clock timing:
+    /// - A handler that calls <c>CancellationTokenSource.Cancel()</c> synchronously
+    ///   inside this event reproduces "cancellation already requested at the exact
+    ///   instant the transient exception is thrown".
+    /// - A handler that signals a <c>TaskCompletionSource</c> (with
+    ///   <c>RunContinuationsAsynchronously</c>, so the continuation does not run
+    ///   inline here) lets a test await "the failure has been thrown" before
+    ///   cancelling on a later attempt, e.g. to land the cancellation inside the
+    ///   subsequent backoff delay instead.
+    /// </summary>
+    public event EventHandler? OnBeforeTransientFailureThrown;
+
     public Task BulkLoadAsync(string connectionString, string stagingTableName,
         DataTable batch, CancellationToken cancellationToken = default)
     {
@@ -48,6 +65,7 @@ public class MockBulkLoader : IBulkLoader
         {
             TransientFailuresBeforeSuccess--;
             TransientFailuresObserved++;
+            OnBeforeTransientFailureThrown?.Invoke(this, EventArgs.Empty);
             throw new InvalidOperationException(
                 $"MockBulkLoader: simulated transient failure (#{TransientFailuresObserved})");
         }

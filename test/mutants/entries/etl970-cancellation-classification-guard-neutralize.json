@@ -1,0 +1,24 @@
+{
+  "id": "etl970-cancellation-classification-guard-neutralize",
+  "kind": "security",
+  "description": "Issue #970: EtlPipelineExecutor.BulkLoadWithRetryAsync's retry catch converts a cancellation observed at the exact instant the loader throws a transient (non-cancellation) failure into OperationCanceledException, via `cancellationToken.ThrowIfCancellationRequested()` checked FIRST inside the catch, before deciding retry vs. give up. Without it, that catch falls through to `if (attempt >= maxRetries) { throw; }`, re-throwing the transient exception's OWN type unchanged -- past the OperationCanceledException-only catch above it (which cannot match a non-cancellation exception type) -- all the way to the caller's general `catch (Exception ex)`, which reports an operator-cancelled run as an ordinary data failure (Aborted=false) instead of an abort. This mutant removes exactly that one `cancellationToken.ThrowIfCancellationRequested();` line, reproducing the pre-#970 defect verbatim. Checked against RetryWithBackoffTests.Cancellation_already_requested_when_transient_thrown_aborts_immediately, which cancels synchronously inside MockBulkLoader.OnBeforeTransientFailureThrown (fired immediately before the loader throws its simulated transient failure), so cancellation is deterministically already requested by the time the retry catch runs -- with the mutant applied, Aborted comes back false and the assertion fails. The green controls are unrelated to this specific line: Single_transient_failure_recovers_with_one_retry proves ordinary retry-then-succeed is unaffected; Cancellation_during_retry_backoff_aborts_immediately proves the OTHER cancellation interleaving (during the Task.Delay backoff wait, caught by the separate `catch (OperationCanceledException)` immediately above the mutated line) is untouched by this mutant; Failures_beyond_budget_abort_job_with_retry_count proves the non-cancelled, retries-exhausted `attempt >= maxRetries` give-up path -- reached by the same catch block, just past the removed check -- still classifies a genuine data failure as Aborted=false.",
+  "target_file": "src/WalkingTec.Mvvm.Etl/Pipeline/EtlPipelineExecutor.cs",
+  "target_symbol": "EtlPipelineExecutor.BulkLoadWithRetryAsync -- the `cancellationToken.ThrowIfCancellationRequested();` call at the top of the retry catch block",
+  "patch": "patches/etl970-cancellation-classification-guard-neutralize.patch",
+  "test_project": "test/WalkingTec.Mvvm.Etl.Test/WalkingTec.Mvvm.Etl.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Etl.Test.Pipeline.RetryWithBackoffTests.Cancellation_already_requested_when_transient_thrown_aborts_immediately",
+  "red_tests": [
+    "WalkingTec.Mvvm.Etl.Test.Pipeline.RetryWithBackoffTests.Cancellation_already_requested_when_transient_thrown_aborts_immediately"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Etl.Test.Pipeline.RetryWithBackoffTests.Cancellation_already_requested_when_transient_thrown_aborts_immediately": "Cancellation already requested when the transient exception is thrown must still surface as Aborted"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured verbatim from the RED TRX of a passing `python3 test/mutants/run_mutant.py --mutant etl970-cancellation-classification-guard-neutralize` run (Release build, HEAD ed37b7e9fad6c10c86debb339d393bf529f56245, stale demo.db under bin/ removed first): 'Assert.IsTrue failed. Cancellation already requested when the transient exception is thrown must still surface as Aborted.' -- identical to the message observed under a plain `dotnet test` (Debug) run of the same assertion; this test uses MSTest's Assert.IsTrue(bool, string) with a literal string message, not FluentAssertions, so it is not subject to the Debug/Release subject-capture divergence documented for #959. Result: 'VERDICT: KILLED' / 'GATE: PASS'.",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Etl.Test.Pipeline.RetryWithBackoffTests.Single_transient_failure_recovers_with_one_retry|FullyQualifiedName=WalkingTec.Mvvm.Etl.Test.Pipeline.RetryWithBackoffTests.Cancellation_during_retry_backoff_aborts_immediately|FullyQualifiedName=WalkingTec.Mvvm.Etl.Test.Pipeline.RetryWithBackoffTests.Failures_beyond_budget_abort_job_with_retry_count",
+  "green_tests": [
+    "WalkingTec.Mvvm.Etl.Test.Pipeline.RetryWithBackoffTests.Single_transient_failure_recovers_with_one_retry",
+    "WalkingTec.Mvvm.Etl.Test.Pipeline.RetryWithBackoffTests.Cancellation_during_retry_backoff_aborts_immediately",
+    "WalkingTec.Mvvm.Etl.Test.Pipeline.RetryWithBackoffTests.Failures_beyond_budget_abort_job_with_retry_count"
+  ]
+}
