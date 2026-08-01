@@ -383,6 +383,28 @@ namespace WalkingTec.Mvvm.Core.Cache
         public async Task RefreshAsync<T>(DbContext dc, string? tenantId = null, CancellationToken ct = default)
             where T : TopBasePoco
         {
+            // Bug #944 / Bug #112 (2): mirror GetAll/GetAllAsync's own bypass (see the
+            // "Bug #112 (2)" comment at :167-173 sync / :259-263 async above) — an unregistered
+            // (non-[CacheLookup]) type must never be written to the cache. Placed as the very
+            // FIRST statement, before BuildKey/_keyLocks.GetOrAdd/anything semaphore-related, for
+            // the same reason GetAll/GetAllAsync run their own bypass before any locking: there
+            // is nothing to protect with a lock when the type was never asked to be cached.
+            // Without this check, SetCache<T> would store the entry with no TTL (its TTL branch
+            // is gated on _registry.TryGetValue succeeding) and no working per-type invalidation
+            // path, so the entry would sit in IMemoryCache immortally.
+            //
+            // This makes the call a no-op rather than throwing. Unlike the #804 timeout case just
+            // below (a real operational failure — a legitimate refresh request that could not
+            // acquire the lock), there is nothing to refresh here: the caller asked to refresh a
+            // type that was never registered as a lookup type in the first place, so silently
+            // doing nothing is correct, not a false assurance. Does not disturb the existing #804
+            // `if (!acquired)` guard further down in this method — this is a second, independent,
+            // earlier guard.
+            if (!_registry.ContainsKey(typeof(T)))
+            {
+                return;
+            }
+
             var key = BuildKey(typeof(T), tenantId);
             var semaphore = _keyLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
             bool acquired = await semaphore.WaitAsync(StampedeTimeout, ct).ConfigureAwait(false);

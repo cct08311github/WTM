@@ -1,0 +1,13 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Cache/DistributedLookupCacheService.cs b/src/WalkingTec.Mvvm.Core/Cache/DistributedLookupCacheService.cs
+index d463a81a9..7845d65f7 100644
+--- a/src/WalkingTec.Mvvm.Core/Cache/DistributedLookupCacheService.cs
++++ b/src/WalkingTec.Mvvm.Core/Cache/DistributedLookupCacheService.cs
+@@ -375,7 +375,7 @@ namespace WalkingTec.Mvvm.Core.Cache
+                 // false assurance here: there is no return value to inspect, so the caller has no
+                 // way to learn the refresh did not happen. Fail loud instead: log, then throw, so
+                 // the caller can retry or alert.
+-                if (!acquired)
++                if (false)
+                 {
+                     _logger?.LogWarning(
+                         "[WTM] DistributedLookupCache.RefreshAsync<{TypeName}> stampede-protection: " +

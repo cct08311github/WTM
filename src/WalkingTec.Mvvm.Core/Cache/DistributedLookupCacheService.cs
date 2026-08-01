@@ -64,7 +64,15 @@ namespace WalkingTec.Mvvm.Core.Cache
 
         // per-key SemaphoreSlim，防 process-local stampede
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _keyLocks = new();
-        private static readonly TimeSpan StampedeTimeout = TimeSpan.FromSeconds(10);
+
+        // Bug #943: was `private static readonly TimeSpan StampedeTimeout = TimeSpan.FromSeconds(10)`
+        // — a hardcoded, process-wide constant, even though the constructor already accepts and
+        // stores a LookupCacheOptions in _options and LookupCacheService.cs's own StampedeTimeout
+        // (wired for the analogous reason under Bug #804) has read from it since that fix. Without
+        // this wiring there is no way to test the semaphore-timeout branch below without a real
+        // 10-second wait. Reads from LookupCacheOptions so it is configurable per-instance and
+        // testable; default value unchanged.
+        private TimeSpan StampedeTimeout => _options.StampedeTimeout;
 
         // 啟動時掃描結果（Build 後不再修改，FrozenDictionary 優化讀取路徑）
         private readonly FrozenDictionary<Type, CacheLookupAttribute> _registry;
@@ -350,6 +358,39 @@ namespace WalkingTec.Mvvm.Core.Cache
             bool acquired = await semaphore.WaitAsync(StampedeTimeout, ct).ConfigureAwait(false);
             try
             {
+                // Bug #943: mirror this class's own GetAll/GetAllAsync semaphore-timeout handling
+                // (see the `if (!acquired)` fallback at :210-218 sync / :267-275 async above) —
+                // the same shape #804 fixed in LookupCacheService.RefreshAsync (a different file,
+                // same defect class). A caller that timed out does NOT hold the lock, so it must
+                // not proceed to Invalidate/LoadFromDbAsync/SetDistributedAsync — doing so would
+                // race the legitimate holder's own Invalidate/SetDistributedAsync pair (a
+                // concurrent GetAll/GetAllAsync cache-miss load, or another RefreshAsync) and
+                // could overwrite a fresher value with this call's own (possibly older-snapshot)
+                // result for the full TTL, defeating the exact invariant the semaphore exists to
+                // protect.
+                //
+                // Unlike the read paths, RefreshAsync is an explicit, caller-invoked "make this
+                // happen now" operation. Silently returning as if the refresh succeeded — the
+                // read-path fallback of "return a valid value, just don't cache it" — would be a
+                // false assurance here: there is no return value to inspect, so the caller has no
+                // way to learn the refresh did not happen. Fail loud instead: log, then throw, so
+                // the caller can retry or alert.
+                if (!acquired)
+                {
+                    _logger?.LogWarning(
+                        "[WTM] DistributedLookupCache.RefreshAsync<{TypeName}> stampede-protection: " +
+                        "timed out after {TimeoutMs}ms waiting for the per-key refresh lock (key " +
+                        "'{Key}'). Another caller currently holds it. The cache was NOT refreshed.",
+                        typeof(T).Name, (int)StampedeTimeout.TotalMilliseconds, key);
+                    throw new TimeoutException(
+                        $"[WTM] DistributedLookupCache.RefreshAsync<{typeof(T).Name}> timed out " +
+                        $"after {StampedeTimeout.TotalMilliseconds}ms waiting for the per-key refresh " +
+                        $"lock (key '{key}'). Another caller currently holds it (a concurrent " +
+                        "GetAll/GetAllAsync load, or another RefreshAsync call). The cache was NOT " +
+                        "refreshed — retry, or increase StampedeTimeout if this occurs frequently.");
+                    // NOTE: semaphore was NOT acquired, so we must NOT Release it below.
+                }
+
                 Invalidate<T>(tenantId);
                 var data = await LoadFromDbAsync<T>(dc, ct).ConfigureAwait(false);
                 await SetDistributedAsync(key, data, typeof(T), ct).ConfigureAwait(false);

@@ -1,0 +1,13 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Cache/LookupCacheService.cs b/src/WalkingTec.Mvvm.Core/Cache/LookupCacheService.cs
+index 53c1e72a6..e02161bfe 100644
+--- a/src/WalkingTec.Mvvm.Core/Cache/LookupCacheService.cs
++++ b/src/WalkingTec.Mvvm.Core/Cache/LookupCacheService.cs
+@@ -400,7 +400,7 @@ namespace WalkingTec.Mvvm.Core.Cache
+             // doing nothing is correct, not a false assurance. Does not disturb the existing #804
+             // `if (!acquired)` guard further down in this method — this is a second, independent,
+             // earlier guard.
+-            if (!_registry.ContainsKey(typeof(T)))
++            if (false)
+             {
+                 return;
+             }
