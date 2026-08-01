@@ -71,6 +71,21 @@ Exit codes: 0 clean (every in-scope step has timeout-minutes), 1 one or more in-
 steps are missing timeout-minutes (each printed above the summary), 2 scanner error
 (a workflow file failed to parse, or the workflows directory could not be listed) --
 distinct from 1 so a scanner failure can never be silently reported as a clean tree.
+
+REUSABLE EXTRACTION (issue #973): `extract_run_body(workflow_path, job_id, step_name)`
+returns the raw, multi-line text of one specific step's `run:` block scalar --
+composed entirely from this module's own existing traversal
+(`iter_job_step_ranges`, the same job/steps discovery `iter_steps` above uses) and
+step-key matcher (`_extract_step_keys`), never a second YAML-subset reader. This
+exists because test/mutants/_selftest/selftest_gate_job_reconciliation.py needs the
+REAL body of mutation-gate.yml's `gate` job's summarize step to prove it can run
+without a checkout (the exact thing that broke #973) -- it first tried PyYAML for
+that, which is not installed on this runner either (the `changes` job that both
+scripts run in has no `setup-python`/`pip install` step, by the same design this
+module's own "NO PyYAML" note above already explains). Rather than write a third
+hand-rolled parser for the same file family, that selftest imports THIS module (via
+`importlib`, since this filename is not a valid Python identifier) and calls this
+function.
 """
 import glob
 import re
@@ -228,15 +243,13 @@ def _extract_step_keys(
     return found
 
 
-def iter_steps(workflow_path: Path):
-    """Yields (job_id, step_index, keys_dict) for every step in every job of one
-    workflow file, where keys_dict maps this script's closed key set
-    (`run`/`uses`/`name`/`timeout-minutes`) to inline value text for whichever of
-    those the step declares at its own indentation level. Raises
-    WorkflowParseError on any structural shape this scanner does not recognize --
-    callers treat that as a scanner error (exit 2), not "zero steps found"."""
-    text = workflow_path.read_text(encoding="utf-8")
-    lines = text.split("\n")
+def iter_job_step_ranges(lines: list[str]):
+    """Yields (job_id, item_start, item_end) for every step's own line range, in
+    every job of one workflow file's already-split lines -- the shared job/steps
+    traversal both `iter_steps` (step-key extraction, below) and `extract_run_body`
+    (run: block-scalar body extraction) build on, so this file has exactly one
+    implementation of "find every step in every job", not two. Raises
+    WorkflowParseError on any structural shape this scanner does not recognize."""
     n = len(lines)
 
     jobs_idx = None
@@ -250,7 +263,7 @@ def iter_steps(workflow_path: Path):
                 pass  # some other top-level key before jobs: -- keep scanning
         i += 1
     if jobs_idx is None:
-        raise WorkflowParseError(f"{workflow_path}: no top-level 'jobs:' key found")
+        raise WorkflowParseError("no top-level 'jobs:' key found")
 
     i = jobs_idx + 1
     job_indent: int | None = None
@@ -265,13 +278,13 @@ def iter_steps(workflow_path: Path):
             break
         if indent != job_indent:
             raise WorkflowParseError(
-                f"{workflow_path}:{i + 1}: expected a job-id key at indent "
+                f"line {i + 1}: expected a job-id key at indent "
                 f"{job_indent}, got: {lines[i]!r}"
             )
         m = _BARE_KEY_RE.match(lines[i].strip())
         if not m:
             raise WorkflowParseError(
-                f"{workflow_path}:{i + 1}: expected a bare 'job-id:' key, got: "
+                f"line {i + 1}: expected a bare 'job-id:' key, got: "
                 f"{lines[i]!r}"
             )
         job_id = m.group(1)
@@ -298,9 +311,8 @@ def iter_steps(workflow_path: Path):
         next_job_probe = j
         if steps_after is not None:
             items, after_seq = _scan_sequence(lines, steps_after)
-            for step_idx, (item_start, item_end) in enumerate(items):
-                keys = _extract_step_keys(lines, item_start, item_end)
-                yield job_id, step_idx, keys
+            for item_start, item_end in items:
+                yield job_id, item_start, item_end
             next_job_probe = after_seq
         else:
             # This job has no `steps:` key at all (not expected for any job in
@@ -314,6 +326,129 @@ def iter_steps(workflow_path: Path):
         # left the jobs: mapping (handled by the loop's own indent<job_indent check
         # on its next iteration).
         i = next_job_probe
+
+
+def iter_steps(workflow_path: Path):
+    """Yields (job_id, step_index, keys_dict) for every step in every job of one
+    workflow file, where keys_dict maps this script's closed key set
+    (`run`/`uses`/`name`/`timeout-minutes`) to inline value text for whichever of
+    those the step declares at its own indentation level. Raises
+    WorkflowParseError on any structural shape this scanner does not recognize --
+    callers treat that as a scanner error (exit 2), not "zero steps found"."""
+    text = workflow_path.read_text(encoding="utf-8")
+    lines = text.split("\n")
+    counts: dict[str, int] = {}
+    try:
+        for job_id, item_start, item_end in iter_job_step_ranges(lines):
+            step_idx = counts.get(job_id, 0)
+            counts[job_id] = step_idx + 1
+            keys = _extract_step_keys(lines, item_start, item_end)
+            yield job_id, step_idx, keys
+    except WorkflowParseError as exc:
+        raise WorkflowParseError(f"{workflow_path}: {exc}") from exc
+
+
+def extract_run_body(workflow_path: Path, job_id: str, step_name: str) -> str:
+    """Returns the RAW, multi-line body text of one specific step's `run:` block
+    scalar (a `run: |` value; the only style this repo's workflows use for a
+    multi-line `run:`), located by (job_id, that step's own `name:` value). Reuses
+    `iter_job_step_ranges`/`_extract_step_keys` -- the SAME parser `iter_steps`
+    itself is built on -- to find the step, then walks one level deeper than
+    `_extract_step_keys` ever needs to: every line more indented than the step's
+    own key column, following the `run:` line, is part of the block scalar's body
+    (the identical "more indented than the owning level" rule `_scan_sequence`
+    already uses to bound one step's range from the next's), captured until a line
+    at or below that column, then dedented to the first body line's own
+    indentation -- plain YAML block-scalar semantics for the un-indented,
+    non-folded `|` style, with no chomping indicator (the default "clip" style:
+    exactly one trailing newline, no extra blank lines), which is what every `run:
+    |` in these files is written as.
+
+    Raises WorkflowParseError if the job, the step, or a block-scalar `run:` key
+    cannot be found -- callers should treat that as a hard failure, never as
+    "empty script, proceed anyway".
+    """
+    text = workflow_path.read_text(encoding="utf-8")
+    lines = text.split("\n")
+
+    target_range: tuple[int, int] | None = None
+    try:
+        for jid, item_start, item_end in iter_job_step_ranges(lines):
+            if jid != job_id:
+                continue
+            keys = _extract_step_keys(lines, item_start, item_end)
+            if keys.get("name") == step_name:
+                target_range = (item_start, item_end)
+                break
+    except WorkflowParseError as exc:
+        raise WorkflowParseError(f"{workflow_path}: {exc}") from exc
+    if target_range is None:
+        raise WorkflowParseError(
+            f"{workflow_path}: job '{job_id}' has no step named '{step_name}'"
+        )
+    item_start, item_end = target_range
+
+    dash_indent = _leading_spaces(lines[item_start])
+    owned_indent = dash_indent + 2
+
+    run_line_idx: int | None = None
+    run_indicator = ""
+    for k in range(item_start, item_end):
+        line = lines[k]
+        if _leading_spaces(line) != owned_indent:
+            continue
+        content = line[owned_indent:]
+        if k == item_start:
+            if not content.startswith("- "):
+                continue
+            content = content[2:]
+        m = re.match(r"^run:(\s|$)(.*)", content)
+        if m:
+            run_line_idx = k
+            run_indicator = m.group(2).strip()
+            break
+    if run_line_idx is None:
+        raise WorkflowParseError(
+            f"{workflow_path}: job '{job_id}' step '{step_name}' has no 'run:' key "
+            "at that step's own indentation"
+        )
+    if not (
+        run_indicator in ("|", ">", "|-", "|+", ">-", ">+")
+        or run_indicator.startswith(("|", ">"))
+    ):
+        raise WorkflowParseError(
+            f"{workflow_path}: job '{job_id}' step '{step_name}': 'run:' value "
+            f"{run_indicator!r} is not a block scalar -- nothing to extract a "
+            "multi-line body from"
+        )
+
+    body_lines: list[str] = []
+    base_indent: int | None = None
+    m2 = run_line_idx + 1
+    while m2 < item_end:
+        line = lines[m2]
+        if line.strip() == "":
+            body_lines.append("")
+            m2 += 1
+            continue
+        indent = _leading_spaces(line)
+        if indent <= owned_indent:
+            break
+        if base_indent is None:
+            base_indent = indent
+        if indent < base_indent:
+            raise WorkflowParseError(
+                f"{workflow_path}:{m2 + 1}: line is less indented ({indent}) than "
+                f"the run: block scalar's own established indentation "
+                f"({base_indent}) but more indented than the step ({owned_indent}) "
+                "-- inconsistent indentation this scanner does not understand"
+            )
+        body_lines.append(line[base_indent:])
+        m2 += 1
+
+    while body_lines and body_lines[-1] == "":
+        body_lines.pop()
+    return "\n".join(body_lines) + "\n"
 
 
 def step_label(keys: dict[str, str]) -> str:

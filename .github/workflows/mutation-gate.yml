@@ -73,23 +73,48 @@ concurrency:
 
 jobs:
   # Cheap, unconditional (no path filter, no `if:`) cost-control gate for the two
-  # expensive jobs below. Computes whether the PR/push actually touched a mutant's
-  # target file or the registry itself; `mutants`/`meta-selftest` are skipped (not
-  # run) when it did not, so a docs-only or unrelated-code PR is not taxed with four
-  # full dotnet builds just to let the required check post a status.
+  # expensive jobs below. Computes, PER ENTRY, whether the PR touched anything that
+  # entry's own declarations make relevant to it; `mutants` runs only the SELECTED
+  # subset, `meta-selftest` is skipped (not run) only when nothing at all was
+  # selected, so a docs-only or unrelated-code PR is not taxed with a full dotnet
+  # build per entry just to let the required check post a status.
   #
-  # Fails OPEN toward "relevant=true" (run the real gate) whenever the diff can't be
-  # computed for any reason -- an unexpected event payload, a missing SHA, a git
+  # issue #968: entries grew linearly (30-35 -> 45 -> 61 in this file's own comment
+  # history below) while `mutants` used to run EVERY kind=='security' entry on EVERY
+  # pull_request -- so its step-level timeout-minutes needed hand-recomputing every
+  # time the count grew, and drifted stale twice already. Per-entry selection (see
+  # test/mutants/gate_lib.py's `select` subcommand) replaces "run everything, sized
+  # for the worst case, every PR" with "run what THIS diff touches"; a push to
+  # dotnet10 still runs the FULL set unconditionally as a post-merge backstop (not
+  # gated on relevance at all -- see the `mutants` job below), so an entry a PR's own
+  # selection correctly skipped is not permanently unexercised. This REDUCES coverage
+  # PER PR BY DESIGN -- a PR's own gate run only proves the entries selected for that
+  # PR's diff, not the whole registry; full-registry coverage is restored on every
+  # merge to dotnet10, not on every PR.
+  #
+  # Fails OPEN toward "select everything" (run the real gate) whenever the diff can't
+  # be computed for any reason -- an unexpected event payload, a missing SHA, a git
   # error. The two failure directions here are not symmetric: a wrongly-skipped real
   # mutant run is a silent security-gate regression; a wrongly-run mutant job on an
   # unrelated PR only costs a few minutes of CI time. Default to the safe, expensive
-  # answer, never to the cheap, unsafe one.
+  # answer, never to the cheap, unsafe one. The ONE case that does NOT fail open: a
+  # selection that computes EMPTY must not silently pass as "nothing to do" unless
+  # gate_lib.py's own relevance_self_check() positive control also confirms the
+  # relevance machinery itself is still working -- see the "Determine..." step below
+  # and gate_lib.py's `select` subcommand for exactly how "0 selected, diff genuinely
+  # touches nothing" is told apart from "0 selected, relevance computation is broken"
+  # (the latter is a hard CI failure, never a masked pass -- #968's whole point is
+  # that those two must never read the same, the same defect class as issue #855
+  # defect 4 one level up: an entry that exists but never executed must never be a
+  # silent pass).
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 10  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md
     outputs:
-      relevant: ${{ steps.check.outputs.relevant }}
-      total_entries: ${{ steps.check.outputs.total_entries }}
+      has_selection: ${{ steps.check.outputs.has_selection }}
+      selected_security_count: ${{ steps.check.outputs.selected_security_count }}
+      selected_selftest_count: ${{ steps.check.outputs.selected_selftest_count }}
+      total_security_entries: ${{ steps.check.outputs.total_security_entries }}
     steps:
     - uses: actions/checkout@v5
       timeout-minutes: 5
@@ -110,11 +135,12 @@ jobs:
     # (see the `on:` block above and this job's own header comment) -- it is guaranteed to
     # run for a docs-only PR, which is exactly the shape most likely to reintroduce this.
     # Placed before "Determine whether a gated path changed" so a guard failure exits
-    # before that step sets `relevant`/`total_entries`; with those outputs empty,
-    # `mutants`/`meta-selftest` (gated on `needs.changes.outputs.relevant == 'true'`)
-    # correctly skip instead of running an expensive build the run has already failed.
-    # `gate`'s own is_ok() check treats a `changes` job failure as FAIL, not skipped, so
-    # this still fails the required check (see that job's summary step).
+    # before that step sets `has_selection`/`selected_security_count`; with those
+    # outputs empty, `mutants`/`meta-selftest` (gated on
+    # `needs.changes.outputs.has_selection == 'true'`) correctly skip instead of
+    # running an expensive build the run has already failed. `gate`'s own is_ok()
+    # check treats a `changes` job failure as FAIL, not skipped, so this still fails
+    # the required check (see that job's summary step).
     #
     # The scan itself lives in scripts/check-gitea-token-not-sourced.py, not inline here,
     # because the rule needs to strip backtick-delimited inline code spans before matching
@@ -250,6 +276,53 @@ jobs:
         python3 scripts/check-e2e-test-integrity.py --selftest
         python3 scripts/check-e2e-test-integrity.py
       timeout-minutes: 3
+    # issue #968: test/mutants/_selftest/selftest_relevance_covers_tests_and_workflow.py
+    # and selftest_kind_validation_and_accounting.py were both written for issue #855
+    # (PR #858) and have been runnable ever since -- but neither was ever wired into
+    # this or any other workflow. They proved their point once, on the PR that added
+    # them, and then rotted: a regression in is_change_relevant()'s test-source/
+    # workflow-file/test-project branches, or in discover_entries()'s kind validation /
+    # discovered-vs-executed accounting, would NOT have failed any CI run. This step
+    # closes that gap and, at the same time, wires in
+    # selftest_select_relevant_entries.py -- the #968 selftest proving: a diff
+    # touching a real entry's target_file selects that entry (and not an unrelated
+    # one); a diff touching nothing gated selects zero; a diff touching the workflow
+    # file selects every entry of a kind; relevance_self_check() passes against the
+    # real registry AND fails the moment is_change_relevant() is broken (proving the
+    # positive control has teeth, not just that it exists); the `select` CLI
+    # subcommand distinguishes "0 selected, healthy" (exit 0) from "0 selected,
+    # broken" (exit 2) for the identical diff; and `select --event-name push` always
+    # returns the full set regardless of the (bogus, in the test) SHAs given.
+    #
+    # issue #973 (found on this PR's own first CI run): selftest_select_relevant_entries.py
+    # also used to cover gate_lib.py's reconcile() function directly, but that function
+    # proving itself correct said nothing about whether the `gate` job -- which has NO
+    # checkout and never will (see that job's own header comment) -- could actually
+    # invoke it. It could not; `gate` failed with "No such file or directory" even
+    # though `changes`/`mutants`/`meta-selftest` all reported a fully reconciled 61/61.
+    # selftest_gate_job_reconciliation.py closes THAT gap specifically: it extracts the
+    # `gate` job's real "Summarize mutation gate result" script (never a hand-copied
+    # duplicate) and runs it under match/mismatch/skip/failure scenarios, including
+    # from a directory with NO repository checked out at all -- the exact condition
+    # that broke #973, reproduced on demand and now guarded against on every PR.
+    #
+    # This step lives in `changes`, not inside `mutants`/`meta-selftest`/`gate` where
+    # the real `select` calls and the real reconciliation happen, for the same reason
+    # as the four guards above: `changes` has no path filter on either trigger and is
+    # guaranteed to run, including for a PR that only touches this workflow file or
+    # gate_lib.py itself -- exactly the shape most likely to reintroduce a selection or
+    # reconciliation regression. Each script exits 0 on success, 1 on any failed case;
+    # `set -e` makes the first failure stop this step before the real "Determine
+    # whether a gated path changed" step below ever calls `select` for real against
+    # unverified logic.
+    - name: "Guard: mutation-gate entry selection fires correctly, positive control included (#968, #973)"
+      run: |
+        set -e
+        python3 test/mutants/_selftest/selftest_kind_validation_and_accounting.py
+        python3 test/mutants/_selftest/selftest_relevance_covers_tests_and_workflow.py
+        python3 test/mutants/_selftest/selftest_select_relevant_entries.py
+        python3 test/mutants/_selftest/selftest_gate_job_reconciliation.py
+      timeout-minutes: 5
     - name: Determine whether a gated path changed
       id: check
       shell: bash
@@ -263,91 +336,98 @@ jobs:
       run: |
         set -uo pipefail
 
-        CHANGED=""
-        DIFF_OK=0
-        if [ "$EVENT_NAME" = "pull_request" ] && [ -n "$BASE_SHA" ] && [ -n "$HEAD_SHA" ]; then
-          CHANGED="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")" && DIFF_OK=1
-        elif [ "$EVENT_NAME" = "push" ] && [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
-          CHANGED="$(git diff --name-only "$PUSH_BEFORE" "$PUSH_AFTER")" && DIFF_OK=1
-        fi
+        # issue #968: total kind counts, for logging context and for the `gate` job's
+        # selftest_count half of the selected-vs-executed reconciliation -- kind==
+        # 'selftest' entries are never filtered by relevance (see the `select`
+        # invocation below, which is only for kind=='security'), so their SELECTED
+        # count is always their TOTAL count, on both pull_request and push.
+        TOTAL_SECURITY="$(python3 test/mutants/gate_lib.py ids --kind security | grep -c . || true)"
+        TOTAL_SELFTEST="$(python3 test/mutants/gate_lib.py ids --kind selftest | grep -c . || true)"
+        echo "total_security_entries -> $TOTAL_SECURITY (kind=='selftest' total -> $TOTAL_SELFTEST, always fully selected)"
+        echo "total_security_entries=$TOTAL_SECURITY" >> "$GITHUB_OUTPUT"
+        echo "selected_selftest_count=$TOTAL_SELFTEST" >> "$GITHUB_OUTPUT"
 
-        if [ "$DIFF_OK" -ne 1 ]; then
-          echo "Could not compute a path diff for event '$EVENT_NAME' (missing SHA, unsupported event, or git error) -- defaulting to relevant=true so the real gate runs."
-          echo "relevant=true" >> "$GITHUB_OUTPUT"
-          echo "total_entries=" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-
-        if [ "$EVENT_NAME" = "pull_request" ]; then
-          echo "Changed files ($EVENT_NAME, $BASE_SHA..$HEAD_SHA):"
+        # issue #968: `select` computes the diff AND the selection decision itself
+        # (see test/mutants/gate_lib.py's `select` subcommand and the module-level
+        # comment above select_relevant_entries() for why this is the ONLY place that
+        # relevance logic lives) -- push unconditionally selects the full kind=='security'
+        # set (the post-merge backstop, never filtered, not even when the diff can't be
+        # read), pull_request selects by per-entry relevance against the computed diff,
+        # falling back to the full set if that diff can't be computed (issue #855's
+        # original fail-open rule, preserved). `mutants` below re-derives this SAME
+        # selection independently, from the SAME event/SHA inputs, rather than trusting
+        # a value passed across a job boundary -- see the "NOTE ON SHAPE" comment at the
+        # top of this file for why cross-job data on this runner is treated with
+        # suspicion; the two independent computations are also what makes the `gate`
+        # job's selected-vs-executed reconciliation meaningful rather than tautological.
+        if SELECTED_IDS="$(python3 test/mutants/gate_lib.py select --kind security \
+            --event-name "$EVENT_NAME" --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" \
+            --push-before "$PUSH_BEFORE" --push-after "$PUSH_AFTER")"; then
+          :
         else
-          echo "Changed files ($EVENT_NAME, $PUSH_BEFORE..$PUSH_AFTER):"
+          SELECT_EXIT=$?
+          if [ "$SELECT_EXIT" -eq 2 ]; then
+            echo "::error::gate_lib.py select's relevance self-check FAILED (see the error printed above) -- a 0-selected result could not be trusted to mean 'this diff touches nothing gated' rather than 'relevance computation is broken'. issue #968: this must be a loud CI failure, never a silent zero-selected pass."
+          else
+            echo "::error::test/mutants/gate_lib.py select failed (exit $SELECT_EXIT) -- see the error printed above."
+          fi
+          exit 1
         fi
-        echo "$CHANGED" | sed 's/^/  - /'
 
-        # issue #855 defect 5: relevance is computed by test/mutants/gate_lib.py's
-        # is_change_relevant() -- the SAME function
-        # test/mutants/_selftest/selftest_relevance_covers_tests_and_workflow.py
-        # exercises directly -- instead of a second, hand-copied inline python block.
-        # It covers every entry's declared target_file AND test_project (.csproj --
-        # e.g. a <Compile Remove="..."> that silently excludes a declared test's source
-        # from the build would otherwise go unnoticed), test/mutants/** (the runner,
-        # this module, every entry/patch/selftest fixture), every source file that
-        # DECLARES a class referenced by any entry's red_tests/green_tests, and
-        # .github/workflows/mutation-gate.yml itself. Before this fix, only
-        # target_file and test/mutants/** were covered: a PR touching ONLY a red-test's
-        # .cs file (e.g. weakening MvcAuthHolesTests.cs), or ONLY this workflow file,
-        # computed relevant=false, `mutants`/`meta-selftest` were skipped, and `gate`
-        # below still posted a real, unconditional success -- meaning either a red test
-        # or the gate's own workflow could be weakened under a green required check.
-        # (Issue #854 history, unchanged: mutants live one-per-file under
-        # test/mutants/entries/, discovered by globbing -- see run_mutant.py's
-        # discover_entries(), which gate_lib.py itself calls, for the same discovery
-        # logic and its fail-loud guards, including issue #855 defect 4's kind
-        # validation.)
-        if RELEVANT_OUT="$(echo "$CHANGED" | python3 test/mutants/gate_lib.py relevant)"; then
-          echo "gate_lib.py relevant -> $RELEVANT_OUT"
+        SELECTED_COUNT="$(printf '%s\n' "$SELECTED_IDS" | grep -c . || true)"
+        echo "selected_security_count=$SELECTED_COUNT" >> "$GITHUB_OUTPUT"
+        if [ "$SELECTED_COUNT" -eq 0 ]; then
+          echo "has_selection=false" >> "$GITHUB_OUTPUT"
+          echo "0 of $TOTAL_SECURITY security-kind entries selected for this $EVENT_NAME -- this diff touches no gated path, and gate_lib.py's own relevance self-check (see stderr above) confirmed the selection machinery is still working. mutants/meta-selftest are skipped; gate treats this as a genuine PASS, not a masked no-op (issue #968)."
         else
-          echo "test/mutants/gate_lib.py failed to compute relevance (see error above, e.g. an entry with an unrecognized kind) -- defaulting to relevant=true so the real gate runs; it will fail loudly for the same underlying reason."
-          RELEVANT_OUT=true
+          echo "has_selection=true" >> "$GITHUB_OUTPUT"
+          echo "$SELECTED_COUNT of $TOTAL_SECURITY security-kind entries selected for this $EVENT_NAME:"
+          printf '%s\n' "$SELECTED_IDS" | sed 's/^/  - /'
         fi
 
-        # issue #855 defect 4: total discovered entries, consumed by the `gate` job's
-        # reconciliation against (mutants job's security_count + meta-selftest job's
-        # selftest_count). A mismatch means an entry existed but was not executed by
-        # either job -- this must never be a silent green pass.
-        TOTAL_OUT="$(python3 test/mutants/gate_lib.py count || true)"
-        echo "total_entries -> $TOTAL_OUT"
-
-        echo "relevant=$RELEVANT_OUT" >> "$GITHUB_OUTPUT"
-        echo "total_entries=$TOTAL_OUT" >> "$GITHUB_OUTPUT"
-
-  # The gate itself: every "security" mutant under test/mutants/entries/ must be
-  # reported KILLED (patch applies in-scope, compiles, positive control stays green,
-  # designated red test fails with the expected assertion message). Any other verdict
-  # -- SURVIVED, UNEXPECTED_RED, a build failure, an out-of-scope patch, or a broken
-  # positive control -- fails this job. All mutants run even after one fails, so one
-  # mutant's result never hides another's; the loop tracks failures itself instead of
-  # relying on `set -e` to stop at the first one.
+  # The gate itself: every SELECTED "security" mutant under test/mutants/entries/ must
+  # be reported KILLED (patch applies in-scope, compiles, positive control stays
+  # green, designated red test fails with the expected assertion message). Any other
+  # verdict -- SURVIVED, UNEXPECTED_RED, a build failure, an out-of-scope patch, or a
+  # broken positive control -- fails this job. All selected mutants run even after one
+  # fails, so one mutant's result never hides another's; the loop tracks failures
+  # itself instead of relying on `set -e` to stop at the first one.
   #
-  # Skipped (not failed) when the `changes` job found nothing gated -- `gate` below
-  # treats a skip here as a pass, not a failure.
+  # issue #968: "every" above means the SELECTED subset on a pull_request (per-entry
+  # relevance against that PR's diff -- see test/mutants/gate_lib.py's `select`
+  # subcommand) and the FULL, unconditional set on a push to dotnet10 (the post-merge
+  # backstop). This job re-derives its own selection independently of `changes`
+  # rather than trusting that job's output list directly (see the "Run every security
+  # mutant" step below) -- the two independently-computed counts are what the `gate`
+  # job's selected-vs-executed reconciliation cross-checks.
+  #
+  # Skipped (not failed) when the `changes` job selected nothing -- `gate` below
+  # treats a skip here as a pass, not a failure, PROVIDED `changes` itself reported
+  # has_selection=false rather than failing outright (see that job's own step for how
+  # "0 selected, legitimately" is told apart from "0 selected, computation broken").
   mutants:
     needs: changes
-    if: needs.changes.outputs.relevant == 'true'
+    if: needs.changes.outputs.has_selection == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 100  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md. Kept >= the "Run every security mutant" step's own 90-minute budget plus this job's setup steps, purely for schema consistency -- see that step's comment for the derivation.
+    timeout-minutes: 135  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md. Kept >= the "Run every security mutant" step's own 125-minute budget plus this job's setup steps, purely for schema consistency -- see that step's comment for the derivation (issue #968: recomputed for 61 entries, was 100/90 for 45).
     outputs:
       security_count: ${{ steps.run.outputs.security_count }}
     env:
       # DOTNET_gcServer=0: use workstation GC instead of server GC. Server GC sizes its
       # heap budget against the WHOLE container (here: act_runner's 4 CPU / 3.8GiB Docker
-      # VM), which is the primary driver of this job's OOM kills (issue #900) -- this job
-      # evaluates every security-kind entry under test/mutants/entries/ (currently 45 --
-      # STALE-COMMENT WARNING, issue #926 cross-vendor review: this used to read "roughly
-      # 30-35 mutant entries", a count from before this suite grew, and the discrepancy
-      # between that stale number and the actual 45 is exactly what made the "Run every
-      # security mutant" step's old 55-minute timeout too tight for a legitimate run.
+      # VM), which is the primary driver of this job's OOM kills (issue #900) -- on a
+      # push to dotnet10 (the unconditional full-set backstop) or a pull_request whose
+      # selection happens to include every entry (e.g. it touches this workflow file or
+      # test/mutants/ itself), this job evaluates every security-kind entry under
+      # test/mutants/entries/ (currently 61 -- SECOND STALE-COMMENT WARNING, issue #968:
+      # this used to read "currently 45", itself a correction of an even earlier "roughly
+      # 30-35 mutant entries" (issue #926). Both times, the stale count is what let the
+      # timeout below drift too tight for a legitimate WORST-CASE run -- #968 additionally
+      # replaces "run every entry on every PR" with per-entry relevance selection (see
+      # test/mutants/gate_lib.py's `select` subcommand) precisely so this recomputation
+      # stops being needed on every registration PR, but the timeout below still has to
+      # cover the worst case (a push, or a PR that selects everything), which is still
+      # the FULL entry count.
       # Recount at any time with:
       #   python3 test/mutants/gate_lib.py ids --kind security | grep -c .
       # and re-derive that step's timeout-minutes from the new count using the formula in
@@ -409,68 +489,85 @@ jobs:
     - name: Run every security mutant
       id: run
       shell: bash
-      # Budget derivation (issue #926 cross-vendor review finding #11): this used to be a
-      # flat 55 minutes that did not scale with the number of entries and was already
-      # tight even for the stale "30-35 entries" estimate above. run_mutant.py's
-      # evaluate_mutant() does 2 incremental builds + 3 filtered test runs per normal
-      # entry (baseline build+test, patched build, green test, red test) -- measured at
-      # ~73s/entry on an otherwise-idle host. This job forces workstation GC
-      # (DOTNET_gcServer=0 above) specifically because server GC's peak causes OOM kills
-      # under this runner's 4 CPU / 3.8GiB co-tenancy (issue #900); the same env comment
-      # documents that workstation GC costs 10-30% slower compiles as the tradeoff. At the
-      # current 45 security-kind entries (recount: `python3 test/mutants/gate_lib.py ids
-      # --kind security | grep -c .`) and the WORST-CASE 30% slowdown:
-      #   45 entries * 73s * 1.3 = 4270s = ~71 minutes
-      # A 55-minute cap is therefore already insufficient at today's entry count using
-      # only the slowdown this job's own comments already document -- before even
-      # accounting for CPU contention from a concurrently scheduled sibling job on this
-      # runner's capacity-2 host (the risk this finding raised: a legitimate run cut off
-      # under co-tenancy). 90 minutes below adds ~25% headroom on top of the 71-minute
-      # worst-case estimate for that contention, without a live measured p95 (this repo's
-      # CI cannot be triggered from this fix to obtain one). This is a static budget re-
-      # derived from a documented formula, not an empirical p95 -- if the entry count or
-      # the per-entry cost materially changes, recompute
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PUSH_BEFORE: ${{ github.event.before }}
+        PUSH_AFTER: ${{ github.event.after }}
+      # Budget derivation (issue #926 cross-vendor review finding #11; recomputed for
+      # issue #968): this used to be a flat 55 minutes that did not scale with the
+      # number of entries and was already tight even for the stale "30-35 entries"
+      # estimate this comment once carried. run_mutant.py's evaluate_mutant() does 2
+      # incremental builds + 3 filtered test runs per normal entry (baseline
+      # build+test, patched build, green test, red test) -- measured at ~73s/entry on
+      # an otherwise-idle host. This job forces workstation GC (DOTNET_gcServer=0
+      # above) specifically because server GC's peak causes OOM kills under this
+      # runner's 4 CPU / 3.8GiB co-tenancy (issue #900); the same env comment documents
+      # that workstation GC costs 10-30% slower compiles as the tradeoff. THIS BUDGET
+      # MUST COVER THE WORST CASE, not a typical selected-subset PR run: a push to
+      # dotnet10 always runs the full set (the post-merge backstop, issue #968, not
+      # conditional on anything), and a pull_request can also select every entry (its
+      # diff touches this workflow file or test/mutants/ itself). At the current 61
+      # security-kind entries (recount: `python3 test/mutants/gate_lib.py ids --kind
+      # security | grep -c .`) and the WORST-CASE 30% slowdown:
+      #   61 entries * 73s * 1.3 = 5788.9s = ~96.5 minutes
+      # Adding the same ~25% headroom this budget has always carried, on top of the
+      # ~96.5-minute worst-case estimate, without a live measured p95 (this repo's CI
+      # cannot be triggered from this fix to obtain one):
+      #   96.5 * 1.25 = ~120.6 minutes, rounded up to 125 for a little extra margin
+      # This is a static budget re-derived from a documented formula, not an empirical
+      # p95 -- if the entry count or the per-entry cost materially changes, recompute
       # entries * 73s * 1.3 / 60 * 1.25 and update both this value and the job-level
-      # timeout-minutes above. Do not let this drift stale the way "30-35 entries" did.
-      timeout-minutes: 90
+      # timeout-minutes above. issue #968 additionally reduces how OFTEN this worst
+      # case is actually hit (most pull_requests now select far fewer than 61 entries)
+      # but does NOT reduce what the budget itself has to cover -- do not let this
+      # drift stale the way "30-35 entries" (then "45 entries") did.
+      timeout-minutes: 125
       run: |
         set -o pipefail
         mkdir -p mutant-results
 
-        # issue #855 defects 4/5: mutant ids are discovered via
-        # `python3 test/mutants/gate_lib.py ids --kind security`, which calls
-        # run_mutant.py's own discover_entries() -- the same loader run_mutant.py uses
-        # for every `--mutant` invocation below, kind validation (issue #855 defect 4:
-        # an unrecognized kind is now rejected at load time, not silently excluded)
-        # included. This replaced a second, hand-copied inline python block that had
-        # no such validation, so a typo'd kind used to load fine and simply produce a
-        # shorter (but never checked against the total) id list. gate_lib.py itself
-        # exits non-zero -- distinct from "ran fine, found zero security-kind entries"
-        # below -- if the glob matches nothing at all, if any discovered file is
-        # missing its own 'id', or if any discovered file's kind is not one of
-        # security/selftest: a directory that silently resolves to "nothing here", or
-        # to "fewer entries than actually exist", must never be treated as "nothing to
-        # do, pass".
-        if ! MUTANT_IDS="$(python3 test/mutants/gate_lib.py ids --kind security)"; then
-          echo "::error::Failed to discover mutant ids from test/mutants/entries/ -- see the error printed above (an empty directory, an entry file missing its id, or an entry with an unrecognized kind -- issue #855 defect 4)."
+        # issue #968: mutant ids to run are SELECTED via
+        # `python3 test/mutants/gate_lib.py select --kind security`, re-derived HERE
+        # independently of the `changes` job's own selection (same event/SHA env vars,
+        # same underlying selection logic -- see gate_lib.py's `select` subcommand and
+        # its module-level comment for why per-entry selection is built ONLY on top of
+        # is_change_relevant(), never a second implementation) rather than trusting a
+        # value passed across the job boundary (see the "NOTE ON SHAPE" comment at the
+        # top of this file). On push, this always resolves to the FULL kind=='security'
+        # set (the post-merge backstop, unconditional). select's own exit code is
+        # distinct for "computation failed outright" vs. "selected empty because the
+        # relevance self-check failed" (exit 2) -- both are hard failures here; this
+        # job only reaches an `if:` of has_selection=='true', so a HEALTHY empty
+        # selection should never occur here at all (see the guard immediately below).
+        if ! MUTANT_IDS="$(python3 test/mutants/gate_lib.py select --kind security \
+            --event-name "$EVENT_NAME" --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" \
+            --push-before "$PUSH_BEFORE" --push-after "$PUSH_AFTER")"; then
+          echo "::error::Failed to select mutant ids (issue #968) -- see the error printed above (an empty entries directory, an entry file missing its id, an entry with an unrecognized kind -- issue #855 defect 4 -- or a failed relevance self-check)."
           exit 1
         fi
 
-        # Guard against this exact class of failure recurring silently: if no
-        # discovered entry has kind='security' (or the python helper above produced
-        # nothing for any other reason it didn't already hard-fail on), that must be
-        # a loud CI failure, not a green no-op run that never evaluated anything.
+        # issue #968: this job only runs when `changes` reported has_selection=='true'
+        # (at least one entry selected). An EMPTY MUTANT_IDS here therefore means this
+        # job's own independent re-selection DISAGREES with what `changes` decided --
+        # e.g. an event/SHA mismatch between the two jobs, or a non-deterministic bug
+        # in the selection logic itself. That divergence must be a loud CI failure,
+        # never a silent no-op run that reports a pass without evaluating anything
+        # (mirrors issue #855 defect 4's own protection, one level up: "selected but
+        # not executed" must never be silent).
         if [ -z "$MUTANT_IDS" ]; then
-          echo "::error::No 'security' mutants were discovered under test/mutants/entries/. Refusing to report a pass without evaluating anything."
+          echo "::error::No 'security' mutants were selected in THIS job, but it only runs when the changes job reported has_selection=true (i.e. it believed at least one entry should run). This divergence between what changes selected and what mutants independently re-selected must never be a silent pass. issue #968."
           exit 1
         fi
 
-        echo "Discovered security mutant ids:"
+        echo "Selected security mutant ids:"
         echo "$MUTANT_IDS" | sed 's/^/  - /'
         echo
 
-        # issue #855 defect 4: this job's own count of ids it is about to execute,
-        # consumed by the `gate` job's discovered-vs-executed reconciliation.
+        # issue #968 (successor to issue #855 defect 4): this job's own count of ids it
+        # is about to execute, consumed by the `gate` job's selected-vs-executed
+        # reconciliation.
         SECURITY_COUNT="$(echo "$MUTANT_IDS" | grep -c .)"
         echo "security_count=$SECURITY_COUNT" >> "$GITHUB_OUTPUT"
 
@@ -525,8 +622,13 @@ jobs:
   # meta-selftest is the load-bearing proof that an invalid mutant is never mistaken
   # for a pass.
   #
-  # Skipped (not failed) when the `changes` job found nothing gated -- `gate` below
-  # treats a skip here as a pass, not a failure.
+  # Skipped (not failed) when the `changes` job selected nothing -- `gate` below
+  # treats a skip here as a pass, not a failure. issue #968: kind=='selftest' entries
+  # are NEVER filtered by relevance (they test the RUNNER's own correctness, a
+  # property that isn't tied to which files a diff touches, and there are only 6 of
+  # them -- cheap enough that per-entry selection isn't worth the added complexity
+  # here); this job always evaluates every one of them whenever it runs at all, on
+  # both pull_request and push, unchanged from before #968.
   meta-selftest:
     # needs: [changes, mutants] -- this job used to declare `needs: changes` only, the
     # same as `mutants`, so both jobs were scheduled concurrently. That self-inflicted
@@ -539,10 +641,11 @@ jobs:
     # minutes of total wall-clock -- the same tradeoff PR #887 already made for
     # e2e-test.yml's matrix legs (see docs/ci-operations.md ~lines 199-221), because
     # Gitea silently ignores `strategy.matrix.max-parallel` there just as it would
-    # ignore any other parallelism cap here. The `if:` below is unchanged -- it still
-    # reads only needs.changes.outputs.relevant, not needs.mutants.
+    # ignore any other parallelism cap here. The `if:` below is unchanged in shape --
+    # it still reads only needs.changes.outputs.has_selection (renamed from
+    # `relevant` by issue #968), not needs.mutants.
     needs: [changes, mutants]
-    if: needs.changes.outputs.relevant == 'true'
+    if: needs.changes.outputs.has_selection == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md
     outputs:
@@ -687,15 +790,28 @@ jobs:
   # still runs when an upstream job failed or was skipped -- it is the one job in this
   # workflow that must post a status in every non-cancelled outcome, because Gitea's
   # required-check evaluation for a PR hangs forever on a context that never arrives.
-  # `mutants`/`meta-selftest` being SKIPPED (the `changes` job found nothing gated) is
+  # `mutants`/`meta-selftest` being SKIPPED (the `changes` job selected nothing) is
   # treated as a pass here, not a failure -- only an actual `failure`/`cancelled` result
-  # fails the gate.
+  # fails the gate. issue #968: this specifically means "0 selected, `changes` reported
+  # has_selection=false" is a pass; "0 selected because `changes` itself FAILED" is a
+  # `changes.result == 'failure'`, which is NOT skipped and therefore fails is_ok()
+  # below -- these two are deliberately different job outcomes precisely so this
+  # summary can tell them apart without any extra plumbing.
   #
   # Judge this job's own log, not the Gitea badge, for the same reason as every other
   # workflow in this repo (see CLAUDE.md "CI red does not mean failed") -- but see the
   # header comment above: for THIS workflow, a red `gate` step now means a real
   # regression, not the known upload-artifact quirk and not an accepted, documented
   # gap. Read the step output either way.
+  #
+  # INVARIANT (issue #973): this job has NO `actions/checkout` step and must stay that
+  # way -- every step here is pure bash/arithmetic over `needs.*.outputs`, never a
+  # repo-relative script. #968 briefly violated this (calling out to
+  # `python3 test/mutants/gate_lib.py reconcile`), which the repo tree being absent
+  # here turned into a job failure indistinguishable, at a glance, from a real
+  # reconciliation mismatch -- see the "Summarize mutation gate result" step's own
+  # comment for the full postmortem and why the fix stayed inline rather than adding a
+  # checkout.
   gate:
     needs: [changes, mutants, meta-selftest]
     # !cancelled(), not always() (#885 cross-vendor review, PR #887): this workflow has a
@@ -703,9 +819,9 @@ jobs:
     # re-evaluated when the run is cancelled (e.g. a superseded PR push), and always()
     # stays true through that, so an always()-gated job could still start after the run
     # it belongs to was supposed to be cancelled. !cancelled() preserves the "run even if
-    # mutants/meta-selftest were skipped (changes.outputs.relevant == 'false')" behavior
-    # this condition exists for — skipped is not cancelled — while actually stopping on
-    # cancellation.
+    # mutants/meta-selftest were skipped (changes.outputs.has_selection == 'false')"
+    # behavior this condition exists for — skipped is not cancelled — while actually
+    # stopping on cancellation.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5  # not enforced by this runner (job.timeout-minutes is ignored) -- real bound is the step-level timeout-minutes below; see docs/ci-operations.md
@@ -714,16 +830,18 @@ jobs:
       timeout-minutes: 2
       env:
         CHANGES_RESULT: ${{ needs.changes.result }}
-        CHANGES_RELEVANT: ${{ needs.changes.outputs.relevant }}
-        TOTAL_ENTRIES: ${{ needs.changes.outputs.total_entries }}
+        HAS_SELECTION: ${{ needs.changes.outputs.has_selection }}
+        SELECTED_SECURITY_COUNT: ${{ needs.changes.outputs.selected_security_count }}
+        SELECTED_SELFTEST_COUNT: ${{ needs.changes.outputs.selected_selftest_count }}
+        TOTAL_SECURITY_ENTRIES: ${{ needs.changes.outputs.total_security_entries }}
         MUTANTS_RESULT: ${{ needs.mutants.result }}
         SECURITY_COUNT: ${{ needs.mutants.outputs.security_count }}
         SELFTEST_RESULT: ${{ needs.meta-selftest.result }}
         SELFTEST_COUNT: ${{ needs.meta-selftest.outputs.selftest_count }}
       run: |
-        echo "changes job result:       $CHANGES_RESULT (relevant=$CHANGES_RELEVANT, total_entries=$TOTAL_ENTRIES)"
-        echo "mutants job result:       $MUTANTS_RESULT (security_count=$SECURITY_COUNT)"
-        echo "meta-selftest job result: $SELFTEST_RESULT (selftest_count=$SELFTEST_COUNT)"
+        echo "changes job result:       $CHANGES_RESULT (has_selection=$HAS_SELECTION, selected_security_count=$SELECTED_SECURITY_COUNT of $TOTAL_SECURITY_ENTRIES total, selected_selftest_count=$SELECTED_SELFTEST_COUNT)"
+        echo "mutants job result:       $MUTANTS_RESULT (security_count executed=$SECURITY_COUNT)"
+        echo "meta-selftest job result: $SELFTEST_RESULT (selftest_count executed=$SELFTEST_COUNT)"
 
         is_ok() {
           case "$1" in
@@ -737,22 +855,73 @@ jobs:
           exit 1
         fi
 
-        # issue #855 defect 4: "entries discovered != entries executed" is itself a
-        # gate failure condition, checked here independently of issue #855 defect 4's
-        # load-time kind validation (test/mutants/gate_lib.py, run_mutant.py's
-        # discover_entries()) -- so a future regression in the selection/counting logic
-        # is still caught even if the load-time check is ever weakened. Only meaningful
-        # when mutants/meta-selftest actually ran (CHANGES_RELEVANT=true); when the
-        # `changes` job found nothing gated and both were skipped, there is nothing to
-        # reconcile.
-        if [ "$CHANGES_RELEVANT" = "true" ]; then
-          EXECUTED=$(( ${SECURITY_COUNT:-0} + ${SELFTEST_COUNT:-0} ))
-          if [ -n "$TOTAL_ENTRIES" ] && [ "$TOTAL_ENTRIES" != "$EXECUTED" ]; then
-            echo "::error::entries discovered ($TOTAL_ENTRIES) != entries executed ($EXECUTED = security $SECURITY_COUNT + selftest $SELFTEST_COUNT). issue #855 defect 4: an entry exists under test/mutants/entries/ but was not executed by either CI job -- this must never be a silent pass."
+        # issue #968 (successor to issue #855 defect 4's discovered-vs-executed check):
+        # "entries selected != entries executed" is itself a gate failure condition.
+        # #855 defect 4's original version compared TOTAL DISCOVERED entries against
+        # executed, which only worked because every discovered entry always ran; #968
+        # makes running a SUBSET on a pull_request legitimate (per-entry relevance
+        # selection), so the baseline moved from "discovered" to "selected".
+        #
+        # POSTMORTEM (#973, discovered on this PR's own first CI run): this comparison
+        # originally shelled out to `python3 test/mutants/gate_lib.py reconcile`. The
+        # `gate` job has NEVER had an `actions/checkout` step -- by design, it is the
+        # one job in this workflow that must unconditionally post a status (see this
+        # job's own header comment), and every other step in it is pure bash/arithmetic
+        # over job outputs, needing nothing from the working tree. Calling out to a
+        # repo file broke that invariant silently: `changes`/`mutants`/`meta-selftest`
+        # all reported success (61 selected, 61 executed, fully reconciled), and `gate`
+        # still failed, because `python3: can't open file
+        # '.../test/mutants/gate_lib.py': No such file or directory` -- the script
+        # simply was not on disk. A repo-wide sweep (issue #973 review) found this is
+        # the ONLY job in ANY workflow file that references a repo-relative script
+        # without ever checking out; nothing else needed the same fix.
+        #
+        # FIX: the comparison is inline bash again, exactly as it was before #968 (just
+        # "selected" instead of "discovered") -- no checkout added, because adding one
+        # here would work against the reason this job has no other tree dependency:
+        # `gate_lib.py reconcile` would ALSO force a full load_entries() (parsing all
+        # ~67 entry files) just to perform a two-integer comparison, coupling a trivial
+        # check to registry-wide parseability that `changes` job's own
+        # check-mutant-entries-parse.py guard already owns.
+        #
+        # TWO IMPLEMENTATIONS NOW EXIST, DELIBERATELY: test/mutants/gate_lib.py's
+        # `reconcile()` function/CLI subcommand is UNCHANGED and still covered by
+        # test/mutants/_selftest/selftest_select_relevant_entries.py's
+        # check_reconcile() -- kept as a documented, independently-tested reference
+        # spec of this rule and for manual `python3 test/mutants/gate_lib.py reconcile
+        # --selected N --executed M` diagnostic use, but it is NOT what this job calls.
+        # This is judged safe specifically because the rule itself is a single `!=`
+        # comparison plus a formatted message -- unlike is_change_relevant() (real
+        # matching logic: prefix/set/regex checks that genuinely could drift if
+        # duplicated), there is no meaningful way for "selected != executed" to diverge
+        # between a Python `!=` and a bash `[ ... != ... ]`. The inline version below
+        # has its own regression coverage --
+        # test/mutants/_selftest/selftest_gate_job_reconciliation.py extracts and runs
+        # THIS job's actual step (not a copy) under match/mismatch/skip scenarios,
+        # including running it from a directory with NO repo checked out at all -- the
+        # exact condition #973 exposed -- so this specific failure mode is now
+        # regression-tested, not just fixed once.
+        #
+        # Only meaningful when HAS_SELECTION is the literal string 'true' (mutants/
+        # meta-selftest actually ran with something selected) -- NOT merely "the count
+        # fields happen to be set". When `changes` reported has_selection=false, it
+        # already logged an explicit reason (this diff genuinely touches nothing
+        # gated, confirmed by gate_lib.py's relevance self-check) and there is nothing
+        # to reconcile: a bare 0-selected/0-executed match here would be
+        # indistinguishable from the exact silent-pass failure mode #968 exists to
+        # prevent, so this is deliberately narrower than "reconcile whenever the
+        # numbers exist".
+        if [ "$HAS_SELECTION" = "true" ]; then
+          SELECTED_TOTAL=$(( ${SELECTED_SECURITY_COUNT:-0} + ${SELECTED_SELFTEST_COUNT:-0} ))
+          EXECUTED_TOTAL=$(( ${SECURITY_COUNT:-0} + ${SELFTEST_COUNT:-0} ))
+          if [ "$SELECTED_TOTAL" != "$EXECUTED_TOTAL" ]; then
+            echo "::error::entries selected ($SELECTED_TOTAL = security $SELECTED_SECURITY_COUNT + selftest $SELECTED_SELFTEST_COUNT) != entries executed ($EXECUTED_TOTAL = security $SECURITY_COUNT + selftest $SELFTEST_COUNT). issue #968 (successor to #855 defect 4): an entry was SELECTED to run but the mutants/meta-selftest job executed a different count -- this must never be a silent pass."
             echo "MUTATION_GATE_RESULT: FAIL"
             exit 1
           fi
-          echo "entries discovered ($TOTAL_ENTRIES) == entries executed ($EXECUTED) -- OK"
+          echo "entries selected ($SELECTED_TOTAL) == entries executed ($EXECUTED_TOTAL) -- OK"
+        elif [ "$CHANGES_RESULT" = "success" ]; then
+          echo "0 entries selected this run (changes job confirmed this diff genuinely touches no gated path; its relevance self-check passed) -- nothing to reconcile. This is a genuine PASS, not a masked no-op (issue #968)."
         fi
 
         echo "MUTATION_GATE_RESULT: PASS"
