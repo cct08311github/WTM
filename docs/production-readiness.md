@@ -74,7 +74,7 @@ WTM 設計為「快速 CRUD 開發框架」，**不**是高流量 SaaS 平台或
 
 **刻意沒做、且這裡明講原因**：
 - 不重跑完整 .NET 測試套件或 mutation-gate（跑一次要跨越這台 2-capacity runner 的容量，而且 CI 的 `build-and-test` conclusion 欄位在本 repo 是不可靠訊號，見 CLAUDE.md「CI red does not mean failed」——引用它取代真的重跑，等於用一個已知不可靠的訊號冒充驗證，這個決定本身寫在 workflow 檔案的註解裡）。
-- 這次修復撰寫期間**刻意不呼叫任何 Gitea/GitHub API、不 push 任何 tag**（含 PR 本身也未開）。以下邏輯因此只做到 bash 語法檢查 + 邏輯覆查 + 對標準 git plumbing 指令（`git fetch`/`rev-parse`/`ls-remote`）的行為推導，**沒有對 mac-mini Gitea 或 GitHub Packages 的真實 registry / 真實 tag push 端到端跑過**：`scripts/check-package-cohort.py` 的 HTTP 呼叫邏輯（只在本機對 nuget.org 這個公開、非 Gitea/GitHub 的標準 NuGet V3 端點，以及一個假造的本機 fixture server 驗證過協定正確性，見 `test/check-package-cohort-tests.sh`）；「Push release tag to GitHub」步驟的 tree-比對 force-move guard；`is_prerelease` 帶進 GitHub Release payload 那段。下次真實 tag 發版時應視為這幾段邏輯的首次生產驗證。
+- 這次修復撰寫期間**刻意不呼叫任何 Gitea/GitHub API、不 push 任何 tag**（含 PR 本身也未開）。以下邏輯因此只做到 bash 語法檢查 + 邏輯覆查 + 對標準 git plumbing 指令（`git fetch`/`rev-parse`/`ls-remote`）的行為推導，**沒有對 mac-mini Gitea 或 GitHub Packages 的真實 registry / 真實 tag push 端到端跑過**：`scripts/check-package-cohort.py` 的 HTTP 呼叫邏輯（只在本機對 nuget.org 這個公開、非 Gitea/GitHub 的標準 NuGet V3 端點，以及一個假造的本機 fixture server 驗證過協定正確性，見 `test/check-package-cohort-tests.sh`）；「Push release tag to GitHub」步驟的 tree-比對 force-move guard；`is_prerelease` 帶進 GitHub Release payload 那段。下次真實 tag 發版時應視為這幾段邏輯的首次生產驗證。**（#967 更正，2026-08-01）`scripts/check-package-cohort.py` 這一段的「未端到端驗證」已不成立——這支腳本原本用的 `HEAD` 探測法讓這個 gate 對 Gitea **每一次**都失敗（見下方新章節），問題在 #967 修好之後才真正對 mac-mini Gitea 跑過端到端；GitHub Packages 只驗證到一半，同見下方新章節。**
 - `scripts/publish-to-gitea.sh` 的真實發佈路徑已停用（見 `docs/gitea-packages.md` §7）——這是「runner 不可用時的本機 fallback」，不是這個 gate 的一部分，過去被文件誤導成等效替代品。
 
 **可重跑的盤點指令**（驗證上面「每次 publish 執行」清單裡各檢查確實排在第一個 push 之前，而不是憑記憶）：
@@ -132,6 +132,24 @@ for idx in range(len(starts) - 1):
     print(f'{name:40s} asserts={n}')
 "
 ```
+
+---
+
+## check-package-cohort.py 的 HEAD→GET 修復（#967，2026-08-01，release-blocking）
+
+`scripts/check-package-cohort.py`（見上一節）原本用 `method="HEAD"` 探測版本是否已存在。**Gitea 的 NuGet flat-container endpoint 對 HEAD 一律回 405 Method Not Allowed，不論該版本存不存在**——腳本只把 404 特判成「不存在」，其餘一律 re-raise 當成 fail-closed 錯誤，405 落在「其餘」，所以這個 gate **每一次 publish 都會失敗**，無論套件實際狀態如何。這是 release-blocking：`workflow_dispatch` 與 tag push 兩條路徑都會在「Verify version cohort not partially published (Gitea)」這一步卡死。修法：探測方式改成 `GET`，且不重用會把整個回應體讀進記憶體的 `fetch()` helper——改成直接開連線、靠 `urlopen` 對非 2xx 狀態碼丟 `HTTPError`（404 分支邏輯不變)、2xx 時最多讀 1 byte（`resp.read(1)`）就讓 `with` block 關閉連線，不會把整個 `.nupkg`（可能數 MB）緩衝進記憶體。
+
+**已驗證（對真實 mac-mini Gitea registry 端到端跑過，2026-08-01）**：
+- `WalkingTec.Mvvm.Core 10.18.0`（已發布的版本）→ 正確回報「1/1 already published」，exit 0。
+- `WalkingTec.Mvvm.Core 10.21.0-rc.1`（未發布的版本）→ 正確回報「0/1 already published」（not yet published），exit 0。
+- 完全比照 `publish-nuget.yml` 呼叫方式、六個套件、`PKG_VERSION=10.21.0-rc.1` 的完整 cohort check → `0/6 already published`，`Cohort check passed`，exit 0——即這個版本目前乾淨、可以安全發布，gate 不再誤擋。
+- 修復前（`method="HEAD"`）對同一台真實 Gitea、同一個已存在版本（`10.18.0`）的實測輸出：`ERROR: could not check existence of WalkingTec.Mvvm.Core 10.18.0: HTTP Error 405: Method Not Allowed`，exit 2——這就是 release-blocking 的實際錯誤訊息，不是推導。
+
+**GitHub Packages（`nuget.pkg.github.com`）—— 只驗證到一半，誠實揭露**：
+- 已驗證：未帶 auth 的情況下，HEAD 對 `https://nuget.pkg.github.com/cct08311github/index.json`（service index）與一個合理猜測的 flat-container download URL 都回 405；同樣未帶 auth 的 GET 對同兩個 URL 回 401（正常的「需要認證」回應，代表請求有被路由/認證層處理，不是被方法層擋掉）——重複測試皆一致。這代表 GitHub Packages 對 HEAD 的拒絕方式與 Gitea 相同（方法層直接拒絕，不因路徑或認證而異），所以把探測方式統一改成 GET 對兩邊都是正確、而非只碰運氣對了一邊。
+- **未驗證**：GitHub Packages 帶正確 PAT 之後，GET 能否正確區分「該版本存在（200）」與「不存在（404）」——這次工作階段沒有可用的 `GH_MIRROR_PAT`，無法測試。這一段**不宣稱已修好**，留待下一次真正的 tag 發版（`publish-nuget.yml` 的「Verify version cohort not partially published (GitHub Packages)」步驟）作為首次生產驗證。
+
+**測試**：`test/check-package-cohort-tests.sh` 新增一個獨立的 fixture HTTP server，用自訂 handler 讓 `do_HEAD` 一律回 405（模擬 Gitea/GitHub 的真實行為），`do_GET` 對特定版本正確回 200/404，另對保留版本號 `0.0.500` 回 500（模擬非 405-masking 的真正異常）。舊的 fixture 直接用 Python `http.server` 的 `SimpleHTTPRequestHandler`，它對 HEAD 的處理是「正確」的（200/404），這正是舊測試套件從未抓到這個缺陷的原因——它跟真實 Gitea/GitHub 的行為不一樣。RED-before-fix 已獨立重現（把腳本換回 `method="HEAD"`、跑新測試案例）：`ERROR: could not check existence of WalkingTec.Mvvm.Core 10.21.0: HTTP Error 405: Method Not Allowed`，該 test case 判定 `FAIL: ... expected exit 0, got 2`。修復後 7 個 case（4 個既有 + 3 個新增）全線變綠，`check-package-cohort-tests: PASS`。**指出哪一行刪除會讓測試變紅**：把 `scripts/check-package-cohort.py` 的 `package_exists()` 內 `method="GET"` 改回 `method="HEAD"`，會讓 `test/check-package-cohort-tests.sh` 新增的「version exists -- detected correctly against HEAD-405 Gitea-like registry」與「version absent -- ...」兩個 case 從 exit 0 變成 exit 2（RED）——這兩行就是這次修復的證明。
 
 ---
 

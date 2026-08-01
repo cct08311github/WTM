@@ -29,13 +29,23 @@ Exit codes:
      publish" -- that is indistinguishable from a genuine partial-cohort race.
 
 NOTE: this script performs live HTTP calls against the registry named on argv[1] and
-is exercised in this repository's CI as part of a real release run. It has NOT been
-exercised against the live mac-mini Gitea registry or GitHub Packages from this
-development session (no Gitea/GitHub API calls were made while authoring this fix) --
-its correctness rests on the NuGet V3 protocol spec (the PackageBaseAddress resource
-and its flat-container URL layout are standardized, not Gitea/GitHub-specific) and
-should be spot-checked against a real `workflow_dispatch` run before being relied on
-for a production release.
+is exercised in this repository's CI as part of a real release run.
+
+Verification status (#967): the live mac-mini Gitea registry has been exercised
+end-to-end -- a GET against the PackageBaseAddress flat-container URL returns 200 for
+a version that already exists and 404 for one that does not, while a HEAD against the
+identical URL returns 405 Method Not Allowed in BOTH cases (Gitea rejects the method
+outright rather than routing it based on existence), which is why package_exists()
+below issues GET, not HEAD. GitHub Packages' nuget.pkg.github.com was confirmed,
+unauthenticated, to reject HEAD the same way (405) on both its service index and a
+plausible flat-container download URL, so the same fix is expected to apply there;
+its authenticated GET exists-vs-404 distinction was NOT exercised in this session (no
+PAT available) and remains unverified -- treat that half of the GitHub Packages path
+as a known gap, not a confirmed behavior, until spot-checked against a real
+`workflow_dispatch` run. The PackageBaseAddress resource and its flat-container URL
+layout are part of the standardized NuGet V3 protocol, not a Gitea- or GitHub-specific
+shape, which is why the identical script and call site works against both registries
+this workflow publishes to.
 """
 from __future__ import annotations
 
@@ -69,8 +79,23 @@ def package_exists(base: str, package_id: str, version: str, token: str | None) 
     pid = package_id.lower()
     ver = version.lower()
     url = f"{base}{pid}/{ver}/{pid}.{ver}.nupkg"
+    # GET, not HEAD (#967): Gitea's NuGet flat-container endpoint returns 405 Method
+    # Not Allowed for HEAD regardless of whether the version exists, and GitHub
+    # Packages' nuget.pkg.github.com rejects HEAD the same way -- see the module
+    # docstring's verification-status paragraph. GET is the verb both registries
+    # answer correctly (200/404) for this resource. Deliberately does NOT reuse the
+    # fetch() helper above, which buffers the full response body via resp.read() --
+    # that is fine for the small JSON service index but would pull an entire,
+    # potentially multi-MB, .nupkg into memory just to check existence. Instead this
+    # opens the connection directly, lets a non-2xx status raise HTTPError (same as
+    # the 404 branch below already expects), and reads at most one byte off a 2xx
+    # response before the `with` block closes the connection.
+    req = urllib.request.Request(url, method="GET")
+    if token:
+        req.add_header("Authorization", f"token {token}")
     try:
-        fetch(url, token, method="HEAD")
+        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 -- fixed, non-user-controlled scheme (http/https only, caller-supplied service index URL)
+            resp.read(1)
         return True
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
