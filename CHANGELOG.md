@@ -427,6 +427,91 @@ That entry justified deprecating `Layui:Asset=legacy` on a conservative timeline
 
 This correction is scoped to a factual claim about a third party's deployment. It changes no code, no behaviour, and no other entry's claims.
 
+### Fixed — `WtmFileProvider.GetFileCore`/`DeleteFileCore` projections omitted `HandlerInfo`, so `WtmOssFileHandler` always fell back to the first configured OSS group/bucket (#1028)
+
+Both `GetFileCore` and `DeleteFileCore` rebuild a lightweight `FileAttachment` via a hand-maintained
+`Select` projection instead of a plain entity load, specifically to avoid pulling `FileData` (the
+byte-array payload) off disk for callers that only need metadata. Before this fix, each method's
+field list independently omitted `FileAttachment.HandlerInfo` — the field `WtmOssFileHandler` uses
+to pick which configured OSS group/bucket a file belongs to, falling back to
+`ossSettings?.FirstOrDefault()` when it is null. Every object either method returned therefore had
+`HandlerInfo == null` regardless of what was persisted. In a single-OSS-group deployment the
+fallback happens to be correct and the defect is invisible; in a multi-group deployment, reads look
+in the wrong bucket, and deletes issue `DeleteObject` against the wrong bucket. A delete against a
+non-existent object in the wrong bucket typically returns success, so a wrong delete and a correct
+delete are indistinguishable to the caller while the object that should have been removed survives.
+
+**Both projections now include `HandlerInfo`, and — the actual point of this issue — the field list
+is centralized into a single `private static readonly Expression<Func<FileAttachment,
+FileAttachment>> _fileMetadataProjection`** in `WtmFileProvider.cs`, used by both `GetFileCore` and
+`DeleteFileCore` via `.Select(_fileMetadataProjection)`. The two hand-maintained lists had already
+happened to agree on every field they DID include (only their ordering differed) while both silently
+missing `HandlerInfo` — proof that nothing was preventing the two from drifting apart, not that they
+hadn't already drifted from the full intended set. A single shared expression makes that class of
+divergence structurally impossible: there is now exactly one place to update when a field is added
+to or removed from this projection, and both call sites use the identical expression object (not
+two independently-typed lambdas of the same shape).
+
+**EF Core translation**: because `_fileMetadataProjection` is declared as
+`Expression<Func<FileAttachment, FileAttachment>>` (not a compiled delegate) and is passed directly
+as the argument to `IQueryable<T>.Select(...)`, the C# compiler does not wrap it in another
+expression — the provider sees exactly the same expression tree it would from an inline lambda.
+Verified in practice, not just by inspection: `WtmFileProviderHandlerInfoRoundTripTests1028` runs the
+`GetFileCore` path against a SQLite shared-memory fixture (`Microsoft.Data.Sqlite`, not EF
+InMemory — InMemory's LINQ-to-objects evaluation would "translate" any C# projection including ones
+the real providers cannot, so a green result there would prove nothing) and confirms the SELECT
+executes and returns the correct value. `DeleteFileCore` uses the exact same expression object
+(reflection-verified in the pinning test below), so this evidence covers it without a separate query
+execution proof.
+
+**Tests** (`test/WalkingTec.Mvvm.Core.Test/Support/`, 5 new, all passing):
+`WtmFileProviderProjectionFieldSetTests1028.cs` (3 tests) reflects over the private static
+`_fileMetadataProjection` field and asserts the *set* of assigned member names via
+`CollectionAssert.AreEquivalent` against a pinned expected set — a count-only assertion would have
+passed both before and after this fix (8 fields either way), so only a set assertion catches a
+field being silently swapped for a different one; separately pins that `HandlerInfo` is present and
+`FileData` is still absent (the entire reason a projection exists instead of a plain load).
+`WtmFileProviderHandlerInfoRoundTripTests1028.cs` (2 tests) seeds a `FileAttachment` with
+`SaveMode="database"` (no OSS network needed) and asserts `HandlerInfo` survives
+`WtmFileProvider.GetFile` unchanged, plus a positive control that fields already in the projection
+before this fix keep working.
+
+**RED-before-fix, captured verbatim** (temporarily reverted only `WtmFileProvider.cs`, kept the new
+test files): `Assert.AreEqual failed. Expected:<group-get-5681756506834f418301bdef4f49e000>.
+Actual:<(null)>. #1028: HandlerInfo must survive GetFileCore's Select projection...` — the positive
+control in the same run stayed green (`Failed: 1, Passed: 1`), confirming the fixture itself was
+sound and only the `HandlerInfo` assertion was red. Reverted state restored; full new-test filter
+green afterward (`Passed: 5`).
+
+**Consequence traced, not reproduced.** No multi-group OSS environment (real Aliyun OSS endpoint,
+multiple configured `FileHandlerOptions.GroupName` values) was stood up to actually observe a wrong
+bucket being read from or deleted against. The wrong-bucket chain above is derived from reading
+`WtmOssFileHandler.GetFileData`/`DeleteFile` against the fact that `HandlerInfo` was always null,
+not from a real multi-group deployment request.
+
+**Other `FileAttachment` projections in the repo**: none found. Full-tree search for
+`new FileAttachment` and `Set<FileAttachment>()` across `src/`, `demo/`, and `test/` found only full
+entity loads (`Utils.cs:695`, `WtmDataBaseFileHandler.cs:41`, no `Select` — these load `FileData`
+too), single-field `ID`-only projections (`DCExtension.FileAttachmentResolution.cs`, unrelated
+shape), or full `new FileAttachment()` construction for writes rather than reconstruction from a
+query. This defect's shape — a partial-field `Select` projection of `FileAttachment` — exists only
+in `WtmFileProvider.cs`'s two call sites.
+
+**Mutant: considered, judged not a fit, not added.** `run_mutant.py`'s `VALID_KINDS` is
+`{security, selftest}`. This is closer to a correctness fix (a hand-maintained field list omitted a
+column) than the "a security control's decision branch was bypassed" shape the `security` kind
+targets elsewhere in this registry (e.g. #985's principal-key check, #1011's tenant-scope check),
+each of which has a real conditional to neutralize with a compile-preserving patch. There is no
+conditional here to neutralize — the only "mutant" available is deleting the
+`HandlerInfo = x.HandlerInfo,` line, which just re-creates the pre-fix state the two tests above
+already cover as ordinary regression protection. Full reasoning in `docs/production-readiness.md`'s
+`#1028` entry.
+
+Tests: `test/WalkingTec.Mvvm.Core.Test` (Release, `TestCategory!=Integration`, `-m:1`) 5090 passed,
+0 failed (5 new). `test/mutants/patches/*.patch` (68 files): 68/68 pass `git apply --check`; none
+touch `WtmFileProvider.cs`. Full details, including the exact pre-fix field lists, in
+`docs/production-readiness.md`'s `#1028` entry — this entry does not repeat or exceed those claims.
+
 ## [10.21.0] - 2026-07-31
 
 > **This section was published only as `10.21.0-rc.2`. The `10.21.0` version number is

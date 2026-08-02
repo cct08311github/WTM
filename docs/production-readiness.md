@@ -1543,6 +1543,62 @@ BMS repo 內三份互相獨立的文件都記載 8.6.1/8.x：一則 commit messa
 
 ---
 
+## `WtmFileProvider.GetFileCore`/`DeleteFileCore` 的投影遺漏 `HandlerInfo`：多群組 OSS 部署下讀寫可能落錯 bucket（#1028，2026-08-03）
+
+### 缺陷
+
+`WtmFileProvider.cs` 的 `GetFileCore`（`.CheckID(id).Select(x => new FileAttachment {...})`）與 `DeleteFileCore`（同形狀，另一份手寫欄位表）各自用一段手動維護的 `Select` 投影重建 `FileAttachment`，理由正當——避免載入 `FileData`（`byte[]`）這個大欄位。但兩份欄位表都**遺漏 `FileAttachment.HandlerInfo`**：
+
+- `GetFileCore`（修法前）：`ID, ExtraInfo, FileExt, FileName, Length, Path, SaveMode, UploadTime`
+- `DeleteFileCore`（修法前）：`ID, ExtraInfo, FileExt, FileName, Path, SaveMode, Length, UploadTime`
+
+兩份欄位表其實是同一個 8 欄位集合（只有列出順序不同），**沒有互相矛盾**——但這正是 issue 要指出的問題：兩份手寫清單已經各自漂移過一次（都漏了 `HandlerInfo`），彼此卻剛好一致，代表沒有任何機制擋得住下一次漂移，"看起來一致" 不等於 "有東西在保證一致"。
+
+`HandlerInfo` 是 `IWtmFile` 介面的一部分（`Models/IWtmFile.cs`），`WtmOssFileHandler.GetFileData`/`DeleteFile` 用它挑 OSS 群組/bucket（`FileHandlerOptions.GroupName`），找不到值時 fallback 成 `ossSettings?.FirstOrDefault()`。因為投影從未複製這個欄位，`WtmFileProvider.GetFile`/`GetFileTenantScoped`/`DeleteFile`/`DeleteFileTenantScoped` 回傳的物件 `HandlerInfo` **永遠是 null**，不論資料庫裡實際存了什麼——在只有一個 OSS 群組的部署下這條 fallback 剛好命中正確答案，缺陷完全不可見；一旦部署設定第二個群組，讀取會去錯的 bucket 找檔案，刪除會對錯的 bucket 發 `DeleteObject`。對不存在的 object 發 delete 通常回成功，所以「刪錯 bucket」跟「刪對 bucket」在呼叫端看起來一模一樣，該刪的檔案其實還留著。
+
+### 修了什麼
+
+**新增 `HandlerInfo` 到兩處投影，並把欄位表收斂成單一來源**——這是本 issue 真正要處理的點，不只是補一個欄位。`WtmFileProvider.cs` 新增一個 `private static readonly Expression<Func<FileAttachment, FileAttachment>> _fileMetadataProjection`，內容是收斂後的 9 個欄位（原 8 個 + `HandlerInfo`）；`GetFileCore`／`DeleteFileCore` 都改成 `.Select(_fileMetadataProjection)`，不再各自手寫。以後要在這個投影加/拿掉欄位，只有一個地方要改，兩個呼叫點不可能再各自漂移。
+
+**EF Core 轉譯證據**：`_fileMetadataProjection` 的宣告型別是 `Expression<Func<FileAttachment, FileAttachment>>`（不是編譯過的 delegate），`IQueryable<T>.Select` 的多載本來就吃這個型別——把已經是這個型別的欄位直接傳進 `Select(...)`，C# 編譯器不會另外包一層 lambda，EF Core provider 看到的運算式樹跟直接把 lambda 打在呼叫點是同一份。這不是理論推導：`test/WalkingTec.Mvvm.Core.Test/Security/WtmFileProviderHandlerInfoRoundTripTests1028.cs` 用 SQLite shared-memory fixture（`Microsoft.Data.Sqlite`，非 EF InMemory——InMemory 的 LINQ-to-objects 求值會放行任何 C# 投影，包含 EF 真正 provider 轉譯不了的寫法，綠燈證明不了轉譯真的成立）實際跑過 `GetFileCore` 這條路徑，SELECT 確實被 SQLite provider 執行且回傳正確值（見下方 RED/GREEN）；`DeleteFileCore` 用的是同一個 `_fileMetadataProjection` 物件（reflection 可驗證兩個呼叫點指向同一個靜態欄位），沒有另外查證的必要——它不是「形狀相同的另一份運算式」，是同一個物件參照。
+
+### 測試
+
+**回歸釘點測試**（`test/WalkingTec.Mvvm.Core.Test/Support/WtmFileProviderProjectionFieldSetTests1028.cs`，3 個測試）：用 reflection 取出 `WtmFileProvider._fileMetadataProjection` 這個 private static 欄位，把它的 `MemberInitExpression.Bindings` 轉成成員名稱清單，用 `CollectionAssert.AreEquivalent` 跟一份寫死的期望集合比對——刻意用集合比對，不是數量比對：數量比對在「拿掉一個欄位、換成另一個不相關欄位」時一樣會過，抓不到 #1028 這種「數量沒變、內容錯了」的漂移。另外兩支測試分別釘住「必須包含 `HandlerInfo`」與「必須不包含 `FileData`」——後者是護住投影存在的理由本身：這個修法不能順便把大欄位載入的問題也修沒了（變成退化成整列 entity load）。
+
+**Round-trip 測試**（`test/WalkingTec.Mvvm.Core.Test/Support/WtmFileProviderHandlerInfoRoundTripTests1028.cs`，2 個測試，SQLite shared-memory fixture）：`SaveMode="database"`（不需要真的 OSS endpoint、不碰網路）種一筆帶 `HandlerInfo` 的 `FileAttachment`，呼叫 `WtmFileProvider.GetFile(...)`，斷言回傳物件的 `HandlerInfo` 等於種下去的值；正控組斷言修法前就已經在投影裡的欄位（`FileName`、`ExtraInfo`）沒有被這次改動動到。
+
+**RED-before-fix，逐字擷取**（暫時 `git stash` 掉 `WtmFileProvider.cs` 的修法、只留新測試檔案，重新 build + 跑）：
+
+```
+Failed GetFile_PersistedHandlerInfo_SurvivesProjectionRoundTrip [713 ms]
+Error Message:
+ Assert.AreEqual failed. Expected:<group-get-5681756506834f418301bdef4f49e000>. Actual:<(null)>. #1028: HandlerInfo must survive GetFileCore's Select projection. Before the fix, the hand-maintained projection never copied this column, so HandlerInfo was always null regardless of what was persisted — the exact defect that made WtmOssFileHandler fall back to the first configured OSS group/bucket instead of the one the file actually belongs to.
+Failed!  - Failed:     1, Passed:     1, Skipped:     0, Total:     2, Duration: 744 ms
+```
+
+（同一次跑，正控組 `GetFile_PersistedMetadata_OtherFieldsStillSurviveProjection` 維持綠燈——證明 fixture 本身沒問題，紅的只有斷言 `HandlerInfo` 的那一支，紅的理由跟預期完全對上。）`git stash pop` 還原修法後，同一組 filter 重跑：`Passed! - Failed: 0, Passed: 5, Skipped: 0, Total: 5`（含釘點測試的 3 支）。
+
+**範圍聲明——`DeleteFileCore` 沒有獨立的 round-trip 測試**：`DeleteFileCore` 是 `void`，沒有可觀察的回傳值；要證明它內部的 `file.HandlerInfo` 真的帶著正確值傳進 `fh.DeleteFile(file)`，唯一辦法是透過 `WtmFileProvider` 的 private、process-wide static handler registry（`_handlers`/`_defaultHandler`，由 `WtmFileProvider.Init` 寫入）注入一個會記錄收到值的假 handler——這是跨測試共享的可變靜態狀態，會在同一個測試 process 裡的其他測試之間互相汙染。權衡後判斷這個風險大於多驗證到的信心：`DeleteFileCore` 用的是跟 `GetFileCore` **同一個** `_fileMetadataProjection` 物件（reflection 已證明兩個呼叫點指向同一個靜態欄位），而不是另一份形狀相同但獨立的運算式，所以 `GetFileCore` 的轉譯證據原則上完全適用於 `DeleteFileCore`。
+
+### 其他 `FileAttachment` 投影site全樹核對
+
+`grep -rn "new FileAttachment"` 與 `grep -rn "Set<FileAttachment>()"` 全樹掃過 `src/`、`demo/`、`test/`：沒有其他檔案用 `Select(x => new FileAttachment {...})` 這種部分欄位投影重建 `FileAttachment`。其餘命中都是：完整 entity load（`Utils.cs:695`、`WtmDataBaseFileHandler.cs:41`，沒有 `Select`，載入含 `FileData` 的整列）、`Select(x => x.ID)` 這種單欄位投影（`DCExtension.FileAttachmentResolution.cs`，跟這個缺陷的形狀無關）、或建立全新物件用於寫入（`new FileAttachment()` 接著逐一設 property，不是從查詢投影重建）。這個缺陷的模式（部分欄位 `Select` 投影 + 遺漏欄位）在整個 repo 裡只存在這一份程式碼、兩個呼叫點。
+
+### Mutant：考慮過，判斷不適合，未新增
+
+`run_mutant.py` 的 `VALID_KINDS` 只有 `security`／`selftest` 兩種。這個修法的性質更接近**正確性修復**（投影欄位表遺漏欄位）而不是傳統意義上「安全控制被繞過」的形狀——沒有身分驗證邊界被打開、沒有攻擊者能主動觸發的輸入、`HandlerInfo` 是否正確完全取決於部署設定（幾個 OSS 群組），不是任何一方可控制的輸入。consequence 雖然讀起來像資安事故（跨群組讀錯、刪錯），但成因是「設定欄位沒被複製」而非「檢查被繞過」，跟本文件裡其他 `security` kind 的 mutant（例如 #985 的 principal-key 檢查、#1011 的租戶範圍檢查）不是同一類東西：那些都是**條件判斷**被中和、可以直接寫「拿掉這個 `&&` 分支」的 compile-preserving patch；這裡沒有條件判斷可以中和——唯一能寫的「mutant」就是把 `HandlerInfo = x.HandlerInfo,` 這一行從投影裡刪掉，等於直接把已經修好的程式碼改回修法前的樣子，本質上是重複回歸測試的角色，不是額外驗證一個決策分支沒被繞過。
+
+回歸保護已經由本節上方兩份測試檔案（5 個測試，含集合比對釘點 + round-trip）用 CI 強制的一般測試套件提供，不需要疊加 mutation-gate 的重量級機制。
+
+### 驗證
+
+`find . -name 'demo.db*' -path '*bin*' -delete && dotnet build src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj -c Release`：0 錯誤（既有警告不變，跟本次改動無關的既有 XML doc/nullable 警告）。`dotnet test test/WalkingTec.Mvvm.Core.Test/ -c Release --filter "TestCategory!=Integration" -m:1`：**5090 passed, 0 failed**（含本次新增 5 個測試）。`test/mutants/patches/*.patch`（68 個檔案）逐一 `git apply --check`：**68/68 通過**，沒有 patch 動到 `WtmFileProvider.cs`。
+
+**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，本機驗證只到 `dotnet build`/`dotnet test` 這兩層，沒有跑過真正的 Gitea Actions CI。**consequence 是追溯出來的，不是重現出來的**：沒有架設任何多群組 OSS 環境（真實 Aliyun OSS endpoint、多個 `FileHandlerOptions.GroupName`）去實際驗證「讀錯 bucket」「刪錯 bucket」——上面的因果鏈是讀 `WtmOssFileHandler.GetFileData`/`DeleteFile` 原始碼、對照 `HandlerInfo` 一路是 null 推出來的，不是對一個真的跑著兩個 bucket 的部署發過請求、看到過真的讀到 A bucket 的東西。`DeleteFileCore` 路徑（見上方「範圍聲明」）沒有獨立的 round-trip 測試，只靠「跟 `GetFileCore` 共用同一個運算式物件」這個結構性論證覆蓋，沒有直接跑過 `DeleteFileCore` 本身觀察 `HandlerInfo` 傳給 handler 的那一刻。
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。
