@@ -1,0 +1,20 @@
+diff --git a/src/WalkingTec.Mvvm.Core/WTMContext.CallApi.cs b/src/WalkingTec.Mvvm.Core/WTMContext.CallApi.cs
+index ba8157628..77ba4b7df 100644
+--- a/src/WalkingTec.Mvvm.Core/WTMContext.CallApi.cs
++++ b/src/WalkingTec.Mvvm.Core/WTMContext.CallApi.cs
+@@ -94,9 +94,12 @@ namespace WalkingTec.Mvvm.Core
+                         // identical fix shape: keep the header NAME (Authorization is fixed here,
+                         // not attacker-controlled) and the exception TYPE; drop the value and the
+                         // original exception object entirely.
+-                        throw new InvalidOperationException(
+-                            $"CallAPI: header 'Authorization' was rejected by the HTTP stack " +
+-                            $"(possible invalid characters or CRLF in name/value; underlying error: {ex.GetType().Name}).");
++                        // MUTANT test/mutants 982-callapi-authorization-header-exception-leak-reintroduce:
++                        // rethrowing the ORIGINAL FormatException (whose Message carries the raw
++                        // "Bearer <token>" value) instead of the sanitized InvalidOperationException
++                        // reopens the #982/#979 leak this fix removed. See test/mutants/entries/
++                        // 982-callapi-authorization-header-exception-leak-reintroduce.json.
++                        throw;
+                     }
+                 }
+ 

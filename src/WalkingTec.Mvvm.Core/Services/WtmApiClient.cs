@@ -90,7 +90,31 @@ namespace WalkingTec.Mvvm.Core.Services
                 if (client.DefaultRequestHeaders.Any(x => x.Key == "Authorization") == false
                     && string.IsNullOrEmpty(authToken) == false)
                 {
-                    client.DefaultRequestHeaders.Add("Authorization", "Bearer " + authToken);
+                    try
+                    {
+                        client.DefaultRequestHeaders.Add("Authorization", "Bearer " + authToken);
+                    }
+                    catch (FormatException ex)
+                    {
+                        // #982: scope gap in #979, not a new defect. #979 added a narrow
+                        // `catch (FormatException)` around the caller-supplied `headers` loop
+                        // above (see that loop's own comment for the full leak mechanics), but
+                        // this Authorization add-point -- fed from `authToken`, a plain public
+                        // method parameter and a DIFFERENT source than the `headers` dictionary
+                        // -- sits immediately after that loop's closing brace and was left
+                        // unprotected. A CRLF/NUL-bearing authToken throws a FormatException
+                        // whose .Message embeds the full attempted "Bearer <token>" value; left
+                        // unguarded, that exception falls through to the broad
+                        // `catch (Exception ex)` below, which hands it whole to
+                        // _logger?.LogError(...) -- the exact #979 leak shape, just at the
+                        // sibling add-point #979 missed. Apply the identical fix shape: keep the
+                        // header NAME (Authorization is fixed here, not attacker-controlled) and
+                        // the exception TYPE; drop the value and the original exception object
+                        // entirely.
+                        throw new InvalidOperationException(
+                            $"WtmApiClient.CallAPI: header 'Authorization' was rejected by the HTTP stack " +
+                            $"(possible invalid characters or CRLF in name/value; underlying error: {ex.GetType().Name}).");
+                    }
                 }
 
                 if (timeout.HasValue)

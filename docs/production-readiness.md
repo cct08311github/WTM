@@ -484,6 +484,67 @@ grep -rn "Headers\.Add(" --include="*.cs" . | grep -v '/bin/\|/obj/'
 
 **未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。`WTMContext.CallApi.cs:77`/`WtmApiClient.cs:93`（Authorization header 透過 `RemoteToken`/`authToken` 組成）兩處同根因缺陷本文件僅記錄「找到了、為何不修」，不宣稱「已修」；全樹掃描指令這次涵蓋了整個 repo（不只 `src/`），但只窮舉了「呼叫 `Headers.Add`」這一個 API 形狀，不證明沒有其他方式（例如 `TryAddWithoutValidation` 之後在別處被驗證/記錄、或非 `HttpRequestHeaders` 的其他 header 表示方式）可能存在結構不同但根因相同的洩漏路徑。
 
+**更新（2026-08-03，#982）**：上面這兩處「找到了、刻意不修」的殘留站點已修——見下一節「`WTMContext.CallApi`／`WtmApiClient` 的 `Authorization` header 值透過廣義例外洩漏進應用程式日誌（#982）」。
+
+---
+
+## `WTMContext.CallApi`／`WtmApiClient` 的 `Authorization` header 值透過廣義例外洩漏進應用程式日誌（#982，2026-08-03）
+
+**這是 #979 的 scope gap，不是新缺陷**：#979 在兩個檔案各自的 `headers` 字典迴圈外面新增了窄 `catch (FormatException)`，但那個窄 catch 只包住迴圈本身；緊接在迴圈**後面**、同一個方法裡的 `Authorization` 組裝行完全沒被包到：
+
+```
+WTMContext.CallApi.cs:77   client.DefaultRequestHeaders.Add("Authorization", "Bearer " + LoginUserInfo?.RemoteToken);
+Services/WtmApiClient.cs:93  client.DefaultRequestHeaders.Add("Authorization", "Bearer " + authToken);
+```
+
+先重讀已合併的程式碼樹確認兩處確實存在、確實在 #979 修過的既有廣義 `catch (Exception ex)` 之內、確實沒有專屬 catch，而不是採信交辦文字——兩處都與描述相符。這兩個站點不是這次新發現的：**#979 自己的 commit 就已經找到並記錄了**（本文件上一節「掃描另外發現、根因相同、本次刻意不修的第三個/第四個站點」），理由是「不是 issue 文字點名的迴圈形狀」，並且**明白建議「下一輪安全掃描直接把這個形狀列為檢查項」**——這正是 #982 存在的原因。`WtmApiClient.cs:77` 的一段既有註解宣稱這個 add 行的修法「byte-for-byte the same fix as WTMContext.CallApi.cs's copy of this loop」——這句話本身沒錯（修法形狀確實逐字相同），但它精確地示範了 CLAUDE.md 記錄過的那個模式：**修法被複製到兩個檔案時，它的邊界（只包住迴圈、不包住迴圈後面那一行）也被原樣複製過去**。#979 自己的 commit 標題也寫「from CallApi and WtmApiClient」，但兩個檔案裡各自只修到一個 add 點——這正是本節標題刻意把「兩處都名字寫出來」的原因，不重複那種只講對一半的說法。
+
+**修法**：套用與 #979 完全相同的形狀——在 `Authorization` add 這一行外面包一層窄 `try`/`catch (FormatException)`，合成一個只帶 header **名稱**（這裡固定是字面值 `"Authorization"`，不是攻擊者可控的字串，但保留它是為了跟 #979 的訊息格式一致，方便從日誌文字辨識是哪一類 add 失敗)與例外**型別**的 `InvalidOperationException`，捨棄值本身與原始例外物件。兩個檔案各自套用一次，訊息前綴沿用各自既有慣例（`"CallAPI: ..."` / `"WtmApiClient.CallAPI: ..."`）。合成出的例外繼續往外傳，落進**完全沒有改動過**的既有廣義 catch——跟 #979 一樣，這是「新窄 catch 不改變廣義 catch 既有行為」這個驗收條件成立的結構性理由。
+
+**`authToken` 全 repo 呼叫端清查（`WtmApiClient.cs`）**：`authToken` 是 `IWtmApiClient.CallAPI<T>` 全部四個 overload 上的公開參數（`IWtmApiClient.cs` 宣告、`WtmApiClient.cs` 實作）。用 `grep -rn "authToken"` 與 `grep -rn "\.CallAPI("` 對 `src/`、`demo/`、`test/` 三處逐一窮舉：
+- `WtmAuthService.AuthenticateViaRemoteHostAsync`（`src/WalkingTec.Mvvm.Core/Services/WtmAuthService.cs:39`/`:62`）與 `RefreshTokenAsync`（`:111`）呼叫 `apiClient.CallAPI(...)`，但把 token 放進 `headers` 字典（`{ "Authorization", "Bearer " + remoteToken }`）傳，從未使用 `authToken:` 具名參數——這條路徑已經被 #979 的 `headers` 迴圈修法保護。
+- `WtmUserCacheService.RemoveUserCacheByRoleAsync`/`RemoveUserCacheByGroupAsync`（`src/WalkingTec.Mvvm.Core/Services/WtmUserCacheService.cs:44`/`:78`）呼叫 `apiClient.CallAPI<List<string>>("mainhost", url)`，不帶任何 header 或 token 參數。
+- `WTMContext.cs:532`/`:561` 從 `ServiceProvider` 解析出 `IWtmApiClient` 只是為了轉呼叫上面兩個 `WtmUserCacheService` 方法，同樣不帶 `authToken`。
+- repo 內剩下唯一出現 `authToken:` 具名參數的地方是 `test/WalkingTec.Mvvm.Core.Test/Services/WtmApiClientTests.cs:153`，傳的是字面常數 `"my-token"`，不是可控輸入。
+
+**結論：repo 內沒有任何呼叫端會把可能含 CRLF/NUL 的字串傳進 `authToken`。** 但 `authToken` 是 `IWtmApiClient`（一個 DI 註冊介面）上刻意公開、有文件說明（`/// <param name="authToken">Bearer token to attach (if not already present in headers). Pass null to skip.</param>`）的參數——WTM 是框架，這個介面存在的目的就是給下游宿主應用呼叫，不是只給 repo 自己用。**判定為 MEDIUM**：沒有框架內部觸發路徑，但這是刻意公開、文件化、預期被呼叫端傳入外部字串的參數，跟 #979 修的 `headers` 字典（同樣是「呼叫端可控字串，框架端無驗證」的形狀）風險性質相同，只是目前沒有 repo 內已知呼叫端示範這條路徑。`WTMContext.CallApi.cs:77` 的 `LoginUserInfo?.RemoteToken` 維持 #979 原本的判定：**LOW**——`?_remotetoken=` 查詢參數只會經過已受保護的 `headers` 迴圈到達（`WTMContext.cs:273-275` 把它放進 `headers` 字典傳給 `CallAPI`），CRLF 值會在那裡被攔下、從未指派到 `LoginUserInfo.RemoteToken`；JWT 的 `RToken` claim 需要 mainhost 本身簽發帶 CRLF 的 claim；`IssueTokenAsync` 回傳的是真正的 base64url JWT。要觸發這條路徑需要 mainhost 本身已被攻陷。
+
+**測試**：`test/WalkingTec.Mvvm.Core.Test/Security/WtmContextCallApiAuthorizationHeaderLogLeakTests982.cs`（對應 `WTMContext.CallApi.cs`，透過 `wtm.LoginUserInfo = new LoginUserInfo { RemoteToken = ... }` 直接餵值，繞過已受保護的 `headers` 迴圈）與 `test/WalkingTec.Mvvm.Core.Test/Services/WtmApiClientAuthorizationHeaderLogLeakTests982.cs`（對應 `WtmApiClient.cs`，`authToken` 是方法參數，直接傳）各兩條測試，結構沿用 #979：
+
+1. **洩漏測試**：token 值帶內嵌換行，斷言 `logger.FullRenderedOutput` 不含 secret 片段、且 mock handler 從未被呼叫（header 拒絕發生在任何 HTTP 請求送出之前）。RED-before-fix（對未修的程式碼跑，逐字擷取）：
+
+   ```
+   WtmApiClient.cs 版本：
+   Did not expect string "API call failed to http://test/api
+   System.FormatException: The format of value 'Bearer s3cr3t-authtoken-A1B2C3-do-not-log-me
+   X-Injected: evil' is invalid.
+      at System.Net.Http.Headers.HttpHeaderParser.ParseValue(String value, Object storeValue, Int32& index)
+      at System.Net.Http.Headers.HttpHeaders.ParseAndAddValue(HeaderDescriptor descriptor, HeaderStoreItemInfo info, String value)
+      at System.Net.Http.Headers.HttpHeaders.Add(HeaderDescriptor descriptor, String value)
+      at WalkingTec.Mvvm.Core.Services.WtmApiClient.CallAPI[T](...) in .../WtmApiClient.cs:line 93" to contain "s3cr3t-authtoken-A1B2C3-do-not-log-me" because the secret must never reach the log, whether via the message template or the logged exception's own text.
+
+   WTMContext.CallApi.cs 版本：
+   Did not expect string "CallAPI failed to 'http://test/api'
+   System.FormatException: The format of value 'Bearer s3cr3t-remotetoken-A1B2C3-do-not-log-me
+   X-Injected: evil' is invalid.
+      ...
+      at WalkingTec.Mvvm.Core.WTMContext.CallAPI[T](...)" to contain "s3cr3t-remotetoken-A1B2C3-do-not-log-me" because the secret must never reach the log, ...
+   ```
+
+2. **正控組**：同樣的內嵌換行值，斷言 `logger.FullRenderedOutput` 仍含 `"Authorization"`。RED-before-fix 同樣重現（例外訊息固定是 "The format of value '...' is invalid."，從不提 header 名稱，跟 #979 對 `Authorization` 的既有發現一致）。
+
+刪掉哪一行會讓兩個檔案的洩漏測試變紅：把新增的 `try { ...Add("Authorization", ...); } catch (FormatException ex) { throw new InvalidOperationException(...); }` 換回原本的 `...Add("Authorization", ...);` 單行（或如下面的 mutant 所證，只把 `throw new InvalidOperationException(...)` 換成 `throw;` 就夠）。GREEN-after-fix：4 條測試全過。
+
+**Mutation gate**：`test/mutants/entries/982-callapi-authorization-header-exception-leak-reintroduce.json`，target file 為 `WTMContext.CallApi.cs`，patch 把本次新增的 `throw new InvalidOperationException(...)` 換成裸的 `throw;`——跟 `979-callapi-header-exception-leak-reintroduce` 同一個 mutant 形狀，只是換了一個 catch 區塊。`kind` 選 `security`。
+
+**正控組解耦論證（`.claude/rules/testing.md`「A mutant's positive control must not touch the mutated decision path」要求寫進 entry）**：這次直接沿用 #979 既有的 `WtmContextCallApiHeaderLogLeakTests979.CallAPI_non_header_exception_is_still_handled_by_the_broad_catch_unchanged` 當 green_test，而不是本節新增的「header 名稱仍留在日誌裡」正控組——後者跟 #979 犯過的錯誤同形狀（斷言的輸出來自被突變的同一個 catch 區塊，`Authorization` 的 `FormatException.Message` 從不含 header 名稱，mutant 套用後這條測試本身就會變紅，不能當控制組）。選用的 green_test 呼叫路徑追蹤：該測試用 `MockWtmContext.CreateWtmContext()` 建構 `wtm`，**從未設定 `wtm.LoginUserInfo`**——`LoginUserInfo` getter 在沒有已驗證 `HttpContext.User`、沒有 `_remotetoken` 查詢參數的情況下維持 `null`，所以 `LoginUserInfo?.RemoteToken` 也是 `null`；外層 guard `string.IsNullOrEmpty(LoginUserInfo?.RemoteToken) == false` 因此恆為 `false`，整個 `if` 區塊（含本次新增、被 mutant 改動的 try/catch）**從未被執行到**。這是解耦論證裡最強的一種（呼叫圖從未到達被突變的那一行），不需要靠短路或不變量論證。
+
+**執行結果**：`python3 test/mutants/run_mutant.py --mutant 982-callapi-authorization-header-exception-leak-reintroduce`——`VERDICT: KILLED` / `GATE: PASS`（實際輸出見 CHANGELOG.md 與本次 session 的執行記錄；每次執行後 `git status --porcelain -- src/WalkingTec.Mvvm.Core/WTMContext.CallApi.cs` 皆為空輸出，確認目標檔案乾淨還原）。**`Services/WtmApiClient.cs` 的同形狀缺陷刻意不另開第二個 mutant entry**——理由與 #979 相同：`run_mutant.py` 的 scope 檢查限制一個 patch 只能動一個 `target_file`，而 `WtmApiClientAuthorizationHeaderLogLeakTests982.cs` 已經對該檔案的修法做了同樣兩條直接測試（洩漏／正控組），第二個 mutant 只會增加 gate 執行時間、不會增加這條直接測試沒有涵蓋到的證據。
+
+**驗證**：`find . -name 'demo.db*' -path '*bin*' -delete`。`dotnet test test/WalkingTec.Mvvm.Core.Test/`：base **5062 passed, 0 failed**（在這個分支自己的修改被 `git stash` 移除後、乾淨測得）→ 修復後 **5066 passed, 0 failed**（5062 + 本次新增的 4 個測試方法，數量吻合）。`dotnet build WalkingTec.Mvvm.sln`：**0 Error(s)**——本次 session 自己重建整個 solution 沒有重現 #961/#979 base commit 上報告過的 `NETSDK1082` browser-wasm 錯誤，跟本次修法無關，不深究。
+
+**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。#979 文件裡提過的「全樹掃描只窮舉了呼叫 `Headers.Add` 這一個 API 形狀」這個限制原樣延續到本次；`authToken`/`RemoteToken` 的呼叫端清查只窮舉了「repo 內目前存在的呼叫端」，不代表「這個公開參數永遠不會被下游宿主應用以不受信任的字串呼叫」——這正是判它 MEDIUM 而非把它跟 `RemoteToken` 一起判 LOW 的理由。
+
 ---
 
 ## Mutation-gate 正控組（positive control）與被突變行的耦合（#986）
