@@ -538,6 +538,56 @@ touch `WtmFileProvider.cs`. Full details, including the exact pre-fix field list
 mutation RED/GREEN proofs, in `docs/production-readiness.md`'s `#1028` entry — this entry does not
 repeat or exceed those claims.
 
+### Added — `integration-test.yml`: report the `mssql` service container's self-reported memory picture into every CI log; add a `--memory` backstop that a real-load check found does not bound what actually grows (#1020)
+
+CI-only; no `WalkingTec.Mvvm.*` package code changed. Full empirical methodology, the exact
+numbers from every local trial, and the honest scope of what was and wasn't verified are in
+`docs/production-readiness.md`'s new "#1020" section — this entry does not repeat or exceed those
+claims. **This does not fix the underlying intermittent flake** (run 6509's `Error 945` under
+memory pressure, 8/9 tests passing before the 9th died after a 13x slowdown) — whether anything
+here helps can only be judged by observing real CI runs over time, and this session had no access
+to Gitea's API or to opening a PR to watch that happen.
+
+Of the three changes made, **only one has confirmed value**: a new `Report MSSQL effective memory
+(issue #1020)` step prints what the engine itself believes its memory picture to be
+(`sys.dm_os_sys_info`'s `physical_memory_kb`/`committed_target_kb`/`committed_kb`/
+`container_type_desc`) into every run's log, so a green run stops being read as proof by default.
+`services.mssql.env` also gets `MSSQL_MEMORY_LIMIT_MB: 1536`, but **local testing against this
+repo's own Gitea Actions Docker daemon found it has no observable effect on azure-sql-edge on this
+host** — three trials at decreasing limits (1536/768/400 MB) moved `committed_target_kb` in the
+wrong direction (1480256/1546520/1561152 KB), and `container_type_desc` read `NONE` in every
+trial, meaning the engine never detects it is containerized here at all. It is kept only
+defensively, per Microsoft's documented mechanism for SQL Server on Linux.
+
+`services.mssql.options` gets `--memory=2560m`, which is mechanically enforced (the container's
+own `/sys/fs/cgroup/memory.max` exactly matched what was configured in every trial) — **but a
+real-load check found it is a backstop against a pathological mssql that has not been observed,
+not a fix for what run 6509 actually showed.** The figure was originally sized from idle-state
+`committed_target_kb` (~2.03GiB); because run 6509 died on the 9th create/drop cycle — under
+sustained load, not at idle — that idle-derived figure was checked against two full runs of the
+real 9-test integration suite against a container with the exact final settings: both passed 9/9,
+and `docker stats` peaked at **~663MiB, only 26% of the 2560MiB cap** — well under both the cap
+and mssql's own idle-state target. A container that peaks at 26% of its cap under real load was
+not the thing growing in run 6509, so `--memory=2560m` does not bound anything that was actually
+observed to grow. Combined with `Error 945` being SQL Server's own memory manager being refused a
+grant (not mssql exceeding its own usage) and `container_type_desc` reading `NONE`, the more
+consistent reading is that mssql was the **victim** of VM-wide memory contention from the sibling
+job container's `dotnet build`/`dotnet test` — the same shape as #902's testhost OOM kills — not
+the cause of it. A per-container `--memory` cap on mssql does nothing to prevent that, since it
+only bounds mssql's own cgroup, not what a sibling container consumes from the shared VM. A more
+direct joint-contention measurement (run the test suite against mssql while a sibling container
+does a full solution build, sampling both) was planned but not run: a real, unrelated Gitea
+Actions job was actively using up to ~260% CPU / ~800MiB on this exact shared daemon at the time,
+budgeted by this repo's own `mutation-gate.yml` at up to ~125 minutes, and deliberately adding
+competing load risked degrading real CI rather than producing a clean reading — left undone rather
+than approximated weakly. **If this recurs, the next step is to look at the sibling job container
+or runner capacity, not to raise this number.**
+
+Checked all 7 other workflow files (`ci-build.yml`, `mutation-gate.yml`, `regression.yml`,
+`e2e-test.yml`, `publish-nuget.yml`, `timeout-selftest.yml`, `vue3demo-build.yml`) via
+`yaml.safe_load`: none of them start any service container, so there is nothing else with this
+shape to fix.
+
 ## [10.21.0] - 2026-07-31
 
 > **This section was published only as `10.21.0-rc.2`. The `10.21.0` version number is

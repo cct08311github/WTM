@@ -1633,6 +1633,117 @@ Failed!  - Failed:     1, Passed:     1, Skipped:     0, Total:     2, Duration:
 
 ---
 
+## `integration-test.yml` 的 `mssql` service container：讓引擎自報的記憶體資訊進 CI log 有明確價值，`--memory=2560m` 是 backstop 不是修法，證據指向 run 6509 是 mssql 被同容器的 build/test 搶記憶體的受害者（#1020，2026-08-03）
+
+**完整的本機實測方法、逐項數字與其他 workflow 的排查結果在 `docs/ci-operations.md` 的
+「#1020」條目——本節不重複，只記讀者判斷 production-readiness 需要的結論。**
+
+**本節標題本身經過一次修正**：第一版標題寫「加記憶體邊界＋讓引擎自報的記憶體資訊進 CI
+log」，把兩者並列成同等分量的修法。用真實測試負載覆核 `--memory=2560m` 之後（見下方），
+數字顯示這個並列是錯的——記憶體邊界那一半沒有框住任何被觀察到在長大的東西，見下方
+「這次改動沒有做、也不宣稱的事」。
+
+### 缺陷與現況
+
+Run 6509（`dotnet10@7cc2b864d`）在 `EnsureCreated()` 死於 `Error 945`
+（insufficient system memory in resource pool 'internal'），同一支測試平常 957ms、
+那次跑了 13 秒才死——thrashing 後放棄，不是硬 crash。**間歇性**：同一天多數 run
+9/9 全過。`services.mssql` 當時完全沒有記憶體邊界，會跟同一個 job 容器（同時在
+build/test）共用這台 mac-mini act_runner 背後那顆硬 **4 CPU / 3.813GiB** 的 Docker VM。
+
+### 這次改動實際做了什麼，依實際證據價值排序（誠實邊界）
+
+- **`Report MSSQL effective memory (issue #1020)` step——三項改動中唯一有明確站得住腳
+  價值的一項。** 用 .NET 10 file-based app 查 `sys.dm_os_sys_info`，把
+  `physical_memory_kb`/`committed_target_kb`/`committed_kb`/`container_type_desc` 印進
+  每一次 run 的 log。這一步**不修任何東西**，只讓「引擎自己相信的記憶體狀況」對人類
+  讀者可見——因為缺陷本身是間歇性的，光是「這次 CI 綠了」不構成任何證據，能讓兩者脫鉤
+  的只有這一步。
+- **`MSSQL_MEMORY_LIMIT_MB: 1536`——實測空跑，不宣稱有用。** 本機對同一 image/同一
+  host 用 1536/768/400 三種設定量測 `sys.dm_os_sys_info.committed_target_kb`，數字沒有
+  跟著往預期方向動（反而是限制越低、數字越高），且 `container_type_desc` 五次全部是
+  `NONE`——**這個環境變數在這台 host 上沒有可觀測的效果**。留著只是因為免費且照文件
+  建議，不是因為證實有用。
+- **`--memory=2560m`——kernel 層面確實生效（容器內 `/sys/fs/cgroup/memory.max` 精確
+  等於外部給的值），但是一個 backstop，不是對 run 6509 實際發生情況的修法。** 用真實
+  測試負載覆核之後（見下方），這個上限沒有框住任何被觀察到在長大的東西——理由與完整
+  推論見下一節。
+- `sp_configure 'max server memory (MB)'` 在 azure-sql-edge 上不存在（`Msg 15123`，
+  本機直接觸發過）；`docker exec` + `sqlcmd` 也不是選項（image 在 arm64 上不含
+  sqlcmd，且這個 job 沒有 docker socket）——兩者都在本機對同一顆 daemon 實測排除，
+  不是查文件就假設不行。
+
+### 這次改動**沒有**做、也不宣稱的事
+
+- **不宣稱修好 #1020 描述的 flake。** 缺陷是間歇性的，本次修法能否讓它消失只能靠往後
+  多次真實 run 的觀察，這次工作階段本身完全沒有跑過真正的 Gitea Actions CI（環境的
+  HARD CONSTRAINT 禁止呼叫 Gitea API、禁止開 PR）。
+- **不宣稱 `MSSQL_MEMORY_LIMIT_MB` 對 azure-sql-edge 生效**——上面已經用實測數字說明
+  為什麼不宣稱。
+- **不宣稱 `--memory=2560m` 框住了 run 6509 實際發生的情況——用真實測試負載覆核，結論
+  是它沒有。** `2560m` 最初是用 idle/startup 狀態量到的 `committed_target_kb`（約
+  2.03GiB）加安全邊界推出來的；run 6509 死在第 9 個 create/drop 循環，也就是**持續
+  負載之下**，剛好是 idle 數字最可能低估的情境，所以覆核了：本機對一個用最終設定
+  （`MSSQL_MEMORY_LIMIT_MB=1536`、`--memory=2560m`）起的 azure-sql-edge 容器，跑兩次
+  完整的 9 項整合測試（皆 9/9 通過，6.5s／7.0s），`docker stats` 全程取樣。**峰值
+  MEM USAGE 約 663MiB，只有 2560m 上限的 26%**，跑完後 `committed_kb` 約 152MiB——
+  **不只遠低於 2560m 上限，也遠低於 mssql 自己 idle 時的 2.03GiB 目標**。一個在真實
+  負載下只用到上限 26% 的容器，不是 run 6509 裡「正在長大」的東西——這個上限沒有框住
+  任何實際被觀察到在長大的東西。
+- **不宣稱這代表 `--memory` 這個改動沒有意義，但它的意義是「防一個目前沒觀察到、未來
+  可能出現的失控 mssql」，不是「修好 run 6509」。** 兩者是不同的宣稱，本節刻意分開。
+- **不宣稱查到了 run 6509 真正的根因，但用手上的數字給出一個比「mssql 需要更多記憶體」
+  更吻合的讀法：mssql 更像是受害者，不是加害者。** `Error 945` 是 SQL Server 自己的
+  記憶體管理員跟系統要記憶體被拒絕；配合 `container_type_desc` 五次全部 `NONE`——引擎
+  在這台 host 上不是照 cgroup 範圍看記憶體，比較像是照整台 VM 的可用記憶體判斷——這個
+  形狀更吻合「mssql 是整台 VM 記憶體被搶光的受害者」，加害者候選是同一個 job 容器同時
+  在跑的 `dotnet build`/`dotnet test`，跟 `#902`（testhost OOM kill，靠 `-m:1` 序列化
+  解掉）是同一種形狀。逐容器獨立生效的 `--memory` 上限，對「mssql 自己沒超標、但整台
+  VM 被別的容器榨乾」這件事沒有防護力。這是**從手上數字論證的讀法，不是新測出來的**
+  ——見下一條，直接測這件事的量測沒有做。
+- **不宣稱驗證過「mssql 會不會被同容器的 build/test 擠壓」這件事——這個更直接的量測
+  規劃過，但沒有做。** 方法是讓 mssql 跑 9 項整合測試的同時，另一個容器對同一個
+  solution 做完整 `dotnet build`，兩邊都取樣記憶體。沒有做的原因：投入這個工作階段的
+  當下，這台機器上正有一個真實、不相關的 Gitea Actions job（`mutation-gate.yml` 的
+  `mutants` job）在跑，CPU 用到 ~260%、記憶體 ~800MiB，且該 job 自己的文件記載預算上
+  看 ~125 分鐘——刻意疊加一個高負擔的 build+test 去搶同一顆 4 CPU / 3.813GiB 的
+  Docker daemon，代價是可能拖慢或搞壞一個真實、無關的 CI job，換來的量測品質還不見得
+  乾淨。**判斷是留著不做，不弱弱做一個近似值拿來充當證據。**
+
+### 下一步
+
+如果之後真實 run 又出現這個缺陷：**不要往上調 `--memory` 這個數字**——上面的證據指向
+問題在 build/test 那一側的資源競爭，不是 mssql 需要更多空間。該查的是同一個 job 容器
+同時在做的 restore/build/test，或是這個 runner 的容量本身；`ubuntu-24.04`（Azure
+overflow runner，15GiB）仍然是最終備案，但那是換一台更大的機器，不是先調這個數字。
+
+### 其他 workflow 有沒有一樣的形狀
+
+用 `yaml.safe_load` 逐一檢查這個 repo 全部 7 個其他 workflow 檔案
+（`ci-build.yml`／`mutation-gate.yml`／`regression.yml`／`e2e-test.yml`／
+`publish-nuget.yml`／`timeout-selftest.yml`／`vue3demo-build.yml`）的每個 job 有沒有
+`services:` 區塊：**沒有其他檔案起任何 service container**，`integration-test.yml`
+是這個 repo 唯一的一份，不需要另外開票。
+
+### 驗證
+
+`python3 scripts/audit-workflow-timeouts.py`：改動前 133/133（0 missing），改動後
+134/134（0 missing，新增的 step 自己帶 `timeout-minutes: 5`）。
+`python3 -c "import yaml; yaml.safe_load(open('.github/workflows/integration-test.yml'))"`：
+解析成功。改動後的 workflow 步驟腳本（含 heredoc 產生的 `.cs` file-based app）在本機對
+一個用相同設定（`MSSQL_MEMORY_LIMIT_MB=1536`、`--memory=2560m`）起的 azure-sql-edge
+容器端到端跑過一次，成功印出
+`physical_memory_kb=2048000 committed_target_kb=1478632 committed_kb=122352 container_type_desc=NONE`——
+證明 YAML 的 heredoc 縮排、`dotnet run --file`、`Microsoft.Data.SqlClient@6.1.1`
+restore 這條路徑本身是通的，不是紙上談兵。另外對 `--memory=2560m` 本身做了真實負載
+覆核（細節見上方「沒有做、也不宣稱的事」）：本機 build 出
+`test/WalkingTec.Mvvm.Integration.Test` 的 Release DLL，對一個用最終設定起的
+azure-sql-edge 容器跑了兩次 `dotnet test ... --filter "TestCategory=Integration"`，
+**兩次都 9/9 通過**（6.5s／7.0s），`docker stats` 全程取樣，峰值 MEM USAGE
+約 663MiB／2560MiB（26%），跑完後 `committed_kb` 約 152MiB。
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。
