@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.IO;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
@@ -21,6 +22,44 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
         private  static ConstructorInfo? _defaultHandler;
         private WTMContext _wtm;
         public static Func<IWtmFileHandler, string>? _subDirFunc;
+
+        /// <summary>
+        /// #1028: the single source of truth for the lightweight <see cref="FileAttachment"/>
+        /// projection used by both <see cref="GetFileCore"/> and <see cref="DeleteFileCore"/>.
+        /// Before this fix, each method hand-maintained its own field list; both had already
+        /// omitted <see cref="FileAttachment.HandlerInfo"/>, so every handler (e.g.
+        /// <c>WtmOssFileHandler</c>, which uses <c>HandlerInfo</c> to pick the OSS group/bucket)
+        /// always saw it as null and silently fell back to the first configured group — in a
+        /// multi-group deployment this makes reads look in the wrong bucket and deletes issue
+        /// against the wrong bucket. Centralizing the field list here means a future column added
+        /// to <see cref="FileAttachment"/> forces a deliberate decision about whether it belongs
+        /// in this projection (see the pinning test in
+        /// <c>WtmFileProviderProjectionFieldSetTests1028</c>), instead of two lists silently
+        /// drifting apart the way they already did once.
+        /// <para>
+        /// Deliberately excludes <see cref="FileAttachment.FileData"/> — the whole point of a
+        /// projection instead of a plain entity load is to avoid pulling that byte array off disk
+        /// for callers that only need metadata (or that fetch the payload separately through a
+        /// file handler). It also excludes <see cref="FileAttachment.TenantCode"/>: that column
+        /// drives the EF Core <c>ITenant</c> global query filter applied to the source
+        /// <see cref="IQueryable{FileAttachment}"/> before <c>Select</c> ever runs, but it is not
+        /// part of the <see cref="IWtmFile"/> contract any caller of this projection's result
+        /// consumes, so carrying it here would be dead weight, not a fix for anything.
+        /// </para>
+        /// </summary>
+        private static readonly Expression<Func<FileAttachment, FileAttachment>> _fileMetadataProjection =
+            x => new FileAttachment
+            {
+                ID = x.ID,
+                ExtraInfo = x.ExtraInfo,
+                FileExt = x.FileExt,
+                FileName = x.FileName,
+                Length = x.Length,
+                Path = x.Path,
+                SaveMode = x.SaveMode,
+                UploadTime = x.UploadTime,
+                HandlerInfo = x.HandlerInfo,
+            };
 
         public WtmFileProvider(WTMContext wtm)
         {
@@ -199,17 +238,9 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             rv = (enforceTenantScope
                 ? dc.Set<FileAttachment>()
                 : dc.Set<FileAttachment>().IgnoreQueryFilters())
-                .CheckID(id).Select(x => new FileAttachment
-            {
-                ID = x.ID,
-                ExtraInfo = x.ExtraInfo,
-                FileExt = x.FileExt,
-                FileName = x.FileName,
-                Length = x.Length,
-                Path = x.Path,
-                SaveMode = x.SaveMode,
-                UploadTime = x.UploadTime
-            }).FirstOrDefault();
+                .CheckID(id)
+                .Select(_fileMetadataProjection)
+                .FirstOrDefault();
             if (rv != null && withData == true)
             {
                 try
@@ -280,17 +311,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
                 ? dc.Set<FileAttachment>()
                 : dc.Set<FileAttachment>().IgnoreQueryFilters())
                 .CheckID(id)
-                .Select(x => new FileAttachment
-                {
-                    ID = x.ID,
-                    ExtraInfo = x.ExtraInfo,
-                    FileExt = x.FileExt,
-                    FileName = x.FileName,
-                    Path = x.Path,
-                    SaveMode = x.SaveMode,
-                    Length = x.Length,
-                    UploadTime = x.UploadTime
-                })
+                .Select(_fileMetadataProjection)
                 .FirstOrDefault();
             if (file != null)
             {
