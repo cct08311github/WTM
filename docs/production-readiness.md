@@ -1192,6 +1192,54 @@ EXIT: 1
 
 ---
 
+## `10.21.0` 版號作廢：非 release 分支的驗證建置佔用了發行版號，經由機器層級的 NuGet global-packages 目錄外溢（#1006，2026-08-03）
+
+下游（BMS）回報 `10.21.0` 正式版缺少 `10.21.0-rc.2` 有的三個 security fix。**複驗結論：現象屬實，但成因與原本假設的「後來的發版把修正弄丟」相反，而且傳播通道不是 NuGet feed。**
+
+### 已用指令驗證的事實
+
+- **feed 乾淨**。Gitea packages API（`/api/v1/packages/chiu0831?type=nuget`）列出六個套件的全部版本，最高一律是 `10.21.0-rc.2`。`10.21.0`、`10.21.0-rc.7`、`99.0.0-rc.5`、`99.0.0-smoketest` 都不在上面。repo 內亦無任何 `10.21.0` / `99.0.0` 的 git tag。
+- **時序與原假設相反**。`~/.nuget/packages` 內各版本的寫入時間：`99.0.0-rc.5` 07-31 07:33、`10.21.0-rc.7` 07-31 07:44、`99.0.0-smoketest` 07-31 09:06、**`10.21.0` 07-31 20:25**、`10.21.0-rc.1` 08-01 23:56、`10.21.0-rc.2` 08-02 01:12。那顆 `10.21.0` **早於兩個 rc**，是驗證性建置直接沿用了當時分支上 `version.props` 的裸版號，rc 後綴是隔天真正發版流程才加的。
+- **內容與來源**（nuspec `repository` 屬性 + `strings` 對組件比對完整型別名）：`10.21.0-rc.2` 來自 `refs/heads/dotnet10` `7e0d99b78`，含 `FileAttachmentSaveChangesGuard`×3、`UnresolvableFileAttachmentReferenceException`×1；`10.21.0` 來自 `refs/heads/docs/958-advisory-issue-keyed-corrections` `b0e4ebc02`，兩者皆 0；`10.21.0-rc.7` 來自 `refs/heads/ci/925-release-gate` `18a359ca0`，兩者皆 0。
+- **傳播通道是 global-packages 目錄，不是 feed**。WTM 與下游專案在同一台機器同一使用者下共用 `~/.nuget/packages`；NuGet 解析版本時先看這個目錄，命中就不連任何 source。這解釋了下游觀察到的表面矛盾：`dotnet list package --outdated` 正確回報「沒有更新」（它查 source），而污染產物其實只差把版本約束改成 `10.21.0` 就會被離線吃進去。
+
+### 這個機制是實測的，含 positive control
+
+拿一個「本機 cache 有、feed 沒有」的版本 `10.13.17`，在 `nuget.config` 寫 `<packageSources><clear /></packageSources>`（零 source）下 `dotnet restore`：
+
+```
+Restored t.csproj (in 179 ms).
+```
+
+兩個對照組確認這個「成功」確實來自 global-packages 命中，而不是 restore 根本沒檢查：
+
+```
+# cache 與 feed 都沒有的版本
+warning NU1603: ... WalkingTec.Mvvm.Core 10.13.99 was not found. 10.14.0 was resolved instead.
+# 隔離之後的 10.21.0
+error NU1100: Unable to resolve 'WalkingTec.Mvvm.Core (>= 10.21.0)' for 'net10.0'.
+```
+
+**附帶更正**：`PackageReference` / `PackageVersion` 的 `Version="X"` 是**下限**（`>= X`）而非 exact pin（exact 要寫 `[X]`）；上面 NU1603 那行即是證據。因此「下游是 exact pin 所以安全」這個推理不成立——今天安全的真正原因是 NuGet 取「滿足約束的最低版本」，而 `10.21.0-rc.2` 存在。
+
+### 已處理
+
+`~/.nuget/packages` 下 22 個「從未發布卻佔用發行版號」的條目（四個版本 × 涵蓋到的套件）已移到 `/Volumes/T7/openclaw/backups/nuget-quarantine-2026-08-03/`——**move 而非 delete，可逆**。動手前確認全樹沒有任何 `.props` / `.csproj` / `.config` 引用這四個版本。隔離後 live cache 上限與 feed 一致。
+
+> 值得記一筆：那顆污染的 `10.21.0` 只涵蓋 Core / Etl / Mvc / LayUI 四顆，`FileHandlers.S3` 與 `WorkFlow` 沒有——而下游引用的正好是 Core / Mvc / LayUI 三顆，全中。缺的那兩顆會讓 restore 直接 NU1100 失敗（大聲），有的那三顆才會靜默降級。
+
+### `10.21.0` 作廢而不補發，理由
+
+即使 feed 乾淨、本機已隔離，**至少曾有一台機器在 `(WalkingTec.Mvvm.Core, 10.21.0)` 這個身分底下放過一份不同的組件**，且無法證明沒有其他副本。NuGet 的 `(id, version)` 是不可變身分，cache 命中不會重新驗證；補發一顆「正確的 `10.21.0`」會讓同一版號在已快取舊版的機器上長期對應兩份不同二進位，比現況更糟——現況至少會 NU1100 大聲失敗。`version.props` 已是 `10.22.0`，走這條路不需額外動作。
+
+### 尚未處理，且這裡明講
+
+- **防止再犯沒有做**。非 release 分支的 `dotnet pack` 仍可使用裸的發行版號。#925 的 branch guard 擋的是 publish 這一步，擋不到「pack 到本機 + 被 restore 撿走」這條路；guard 自身還有 #1008 記錄的 ref 涵蓋問題。這需要改 CI，另案。
+- **只掃了這一台機器**。沒有掃描任何其他環境，沒有證明 `10.21.0` 不存在於其他副本。上一節的作廢建議正是建立在「無法證明不存在」之上，不是建立在「已證明外流」之上。
+- 隔離動作沒有跑一次下游專案的完整 restore 來確認不受影響；依據是「全樹無引用」的靜態掃描與下游目前釘在 `10.21.0-rc.2`（該版本仍在 cache 與 feed 上）。
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。

@@ -331,6 +331,19 @@ Tests: `test/WalkingTec.Mvvm.Core.Test` (Release, `TestCategory!=Integration`) 5
 
 ## [10.21.0] - 2026-07-31
 
+> **This section was published only as `10.21.0-rc.2`. The `10.21.0` version number is
+> withdrawn and will never be published — take these changes from `10.22.0` instead (#1006).**
+>
+> A validation build made on 2026-07-31 from the branch `docs/958-advisory-issue-keyed-corrections`
+> packed itself as a bare `10.21.0` — earlier than either release candidate, and without the
+> `#824 Part 2` guard described below. It never reached the NuGet feed (verified: the highest
+> version published for all six packages is `10.21.0-rc.2`), but it did land in the per-user
+> NuGet global-packages folder, which NuGet consults before any configured source. Republishing a
+> corrected `10.21.0` would leave one immutable `(id, version)` identity pointing at two different
+> assemblies on any machine that already cached the first one, so the number is burned instead.
+> Consumers on `10.21.0-rc.2` should move to `10.22.0`; consumers who resolved a `10.21.0` should
+> treat it as not containing anything in this section.
+
 ### Security — `EmptyContext.SaveChanges`/`SaveChangesAsync` guard against forged `FileAttachment` foreign keys, closing the five remaining #824 write-path sinks + a cross-vendor-review fix to the Part 1 (#849) predicate itself (#824 Part 2)
 
 **Full mechanics, the four cross-vendor review findings and how each was addressed, and the test
