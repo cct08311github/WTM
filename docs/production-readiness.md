@@ -1480,6 +1480,69 @@ BMS repo 內三份互相獨立的文件都記載 8.6.1/8.x：一則 commit messa
 
 ---
 
+## `FileAttachmentSaveChangesGuard` 的同一 unit-of-work 信任集不檢查租戶：裁決為已揭露限制，附具名前置條件（#987，2026-08-03）
+
+`IsTrustedSameUnitOfWork` 只比對兩件事：candidate 的 id 是否出現在本次 `SaveChanges` 的 `Added` `FileAttachment` 集合，以及該 entry 的 runtime type 是否可指派給 FK 宣告的 principal 型別。**`TenantCode` 不在判定內**，#985／#1000／#1011 都沒有收窄它。缺陷描述屬實。
+
+**經設計、跨廠對抗性審查、以及對關鍵事實的自行複驗後，決定不改 guard。** 本節記錄為什麼「不修」是誠實的結論而非延後——以及一個被評估後否決的具體方案，避免下一輪從頭重推。
+
+### 信任例外有三個維度，目前檢查兩個
+
+**PK 存在性**（#824 原始設計：「保證會被 INSERT，因此會過 PK 檢查」）、**型別**（#978 Finding 6 補上）、**租戶**（缺）。這是最精準的框架定位。但補上第三維**關不掉這個缺口**。
+
+### 為什麼補上租戶檢查沒有用：兩步繞過
+
+任何只檢查「當次 dependent FK 寫入」的規則，都可以用兩次 `SaveChanges` 繞過：
+
+1. attachment 戳 null 或攻擊者自己的租戶，dependent 指向它 → 租戶相容、信任成立、兩列合法落地
+2. 只把該 attachment 的 `TenantCode` 改成受害者 → 這次沒有任何 FK candidate，guard 在 `candidates.Count == 0` 早退
+
+最終資料庫列與「單次建立受害者租戶 attachment ＋ 攻擊者 dependent」**完全相同**。`ValidateDuplicateData`、`BaseCRUDVM`、import stamping 都只存在於各自 VM pipeline，直接 `DbSet` writer 不經過它們；樹內沒有會擋第二步的 production `SaveChangesInterceptor`。
+
+**這個專案已經踩過同型的兩步攻擊**：`BaseCRUDVM` 的刪檔註解自己寫著「第一請求偽造引用、第二請求再刪除」會擊穿只看既存引用的防線，所以 sink 端的 tenant-scoped resolution 才是主控制。在 `Added` 集合上加租戶檢查，是重複同一個架構錯誤。
+
+**真正缺的是 tenant-transition invariant**：資料庫的 FK 只含 attachment ID；principal 的租戶一旦可變，所有既存 dependent 都可能被重新分類。**只檢查當次的 dependent FK write，架構上不可能維護這個反向不變式。**
+
+### 被評估並否決的方案，及否決理由
+
+提案為「只在兩邊租戶皆非 null 且不同時撤銷信任」（null 一律放行），理由是 `WtmFileProvider` 從 ambient 身分戳租戶（#988 未修），背景工作合法產生 null，嚴格相等會拒絕它們。
+
+**這個相容性論據不成立，已複驗**：兩條 upload 路徑（`WtmFileProvider` 的 local 路徑、`WtmDataBaseFileHandler.UploadToDB`）都在 `AddEntity` 之後**立刻**自己 `SaveChanges()`，所以附件永遠不會以 `Added` 狀態與 dependent FK 寫入處在同一批。而 `UploadToDB` 走 `wtm.DC` 的那個真同批情形裡，附件租戶與 `dc.TenantCode` **同源**（皆為 `LoginUserInfo?.CurrentTenant`），必然相等——不是 null 那一格。
+
+所以「恰有一邊 null 也信任」沒有任何 in-tree 合法流程支撐；現行 persisted path 對「恰一邊 null」本來就拒絕。它不是保留既有規則，是把 same-unit bypass 換成 null 的形式留下來。
+
+其餘否決理由：
+
+- **`OrdinalIgnoreCase` 有不安全方向**：global filter 在 SQL 端依伺服器 collation 求值，而本框架同時支援 SQL Server／MySQL／PostgreSQL／SQLite／Oracle，沒有共同 collation 語義。記憶體判定 `"TENANT_A" == "tenant_a"` 為真、case-sensitive DB 判定為假 → 會信任一筆 persisted path 解析不到的 attachment。
+- **`SetTenantCode` 是 `public void`**（`EmptyContext.cs`）：能直接操作 context 的 writer 可以先把 context 租戶設成受害者，讓任何「entity 租戶 vs context 租戶」的比較直接成立。該比較只在「請求能控制 entity、但不能控制 context」這個很窄的前置條件下有意義。
+- **同 ID 的多筆 TPC added type 被壓成一個值**：信任集是 `Dictionary<Guid, Type>`，以賦值覆蓋；TPC 的 concrete tables 可有相同 ID，結果取決於 ChangeTracker 列舉的最後一筆。把租戶塞進同一個 dictionary 會延續這個不確定性。
+- **`SaveChanges` 不是完整的寫入邊界**：`ExecuteUpdate`／`ExecuteDelete` 完全繞過 ChangeTracker，現有防線只是一支可被 alias 拆解規避的文字掃描測試。
+
+### 具名前置條件（本節的可操作結論）
+
+> **Host 存在一條可讓請求控制 `FileAttachment` 之 persisted fields、但不能控制 context tenant、也不能使用 bulk 或 raw SQL 的自訂寫入路徑。**
+
+**in-tree 沒有證明這個前置條件成立**：inline 編輯明確 block `TenantCode`；`BaseCRUDVM` 的 Add 路徑強制覆寫成當前租戶；`BaseImportVM` 主列與子列同樣 stamp；CodeGen 產生的 MVC／API controller 都走 `BaseCRUDVM.DoAdd`/`DoEdit`。
+
+**但不可升格為「下游不可達」**：`FileAttachment.TenantCode` **沒有 `[CanNotEdit]`**（只有 `[Display]` 與 `[StringLength]`），而 `BaseCRUDVM.DoEdit` 會更新任何出現在 FC、且非 ID／NotMapped／CanNotEdit 的 scalar property。下游只要手寫或生成一個 `FileAttachment` 的 CRUD VM 就可能暴露它。
+
+### 同一前置條件下有一條更嚴重的路徑：#1024
+
+`FileAttachment.Path` 是可偽造的 storage locator。租戶過濾器保護的是 metadata 那一列，**不是它指向的 blob**；`ResolveUnderUploadRoot` 只保證路徑落在某個 upload root 之下（目錄穿越防護），沒有租戶維度。同一個能控制 attachment 欄位的寫入端，只要建一筆**自己租戶**的合法 attachment 並把 `Path` 指向受害者的實體檔，就能經正常 `GetFile` 讀出檔案內容——步驟更少、不需要動 `TenantCode`、guard 架構上碰不到。**投入 #987 之前應先處理 #1024。**
+
+### 明確沒有做的事
+
+- 沒有改 `FileAttachmentSaveChangesGuard` 任何一行；沒有新增測試或 mutant（沒有行為變更可測）；**沒有 CHANGELOG 條目**（沒有變更可宣稱）。
+- **沒有實際建構任何一個攻擊並執行。** 上述判定全部來自靜態追蹤，包含兩步繞過——「兩步繞過成立」是對控制流的推導，不是實測。
+- 沒有查證是否有下游真的暴露 `FileAttachment` 的 CRUD 端點。這決定嚴重度，目前**未知**。
+- **TPC base-type principal 的 FK 是否會產生真正的 relational 約束，未驗證。** 這一格決定「既有 attachment 能不能被冒充」；repo 現有的 TPC fixture 只涵蓋 derived-principal FK。要驗證需新增一支 SQLite（FK 開啟）fixture，把 dependent navigation 宣告成 base `FileAttachment`，檢查 `GenerateCreateScript()` 再實跑。在那之前，**不宣稱 EF 一定會或一定不會產生 FK**。
+
+### 何時該重新評估
+
+任一條成立即應重開：#1024 修好之後（前置條件的成本結構改變）；普通已驗證請求的可達性被證明；或 `FileAttachment.TenantCode`／`Path` 取得建立後不可變的語意（屆時 transition policy 已存在，反向不變式才有地方掛）。
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。
