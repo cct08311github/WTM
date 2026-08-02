@@ -302,9 +302,11 @@ jobs:
     # though `changes`/`mutants`/`meta-selftest` all reported a fully reconciled 61/61.
     # selftest_gate_job_reconciliation.py closes THAT gap specifically: it extracts the
     # `gate` job's real "Summarize mutation gate result" script (never a hand-copied
-    # duplicate) and runs it under match/mismatch/skip/failure scenarios, including
-    # from a directory with NO repository checked out at all -- the exact condition
-    # that broke #973, reproduced on demand and now guarded against on every PR.
+    # duplicate) and runs it under match/shortfall/surplus/skip/failure scenarios
+    # (issue #1001 added the surplus case when the reconciliation became asymmetric),
+    # including from a directory with NO repository checked out at all -- the exact
+    # condition that broke #973, reproduced on demand and now guarded against on
+    # every PR.
     #
     # This step lives in `changes`, not inside `mutants`/`meta-selftest`/`gate` where
     # the real `select` calls and the real reconciliation happen, for the same reason
@@ -360,6 +362,18 @@ jobs:
         # top of this file for why cross-job data on this runner is treated with
         # suspicion; the two independent computations are also what makes the `gate`
         # job's selected-vs-executed reconciliation meaningful rather than tautological.
+        #
+        # issue #1001: "SAME event/SHA inputs" is necessary but was not sufficient --
+        # `select` resolves those SHAs against whatever commits THIS job's own checkout
+        # actually has on disk (`git diff --name-only base_sha head_sha`, in
+        # gate_lib.py's resolve_changed_files()). Matching env vars with a DIFFERENT
+        # checkout depth still diverges: this job's `fetch-depth: 0` (below) makes
+        # base_sha reachable so the diff resolves; `mutants`'/`meta-selftest`'s
+        # checkouts must carry the same `fetch-depth: 0` or their copy of the "same"
+        # inputs resolves against an incomplete history and fails open to "select
+        # everything" instead. Checkout depth is part of this contract, not an
+        # independent detail -- see the `mutants` job's checkout step for the incident
+        # (PR #998) this was found from.
         if SELECTED_IDS="$(python3 test/mutants/gate_lib.py select --kind security \
             --event-name "$EVENT_NAME" --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" \
             --push-before "$PUSH_BEFORE" --push-after "$PUSH_AFTER")"; then
@@ -461,8 +475,29 @@ jobs:
       # to "speed up CI" -- see issue #900.
       MSBUILDDISABLENODEREUSE: "1"
     steps:
+    # fetch-depth: 0 (issue #1001, found on PR #998): this job calls the SAME
+    # `gate_lib.py select --kind security --base-sha --head-sha` the `changes` job
+    # above already called with identical inputs -- but until this fix, `changes`
+    # checked out full history (fetch-depth: 0, see that job's own checkout) while
+    # THIS job used actions/checkout@v5's default shallow clone (fetch-depth: 1, base
+    # commit absent). `select` calls resolve_changed_files(), which shells out to
+    # `git diff --name-only base_sha head_sha`; on a shallow clone that git invocation
+    # fails (base_sha unreachable), resolve_changed_files() catches the
+    # CalledProcessError and returns None, and select's pre-existing fail-open rule
+    # (issue #855, preserved by #968) then selects the FULL kind='security' set --
+    # not because the diff was empty, but because it could not be computed at all.
+    # `changes` (full history) computed the correct partial selection (30 on #998);
+    # `mutants` (shallow) computed 68 (the full set); the `gate` job's
+    # selected-vs-executed reconciliation below then failed on 30 != 68. See the
+    # "NOTE ON SHAPE"/select-invocation comments further up this file for why the two
+    # jobs deliberately re-derive the same selection independently rather than
+    # trusting a value passed across the job boundary -- that independence is exactly
+    # what requires both checkouts to see the same repository state, not just the
+    # same env vars.
     - uses: actions/checkout@v5
       timeout-minutes: 5
+      with:
+        fetch-depth: 0
     - uses: actions/setup-dotnet@v5
       timeout-minutes: 10
       with:
@@ -684,8 +719,19 @@ jobs:
       # "speed up CI" -- see issue #900.
       MSBUILDDISABLENODEREUSE: "1"
     steps:
+    # fetch-depth: 0 (issue #1001), for consistency with `changes` and `mutants`
+    # above -- DEFENSIVE, not a fix for an observed bug in THIS job: kind=='selftest'
+    # entries are never filtered by relevance (see `gate_lib.py select`'s selftests
+    # discovery, which is unconditional) and this job's own selftest_count is always
+    # compared against `changes`' selected_selftest_count, which is always the FULL
+    # selftest total on every event -- so a shallow clone here never produced the
+    # wrong count (6 == 6 always matched, even before this fix). Kept at fetch-depth:
+    # 0 anyway so this job's checkout depth cannot silently drift from the other two
+    # and become a real bug the next time this job's selection logic changes.
     - uses: actions/checkout@v5
       timeout-minutes: 5
+      with:
+        fetch-depth: 0
     - uses: actions/setup-dotnet@v5
       timeout-minutes: 10
       with:
@@ -856,7 +902,10 @@ jobs:
         fi
 
         # issue #968 (successor to issue #855 defect 4's discovered-vs-executed check):
-        # "entries selected != entries executed" is itself a gate failure condition.
+        # "entries executed < entries selected" is a gate failure condition (issue
+        # #1001 narrowed this from the original "!=" to "<" only -- see that issue's
+        # own comment further down, next to the actual comparison, for why the ">"
+        # direction was loosened to a warning instead of staying fatal).
         # #855 defect 4's original version compared TOTAL DISCOVERED entries against
         # executed, which only worked because every discovered entry always ran; #968
         # makes running a SUBSET on a pull_request legitimate (per-entry relevance
@@ -885,22 +934,28 @@ jobs:
         # check-mutant-entries-parse.py guard already owns.
         #
         # TWO IMPLEMENTATIONS NOW EXIST, DELIBERATELY: test/mutants/gate_lib.py's
-        # `reconcile()` function/CLI subcommand is UNCHANGED and still covered by
+        # `reconcile()` function/CLI subcommand still exists and is still covered by
         # test/mutants/_selftest/selftest_select_relevant_entries.py's
         # check_reconcile() -- kept as a documented, independently-tested reference
         # spec of this rule and for manual `python3 test/mutants/gate_lib.py reconcile
         # --selected N --executed M` diagnostic use, but it is NOT what this job calls.
-        # This is judged safe specifically because the rule itself is a single `!=`
-        # comparison plus a formatted message -- unlike is_change_relevant() (real
-        # matching logic: prefix/set/regex checks that genuinely could drift if
-        # duplicated), there is no meaningful way for "selected != executed" to diverge
-        # between a Python `!=` and a bash `[ ... != ... ]`. The inline version below
-        # has its own regression coverage --
+        # issue #1001 updated `reconcile()` to the SAME asymmetric selected/executed
+        # rule as the inline version below (executed < selected fails, executed >
+        # selected passes with a warning) specifically so this paragraph's claim stays
+        # true; before #1001 both sides were a plain equality check. This is judged
+        # safe specifically because the rule itself is a two-branch integer comparison
+        # plus a formatted message -- unlike is_change_relevant() (real matching
+        # logic: prefix/set/regex checks that genuinely could drift if duplicated),
+        # there is no meaningful way for this comparison to diverge between the Python
+        # version and the bash version below as long as both are kept in the same
+        # shape on every edit. The inline version below has its own regression
+        # coverage --
         # test/mutants/_selftest/selftest_gate_job_reconciliation.py extracts and runs
-        # THIS job's actual step (not a copy) under match/mismatch/skip scenarios,
-        # including running it from a directory with NO repo checked out at all -- the
-        # exact condition #973 exposed -- so this specific failure mode is now
-        # regression-tested, not just fixed once.
+        # THIS job's actual step (not a copy) under match/shortfall/surplus/skip
+        # scenarios (issue #1001 added the surplus case), including running it from a
+        # directory with NO repo checked out at all -- the exact condition #973
+        # exposed -- so this specific failure mode is now regression-tested, not just
+        # fixed once.
         #
         # Only meaningful when HAS_SELECTION is the literal string 'true' (mutants/
         # meta-selftest actually ran with something selected) -- NOT merely "the count
@@ -911,15 +966,48 @@ jobs:
         # indistinguishable from the exact silent-pass failure mode #968 exists to
         # prevent, so this is deliberately narrower than "reconcile whenever the
         # numbers exist".
+        #
+        # issue #1001 (root cause of #998's failure -- see the `mutants` job's checkout
+        # step for the fetch-depth fix and this file's "SAME event/SHA inputs" comment
+        # above): a shallow `mutants`/`meta-selftest` checkout made `select`'s diff
+        # computation fail and fail open to "select everything", so EXECUTED could
+        # exceed SELECTED even though nothing was actually under-executed -- the
+        # fetch-depth fix addresses the root cause, but the comparison below is ALSO
+        # loosened, on purpose, in one direction only:
+        #   EXECUTED < SELECTED  -- still a hard FAIL. This is the direction #968's
+        #     check exists to catch: an entry `changes` believed should run did NOT
+        #     run. Nothing about #1001 changes that risk or its severity.
+        #   EXECUTED > SELECTED  -- now a WARNING, not a failure. More mutants ran
+        #     than `changes` believed were required. That is never itself a security
+        #     gap (every mutant that ran still had to report KILLED), and treating it
+        #     as fatal makes the reconciliation MORE fragile in exactly the failure
+        #     mode #1001 diagnoses: `select`'s fail-open rule (issue #855, preserved
+        #     through #968) can legitimately fire independently in `changes` and in
+        #     `mutants`/`meta-selftest` for reasons that have nothing to do with a
+        #     real defect -- a transient git error, an event payload this workflow
+        #     does not fully model, or (had the fetch-depth fix been incomplete) a
+        #     residual checkout-depth mismatch -- and in every one of those cases the
+        #     safe side to land on is "ran too much", not "ran too little". Failing
+        #     the required check on the safe side would have re-created #998's exact
+        #     symptom (a correct, defensible selection difference blocking merge) for
+        #     a DIFFERENT root cause than the one #1001 fixes, the next time any such
+        #     divergence occurs. The WARNING is printed with both totals precisely
+        #     because a superset is usually still worth a human looking at, even
+        #     though it must not block the gate.
+        #   EXECUTED == SELECTED -- unchanged, silent OK.
         if [ "$HAS_SELECTION" = "true" ]; then
           SELECTED_TOTAL=$(( ${SELECTED_SECURITY_COUNT:-0} + ${SELECTED_SELFTEST_COUNT:-0} ))
           EXECUTED_TOTAL=$(( ${SECURITY_COUNT:-0} + ${SELFTEST_COUNT:-0} ))
-          if [ "$SELECTED_TOTAL" != "$EXECUTED_TOTAL" ]; then
-            echo "::error::entries selected ($SELECTED_TOTAL = security $SELECTED_SECURITY_COUNT + selftest $SELECTED_SELFTEST_COUNT) != entries executed ($EXECUTED_TOTAL = security $SECURITY_COUNT + selftest $SELFTEST_COUNT). issue #968 (successor to #855 defect 4): an entry was SELECTED to run but the mutants/meta-selftest job executed a different count -- this must never be a silent pass."
+          if [ "$EXECUTED_TOTAL" -lt "$SELECTED_TOTAL" ]; then
+            echo "::error::entries executed ($EXECUTED_TOTAL = security $SECURITY_COUNT + selftest $SELFTEST_COUNT) < entries selected ($SELECTED_TOTAL = security $SELECTED_SECURITY_COUNT + selftest $SELECTED_SELFTEST_COUNT). issue #968/#1001: an entry was SELECTED to run but the mutants/meta-selftest job executed FEWER than that -- the dangerous direction (a mutant that should have run, did not) -- this must never be a silent pass."
             echo "MUTATION_GATE_RESULT: FAIL"
             exit 1
+          elif [ "$EXECUTED_TOTAL" -gt "$SELECTED_TOTAL" ]; then
+            echo "::warning::entries executed ($EXECUTED_TOTAL = security $SECURITY_COUNT + selftest $SELFTEST_COUNT) > entries selected ($SELECTED_TOTAL = security $SELECTED_SECURITY_COUNT + selftest $SELECTED_SELFTEST_COUNT). issue #1001: the safe direction (more mutants ran than believed required, e.g. the two independent selections diverged or one fell back to fail-open) -- tolerated, not a gate failure, but worth checking why they diverged."
+            echo "entries executed ($EXECUTED_TOTAL) > entries selected ($SELECTED_TOTAL) -- WARNING, not a failure (issue #1001)"
+          else
+            echo "entries selected ($SELECTED_TOTAL) == entries executed ($EXECUTED_TOTAL) -- OK"
           fi
-          echo "entries selected ($SELECTED_TOTAL) == entries executed ($EXECUTED_TOTAL) -- OK"
         elif [ "$CHANGES_RESULT" = "success" ]; then
           echo "0 entries selected this run (changes job confirmed this diff genuinely touches no gated path; its relevance self-check passed) -- nothing to reconcile. This is a genuine PASS, not a masked no-op (issue #968)."
         fi

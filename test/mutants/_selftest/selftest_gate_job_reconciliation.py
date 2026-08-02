@@ -45,11 +45,17 @@ script under test, satisfying the same requirement the first version did, just w
 the missing dependency. See both files' own docstrings for the full account.
 
   1. all three upstream jobs succeeded, has_selection=true, counts MATCH -> exit 0.
-  2. same, but counts MISMATCH -> exit 1, naming both totals.
-  3. has_selection=false, changes succeeded -> exit 0 (the legitimate "0 selected,
+  2. same, but EXECUTED < SELECTED -> exit 1, naming both totals (issue #968/#1001:
+     the dangerous direction -- something selected to run did not run -- stays a
+     hard failure).
+  3. same, but EXECUTED > SELECTED -> exit 0 WITH A PRINTED WARNING naming both
+     totals (issue #1001, the new behaviour this selftest exists to prove: the safe
+     direction -- more ran than believed required -- is tolerated, not fatal, but
+     must not be silent either).
+  4. has_selection=false, changes succeeded -> exit 0 (the legitimate "0 selected,
      nothing to reconcile" pass path, issue #968).
-  4. the changes job itself failed -> exit 1, regardless of what the counts say.
-  5. THE ACTUAL #973 REGRESSION TEST: scenario 1's env vars, executed with cwd set to
+  5. the changes job itself failed -> exit 1, regardless of what the counts say.
+  6. THE ACTUAL #973 REGRESSION TEST: scenario 1's env vars, executed with cwd set to
      an EMPTY temporary directory that does not contain a checkout of this repository
      at all (no .git, no test/mutants/, nothing). Before the #973 fix this reproduces
      the incident exactly (`No such file or directory`); after the fix it must still
@@ -172,8 +178,10 @@ def check_match_passes(script: str) -> bool:
     return ok
 
 
-def check_mismatch_fails(script: str) -> bool:
-    # SELECTED_TOTAL stays 61+6=67; EXECUTED_TOTAL becomes 60+6=66 -- a mismatch.
+def check_shortfall_fails(script: str) -> bool:
+    # issue #1001: EXECUTED < SELECTED stays a hard failure -- the dangerous
+    # direction (something selected to run did not run). SELECTED_TOTAL stays
+    # 61+6=67; EXECUTED_TOTAL becomes 60+6=66.
     result = run_script(script, {"SECURITY_COUNT": "60"}, cwd=_REPO_ROOT)
     ok = (
         result.returncode == 1
@@ -182,9 +190,33 @@ def check_mismatch_fails(script: str) -> bool:
         and "66" in result.stdout
     )
     print(
-        f"{'PASS' if ok else 'FAIL'}: mismatched counts (67 selected != 66 executed) "
+        f"{'PASS' if ok else 'FAIL'}: executed < selected (66 executed < 67 selected) "
         f"-> exit={result.returncode} (expected 1), totals named in output: "
         f"{'67' in result.stdout and '66' in result.stdout}"
+    )
+    if not ok:
+        print("  stdout:", result.stdout, "  stderr:", result.stderr)
+    return ok
+
+
+def check_surplus_tolerated_with_warning(script: str) -> bool:
+    # issue #1001, THE new behaviour this fix adds: EXECUTED > SELECTED is now the
+    # SAFE direction -- tolerated as a PASS, but must still print a visible warning
+    # naming both totals so a diverging selection is not silently invisible.
+    # SELECTED_TOTAL stays 61+6=67; EXECUTED_TOTAL becomes 62+6=68.
+    result = run_script(script, {"SECURITY_COUNT": "62"}, cwd=_REPO_ROOT)
+    ok = (
+        result.returncode == 0
+        and "MUTATION_GATE_RESULT: PASS" in result.stdout
+        and "WARNING" in result.stdout
+        and "68" in result.stdout
+        and "67" in result.stdout
+    )
+    print(
+        f"{'PASS' if ok else 'FAIL'}: executed > selected (68 executed > 67 selected) "
+        f"-> exit={result.returncode} (expected 0), WARNING printed: "
+        f"{'WARNING' in result.stdout}, totals named in output: "
+        f"{'68' in result.stdout and '67' in result.stdout}"
     )
     if not ok:
         print("  stdout:", result.stdout, "  stderr:", result.stderr)
@@ -304,15 +336,16 @@ def main() -> int:
     results = [
         check_extraction_sane(script),
         check_match_passes(script),
-        check_mismatch_fails(script),
+        check_shortfall_fails(script),
+        check_surplus_tolerated_with_warning(script),
         check_zero_selected_legit_pass(script),
         check_changes_failure_fails(script),
         check_no_checkout_needed(script),
     ]
     ok = all(results)
     print(
-        "SELFTEST issue-973 (gate job needs no checkout; selected-vs-executed "
-        f"reconciliation stays inline bash): {'PASS' if ok else 'FAIL'}"
+        "SELFTEST issue-973/1001 (gate job needs no checkout; selected-vs-executed "
+        f"reconciliation stays inline bash, now asymmetric): {'PASS' if ok else 'FAIL'}"
     )
     return 0 if ok else 1
 

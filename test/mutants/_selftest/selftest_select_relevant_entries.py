@@ -28,9 +28,12 @@ call (not a hand-copied approximation):
   7. `select --event-name push` always returns the full kind set, regardless of the
      (bogus, in this test) SHAs given -- the post-merge backstop is not conditional on
      the diff resolving at all;
-  8. reconcile() -- a documented, standalone implementation of the "selected ==
-     executed" comparison -- passes when the two counts match and fails when they
-     don't.
+  8. reconcile() -- a documented, standalone implementation of the selected/executed
+     comparison -- passes (silently) when the two counts match, FAILS when executed
+     is strictly less than selected, and passes WITH A WARNING when executed is
+     strictly greater than selected (issue #1001's asymmetric rule -- see that
+     function's own docstring for why the ">" direction was loosened from the
+     original plain "!=").
 
 **issue #973 correction**: this file's case 8 tests reconcile() as a function, in
 isolation. It does NOT prove the `gate` job in mutation-gate.yml can actually use it --
@@ -41,9 +44,9 @@ The `gate` job's actual reconciliation is inline bash, independent of reconcile(
 own regression coverage is test/mutants/_selftest/selftest_gate_job_reconciliation.py,
 which extracts and runs THAT job's real script -- including from a directory with no
 repository checked out at all, the specific condition #973 exposed. reconcile() is
-kept here as a tested, documented reference implementation of the same trivial rule
-(a single `!=` comparison; unlike is_change_relevant(), there is no real logic to
-drift) and for manual `python3 test/mutants/gate_lib.py reconcile --selected N
+kept here as a tested, documented reference implementation of the same rule (issue
+#1001 kept both implementations on the same asymmetric shape -- see that function's
+docstring) and for manual `python3 test/mutants/gate_lib.py reconcile --selected N
 --executed M` diagnostic use -- not because anything in CI still calls it.
 
 Run directly: python3 test/mutants/_selftest/selftest_select_relevant_entries.py
@@ -177,12 +180,30 @@ def check_push_mode_ignores_diff_and_selects_full_set(security_entries: list[dic
 
 
 def check_reconcile() -> bool:
+    # match: executed == selected -> ok, no WARNING in the message.
     match_ok, match_msg = gate_lib.reconcile(5, 5)
-    mismatch_ok, mismatch_msg = gate_lib.reconcile(5, 4)
-    ok = match_ok is True and mismatch_ok is False
-    print(f"{'PASS' if match_ok else 'FAIL'}: reconcile(5, 5) -> ok={match_ok} ({match_msg})")
-    print(f"{'PASS' if not mismatch_ok else 'FAIL'}: reconcile(5, 4) -> ok={mismatch_ok} (expected False) ({mismatch_msg})")
-    return ok
+    match_pass = match_ok is True and "WARNING" not in match_msg
+    print(f"{'PASS' if match_pass else 'FAIL'}: reconcile(selected=5, executed=5) -> ok={match_ok} ({match_msg})")
+
+    # issue #1001, dangerous direction: executed < selected -> still a hard failure.
+    shortfall_ok, shortfall_msg = gate_lib.reconcile(5, 4)
+    shortfall_pass = shortfall_ok is False
+    print(
+        f"{'PASS' if shortfall_pass else 'FAIL'}: reconcile(selected=5, executed=4) -> "
+        f"ok={shortfall_ok} (expected False) ({shortfall_msg})"
+    )
+
+    # issue #1001, safe direction: executed > selected -> tolerated, but the message
+    # must say WARNING so a caller reading only the printed text (not the bool) can
+    # still tell this apart from a plain, unremarkable match.
+    surplus_ok, surplus_msg = gate_lib.reconcile(4, 5)
+    surplus_pass = surplus_ok is True and "WARNING" in surplus_msg
+    print(
+        f"{'PASS' if surplus_pass else 'FAIL'}: reconcile(selected=4, executed=5) -> "
+        f"ok={surplus_ok} (expected True, with WARNING in message) ({surplus_msg})"
+    )
+
+    return match_pass and shortfall_pass and surplus_pass
 
 
 def main() -> int:
@@ -200,7 +221,7 @@ def main() -> int:
         check_reconcile(),
     ]
     ok = all(results)
-    print(f"SELFTEST issue-968 (per-entry selection, positive control, push backstop, reconcile): {'PASS' if ok else 'FAIL'}")
+    print(f"SELFTEST issue-968/1001 (per-entry selection, positive control, push backstop, asymmetric reconcile): {'PASS' if ok else 'FAIL'}")
     return 0 if ok else 1
 
 

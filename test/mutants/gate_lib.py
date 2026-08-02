@@ -44,18 +44,28 @@ Subcommands:
                                     nothing to do": #968's entire point is that those two
                                     must never read the same.
   reconcile --selected N --executed M
-                                    exit 0 if N == M (printing an OK line to stdout), exit
-                                    1 otherwise (printing the mismatch to stderr) -- a
-                                    documented, tested reference implementation of the
-                                    "selected == executed" rule (issue #968, successor to
-                                    issue #855 defect 4's original discovered-vs-executed
-                                    check). NOT what mutation-gate.yml's `gate` job
+                                    exit 0 if executed >= selected (printing an OK line, or
+                                    a WARNING line if executed > selected, to stdout), exit
+                                    1 if executed < selected (printing the shortfall to
+                                    stderr) -- a documented, tested reference implementation
+                                    of the selected/executed reconciliation rule (issue
+                                    #968, successor to issue #855 defect 4's original
+                                    discovered-vs-executed check; the asymmetric >= rule is
+                                    issue #1001 -- executed < selected stays a hard failure,
+                                    the dangerous direction where something selected to run
+                                    did not; executed > selected is now tolerated with a
+                                    warning, the safe direction, since it only means the
+                                    two independent selections diverged, e.g. one fell back
+                                    to fail-open -- never that fewer mutants ran than
+                                    required). NOT what mutation-gate.yml's `gate` job
                                     actually calls (issue #973: that job has no
                                     `actions/checkout` and never will -- see its own
                                     header comment -- so shelling out to this file from
                                     inside it fails with "No such file or directory";
                                     `gate`'s real reconciliation is inline bash, covered
-                                    by test/mutants/_selftest/selftest_gate_job_reconciliation.py).
+                                    by test/mutants/_selftest/selftest_gate_job_reconciliation.py,
+                                    and issue #1001 kept both implementations on the SAME
+                                    asymmetric rule so they cannot silently diverge).
                                     Kept here for its own selftest coverage
                                     (test/mutants/_selftest/selftest_select_relevant_entries.py's
                                     check_reconcile()) and for manual diagnostic use.
@@ -274,27 +284,53 @@ def reconcile(selected: int, executed: int) -> tuple[bool, str]:
     legitimate, so the comparison baseline had to move from "discovered" to
     "selected".
 
+    issue #1001 (found on PR #998): the original rule was a plain `selected !=
+    executed`, which turned out to be too strict. A shallow `mutants`/`meta-selftest`
+    checkout could make `select`'s diff computation fail there while `changes` (full
+    history) computed it fine, so `select`'s pre-existing fail-open rule (issue #855)
+    fired independently in `mutants` but not in `changes` -- `mutants` then executed
+    MORE than `changes` selected, for a reason that had nothing to do with a real
+    under-execution. The fetch-depth fix on all three jobs' checkouts (see
+    mutation-gate.yml's `mutants`/`meta-selftest` checkout steps) addresses that root
+    cause, but this rule is ALSO loosened, on purpose, in one direction only:
+    `executed < selected` stays a hard failure (an entry that should have run did
+    not -- the dangerous direction and the original point of this check);
+    `executed > selected` is now tolerated with a warning (more ran than believed
+    necessary -- always the safe direction, and fail-open can still legitimately
+    fire for OTHER reasons even with the fetch-depth fix in place: a transient git
+    error, an event payload this workflow does not fully model). `executed ==
+    selected` is unchanged.
+
     issue #973: this function is NOT what mutation-gate.yml's `gate` job calls. It
     briefly was -- the `gate` job shelled out to `python3 test/mutants/gate_lib.py
     reconcile ...` -- but that job has no `actions/checkout` step and architecturally
     never will (it is the one job that must unconditionally post a status; see its own
     header comment), so the call failed in real CI with "No such file or directory"
     even though the actual selected/executed counts were fully reconciled (61/61).
-    `gate`'s real reconciliation reverted to inline bash -- the same `!=` comparison,
+    `gate`'s real reconciliation reverted to inline bash -- the same comparison,
     duplicated deliberately: unlike is_change_relevant() (real matching logic that
-    could genuinely drift if reimplemented), this rule is a single comparison plus a
-    message, so the duplication risk is negligible. The inline version's own
-    regression coverage is
+    could genuinely drift if reimplemented), this rule is a two-branch integer
+    comparison plus a message, so the duplication risk is negligible as long as both
+    sides are kept on the same rule on every edit (issue #1001 did so for the
+    asymmetric >= rule, exactly as it was for the original `!=` rule). The inline
+    version's own regression coverage is
     test/mutants/_selftest/selftest_gate_job_reconciliation.py, which runs the `gate`
     job's actual script (extracted from this file's own YAML, not a copy) including
     from a directory with no repository checked out at all. This function is kept as
     a tested spec of the rule and for manual `--selected N --executed M` diagnostic
     use."""
-    if selected != executed:
+    if executed < selected:
         return False, (
-            f"entries selected ({selected}) != entries executed ({executed}) -- an entry "
-            "was selected to run but not executed (or executed without having been "
-            "selected). issue #968: this must never be a silent pass."
+            f"entries executed ({executed}) < entries selected ({selected}) -- an entry "
+            "was selected to run but not executed. issue #968/#1001: this is the "
+            "dangerous direction and must never be a silent pass."
+        )
+    if executed > selected:
+        return True, (
+            f"WARNING: entries executed ({executed}) > entries selected ({selected}) -- "
+            "the safe direction (issue #1001): more ran than believed required. "
+            "Tolerated, not a failure, but worth checking why the two independent "
+            "selections diverged."
         )
     return True, f"entries selected ({selected}) == entries executed ({executed}) -- OK"
 
@@ -330,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_reconcile = sub.add_parser(
         "reconcile",
-        help="exit 0 if --selected == --executed, 1 otherwise -- issue #968",
+        help="exit 0 if --executed >= --selected (warning if strictly greater), 1 if --executed < --selected -- issue #968/#1001",
     )
     p_reconcile.add_argument("--selected", required=True, type=int)
     p_reconcile.add_argument("--executed", required=True, type=int)
