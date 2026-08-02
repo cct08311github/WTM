@@ -147,6 +147,54 @@ Gitea 對 `pull_request` 事件 checkout 的是 **PR 分支自己的快照**（`
 
 **案例（#906）**：#882 合併後 `docs/production-readiness.md` 已把 #876 從「未修」節移除，`dotnet10` 上 `ProductionReadinessBaselineDriftTests863` 三支測試全綠；但開在 #882 之前的 PR #881、#904 仍各自紅在同一斷言（`Expected:<0>. Actual:<1>. ... lists #876 as unfixed`），因為它們的 checkout 停在合併前的快照——需要各自 rebase/merge 最新 `dotnet10` 並 push 才會變綠，不是在 `dotnet10` 上再改一次文件能解決的。
 
+### 5b. `workflow_dispatch` 的守衛跟著 ref 走 —— 加守衛**不會**保護舊 ref（#1008，2026-08-03）
+
+**事實**：Gitea Actions 對 `workflow_dispatch` 使用**被 dispatch 的那個 ref 上的 workflow 檔**，不是 default branch 的版本。
+
+**後果，而且非常反直覺**：往 `dotnet10` 合併一道 workflow 守衛之後，**任何還停在守衛落地前的分支，從它 dispatch 仍然會執行沒有守衛的舊版**。
+
+守衛的保護範圍不是「這個 repo」，是「workflow 檔已經更新的那些 ref」。
+
+#### 這實際發生過
+
+`publish-nuget.yml` 的三道分支守衛（`REF != refs/heads/dotnet10` 即中止、dispatch SHA 必須是 `origin/dotnet10` 祖先、tag 必須指向其祖先）由 `3b894df80`（#925，2026-07-31）加入，且已在 `10.21.0-rc.2` 內。
+
+但下游（BMS #350）在本機 NuGet cache 中找到：
+
+| 版本 | nuspec 的建置分支 |
+|---|---|
+| `10.21.0`（正式版號） | `refs/heads/docs/958-advisory-issue-keyed-corrections` |
+| `10.21.0-rc.7` | `refs/heads/ci/925-release-gate` |
+| `99.0.0-rc.5` / `99.0.0-smoketest` | `refs/heads/ci/925-release-gate` |
+
+那顆 `10.21.0` **缺少 `dotnet10` 上的三個 security fix**（#824 Part 2、#961、#979）。SemVer 上 `10.21.0-rc.2 < 10.21.0`，所以任何「rc 驗過就升正式版」的下游會**靜默失去**那三個修復。
+
+（`99.0.0-*` 是 #925 自己的煙霧測試，版號刻意選在一切之上以驗證一個從未生效的 pack 版本覆寫缺陷——那部分是預期的。）
+
+#### 為什麼守衛沒擋住
+
+那幾顆是守衛落地**之前**發出的。而更要緊的是：**守衛落地之後，那些舊分支仍然帶著舊的 workflow 檔**。
+
+實測全部 112 條遠端分支：**全部都有 `publish-nuget.yml`，其中 81 條沒有分支守衛**——包括 `release/10.16.0`、`release/10.16.1`、`chore/release-10.15.0` 這種名字看起來就像 release 的。
+
+#### 只有一支 workflow 有這個風險
+
+八支 workflow 全部檢查（有無 `workflow_dispatch` × 有無守衛 × 有無對外副作用）：
+
+**只有 `publish-nuget.yml` 同時具備 `workflow_dispatch` 與對外副作用**（`nuget push` + GitHub mirror push）。其餘七支雖然都能從任意分支 dispatch，但只跑測試與建置——最壞後果是浪費 runner 時間。**它們不需要守衛，加了反而是噪音。**
+
+#### 因此修法不是「加更好的守衛」
+
+守衛已經是對的，且已在主線上。要關閉的是**還存在的舊 ref**——也就是刪除已合併的陳舊分支（#1008），或收斂 Gitea 端的 dispatch 權限。
+
+**這一點值得記住的原因**：面對「某個 workflow 可以被濫用」，直覺反應是去改 workflow。但當保護機制**跟著 ref 走**時，改 workflow 只保護未來的 ref，舊 ref 的攻擊面要靠刪除它們才會消失。
+
+#### 一項方法論註記
+
+第一次掃這 112 條分支時，用的 shell 迴圈**印出零筆**——看起來像「全部安全」。改用 Python 重寫才得到 81。
+
+下游在同一份回報裡寫下的鐵律正好適用：**任何用來證明「沒有」的指令，先確認它在已知有的情況下真的會輸出東西。「查無」與「查壞了」的輸出長得一模一樣。**
+
 ### 6. `job.timeout-minutes` 被此 runner 忽略；真正生效的是 `step.timeout-minutes`（issue #926，2026-07-31 查證）
 
 **事實**：這個 Gitea 實例的 act_runner 執行的是 `gitea.com/gitea/act`（`nektos/act` 的 fork）。查證方式是直接讀原始碼，不是猜測：
