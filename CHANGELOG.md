@@ -460,17 +460,38 @@ Verified in practice, not just by inspection: `WtmFileProviderHandlerInfoRoundTr
 `GetFileCore` path against a SQLite shared-memory fixture (`Microsoft.Data.Sqlite`, not EF
 InMemory — InMemory's LINQ-to-objects evaluation would "translate" any C# projection including ones
 the real providers cannot, so a green result there would prove nothing) and confirms the SELECT
-executes and returns the correct value. `DeleteFileCore` uses the exact same expression object
-(reflection-verified in the pinning test below), so this evidence covers it without a separate query
-execution proof.
+executes and returns the correct value. `DeleteFileCore` uses the exact same expression object —
+this is now asserted by a dedicated test (below), not merely observed while writing the fix — so
+this evidence covers it without a separate query execution proof.
 
-**Tests** (`test/WalkingTec.Mvvm.Core.Test/Support/`, 5 new, all passing):
-`WtmFileProviderProjectionFieldSetTests1028.cs` (3 tests) reflects over the private static
-`_fileMetadataProjection` field and asserts the *set* of assigned member names via
-`CollectionAssert.AreEquivalent` against a pinned expected set — a count-only assertion would have
-passed both before and after this fix (8 fields either way), so only a set assertion catches a
-field being silently swapped for a different one; separately pins that `HandlerInfo` is present and
-`FileData` is still absent (the entire reason a projection exists instead of a plain load).
+**Tests** (`test/WalkingTec.Mvvm.Core.Test/Support/`, 7 new, all passing):
+
+`WtmFileProviderProjectionFieldSetTests1028.cs` (5 tests). The first 3 reflect over the private
+static `_fileMetadataProjection` field and assert the *set* of assigned member names via
+`CollectionAssert.AreEquivalent` against a **hardcoded** pinned expected set — a count-only
+assertion would have passed both before and after this fix (8 fields either way), so only a set
+assertion catches a field being silently swapped for a different one; separately pins that
+`HandlerInfo` is present and `FileData` is still absent. Those 3 alone have a gap review caught:
+they compare the projection against each other, not against `FileAttachment` itself, so a column
+added to `FileAttachment` tomorrow without a projection decision would leave all 3 green. Test 4
+closes that gap: it reflects over `typeof(FileAttachment)` directly (walking the base chain —
+`GetProperties` on a class includes inherited members, which is how it picks up
+`TopBasePoco.ID`), filters to public read/write, non-`[NotMapped]`, non-navigation/collection
+properties, and asserts that set equals (projection fields) ∪ (an explicit
+`DeliberatelyExcludedFields` dictionary — currently `FileData` and `TenantCode`, each with a
+reason). An unclassified property fails with a message naming exactly which field is undecided and
+what to do about it. **Proved by mutation, not just by assertion**: added a throwaway scalar
+property to `FileAttachment`, reran — RED (`Assert.Fail ... UNDECIDED ... [Wtm1028ThrowawayProbe]
+... this exact 'silently neither' shape is the #1028 regression`), the other 4 tests stayed green;
+removed the property, reran — GREEN, `git diff` confirmed the model file was byte-identical to the
+prior commit. Test 5 is the identity check: it scans `GetFileCore`'s and `DeleteFileCore`'s IL for
+an `ldsfld` of `_fileMetadataProjection` (both must reference the exact same field, not two
+independently-declared expressions of the same shape — the field-set tests would stay green even
+if someone gave `DeleteFileCore` its own separate copy). **Also proved by mutation**: temporarily
+inlined `DeleteFileCore` back to its own `Select(x => new FileAttachment {...})` with an identical
+field list — RED (`DeleteFileCore's IL no longer references the shared _fileMetadataProjection
+field ... even one with an identical field list ...`); reverted — GREEN.
+
 `WtmFileProviderHandlerInfoRoundTripTests1028.cs` (2 tests) seeds a `FileAttachment` with
 `SaveMode="database"` (no OSS network needed) and asserts `HandlerInfo` survives
 `WtmFileProvider.GetFile` unchanged, plus a positive control that fields already in the projection
@@ -481,13 +502,17 @@ test files): `Assert.AreEqual failed. Expected:<group-get-5681756506834f418301bd
 Actual:<(null)>. #1028: HandlerInfo must survive GetFileCore's Select projection...` — the positive
 control in the same run stayed green (`Failed: 1, Passed: 1`), confirming the fixture itself was
 sound and only the `HandlerInfo` assertion was red. Reverted state restored; full new-test filter
-green afterward (`Passed: 5`).
+green afterward.
 
 **Consequence traced, not reproduced.** No multi-group OSS environment (real Aliyun OSS endpoint,
 multiple configured `FileHandlerOptions.GroupName` values) was stood up to actually observe a wrong
 bucket being read from or deleted against. The wrong-bucket chain above is derived from reading
 `WtmOssFileHandler.GetFileData`/`DeleteFile` against the fact that `HandlerInfo` was always null,
-not from a real multi-group deployment request.
+not from a real multi-group deployment request. `DeleteFileCore` still has no round-trip test that
+observes `HandlerInfo` reaching a real file handler's `DeleteFile` call (would require injecting a
+capturing handler through `WtmFileProvider`'s private, process-wide static handler registry —
+shared mutable state judged too risky for the marginal proof gained); what changed this round is
+that the "same expression object" claim is now test-enforced instead of only author-observed.
 
 **Other `FileAttachment` projections in the repo**: none found. Full-tree search for
 `new FileAttachment` and `Set<FileAttachment>()` across `src/`, `demo/`, and `test/` found only full
@@ -507,10 +532,11 @@ conditional here to neutralize — the only "mutant" available is deleting the
 already cover as ordinary regression protection. Full reasoning in `docs/production-readiness.md`'s
 `#1028` entry.
 
-Tests: `test/WalkingTec.Mvvm.Core.Test` (Release, `TestCategory!=Integration`, `-m:1`) 5090 passed,
-0 failed (5 new). `test/mutants/patches/*.patch` (68 files): 68/68 pass `git apply --check`; none
-touch `WtmFileProvider.cs`. Full details, including the exact pre-fix field lists, in
-`docs/production-readiness.md`'s `#1028` entry — this entry does not repeat or exceed those claims.
+Tests: `test/WalkingTec.Mvvm.Core.Test` (Release, `TestCategory!=Integration`, `-m:1`) 5092 passed,
+0 failed (7 new). `test/mutants/patches/*.patch` (68 files): 68/68 pass `git apply --check`; none
+touch `WtmFileProvider.cs`. Full details, including the exact pre-fix field lists and both
+mutation RED/GREEN proofs, in `docs/production-readiness.md`'s `#1028` entry — this entry does not
+repeat or exceed those claims.
 
 ## [10.21.0] - 2026-07-31
 

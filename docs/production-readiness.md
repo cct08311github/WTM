@@ -1564,7 +1564,41 @@ BMS repo 內三份互相獨立的文件都記載 8.6.1/8.x：一則 commit messa
 
 ### 測試
 
-**回歸釘點測試**（`test/WalkingTec.Mvvm.Core.Test/Support/WtmFileProviderProjectionFieldSetTests1028.cs`，3 個測試）：用 reflection 取出 `WtmFileProvider._fileMetadataProjection` 這個 private static 欄位，把它的 `MemberInitExpression.Bindings` 轉成成員名稱清單，用 `CollectionAssert.AreEquivalent` 跟一份寫死的期望集合比對——刻意用集合比對，不是數量比對：數量比對在「拿掉一個欄位、換成另一個不相關欄位」時一樣會過，抓不到 #1028 這種「數量沒變、內容錯了」的漂移。另外兩支測試分別釘住「必須包含 `HandlerInfo`」與「必須不包含 `FileData`」——後者是護住投影存在的理由本身：這個修法不能順便把大欄位載入的問題也修沒了（變成退化成整列 entity load）。
+**釘點測試 v1（`test/WalkingTec.Mvvm.Core.Test/Support/WtmFileProviderProjectionFieldSetTests1028.cs`，前 3 支）**：用 reflection 取出 `WtmFileProvider._fileMetadataProjection` 這個 private static 欄位，把它的 `MemberInitExpression.Bindings` 轉成成員名稱清單，用 `CollectionAssert.AreEquivalent` 跟一份**寫死**的期望集合比對——刻意用集合比對，不是數量比對：數量比對在「拿掉一個欄位、換成另一個不相關欄位」時一樣會過，抓不到 #1028 這種「數量沒變、內容錯了」的漂移。另外兩支測試分別釘住「必須包含 `HandlerInfo`」與「必須不包含 `FileData`」——後者是護住投影存在的理由本身：這個修法不能順便把大欄位載入的問題也修沒了（變成退化成整列 entity load）。
+
+**這三支測試本身有一個結構性缺口，經 review 抓到並已補上**：三支都是拿投影去對一份**人工寫死**的 `ExpectedFields`，而 `ExpectedFields` 本身不會自動追蹤 `FileAttachment` 的真實形狀——這正是產生 #1028 的同一種缺陷（人工維護的清單，沒有機制保證跟著源頭走）。如果明天有人在 `FileAttachment` 上加一個新欄位卻沒決定它該不該進投影，這三支測試會**全部維持綠燈**，因為它們比對的是彼此，不是比對 `FileAttachment` 本身。
+
+**釘點測試 v2 —— 真正防止再犯的那一支（同檔案，第 4 支：`FileAttachmentMappedScalarProperties_EqualsProjectionUnionDeliberateExclusions`）**：不比對寫死清單，改成直接對 `typeof(FileAttachment)` 做 reflection，推導出「目前實際存在的 mapped scalar 屬性集合」，斷言它等於「投影欄位」∪「`DeliberatelyExcludedFields`」（後者是一個具名字典，目前只有兩項：`FileData`——原因是這正是投影存在的理由；`TenantCode`——原因是它驅動 EF Core 的 `ITenant` 全域過濾器，`Select` 執行前就已經套用，不屬於任何呼叫端消費的 `IWtmFile` contract；兩項各自附理由字串）。任何既不在投影裡、也不在 `DeliberatelyExcludedFields` 裡的欄位都判定為「UNDECIDED」，斷言失敗訊息直接告訴下一個人怎麼做：加進投影，或加進 `DeliberatelyExcludedFields` 並寫理由。
+
+Reflection 細節（依 review 要求逐項處理）：
+- **繼承鏈**：`Type.GetProperties(BindingFlags.Public | BindingFlags.Instance)` 對**類別**預設就會走完整 base chain（這正是抓到 `TopBasePoco.ID` 的機制）——這裡刻意記錄一個相關但不同的坑：`Type.GetMember` 在**介面**上呼叫時**不會**沿 base interface 往上找（WTM 自己另一個缺陷 `type-getmember-on-interface-skips-inherited` 記過同一個 gotcha），但 `FileAttachment` 是類別不是介面，不適用那個坑，這裡的寫法是對的。
+- **`[NotMapped]`**：用 `GetCustomAttribute<NotMappedAttribute>() == null` 過濾，排除 `TopBasePoco.Checked`/`BatchError`/`ExcelIndex`/`IsBasePoco` 與 `FileAttachment.DataStream`。
+- **Navigation／collection 屬性**：`FileAttachment` 目前沒有任何一個，但方法本身要能正確分類——`IsNavigationOrCollectionProperty` 對 `string`／`byte[]`（兩者都實作 `IEnumerable` 但都是合法的 EF 純量欄位型別）明確排除在「集合」判定之外，其餘任何實作 `IEnumerable` 的型別視為集合 navigation；非集合的一般 struct/enum/`Nullable<>`（`Guid`/`DateTime`/`decimal`/...）視為純量；任何其餘 class（例如 `Stream`）視為 navigation-shaped，不計入純量集合。
+
+**Mutation 證明，不只是斷言——逐字擷取**：在 `FileAttachment.cs` 暫時加一個丟棄用純量屬性 `public string? Wtm1028ThrowawayProbe { get; set; }`，重跑：
+
+```
+Failed FileAttachmentMappedScalarProperties_EqualsProjectionUnionDeliberateExclusions [3 ms]
+Error Message:
+ Assert.Fail failed. #1028: FileAttachment's mapped scalar properties no longer match (_fileMetadataProjection's fields) UNION (DeliberatelyExcludedFields). UNDECIDED — these FileAttachment properties are mapped/scalar but appear in NEITHER the projection NOR DeliberatelyExcludedFields: [Wtm1028ThrowawayProbe]. For each: either add it to WtmFileProvider._fileMetadataProjection if callers/handlers need it, or add it to DeliberatelyExcludedFields in this test with a reason — this exact 'silently neither' shape is the #1028 regression.
+Total tests: 5
+     Passed: 4
+     Failed: 1
+```
+
+其餘 4 支（含舊版 3 支寫死清單測試）維持綠燈——證明新測試量測的是新加欄位本身，不是連帶弄壞了別的東西。移除該屬性後重跑：`Total tests: 5, Passed: 5`，`git diff --stat FileAttachment.cs` 確認檔案回到與上一次 commit 逐位元組相同（該屬性未被提交）。
+
+**釘點測試 v3 —— 投影「身分」測試（同檔案，第 5 支：`GetFileCoreAndDeleteFileCore_BothReferenceTheSameSharedProjectionField`）**：v1/v2 都只驗證投影**內容**，沒有驗證 `GetFileCore` 與 `DeleteFileCore` 是不是真的指向**同一個**運算式物件——理論上有人可以讓兩份測試都維持綠燈，做法是給 `DeleteFileCore` 另外宣告一個欄位列表完全相同、但獨立存在的 `Expression<Func<FileAttachment, FileAttachment>>`，這樣悄悄地把 #1028 要根除的「兩份手寫清單」形狀原樣複製回來（只是兩份現在恰好同步，跟修法前的狀態一樣脆弱）。這支測試對 `GetFileCore`/`DeleteFileCore` 的 IL（`MethodBody.GetILAsByteArray()`）做位元組掃描，找 `ldsfld`（opcode `0x7E`，永遠是單位元組、後接 4 位元組 metadata token，沒有短版本）指令，把 token 解析回 `FieldInfo`（`Module.ResolveField(token)`），確認兩個方法的 IL 裡都有一個 `ldsfld` 解析回同一個 `_fileMetadataProjection` 欄位。這不是完整 IL decoder（沒有追蹤指令邊界，理論上另一條指令的 operand 位元組剛好等於 `0x7E` 會被誤判成 `ldsfld`），但風險是單向的——`ResolveField` 對不是真正欄位 token 的位元組序列通常直接丟例外（被 catch、繼續掃描），巧合解析成剛好等於目標欄位的機率可忽略，所以誤判只可能讓測試「太寬鬆」而非「太嚴格」，下面的 RED 證明排除了目前這兩個方法形狀下真的發生這種情況。
+
+**這支測試的 RED 證明**：把 `DeleteFileCore` 暫時改回它自己獨立的內聯 `Select(x => new FileAttachment {...})`（欄位列表刻意保持完全相同，包含 `HandlerInfo`，只是不再是同一個物件參照），重跑：
+
+```
+Failed GetFileCoreAndDeleteFileCore_BothReferenceTheSameSharedProjectionField [3 ms]
+Error Message:
+ Assert.IsTrue failed. #1028: DeleteFileCore's IL no longer references the shared _fileMetadataProjection field — if it was changed to build its own inline Select(x => new FileAttachment { ... }) projection (even one with an identical field list), that silently reintroduces the two-hand-maintained-lists shape #1028 fixed. Route it back through _fileMetadataProjection.
+```
+
+其餘 4 支（含 v2 的欄位集合測試）維持綠燈——因為欄位集合本身沒有變，只有「是不是同一個物件」變了，證明這支測試量測的是 v1/v2 都量測不到的維度。還原 `DeleteFileCore` 後重跑：`Total tests: 5, Passed: 5`；`git diff --stat WtmFileProvider.cs` 確認回到與上一次 commit 逐位元組相同。
 
 **Round-trip 測試**（`test/WalkingTec.Mvvm.Core.Test/Support/WtmFileProviderHandlerInfoRoundTripTests1028.cs`，2 個測試，SQLite shared-memory fixture）：`SaveMode="database"`（不需要真的 OSS endpoint、不碰網路）種一筆帶 `HandlerInfo` 的 `FileAttachment`，呼叫 `WtmFileProvider.GetFile(...)`，斷言回傳物件的 `HandlerInfo` 等於種下去的值；正控組斷言修法前就已經在投影裡的欄位（`FileName`、`ExtraInfo`）沒有被這次改動動到。
 
@@ -1577,9 +1611,9 @@ Error Message:
 Failed!  - Failed:     1, Passed:     1, Skipped:     0, Total:     2, Duration: 744 ms
 ```
 
-（同一次跑，正控組 `GetFile_PersistedMetadata_OtherFieldsStillSurviveProjection` 維持綠燈——證明 fixture 本身沒問題，紅的只有斷言 `HandlerInfo` 的那一支，紅的理由跟預期完全對上。）`git stash pop` 還原修法後，同一組 filter 重跑：`Passed! - Failed: 0, Passed: 5, Skipped: 0, Total: 5`（含釘點測試的 3 支）。
+（同一次跑，正控組 `GetFile_PersistedMetadata_OtherFieldsStillSurviveProjection` 維持綠燈——證明 fixture 本身沒問題，紅的只有斷言 `HandlerInfo` 的那一支，紅的理由跟預期完全對上。）`git stash pop` 還原修法後，同一組 filter 重跑：`Passed! - Failed: 0, Passed: 5, Skipped: 0, Total: 5`（含當時已存在的釘點測試 3 支；v2/v3 兩支是 review 之後才補上的第二輪）。
 
-**範圍聲明——`DeleteFileCore` 沒有獨立的 round-trip 測試**：`DeleteFileCore` 是 `void`，沒有可觀察的回傳值；要證明它內部的 `file.HandlerInfo` 真的帶著正確值傳進 `fh.DeleteFile(file)`，唯一辦法是透過 `WtmFileProvider` 的 private、process-wide static handler registry（`_handlers`/`_defaultHandler`，由 `WtmFileProvider.Init` 寫入）注入一個會記錄收到值的假 handler——這是跨測試共享的可變靜態狀態，會在同一個測試 process 裡的其他測試之間互相汙染。權衡後判斷這個風險大於多驗證到的信心：`DeleteFileCore` 用的是跟 `GetFileCore` **同一個** `_fileMetadataProjection` 物件（reflection 已證明兩個呼叫點指向同一個靜態欄位），而不是另一份形狀相同但獨立的運算式，所以 `GetFileCore` 的轉譯證據原則上完全適用於 `DeleteFileCore`。
+**範圍聲明的更新——`DeleteFileCore` 現在有一支「身分」測試，而不只是作者本人的觀察**：初版報告寫「reflection 已證明兩個呼叫點指向同一個靜態欄位」，但那句話當時只是作者互動式驗證過、沒有寫進任何測試——review 正確指出這樣不算數，晚一點有人把其中一個呼叫點改回內聯 lambda 也不會有任何測試變紅。現在已經是上面的釘點測試 v3，帶 RED/GREEN 逐字證明。`DeleteFileCore` 仍然沒有獨立的、透過真正 OSS/database handler 觀察 `HandlerInfo` 傳遞的 round-trip 測試——`DeleteFileCore` 是 `void`，沒有可觀察的回傳值；要做到那個層級的驗證，唯一辦法是透過 `WtmFileProvider` 的 private、process-wide static handler registry（`_handlers`/`_defaultHandler`，由 `WtmFileProvider.Init` 寫入）注入一個會記錄收到值的假 handler——這是跨測試共享的可變靜態狀態，會在同一個測試 process 裡的其他測試之間互相汙染，判斷這個風險大於多驗證到的信心。但「`DeleteFileCore` 用的是跟 `GetFileCore` 同一個運算式物件」這件事本身，現在是被測試強制的，不再只是作者的觀察。
 
 ### 其他 `FileAttachment` 投影site全樹核對
 
@@ -1593,9 +1627,9 @@ Failed!  - Failed:     1, Passed:     1, Skipped:     0, Total:     2, Duration:
 
 ### 驗證
 
-`find . -name 'demo.db*' -path '*bin*' -delete && dotnet build src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj -c Release`：0 錯誤（既有警告不變，跟本次改動無關的既有 XML doc/nullable 警告）。`dotnet test test/WalkingTec.Mvvm.Core.Test/ -c Release --filter "TestCategory!=Integration" -m:1`：**5090 passed, 0 failed**（含本次新增 5 個測試）。`test/mutants/patches/*.patch`（68 個檔案）逐一 `git apply --check`：**68/68 通過**，沒有 patch 動到 `WtmFileProvider.cs`。
+`find . -name 'demo.db*' -path '*bin*' -delete && dotnet build src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj -c Release`：0 錯誤（既有警告不變，跟本次改動無關的既有 XML doc/nullable 警告）。`dotnet test test/WalkingTec.Mvvm.Core.Test/ -c Release --filter "TestCategory!=Integration" -m:1`：**5092 passed, 0 failed**（含本次新增 7 個測試——round-trip 2 個＋釘點測試 5 個，後者含 review 之後補上的 v2 欄位集合推導測試與 v3 投影身分測試）。`test/mutants/patches/*.patch`（68 個檔案）逐一 `git apply --check`：**68/68 通過**（review 補測試後重新核對一次，結果不變），沒有 patch 動到 `WtmFileProvider.cs`。
 
-**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，本機驗證只到 `dotnet build`/`dotnet test` 這兩層，沒有跑過真正的 Gitea Actions CI。**consequence 是追溯出來的，不是重現出來的**：沒有架設任何多群組 OSS 環境（真實 Aliyun OSS endpoint、多個 `FileHandlerOptions.GroupName`）去實際驗證「讀錯 bucket」「刪錯 bucket」——上面的因果鏈是讀 `WtmOssFileHandler.GetFileData`/`DeleteFile` 原始碼、對照 `HandlerInfo` 一路是 null 推出來的，不是對一個真的跑著兩個 bucket 的部署發過請求、看到過真的讀到 A bucket 的東西。`DeleteFileCore` 路徑（見上方「範圍聲明」）沒有獨立的 round-trip 測試，只靠「跟 `GetFileCore` 共用同一個運算式物件」這個結構性論證覆蓋，沒有直接跑過 `DeleteFileCore` 本身觀察 `HandlerInfo` 傳給 handler 的那一刻。
+**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，本機驗證只到 `dotnet build`/`dotnet test` 這兩層，沒有跑過真正的 Gitea Actions CI。**consequence 是追溯出來的，不是重現出來的**：沒有架設任何多群組 OSS 環境（真實 Aliyun OSS endpoint、多個 `FileHandlerOptions.GroupName`）去實際驗證「讀錯 bucket」「刪錯 bucket」——上面的因果鏈是讀 `WtmOssFileHandler.GetFileData`/`DeleteFile` 原始碼、對照 `HandlerInfo` 一路是 null 推出來的，不是對一個真的跑著兩個 bucket 的部署發過請求、看到過真的讀到 A bucket 的東西。`DeleteFileCore` 路徑仍然沒有一支透過真正的 file handler 直接觀察「`HandlerInfo` 被傳進 `fh.DeleteFile(file)` 那一刻」的 round-trip 測試（理由見上方「範圍聲明的更新」段落：唯一做法要動 `WtmFileProvider` 的 process-wide 可變靜態狀態，判斷風險大於效益）；但「`DeleteFileCore` 跟 `GetFileCore` 是不是共用同一個投影物件」這件事，第一版報告只是作者互動驗證過、沒有測試守著，這一輪已經補上（v3 IL 身分測試，RED/GREEN 皆已逐字擷取）——這是本次修正的範圍，不是新的未能驗證項目。
 
 ---
 
