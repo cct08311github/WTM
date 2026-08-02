@@ -1,5 +1,273 @@
 # 更新日志
 
+## [10.22.0] - 2026-08-02
+
+**Contains one BREAKING change (#985).** `FileAttachmentSaveChangesGuard` now rejects a
+`FileAttachment`-principal foreign key whose principal key is not the canonical
+single-property Guid `ID`. No in-tree model is affected, but `HasPrincipalKey` is a legal
+EF Core API that this framework never marked unsupported — a downstream model using it goes
+from writes succeeding to every `SaveChanges` on that whole context failing. Migration is in
+that entry, and it does **not** offer `FileAttachmentSaveChangesGuard.Enabled = false` as a
+step: that switch is process-wide and re-enables the exact false-allow the check closes.
+
+Everything here landed after `10.21.0-rc.2` (`7e0d99b78`), which is the tree `10.21.0`
+ships. Splitting them keeps the version a downstream verified identical to the version it
+receives — see #1009.
+
+### Security — `FileAttachmentSaveChangesGuard.BuildMap` now rejects a FileAttachment-principal FK whose principal key is not `FileAttachment.ID` (#985, cross-vendor review of #824 Part 2)
+
+**Full defect analysis (the concrete false-allow/false-reject reproductions), the EF Core API/
+invariant verification, RED-before-fix messages, and the mutation-gate evidence are in
+`docs/production-readiness.md`'s new "#985" row — this entry does not repeat or exceed those
+claims.**
+
+A cross-vendor review of #824 Part 2 found that `BuildMap` recognised a FileAttachment-principal FK
+purely by relationship SHAPE (principal is `FileAttachment` or derived) and discarded
+`fk.PrincipalKey` entirely, so every Guid-typed candidate was resolved through
+`DCExtension.ResolveFileAttachmentIds`/`-Async`'s hardcoded `x.ID` query regardless of which key the
+relationship actually targets. For a downstream model configured via
+`HasForeignKey(...).HasPrincipalKey(x => x.SomeGuidAlternateKey)` this produced both a **false
+allow** (an attacker whose own row's `ID` happens to equal the victim's alternate-key value is
+waved through by the `x.ID` query) and a **false reject** (a legitimate alternate-key value is
+never found by `ID`, so a correct write throws). `BuildMap` now requires the relationship's
+`PrincipalKey` to be exactly the single `Guid` `TopBasePoco.ID` primary key — not merely
+`IsPrimaryKey()`, since a downstream context can re-declare `FileAttachment`'s own primary key —
+before adding a Guid-typed candidate to the map. A non-canonical principal key with at least one
+Guid-typed FK property (a Guid alternate key, single or composite — EF Core's own FK/principal-key
+property-count parity means a composite FK can never target the single-column `ID` PK, so this
+needs no separate composite branch) now throws a `NotSupportedException` — deliberately not
+`UnresolvableFileAttachmentReferenceException`, which means "a posted id failed tenant-scoped
+resolution" and would make a configuration mistake look like a detected attack — the first time the
+model is used, deterministically, at `BuildMap`/`GetOrBuildMap` time (`_fkMapCache.GetOrAdd` does
+not cache a throwing factory, so every `SaveChanges` on that model rethrows). The pre-existing
+Finding 7 path (non-Guid alternate key → `LogNonGuidAttachmentFk` + exclude from map) is untouched,
+byte-for-byte — the new check runs strictly before that loop and only ever throws for the one shape
+the loop cannot already handle safely.
+
+**No in-tree model is affected — but for a downstream consumer this is a BREAKING change, and the
+earlier wording ("not a behaviour change to any supported configuration") is retracted.** No
+`FileAttachment`-derived type or relationship shipped in this repository, or exercised by any in-tree
+test, configures `HasPrincipalKey` against anything but the implicit `ID` primary key; the positive
+control confirms the canonical shape's own map entry and behaviour are unchanged. That half is
+verified and stands.
+
+The retracted half claimed too much. `HasPrincipalKey` is a legal EF Core API, and nothing in this
+framework ever marked it unsupported — no Roslyn analyzer, no `.editorconfig` rule, no runtime
+validation, and no documented contract. This guard's own class doc comment called the alternate-key
+shape "the one legal EF Core shape" before this change. So a downstream model using it was a
+supported configuration by any reasonable reading, and after upgrading it goes from **writes
+succeeding** to **every `SaveChanges` on that whole context failing** — including saves that touch no
+`FileAttachment` at all, because `BuildMap` walks the entire model and `ConcurrentDictionary.GetOrAdd`
+never caches a throwing factory. That is a behaviour change, and by this project's own rules a
+breaking one.
+
+**Migration for an affected downstream**, in order of preference: (1) add and backfill a `Guid` FK
+pointing at `FileAttachment.ID`, keeping the business alternate key as an ordinary unique column;
+(2) if the alternate key must stay, bring the model upstream as its own issue so a typed,
+tenant-scoped resolver can be registered for that relationship. `FileAttachmentSaveChangesGuard.Enabled
+= false` is **not** offered as a migration step: it is process-wide, and it re-enables the exact
+Guid-alternate-key false-allow this check exists to close, for every entity in the application. It
+remains only as an emergency switch.
+
+Tests (TDD — RED captured against the unfixed code before implementing):
+`test/WalkingTec.Mvvm.Core.Test/VM/FileAttachmentSaveChangesGuardPrincipalKeyRejectionTests985.cs`,
+5 new — a Guid-alternate-key FK throws at first use; a composite key with a Guid component throws
+(proving "composite comes free", no dedicated branch needed); a non-Guid alternate key still warns
+and skips (Finding 7 regression pin, reusing the existing fixture); the in-tree canonical
+`FileAttachment.ID`-keyed shape's positive control (map unchanged, normal saves still work); and a
+dedicated false-allow reproduction (attacker's own row `ID` deliberately equal to the victim's
+alternate-key value) used as the mutation gate's own red test. `test/WalkingTec.Mvvm.Core.Test`
+5041 → 5046 passed, 0 failed. One pre-existing, unrelated `NETSDK1082` browser-wasm build error
+confirmed present on the unmodified base commit too, not a regression. New mutant
+`fileattachmentguard985-principal-key-check-neutralize` (neutralizes the new check,
+compile-preserving `&& false`), `VERDICT: KILLED` / `GATE: PASS` on two independent `run_mutant.py`
+runs; its red test is the concrete false-allow reproduction (SaveChanges succeeds silently under the
+mutant instead of throwing), and its green test (the positive control above) is provably decoupled
+from the mutated line — `IsCanonicalFileAttachmentPrincipalKey` short-circuits the `&&` before the
+mutated term is ever evaluated for that model's own (canonical) FK.
+
+### Improved — `FileAttachmentSaveChangesGuard`: log the #985 principal-key rejection at its throw site; correct the opt-out message, the #985 "framework framing" paragraph, and six stale doc anchors (#1000 Part 1, stacked on #985/#991)
+
+**Observability and documentation only — the set of writes this guard accepts or rejects is
+byte-for-byte unchanged. Full defect analysis, the corrected message text, and the anchor-by-anchor
+verification table are in `docs/production-readiness.md`'s new "#1000 Part 1" row — this entry does
+not repeat or exceed those claims.** Issue #1000 part (2), a design question about the fail-closed/
+fail-open asymmetry between Guid-typed and non-Guid-typed FKs, is under cross-vendor review and is
+**not** part of this change.
+
+`BuildPrincipalKeyRejectionException` (`FileAttachmentSaveChangesGuard.cs`, added by #985) and its
+throw site shipped with no log at all — the same Finding 3 (#824) gap this class's other three
+decision points (`LogRejection`, `LogResolutionFailure`, `LogNonGuidAttachmentFk`) already closed,
+just never applied to this fourth one. Because `ConcurrentDictionary.GetOrAdd` never caches a
+throwing factory, every `SaveChanges` against a misconfigured model rethrows — so a sustained
+misconfiguration or a repeated probe against the same field previously left nothing for an operator
+or a security-monitoring pipeline to find, and none of the seven downstream call sites' own
+exception handling (two bare `catch` blocks, four `SetExceptionMessage(e, null)` discards, one
+`catch` that collapses to `Sys.EditFailed` despite this same file's own comment arguing against
+exactly that collapse for the sibling `UnresolvableFileAttachmentReferenceException`) can substitute
+for a log at the decision point itself. Fixed the same way this class already established: a new
+throttled `LogWarning` (`_loggedPrincipalKeyRejections`, `LogPrincipalKeyRejection`), same logger
+name, same level, same once-per-(entity type, FK propert(y/ies))-per-process discipline, called
+immediately before the throw — deleting it cannot affect whether the throw fires.
+
+The exception's own message previously said the operator could opt out "for this context"; `Enabled`
+is a single process-wide `static` switch, not scoped to any one context, and turning it off
+specifically re-enables the Guid-alternate-key false allow this check exists to close, not merely
+"what the class doc says." Message corrected to state both facts plainly and to remain actionable in
+a stack trace; the existing test's substring assertion (`"FileAttachmentSaveChangesGuard.Enabled"`)
+still passes unchanged.
+
+`docs/production-readiness.md`'s #985 row asserted the tests prove this rethrows on every subsequent
+`SaveChanges`, but no test had actually called `SaveChanges` a second time. Added a second
+`Assert.ThrowsException<NotSupportedException>` on the same `dc` instance, immediately after the
+first, to `FileAttachmentSaveChangesGuardPrincipalKeyRejectionTests985.cs` — proving the claim rather
+than continuing to merely assert it. Also corrected six line-number anchors in that same doc section,
+all wrong since the #985 commit that introduced them (not later drift); two previously pointed at
+unrelated text elsewhere in the file (a log message string; a comment about a different code path)
+that happened to read plausibly in context.
+
+That same doc section's "framework framing" paragraph said this hardening is "not a behaviour change
+to any supported configuration." Verified against the tree, not assumed: nothing in this repository —
+not this class's own #824-era doc comment (which calls `HasPrincipalKey` "the one legal EF Core
+shape" for the non-canonical case), not `.editorconfig` (no analyzer exists), not the pre-#985
+CHANGELOG (which called it "non-standard... nothing in this repository uses today," never
+"unsupported") — ever declared `HasPrincipalKey` against a `FileAttachment` principal unsupported.
+It is a legal EF Core API; WTM ships as a NuGet package to downstream consumers who write their own
+models. A downstream context configured that way previously had `SaveChanges` succeed (subject to
+the #985 false-allow/false-reject this change's base branch fixes); after upgrading, every
+`SaveChanges` on that context now throws `NotSupportedException`. That is a breaking change for such
+a consumer, not a narrowing of an already-unsupported shape. Corrected the paragraph to keep the
+verified, valuable claim (no in-tree model is affected — the positive-control test proves it) while
+stating the downstream consequence plainly instead of implying no supported configuration is
+affected. No behaviour, guard, or migration tooling changed — documentation only.
+
+**Resolved, in PR #991 rather than here**: the #985 entry below in this same CHANGELOG carried the
+identical phrase ("not a behaviour change to any supported configuration"). This branch flagged it
+rather than editing it, because that entry belongs to PR #991. It has since been retracted there
+(commit `cf78cd15e`), reframed as BREAKING for downstream, with a migration path that no longer
+offers `Enabled = false` as a step. Both documents now say the same, honest thing — which matters,
+because "the CHANGELOG may not claim more than production-readiness" is a *relative* test and passes
+vacuously when both carry the same over-claim.
+
+No mutation-gate entry added: this class's other three log helpers have none either, and deleting the
+new log call leaves the throw — and therefore every accept/reject decision this guard makes —
+completely unaffected; only the one new test that directly asserts on the log's own content would go
+red.
+
+Tests: `test/WalkingTec.Mvvm.Core.Test` 5046 → 5047 passed, 0 failed (one new test method; the
+rethrow assertion was added to an existing test method, not counted as new).
+`python3 scripts/check-mutant-entries-parse.py`: 75 entries, unchanged, all still parse.
+
+**Branch note (historical):** this change was authored stacked on
+`security/985-principal-key-rejection` (#991), whose code it edits. Both have since merged —
+#991 as `d79de81c2`, this as `33d08ffed`, in that order.
+
+---
+
+### Fixed — `DistributedLookupCacheService.RefreshAsync` writes unregistered types to the cache, the third instance of the #804/#943/#944 family (#975)
+
+**Full defect analysis, the class × method × has-check survey and the command that produced it, the RED-before-fix message, the negative control, and the mutation-gate verdict are in `docs/production-readiness.md` § "DistributedLookupCacheService.RefreshAsync 缺 registry 檢查——#944 留下的第三個實例（#975）" — this entry does not repeat or exceed those claims.**
+
+`DistributedLookupCacheService.RefreshAsync<T>` had the same structural gap #944 closed in the sibling `LookupCacheService.RefreshAsync`: its own `GetAll`/`GetAllAsync` both bypass the cache entirely for an unregistered (non-`[CacheLookup]`) type before touching it, but `RefreshAsync` had no equivalent check and proceeded straight to `Invalidate`/`LoadFromDbAsync`/`SetDistributedAsync` for any `T`, registered or not. Confirmed as a real, separate defect rather than assumed from #944's title: this class's `SetDistributedAsync` → `BuildCacheEntryOptions` falls back to a **bounded 30-minute TTL** for an unregistered type, not the immortal `IMemoryCache` entry #944 produced — the exact reason this instance was deliberately left out of scope when #944 shipped (see that entry's own note, now updated to point here instead of going stale). Fixed the same way #944 was: the registry-check bypass is now the first statement of the method, before any locking, so an unregistered type's `RefreshAsync` call is a no-op instead of a cache write.
+
+Re-derived whole-tree before closing, per this issue's own "confirm there is no fourth" requirement: both `ILookupCacheService` implementations (`LookupCacheService`, `DistributedLookupCacheService`) now have the registry-check bypass on all three write-path generic methods (`GetAll`/`GetAllAsync`/`RefreshAsync`) — no fourth instance found. `Invalidate<T>`/`InvalidateType` are delete/sentinel-only paths, not cache-write paths, so they are outside this defect family. Survey command and what it does not prove are in production-readiness.md.
+
+Tests (RED captured against the unfixed code before implementing, not simulated after the fact): `test/WalkingTec.Mvvm.Core.Test/Cache/DistributedLookupCacheRefreshAsyncRegistryCheckTests975.cs`, with a dedicated negative control (a registered type still caches normally via `RefreshAsync`, confirmed green both before and after). One new mutant (`test/mutants/entries/lookupcache975-distributed-refreshasync-registry-guard-neutralize.json`), `VERDICT: KILLED` / `GATE: PASS` on two independent runs after the assertion pattern was filled in from a real Release-build run — plus the initial dry run against the placeholder pattern, which reported `UNEXPECTED_RED`, confirming the harness genuinely evaluated the mutant rather than short-circuiting. `kind: security` chosen: a forced classification (`run_mutant.py`'s `VALID_KINDS` has no non-security option for a real production mutant, same reasoning already documented for #943/#944's own entries and `etl970-cancellation-classification-guard-neutralize.json`), not a claim this is a traditional auth/injection vulnerability; pushes the security-kind entry count from 66 to 67 (total entries 72 → 73, verified by direct parsing of every entry's `kind` field, not assumed). Full suite: `test/WalkingTec.Mvvm.Core.Test` — 5033 passed / 1 failed (the new RED test; total 5034) immediately before the fix, 5034 passed / 0 failed immediately after (same total; only the new RED test's own outcome changed). One pre-existing, unrelated `NETSDK1082` browser-wasm build error confirmed present on the unmodified base commit too, not a regression.
+
+**Not verified this session**: this fix has not run on real Gitea Actions CI — this session's hard constraints forbid any Gitea/GitHub API call and forbid opening a PR, so CI verification is deferred to whenever this branch is actually opened as a PR.
+
+### Fixed — mutation-gate.yml: `mutants`/`meta-selftest` checkouts were shallow, silently defeating #968's per-entry selection on the first PR that actually exercised it (#1001)
+
+CI-only; no `WalkingTec.Mvvm.*` package code changed, and this does **not** change #968's per-PR coverage trade-off (still reduced by design, on purpose) — what's fixed is that the reduction never actually took effect for a real partial-selection PR and broke the required check instead. Full derivation, the shallow-vs-full-history local reproduction, and the honest scope of what was and wasn't exercised are in `docs/production-readiness.md` § "mutation-gate.yml 的 `mutants`／`meta-selftest` checkout 是 shallow clone，讓 #968 的 per-entry selection 在第一個真正命中 partial-selection 的 PR 上就整個失效（#1001）" — this entry does not claim more than that section verifies.
+
+**Root cause**: the `changes` job's checkout (added when #968 introduced per-entry selection) carries `fetch-depth: 0`; `mutants`' and `meta-selftest`'s checkouts never did, so `actions/checkout@v5`'s default shallow clone left them without the PR's base commit on disk. Both `changes` and `mutants` independently call `python3 test/mutants/gate_lib.py select --kind security` with identical `BASE_SHA`/`HEAD_SHA` env vars — but `select` resolves those SHAs by shelling out to `git diff --name-only base_sha head_sha` (`gate_lib.py`'s `resolve_changed_files()`), and on a shallow clone that `git diff` fails (`base_sha` unreachable). `resolve_changed_files()` catches the error and returns `None`; `select`'s pre-existing fail-open rule (issue #855, preserved through #968) then selects the **entire** `kind='security'` set — not because the diff was empty, but because it could not be computed at all. Identical env vars, divergent repository state: "the SAME event/SHA inputs" (this file's own pre-#1001 comment) was necessary but not sufficient.
+
+**Why this was invisible until now**: every PR before #998 either touched `test/mutants/**` itself (an `ALWAYS_RELEVANT_PREFIXES` entry — both jobs select everything regardless of checkout depth, so `changes`' correct full-set answer and `mutants`' fail-open full-set answer happened to match) or was docs-only (the job is skipped entirely). PR #998 (`aa4631179`) is the first PR to land in the **partial-selection** case — the exact case #968's optimization exists to serve: `changes` (full history) correctly computed 30 selected (29 from `test/WalkingTec.Mvvm.Core.Test.csproj` being the `test_project` of 29 entries, that PR having edited it to add a test-only package, + 1 from the `src/` file it touched) plus 6 selftest = 36; `mutants` (shallow, fail-open) executed all 68 security entries; `gate`'s selected-vs-executed reconciliation failed on 36 != 74.
+
+**Fix, two parts**: (1) `fetch-depth: 0` added to `mutants`' checkout — this is the actual bug fix. The same was added to `meta-selftest`'s checkout for consistency, but that job was **not** actually affected: `kind='selftest'` entries are never filtered by relevance (selection is unconditional for that kind), so its own selected/executed count (6/6) always matched regardless of checkout depth — this half is defensive, not a fix for an observed defect. (2) `gate`'s selected-vs-executed reconciliation, previously a plain `!=`, is now asymmetric: `executed < selected` (an entry that should have run did not) stays a hard failure — the dangerous direction and the original point of the check; `executed > selected` (more ran than believed required) now passes with a printed `::warning::` naming both totals, rather than failing — the safe direction, and one `select`'s fail-open rule can still legitimately produce even with the fetch-depth fix in place, for reasons unrelated to any real defect (a transient git error, an event payload this workflow does not fully model). `test/mutants/gate_lib.py`'s `reconcile()` reference implementation was updated to the identical asymmetric rule so the file's existing "two implementations, deliberately, because they cannot meaningfully diverge" claim stays true.
+
+**Local proof the fix actually reduces what runs (not just that the required check stops failing)**: a one-file diff was constructed against `src/WalkingTec.Mvvm.Core/WTMContext.CallApi.cs` (target_file of exactly one security entry) between two real commits. `gate_lib.py select` against a full-history clone of that diff selected **1 of 68**; the identical command against a `git clone --depth 1` of the same two commits (base commit genuinely absent, reproducing the pre-fix `mutants`/`meta-selftest` checkout) selected **68 of 68** via the fail-open path (`Could not compute a path diff ... SELECT mode=fallback-full`). Since `actions/checkout@v5`'s `fetch-depth: 0` is exactly the full-history condition reproduced above, the fixed workflow's `mutants`/`meta-selftest` jobs get the 1-of-68 answer, not the 68-of-68 one.
+
+Tests: `python3 test/mutants/_selftest/selftest_gate_job_reconciliation.py` (extracts the `gate` job's real script from the live YAML; new `check_surplus_tolerated_with_warning` case added alongside the renamed shortfall/match/skip/failure cases, 7/7 pass) and `python3 test/mutants/_selftest/selftest_select_relevant_entries.py` (its `check_reconcile()` now asserts all three of match/shortfall/surplus against `gate_lib.reconcile()`, 8/8 pass). `python3 scripts/check-mutant-entries-parse.py`, `python3 scripts/audit-workflow-timeouts.py` (133/133 real-work steps still carry `timeout-minutes`, unchanged — this PR only adds a `with:` block to two existing checkout steps (`mutants`, `meta-selftest`) and comment lines, no new step), and `python3 -c "import yaml,sys; yaml.safe_load(open('.github/workflows/mutation-gate.yml'))"` (PyYAML confirmed available in this session; `audit-workflow-timeouts.py`'s own dependency-free parser was also run as a second, non-PyYAML structural check) all pass. **Not exercised on real Gitea CI, same constraint as #968/#973 above**: this session's hard constraints forbid any Gitea/GitHub API call and forbid opening a PR — the fix is verified by local YAML parsing, the guard scripts above, and direct `gate_lib.py select` invocation against a genuinely shallow local clone reproducing the pre-fix checkout, not by a live CI run reproducing #998's actual job-scheduling failure end-to-end.
+
+### Fixed — a mutation-gate positive control coupled to the mutated line proved nothing, and passed silently (#986)
+
+`test/mutants/entries/dcext824-derived-principal-neutralize.json`'s `green_test` (the positive control) called `IsFileAttachmentForeignKeyProperty` against a fixture whose only foreign key had a TPH-derived `FileAttachment` principal — the exact relationship shape the mutant neutralizes recognition of. Production's per-FK loop gates on `IsFileAttachmentPrincipal` *before* the property-name comparison the test meant to exercise; under the mutant that gate now rejects the FK earlier, so the test's `Assert.IsFalse` still passed, but by reaching `false` through a different branch than the unmutated code takes. `run_mutant.py` reported `VERDICT: KILLED`/`GATE: PASS` throughout — the tool has no way to see that the green test's own proof was hollow, because the *red* test still failed correctly. **Full accounting — the control-flow trace proving the coupling, the audit method applied to all 74 entries, and what that audit does not prove — is in `docs/production-readiness.md` § "Mutation-gate 正控組（positive control）與被突變行的耦合（#986）" — this entry does not repeat or exceed those claims.**
+
+- `dcext824-derived-principal-neutralize`'s `green_test` replaced with a new test, `IsFileAttachmentForeignKeyProperty_UnrelatedProperty_NonDerivedPrincipal_ReturnsFalse`: it queries a fixture whose only FK principal is `FileAttachment` itself (not derived), so `IsFileAttachmentPrincipal` returns `true` identically under both the real `IsAssignableFrom` comparison and the mutant's reverted exact-type comparison — the assertion's outcome is provably invariant to this specific mutation, not merely observed to still pass.
+- A second, lower-severity instance of the same defect class found by the same audit: `876-wtmcontrolleractivator-neutralize`'s `green_test` reused one of the same five `WalkingTec.Mvvm.Etl` controllers' role-gate computation the mutant targets (`Wtm?.LoginUserInfo?.Roles?.Select(...) ?? Array.Empty<string>()`) — under the mutant it took the `??` fallback branch (Wtm never populated) rather than genuinely evaluating a non-admin caller's real role list, landing on the same `isAdmin=false` conclusion for a different reason. Both directions deny the caller either way (fail-closed, not the security-relevant fail-open direction #986's namesake defect was), but the control's own claim — "does not affect the still-correct non-admin denial path" — did not hold. Replaced with `MvcAuthHolesTests.Selector_AuthenticatedRequest_Succeeds`, a controller that never reads `Wtm` inside its own `OnActionExecuting` and is authorized entirely through `PrivilegeFilter`/`DataContextFilter` (ordinary filters, unaffected by this mutation) — a genuinely different code path, not a coincidentally-equal outcome.
+- Audited all 74 entries under `test/mutants/entries/` (68 `kind: security` + 6 `kind: selftest`) by the same method: read the patch to identify the exact mutated condition, then trace the green test's call path to it and show either it never reaches that line, or the mutated and unmutated forms are provably equal for that test's specific input (a short-circuit, or an invariant like an exact-type match agreeing under both an equality check and an `IsAssignableFrom` check). Found the two entries above coupled; the remaining 66 `security` entries already decouple correctly — most already state their own decoupling argument in `description`, verified against the actual patch and test source rather than trusted at face value. The 6 `selftest` entries are meta-tests of `run_mutant.py` itself (shared no-op or deliberately-broken patches) and are outside this defect class's scope.
+- The rule this codifies — trace a positive control's reach to the mutated line before registering an entry, and require either "never reached" or "provably invariant for this input," not just an observed `KILLED`/`GATE: PASS` — is recorded in `.claude/rules/testing.md` ("A mutant's positive control must not touch the mutated decision path") and in `run_mutant.py`'s own header, next to the exit-code contract that a `KILLED` verdict is necessary but not sufficient evidence of a valid control.
+
+**Not a `### Security` entry**: no production `src/` code changed. Both `dcext824-derived-principal-neutralize` and `876-wtmcontrolleractivator-neutralize`'s own `red_test`s already correctly detected their mutants throughout — this fixes the strength of the *positive control's* evidence, not a gap in detection.
+
+---
+
+### Fixed — 9 more LayUI TagHelper sites raw-interpolated a `*Func` callback at JS statement-start, an unwrapped-IIFE SyntaxError that killed the whole enclosing `<script>` block for a function-literal value (#999 part (A))
+
+`DataTableTagHelper.cs`'s `DoneFunc`, `TransferTagHelper.cs`'s `ChangeFunc`, `SliderTagHelper.cs`'s
+`ChangeFunc`, and `DateTimeTagHelper.cs`'s `ReadyFunc`/`ChangeFunc`/`DoneFunc` (both the single-field
+and the two-hidden-input `IsRange` path — 6 of the 9 sites) all interpolated the developer-supplied
+callback string directly ahead of its own invocation parens. A function-literal value there
+(`function(v){...}`) produced `function(v){...}(...)` — JS parses a statement starting with the
+`function` keyword as a FunctionDeclaration, which requires a name; an anonymous one is a hard
+SyntaxError that fails the whole enclosing `<script>` block, not just the one callback. Fixed the
+same way #965/PR #998 fixed the first discovered instance
+(`DataTableTagHelper.cs`'s `GridAction.OnClickFunc`, deliberately untouched here to avoid a
+same-line collision with that branch): wrap in parens, `({X})(...)`, forcing expression context.
+**This does not fix every `*Func` unwrapped-IIFE site** — an exhaustive 47-site enumeration (#999)
+found 12 further sites reached through `BaseElementTag.FormatFuncName`, which truncates the
+developer's value at its first `(` and appends `(data)` *before* it reaches any syntactic position
+(`function(v){...}` becomes the string `function(data)`; paren-wrapping that,
+`(function(data));`, is itself a SyntaxError) — those need a different fix and are tracked
+separately on #999 part (B), pending cross-vendor design review. Two sites this same sweep
+confirmed are already safe and were deliberately left unwrapped: `SliderTagHelper.cs`'s
+`OnTipsFunc` (reached only via `return {OnTipsFunc}(...)`, expression position) and
+`DataTableTagHelper.cs`'s `CheckedFunc` (a `table.on(...)` call argument, also expression
+position) — both verified, not assumed, by feeding a function-literal value through the real
+TagHelper and parsing the actual emitted output. **Full site table, the RED-before-fix
+transcripts, the two pre-existing byte-identity tests this necessarily changed, and the mutant
+non-entry reasoning are in `docs/production-readiness.md` § "LayUI TagHelper：9 個「statement 位置
+原樣內插 `*Func` callback」的 unwrapped-IIFE 修復（#999 part (A)）" — this entry does not repeat or
+exceed those claims.**
+
+- Test-only: `Directory.Packages.props`/`WalkingTec.Mvvm.Core.Test.csproj` gain the same
+  `Acornima 1.6.2` test-only `PackageReference` PR #998 already adds, at the same version and in
+  the same place, so the two branches' lines merge as a trivial identical-line conflict rather
+  than a semantic one.
+- New `test/WalkingTec.Mvvm.Core.Test/TagHelpers/RawFuncInterpolationParens999Tests.cs`: renders
+  each real TagHelper, extracts the actual emitted `<script>` block, and parses it with Acornima —
+  9 tests (one per fixed site) proven RED before the fix and GREEN after, plus 2 tests proving the
+  two deliberately-unwrapped sites already parsed correctly with no change.
+
+### Fixed — `DataTableTagHelper` emitted an unwrapped IIFE, breaking the whole toolbar/row-action `<script>` block for any `GridAction.OnClickFunc` set to a function literal (#965)
+
+**Full re-derivation of the affected surface (exact grep commands and raw output), the JS-validity test's mechanism and why it was chosen over shelling out to `node` or hand-parsing, and the complete RED/GREEN transcript are in `docs/production-readiness.md`'s new "DataTableTagHelper 未包裹 IIFE" section — this entry does not repeat or exceed those claims.**
+
+`DataTableTagHelper.cs`'s `AddSubButton` (`src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.cs:1284`) emitted `actionScript = $"{item.OnClickFunc}(ids,ff.GetSelectionData('{Id}'));"` — a raw, unwrapped invocation of whatever string `GridAction.OnClickFunc` holds. `GridActionExtension.Legacy.cs`'s own XML doc documents the intended shape as a bare identifier naming a page-global function, but nothing enforces that: `EtlJobListVM`'s "執行記錄" toolbar action and `ProcessDefinitionListVM`'s two designer actions instead pass a raw anonymous function literal (`function(ids,data){...}`). This is not merely "an IIFE missing its wrapping parens" — a statement cannot open with the bare `function` keyword at all (it parses as an anonymous `FunctionDeclaration`, which requires a name, so it is a syntax error on its own, independent of what follows). The `SyntaxError` kills parsing of the WHOLE enclosing `<script>` block, not just that one action — `BuildTableOptionsScript` writes the toolbar-event dispatcher and the real `table.render()` call into the SAME `<script>` tag — so `/_EtlJob/Index`'s entire grid never renders via any real navigation route.
+
+**Fix** (one line): `actionScript = $"({item.OnClickFunc})(ids,ff.GetSelectionData('{Id}'));"`. Wrapping the whole expression in parens turns the function-literal case into a legal `(function(...){...})(...)` IIFE and is a no-op for every other shape already in use (bare identifier, dotted member, call expression) — JavaScript's grouping operator does not strip a Reference's `this` binding, so `(obj.method)(args)` still calls with `this === obj`, same as `obj.method(args)`.
+
+**Re-derived the affected surface across the whole tree** (`src/`, `demo/`, and the `GeneratorFiles/` CodeGen templates — not scoped from the issue text). Exactly one emission site (`DataTableTagHelper.cs:1284`); the opt-in island-render path (`DataTableTagHelper.Island.cs`, default off via `WtmUIOptions.UseSelectIslandRender`) cannot reach this shape by construction — `DetermineGridIslandDecision`/`FindNonIdentifierOnClickFunc` force any non-identifier `OnClickFunc` onto the legacy path before island rendering is even considered, and legacy is also the ONLY path taken by default regardless. No `GeneratorFiles/` template emits `OnClickFunc` or any bare `function(` literal — scaffolded downstream code does not carry this shape. Two real consumers: `EtlJobListVM`'s "執行記錄" action (reachable today via `/_EtlJob/Index`) and `ProcessDefinitionListVM`'s two designer actions. The latter are defined in source and exercised only by `NotifierTests.cs`; `docs/workflow.md` §8 shows a `WfProcessDefinitionController` as a documentation example of how a downstream area controller could wire this VM up, but no such controller exists anywhere in this tree (`find . -iname "*WfProcessDefinition*"` → nothing) — consistent with this repo's own earlier dead-link history for the same VM (`CHANGELOG.md`'s existing "Dead-link repair" entry: these two GridActions previously pointed at a controller "verified nonexistent anywhere"). Fixed anyway, since the same generator-level fix covers it for free.
+
+**Correction to an earlier draft of this entry, caught on re-review**: a structurally-similar direct-concatenation pattern also exists on sibling `Func` properties elsewhere in this codebase (`SliderTagHelper`'s `ChangeFunc`, `DateTimeTagHelper`'s `ReadyFunc`/`ChangeFunc`/`DoneFunc`, `TransferTagHelper`'s own legacy `ChangeFunc` emission, `TextBoxTagHelper`'s legacy `onchange`/`oninput` attribute construction, `DataTableTagHelper`'s own `DoneFunc`). These are **not** protected by the `xxxIsIdentifier ? xxxFuncName : null` guard found in `ComboBoxTagHelper.cs`/`TransferTagHelper.cs`/`TreeTagHelper.cs`/`TextBoxTagHelper.cs` — that guard gates only the value written into the opt-in island-render JSON descriptor (same `UseSelectIslandRender` flag, default off); it never runs for the always-active legacy inline-script path these same properties also feed, unguarded, exactly like `GridAction.OnClickFunc`. Every real (non-test) `.cshtml` usage of these properties in this tree today (`grep -rnoE '(change|done|ready|checked|ontips)-func="[^"]*"' demo/ src/`) is a bare identifier or a simple call expression — none is a function literal — so nothing currently triggers this on the sibling sites; that is an empirical fact about today's callers, not a structural guarantee. Flagging this as a latent, unfixed risk class rather than claiming a protection that does not exist — out of scope for this fix, which is #965's exact reported shape.
+
+**Test — parses the real emitted script, not a string comparison**, per the issue's own explicit ask: `DataTableTagHelperUnwrappedIife965Tests.cs` renders the real, unmodified `DataTableTagHelper.Process()` output for a `GridAction` shaped exactly like `EtlJobListVM`'s, extracts the actual bare `<script>` block (never the `type="text/html"` LayUI template blocks, which are HTML, not JS), and feeds it to **Acornima** — a pure-.NET, Test262-complete ECMAScript parser, asserting it parses without throwing `Acornima.ParseErrorException` (the base type the concrete `SyntaxErrorException` derives from; the test catches the base type). This repo's own `DataTableByteIdentityTests` exercises this exact code path (`AddSubButton`'s `actionScript` line) with a bare-identifier `OnClickFunc` fixture (`"myGridOnClickHandler"`) and stayed green throughout the defect's lifetime — precisely because its own fixture never triggers the bug, byte-comparison would have stayed equally green had it: a golden string is captured from whatever the code currently emits, bugs included, so pinning bytes proves nothing about JavaScript validity. That is the blind spot this new test closes.
+
+**New NuGet dependency, flagged prominently**: `Acornima 1.6.2` (`Directory.Packages.props`, BSD-3-Clause), referenced ONLY by `test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj` — no shipping `WalkingTec.Mvvm.*` package references it. Chosen over shelling out to `node`: `.github/workflows/ci-build.yml`'s `build-and-test` job (the only job running `dotnet test`) has `actions/setup-dotnet` but no `actions/setup-node` — that only exists in the separate `js-test` job that runs this repo's Jest suite — so a `node`-on-PATH assumption would be sound in a local dev shell and silently break on the self-hosted Gitea runner that actually gates merges.
+
+**RED-before-fix, captured verbatim** (full transcript in production-readiness.md): with the fix reverted, the new test fails with `Assert.Fail failed. ... Parser error: Unexpected token '(' (10:9)`, printing the literal unwrapped `function(ids,data){...}(ids,ff.GetSelectionData('wtTable_965'));` from the emitted script. Restoring the fix: `Passed ... [142 ms]`.
+
+**e2e — TC-29's KNOWN-GAP removed** (`test/e2e/wtm_e2e_tests.py`). TC-29 (from the #898/#905 entry above) is where this defect was originally found and deliberately left unfixed as out-of-scope; its docstring named `DataTableTagHelper.cs:1284` as root cause and asserted only what the bug did not affect. Converted to positive assertions: `/_EtlJob/Index`'s grid (`.layui-table-body`) and its `Status`/`SourceDbType` xmSelect filter fields, using the same `open_grid_via_direct_tab()` helper `/_EtlRunLog/Index` already used.
+
+**Correction, found by CI on the first push and fixed in a review round**: this entry originally said the e2e change was "not exercised against a live browser this session." CI ran it and `e2e (baseline)`/`e2e (island)` both failed identically on TC-29 (`Total: 36 | PASS: 34 | FAIL: 1`) — the C# fix and the new unit test were unaffected, only this test's own assertions. The failure data (`EtlJob .layui-table-body: 3` — the grid DID render; `No browser console errors`) directly contradicted the assertion's own error message ("page route itself has a problem"), which was a stale diagnosis carried over from when the page was genuinely broken. Root-caused by launching the real demo (`dotnet run`) and running Playwright against it directly: `open_grid_via_direct_tab()`'s wait condition (`Object.keys(window.layui.table.cache).length > 0` — "at least one entry exists") is correct only for the *first* call in a session; `table.cache` is never cleared, and TC-29 calls this helper twice (RunLog, then EtlJob) — on the second call RunLog's own cache entry already satisfies the condition, so the helper returns before EtlJob's own grid has actually loaded (~0.1–0.2s later, per direct polling measurement), a gap wide enough to lose the race on a cold demo process (JIT/Razor not yet warmed) but not on a warm one — reproduced locally on a fresh cold start, matching CI's numbers exactly. Fixed the helper itself: wait for a key that was NOT present before this call, not merely "any key" — a no-op for the first call, correct for the second. Verified locally, not simulated: 2 independent cold restarts (kill process, delete `demo.db`, relaunch) both pass on the very first run, plus 3 consecutive warm reruns, plus the full 36-TC suite (`Total: 36 | PASS: 35 | FAIL: 0 | SKIP: 1` — the only change from CI's failing run is TC-29 flipping to PASS). Also directly tested the reversed navigation order (EtlJob before RunLog) with the fixed helper — passes reliably too, which is the evidence behind the docstring correction below.
+
+**Execution-order rationale corrected**: the docstring claimed RunLog must run before EtlJob to avoid the (pre-fix) broken `<script>` poisoning the session. That reason is now moot (the syntax error is fixed), and this same review found that ordering had also been *accidentally* masking the `table.cache` race above — RunLog, always called first, could never hit the "second call" condition; EtlJob, always second, always could. With the helper itself fixed and the reversed order empirically verified to pass, the order is no longer load-bearing for any known reason; the code keeps it only because it is the already-validated configuration, not because changing it would break anything now.
+
+**Mutant: considered, not added.** This is a `core`/correctness defect, not a security one — no unauthorized access, injection, or tenant-isolation dimension. `run_mutant.py`'s `VALID_KINDS` (`security`/`selftest`) has no honest classification for it; forcing one in as `security` would repeat the exact `kind`-classification drift the #970 entry (above) already had to accept and #968 (above) just spent a whole PR containing the fallout of. The manual RED/GREEN proof above already provides the same evidence a mutant run would.
+
+Tests: `test/WalkingTec.Mvvm.Core.Test` (unfiltered) 5041 → 5042 passed, 0 failed (1 new test). Two pre-existing golden-string assertions updated to match the new (still syntactically legal) emission shape for their own fixtures (`DataTableByteIdentityTests.Fixtures.cs`, `RenderGridToolbar470SliceO2Tests.cs`) — both fixtures' `OnClickFunc` values were already valid JS before this fix (a bare identifier and a call expression, respectively), so this is a byte-shape update, not a behaviour fix for those two. Full `core.slnf` suite (`dotnet test core.slnf -m:1 --no-build -c Release --filter "TestCategory!=Integration"` — same `-m:1`/`--filter` test-selection flags `ci-build.yml`'s `build-and-test` job uses; its `--logger`/`--collect`/`--settings`/`--results-directory` flags are TRX/coverage-artifact options that do not affect which tests run or their pass/fail outcome, so were omitted): all 7 projects `Test Run Successful`, 0 failed, only pre-existing skips (23 WorkFlow.Test, 1 Api.Test mutation-gate-baseline selftest). e2e: full 36-TC suite run locally against a real `dotnet run` demo instance + real Playwright/chromium, `Total: 36 | PASS: 35 | FAIL: 0 | ERROR: 0 | SKIP: 1` (see the review-round correction above for the TC-29 diagnosis this replaced). **Not verified this session**: real Gitea Actions CI (hard constraint forbids any Gitea/GitHub API call and opening a PR) — local verification used this session's own demo process and Playwright install, not the CI runner's.
+
 ## [10.21.0] - 2026-07-31
 
 ### Security — `EmptyContext.SaveChanges`/`SaveChangesAsync` guard against forged `FileAttachment` foreign keys, closing the five remaining #824 write-path sinks + a cross-vendor-review fix to the Part 1 (#849) predicate itself (#824 Part 2)
@@ -187,169 +455,6 @@ Tests (TDD — RED captured against the unfixed code before implementing, not si
 
 **Not verified this session**: neither fix has run on real Gitea Actions CI — this session's hard constraints forbid any Gitea/GitHub API call and forbid opening a PR, so CI verification is deferred to whenever this branch is actually opened as a PR.
 
-### Security — `FileAttachmentSaveChangesGuard.BuildMap` now rejects a FileAttachment-principal FK whose principal key is not `FileAttachment.ID` (#985, cross-vendor review of #824 Part 2)
-
-**Full defect analysis (the concrete false-allow/false-reject reproductions), the EF Core API/
-invariant verification, RED-before-fix messages, and the mutation-gate evidence are in
-`docs/production-readiness.md`'s new "#985" row — this entry does not repeat or exceed those
-claims.**
-
-A cross-vendor review of #824 Part 2 found that `BuildMap` recognised a FileAttachment-principal FK
-purely by relationship SHAPE (principal is `FileAttachment` or derived) and discarded
-`fk.PrincipalKey` entirely, so every Guid-typed candidate was resolved through
-`DCExtension.ResolveFileAttachmentIds`/`-Async`'s hardcoded `x.ID` query regardless of which key the
-relationship actually targets. For a downstream model configured via
-`HasForeignKey(...).HasPrincipalKey(x => x.SomeGuidAlternateKey)` this produced both a **false
-allow** (an attacker whose own row's `ID` happens to equal the victim's alternate-key value is
-waved through by the `x.ID` query) and a **false reject** (a legitimate alternate-key value is
-never found by `ID`, so a correct write throws). `BuildMap` now requires the relationship's
-`PrincipalKey` to be exactly the single `Guid` `TopBasePoco.ID` primary key — not merely
-`IsPrimaryKey()`, since a downstream context can re-declare `FileAttachment`'s own primary key —
-before adding a Guid-typed candidate to the map. A non-canonical principal key with at least one
-Guid-typed FK property (a Guid alternate key, single or composite — EF Core's own FK/principal-key
-property-count parity means a composite FK can never target the single-column `ID` PK, so this
-needs no separate composite branch) now throws a `NotSupportedException` — deliberately not
-`UnresolvableFileAttachmentReferenceException`, which means "a posted id failed tenant-scoped
-resolution" and would make a configuration mistake look like a detected attack — the first time the
-model is used, deterministically, at `BuildMap`/`GetOrBuildMap` time (`_fkMapCache.GetOrAdd` does
-not cache a throwing factory, so every `SaveChanges` on that model rethrows). The pre-existing
-Finding 7 path (non-Guid alternate key → `LogNonGuidAttachmentFk` + exclude from map) is untouched,
-byte-for-byte — the new check runs strictly before that loop and only ever throws for the one shape
-the loop cannot already handle safely.
-
-**No in-tree model is affected — but for a downstream consumer this is a BREAKING change, and the
-earlier wording ("not a behaviour change to any supported configuration") is retracted.** No
-`FileAttachment`-derived type or relationship shipped in this repository, or exercised by any in-tree
-test, configures `HasPrincipalKey` against anything but the implicit `ID` primary key; the positive
-control confirms the canonical shape's own map entry and behaviour are unchanged. That half is
-verified and stands.
-
-The retracted half claimed too much. `HasPrincipalKey` is a legal EF Core API, and nothing in this
-framework ever marked it unsupported — no Roslyn analyzer, no `.editorconfig` rule, no runtime
-validation, and no documented contract. This guard's own class doc comment called the alternate-key
-shape "the one legal EF Core shape" before this change. So a downstream model using it was a
-supported configuration by any reasonable reading, and after upgrading it goes from **writes
-succeeding** to **every `SaveChanges` on that whole context failing** — including saves that touch no
-`FileAttachment` at all, because `BuildMap` walks the entire model and `ConcurrentDictionary.GetOrAdd`
-never caches a throwing factory. That is a behaviour change, and by this project's own rules a
-breaking one.
-
-**Migration for an affected downstream**, in order of preference: (1) add and backfill a `Guid` FK
-pointing at `FileAttachment.ID`, keeping the business alternate key as an ordinary unique column;
-(2) if the alternate key must stay, bring the model upstream as its own issue so a typed,
-tenant-scoped resolver can be registered for that relationship. `FileAttachmentSaveChangesGuard.Enabled
-= false` is **not** offered as a migration step: it is process-wide, and it re-enables the exact
-Guid-alternate-key false-allow this check exists to close, for every entity in the application. It
-remains only as an emergency switch.
-
-Tests (TDD — RED captured against the unfixed code before implementing):
-`test/WalkingTec.Mvvm.Core.Test/VM/FileAttachmentSaveChangesGuardPrincipalKeyRejectionTests985.cs`,
-5 new — a Guid-alternate-key FK throws at first use; a composite key with a Guid component throws
-(proving "composite comes free", no dedicated branch needed); a non-Guid alternate key still warns
-and skips (Finding 7 regression pin, reusing the existing fixture); the in-tree canonical
-`FileAttachment.ID`-keyed shape's positive control (map unchanged, normal saves still work); and a
-dedicated false-allow reproduction (attacker's own row `ID` deliberately equal to the victim's
-alternate-key value) used as the mutation gate's own red test. `test/WalkingTec.Mvvm.Core.Test`
-5041 → 5046 passed, 0 failed. One pre-existing, unrelated `NETSDK1082` browser-wasm build error
-confirmed present on the unmodified base commit too, not a regression. New mutant
-`fileattachmentguard985-principal-key-check-neutralize` (neutralizes the new check,
-compile-preserving `&& false`), `VERDICT: KILLED` / `GATE: PASS` on two independent `run_mutant.py`
-runs; its red test is the concrete false-allow reproduction (SaveChanges succeeds silently under the
-mutant instead of throwing), and its green test (the positive control above) is provably decoupled
-from the mutated line — `IsCanonicalFileAttachmentPrincipalKey` short-circuits the `&&` before the
-mutated term is ever evaluated for that model's own (canonical) FK.
-
-### Improved — `FileAttachmentSaveChangesGuard`: log the #985 principal-key rejection at its throw site; correct the opt-out message, the #985 "framework framing" paragraph, and six stale doc anchors (#1000 Part 1, stacked on #985/#991)
-
-**Observability and documentation only — the set of writes this guard accepts or rejects is
-byte-for-byte unchanged. Full defect analysis, the corrected message text, and the anchor-by-anchor
-verification table are in `docs/production-readiness.md`'s new "#1000 Part 1" row — this entry does
-not repeat or exceed those claims.** Issue #1000 part (2), a design question about the fail-closed/
-fail-open asymmetry between Guid-typed and non-Guid-typed FKs, is under cross-vendor review and is
-**not** part of this change.
-
-`BuildPrincipalKeyRejectionException` (`FileAttachmentSaveChangesGuard.cs`, added by #985) and its
-throw site shipped with no log at all — the same Finding 3 (#824) gap this class's other three
-decision points (`LogRejection`, `LogResolutionFailure`, `LogNonGuidAttachmentFk`) already closed,
-just never applied to this fourth one. Because `ConcurrentDictionary.GetOrAdd` never caches a
-throwing factory, every `SaveChanges` against a misconfigured model rethrows — so a sustained
-misconfiguration or a repeated probe against the same field previously left nothing for an operator
-or a security-monitoring pipeline to find, and none of the seven downstream call sites' own
-exception handling (two bare `catch` blocks, four `SetExceptionMessage(e, null)` discards, one
-`catch` that collapses to `Sys.EditFailed` despite this same file's own comment arguing against
-exactly that collapse for the sibling `UnresolvableFileAttachmentReferenceException`) can substitute
-for a log at the decision point itself. Fixed the same way this class already established: a new
-throttled `LogWarning` (`_loggedPrincipalKeyRejections`, `LogPrincipalKeyRejection`), same logger
-name, same level, same once-per-(entity type, FK propert(y/ies))-per-process discipline, called
-immediately before the throw — deleting it cannot affect whether the throw fires.
-
-The exception's own message previously said the operator could opt out "for this context"; `Enabled`
-is a single process-wide `static` switch, not scoped to any one context, and turning it off
-specifically re-enables the Guid-alternate-key false allow this check exists to close, not merely
-"what the class doc says." Message corrected to state both facts plainly and to remain actionable in
-a stack trace; the existing test's substring assertion (`"FileAttachmentSaveChangesGuard.Enabled"`)
-still passes unchanged.
-
-`docs/production-readiness.md`'s #985 row asserted the tests prove this rethrows on every subsequent
-`SaveChanges`, but no test had actually called `SaveChanges` a second time. Added a second
-`Assert.ThrowsException<NotSupportedException>` on the same `dc` instance, immediately after the
-first, to `FileAttachmentSaveChangesGuardPrincipalKeyRejectionTests985.cs` — proving the claim rather
-than continuing to merely assert it. Also corrected six line-number anchors in that same doc section,
-all wrong since the #985 commit that introduced them (not later drift); two previously pointed at
-unrelated text elsewhere in the file (a log message string; a comment about a different code path)
-that happened to read plausibly in context.
-
-That same doc section's "framework framing" paragraph said this hardening is "not a behaviour change
-to any supported configuration." Verified against the tree, not assumed: nothing in this repository —
-not this class's own #824-era doc comment (which calls `HasPrincipalKey` "the one legal EF Core
-shape" for the non-canonical case), not `.editorconfig` (no analyzer exists), not the pre-#985
-CHANGELOG (which called it "non-standard... nothing in this repository uses today," never
-"unsupported") — ever declared `HasPrincipalKey` against a `FileAttachment` principal unsupported.
-It is a legal EF Core API; WTM ships as a NuGet package to downstream consumers who write their own
-models. A downstream context configured that way previously had `SaveChanges` succeed (subject to
-the #985 false-allow/false-reject this change's base branch fixes); after upgrading, every
-`SaveChanges` on that context now throws `NotSupportedException`. That is a breaking change for such
-a consumer, not a narrowing of an already-unsupported shape. Corrected the paragraph to keep the
-verified, valuable claim (no in-tree model is affected — the positive-control test proves it) while
-stating the downstream consequence plainly instead of implying no supported configuration is
-affected. No behaviour, guard, or migration tooling changed — documentation only.
-
-**Resolved, in PR #991 rather than here**: the #985 entry below in this same CHANGELOG carried the
-identical phrase ("not a behaviour change to any supported configuration"). This branch flagged it
-rather than editing it, because that entry belongs to PR #991. It has since been retracted there
-(commit `cf78cd15e`), reframed as BREAKING for downstream, with a migration path that no longer
-offers `Enabled = false` as a step. Both documents now say the same, honest thing — which matters,
-because "the CHANGELOG may not claim more than production-readiness" is a *relative* test and passes
-vacuously when both carry the same over-claim.
-
-No mutation-gate entry added: this class's other three log helpers have none either, and deleting the
-new log call leaves the throw — and therefore every accept/reject decision this guard makes —
-completely unaffected; only the one new test that directly asserts on the log's own content would go
-red.
-
-Tests: `test/WalkingTec.Mvvm.Core.Test` 5046 → 5047 passed, 0 failed (one new test method; the
-rethrow assertion was added to an existing test method, not counted as new).
-`python3 scripts/check-mutant-entries-parse.py`: 75 entries, unchanged, all still parse.
-
-**Branch note:** this change is stacked on `security/985-principal-key-rejection` (#991, not yet
-merged to `dotnet10`) — the code it edits does not exist on `dotnet10` yet. Merge #991 first.
-
----
-
----
-
-### Fixed — `DistributedLookupCacheService.RefreshAsync` writes unregistered types to the cache, the third instance of the #804/#943/#944 family (#975)
-
-**Full defect analysis, the class × method × has-check survey and the command that produced it, the RED-before-fix message, the negative control, and the mutation-gate verdict are in `docs/production-readiness.md` § "DistributedLookupCacheService.RefreshAsync 缺 registry 檢查——#944 留下的第三個實例（#975）" — this entry does not repeat or exceed those claims.**
-
-`DistributedLookupCacheService.RefreshAsync<T>` had the same structural gap #944 closed in the sibling `LookupCacheService.RefreshAsync`: its own `GetAll`/`GetAllAsync` both bypass the cache entirely for an unregistered (non-`[CacheLookup]`) type before touching it, but `RefreshAsync` had no equivalent check and proceeded straight to `Invalidate`/`LoadFromDbAsync`/`SetDistributedAsync` for any `T`, registered or not. Confirmed as a real, separate defect rather than assumed from #944's title: this class's `SetDistributedAsync` → `BuildCacheEntryOptions` falls back to a **bounded 30-minute TTL** for an unregistered type, not the immortal `IMemoryCache` entry #944 produced — the exact reason this instance was deliberately left out of scope when #944 shipped (see that entry's own note, now updated to point here instead of going stale). Fixed the same way #944 was: the registry-check bypass is now the first statement of the method, before any locking, so an unregistered type's `RefreshAsync` call is a no-op instead of a cache write.
-
-Re-derived whole-tree before closing, per this issue's own "confirm there is no fourth" requirement: both `ILookupCacheService` implementations (`LookupCacheService`, `DistributedLookupCacheService`) now have the registry-check bypass on all three write-path generic methods (`GetAll`/`GetAllAsync`/`RefreshAsync`) — no fourth instance found. `Invalidate<T>`/`InvalidateType` are delete/sentinel-only paths, not cache-write paths, so they are outside this defect family. Survey command and what it does not prove are in production-readiness.md.
-
-Tests (RED captured against the unfixed code before implementing, not simulated after the fact): `test/WalkingTec.Mvvm.Core.Test/Cache/DistributedLookupCacheRefreshAsyncRegistryCheckTests975.cs`, with a dedicated negative control (a registered type still caches normally via `RefreshAsync`, confirmed green both before and after). One new mutant (`test/mutants/entries/lookupcache975-distributed-refreshasync-registry-guard-neutralize.json`), `VERDICT: KILLED` / `GATE: PASS` on two independent runs after the assertion pattern was filled in from a real Release-build run — plus the initial dry run against the placeholder pattern, which reported `UNEXPECTED_RED`, confirming the harness genuinely evaluated the mutant rather than short-circuiting. `kind: security` chosen: a forced classification (`run_mutant.py`'s `VALID_KINDS` has no non-security option for a real production mutant, same reasoning already documented for #943/#944's own entries and `etl970-cancellation-classification-guard-neutralize.json`), not a claim this is a traditional auth/injection vulnerability; pushes the security-kind entry count from 66 to 67 (total entries 72 → 73, verified by direct parsing of every entry's `kind` field, not assumed). Full suite: `test/WalkingTec.Mvvm.Core.Test` — 5033 passed / 1 failed (the new RED test; total 5034) immediately before the fix, 5034 passed / 0 failed immediately after (same total; only the new RED test's own outcome changed). One pre-existing, unrelated `NETSDK1082` browser-wasm build error confirmed present on the unmodified base commit too, not a regression.
-
-**Not verified this session**: this fix has not run on real Gitea Actions CI — this session's hard constraints forbid any Gitea/GitHub API call and forbid opening a PR, so CI verification is deferred to whenever this branch is actually opened as a PR.
-
 ### Fixed — publish-nuget.yml release-gate cross-vendor review (#925, #937)
 
 Eight verified findings from a cross-vendor review of #925's initial release-gate implementation, fixed on the same branch, CI-only (no `WalkingTec.Mvvm.*` package code changed — nothing here affects any shipped package's runtime behaviour). **Full accounting of what is proven vs. assumed at publish time, and exactly which checks run before the first push, is in `docs/production-readiness.md` § "Release 供應鏈完整性（#925）" — this entry does not repeat or exceed those claims; that section is the ceiling, not this one.**
@@ -397,20 +502,6 @@ CI-only; no `WalkingTec.Mvvm.*` package code changed. `.github/workflows/mutatio
 **`kind` classification (considered, deferred)**: #970's `etl970-cancellation-classification-guard-neutralize` (above) had to be labelled `security` — the only enforceable option — despite being a correctness-only defect, because `run_mutant.py`'s `VALID_KINDS` is `{security, selftest}` and `selftest` is reserved for testing the runner itself. Once selection is in place, `kind` becomes classification-only (it no longer decides whether an entry runs), so adding a `correctness` kind would be cheaper now than before — but `mutants` still only selects `kind == 'security'`, so actually adding one would require changing that filter's semantics in the SAME PR that just changed the diff-selection semantics. Deferred to a follow-up rather than compounding two selection-logic changes in one PR.
 
 Verification: `python3 test/mutants/gate_lib.py ids --kind security | wc -l` → 61; `dotnet build WalkingTec.Mvvm.sln` (one pre-existing, unrelated failure confirmed identical on unmodified `origin/dotnet10` — `NETSDK1082`, missing `browser-wasm` runtime pack for `BlazorDemo.Client`, a local workload gap, not a regression); `python3 test/mutants/_selftest/selftest_select_relevant_entries.py` (new, 8/8 cases pass) plus the two now-wired pre-existing selftests, all passing; `python3 test/mutants/run_mutant.py --mutant 953-getbatchquery-wherereplacemodifier-reintroduce` → `VERDICT: KILLED` / `GATE: PASS` and `python3 test/mutants/run_mutant.py --mutant _selftest-empty-red-tests-invalid --expect-verdict INVALID_MUTANT_EMPTY_RED_TESTS` → `PASS`, both run to confirm individual mutant execution (unchanged code in `run_mutant.py`) is unaffected — not all 61 entries were re-run, since neither of those two ever call the changed `gate_lib.py`/workflow code. **Not exercised on real Gitea CI**: this session's hard constraints forbid any Gitea/GitHub API call and forbid opening a PR, so the workflow's actual behaviour on a real pull_request/push event (job scheduling, `GITHUB_OUTPUT` propagation, the `changes`→`mutants`/`meta-selftest`→`gate` job chain end-to-end) is verified by local YAML parsing, `scripts/audit-workflow-timeouts.py`, and direct invocation of the underlying Python — not by a live CI run.
-
-### Fixed — mutation-gate.yml: `mutants`/`meta-selftest` checkouts were shallow, silently defeating #968's per-entry selection on the first PR that actually exercised it (#1001)
-
-CI-only; no `WalkingTec.Mvvm.*` package code changed, and this does **not** change #968's per-PR coverage trade-off (still reduced by design, on purpose) — what's fixed is that the reduction never actually took effect for a real partial-selection PR and broke the required check instead. Full derivation, the shallow-vs-full-history local reproduction, and the honest scope of what was and wasn't exercised are in `docs/production-readiness.md` § "mutation-gate.yml 的 `mutants`／`meta-selftest` checkout 是 shallow clone，讓 #968 的 per-entry selection 在第一個真正命中 partial-selection 的 PR 上就整個失效（#1001）" — this entry does not claim more than that section verifies.
-
-**Root cause**: the `changes` job's checkout (added when #968 introduced per-entry selection) carries `fetch-depth: 0`; `mutants`' and `meta-selftest`'s checkouts never did, so `actions/checkout@v5`'s default shallow clone left them without the PR's base commit on disk. Both `changes` and `mutants` independently call `python3 test/mutants/gate_lib.py select --kind security` with identical `BASE_SHA`/`HEAD_SHA` env vars — but `select` resolves those SHAs by shelling out to `git diff --name-only base_sha head_sha` (`gate_lib.py`'s `resolve_changed_files()`), and on a shallow clone that `git diff` fails (`base_sha` unreachable). `resolve_changed_files()` catches the error and returns `None`; `select`'s pre-existing fail-open rule (issue #855, preserved through #968) then selects the **entire** `kind='security'` set — not because the diff was empty, but because it could not be computed at all. Identical env vars, divergent repository state: "the SAME event/SHA inputs" (this file's own pre-#1001 comment) was necessary but not sufficient.
-
-**Why this was invisible until now**: every PR before #998 either touched `test/mutants/**` itself (an `ALWAYS_RELEVANT_PREFIXES` entry — both jobs select everything regardless of checkout depth, so `changes`' correct full-set answer and `mutants`' fail-open full-set answer happened to match) or was docs-only (the job is skipped entirely). PR #998 (`aa4631179`) is the first PR to land in the **partial-selection** case — the exact case #968's optimization exists to serve: `changes` (full history) correctly computed 30 selected (29 from `test/WalkingTec.Mvvm.Core.Test.csproj` being the `test_project` of 29 entries, that PR having edited it to add a test-only package, + 1 from the `src/` file it touched) plus 6 selftest = 36; `mutants` (shallow, fail-open) executed all 68 security entries; `gate`'s selected-vs-executed reconciliation failed on 36 != 74.
-
-**Fix, two parts**: (1) `fetch-depth: 0` added to `mutants`' checkout — this is the actual bug fix. The same was added to `meta-selftest`'s checkout for consistency, but that job was **not** actually affected: `kind='selftest'` entries are never filtered by relevance (selection is unconditional for that kind), so its own selected/executed count (6/6) always matched regardless of checkout depth — this half is defensive, not a fix for an observed defect. (2) `gate`'s selected-vs-executed reconciliation, previously a plain `!=`, is now asymmetric: `executed < selected` (an entry that should have run did not) stays a hard failure — the dangerous direction and the original point of the check; `executed > selected` (more ran than believed required) now passes with a printed `::warning::` naming both totals, rather than failing — the safe direction, and one `select`'s fail-open rule can still legitimately produce even with the fetch-depth fix in place, for reasons unrelated to any real defect (a transient git error, an event payload this workflow does not fully model). `test/mutants/gate_lib.py`'s `reconcile()` reference implementation was updated to the identical asymmetric rule so the file's existing "two implementations, deliberately, because they cannot meaningfully diverge" claim stays true.
-
-**Local proof the fix actually reduces what runs (not just that the required check stops failing)**: a one-file diff was constructed against `src/WalkingTec.Mvvm.Core/WTMContext.CallApi.cs` (target_file of exactly one security entry) between two real commits. `gate_lib.py select` against a full-history clone of that diff selected **1 of 68**; the identical command against a `git clone --depth 1` of the same two commits (base commit genuinely absent, reproducing the pre-fix `mutants`/`meta-selftest` checkout) selected **68 of 68** via the fail-open path (`Could not compute a path diff ... SELECT mode=fallback-full`). Since `actions/checkout@v5`'s `fetch-depth: 0` is exactly the full-history condition reproduced above, the fixed workflow's `mutants`/`meta-selftest` jobs get the 1-of-68 answer, not the 68-of-68 one.
-
-Tests: `python3 test/mutants/_selftest/selftest_gate_job_reconciliation.py` (extracts the `gate` job's real script from the live YAML; new `check_surplus_tolerated_with_warning` case added alongside the renamed shortfall/match/skip/failure cases, 7/7 pass) and `python3 test/mutants/_selftest/selftest_select_relevant_entries.py` (its `check_reconcile()` now asserts all three of match/shortfall/surplus against `gate_lib.reconcile()`, 8/8 pass). `python3 scripts/check-mutant-entries-parse.py`, `python3 scripts/audit-workflow-timeouts.py` (133/133 real-work steps still carry `timeout-minutes`, unchanged — this PR only adds a `with:` block to two existing checkout steps (`mutants`, `meta-selftest`) and comment lines, no new step), and `python3 -c "import yaml,sys; yaml.safe_load(open('.github/workflows/mutation-gate.yml'))"` (PyYAML confirmed available in this session; `audit-workflow-timeouts.py`'s own dependency-free parser was also run as a second, non-PyYAML structural check) all pass. **Not exercised on real Gitea CI, same constraint as #968/#973 above**: this session's hard constraints forbid any Gitea/GitHub API call and forbid opening a PR — the fix is verified by local YAML parsing, the guard scripts above, and direct `gate_lib.py select` invocation against a genuinely shallow local clone reproducing the pre-fix checkout, not by a live CI run reproducing #998's actual job-scheduling failure end-to-end.
 
 ### Security
 
@@ -1207,88 +1298,10 @@ Verification: `dotnet build WalkingTec.Mvvm.sln` — the same pre-existing `NETS
 - Unused `echarts-gl`/`echarts-wordcloud` dependencies removed (verified zero import sites anywhere in `src/`) and `@types/node` bumped `^18.15.11` → `^20.19.0` — both were additional peer-dependency conflicts this work found blocking `npm ci` after #939's fix alone, not part of either named issue.
 - `python3 scripts/audit-workflow-timeouts.py`: 132/132 real-work steps across all 8 workflow files now carry `timeout-minutes` (up from 127/127).
 
-### Fixed — a mutation-gate positive control coupled to the mutated line proved nothing, and passed silently (#986)
-
-`test/mutants/entries/dcext824-derived-principal-neutralize.json`'s `green_test` (the positive control) called `IsFileAttachmentForeignKeyProperty` against a fixture whose only foreign key had a TPH-derived `FileAttachment` principal — the exact relationship shape the mutant neutralizes recognition of. Production's per-FK loop gates on `IsFileAttachmentPrincipal` *before* the property-name comparison the test meant to exercise; under the mutant that gate now rejects the FK earlier, so the test's `Assert.IsFalse` still passed, but by reaching `false` through a different branch than the unmutated code takes. `run_mutant.py` reported `VERDICT: KILLED`/`GATE: PASS` throughout — the tool has no way to see that the green test's own proof was hollow, because the *red* test still failed correctly. **Full accounting — the control-flow trace proving the coupling, the audit method applied to all 74 entries, and what that audit does not prove — is in `docs/production-readiness.md` § "Mutation-gate 正控組（positive control）與被突變行的耦合（#986）" — this entry does not repeat or exceed those claims.**
-
-- `dcext824-derived-principal-neutralize`'s `green_test` replaced with a new test, `IsFileAttachmentForeignKeyProperty_UnrelatedProperty_NonDerivedPrincipal_ReturnsFalse`: it queries a fixture whose only FK principal is `FileAttachment` itself (not derived), so `IsFileAttachmentPrincipal` returns `true` identically under both the real `IsAssignableFrom` comparison and the mutant's reverted exact-type comparison — the assertion's outcome is provably invariant to this specific mutation, not merely observed to still pass.
-- A second, lower-severity instance of the same defect class found by the same audit: `876-wtmcontrolleractivator-neutralize`'s `green_test` reused one of the same five `WalkingTec.Mvvm.Etl` controllers' role-gate computation the mutant targets (`Wtm?.LoginUserInfo?.Roles?.Select(...) ?? Array.Empty<string>()`) — under the mutant it took the `??` fallback branch (Wtm never populated) rather than genuinely evaluating a non-admin caller's real role list, landing on the same `isAdmin=false` conclusion for a different reason. Both directions deny the caller either way (fail-closed, not the security-relevant fail-open direction #986's namesake defect was), but the control's own claim — "does not affect the still-correct non-admin denial path" — did not hold. Replaced with `MvcAuthHolesTests.Selector_AuthenticatedRequest_Succeeds`, a controller that never reads `Wtm` inside its own `OnActionExecuting` and is authorized entirely through `PrivilegeFilter`/`DataContextFilter` (ordinary filters, unaffected by this mutation) — a genuinely different code path, not a coincidentally-equal outcome.
-- Audited all 74 entries under `test/mutants/entries/` (68 `kind: security` + 6 `kind: selftest`) by the same method: read the patch to identify the exact mutated condition, then trace the green test's call path to it and show either it never reaches that line, or the mutated and unmutated forms are provably equal for that test's specific input (a short-circuit, or an invariant like an exact-type match agreeing under both an equality check and an `IsAssignableFrom` check). Found the two entries above coupled; the remaining 66 `security` entries already decouple correctly — most already state their own decoupling argument in `description`, verified against the actual patch and test source rather than trusted at face value. The 6 `selftest` entries are meta-tests of `run_mutant.py` itself (shared no-op or deliberately-broken patches) and are outside this defect class's scope.
-- The rule this codifies — trace a positive control's reach to the mutated line before registering an entry, and require either "never reached" or "provably invariant for this input," not just an observed `KILLED`/`GATE: PASS` — is recorded in `.claude/rules/testing.md` ("A mutant's positive control must not touch the mutated decision path") and in `run_mutant.py`'s own header, next to the exit-code contract that a `KILLED` verdict is necessary but not sufficient evidence of a valid control.
-
-**Not a `### Security` entry**: no production `src/` code changed. Both `dcext824-derived-principal-neutralize` and `876-wtmcontrolleractivator-neutralize`'s own `red_test`s already correctly detected their mutants throughout — this fixes the strength of the *positive control's* evidence, not a gap in detection.
-
----
-
-### Fixed — 9 more LayUI TagHelper sites raw-interpolated a `*Func` callback at JS statement-start, an unwrapped-IIFE SyntaxError that killed the whole enclosing `<script>` block for a function-literal value (#999 part (A))
-
-`DataTableTagHelper.cs`'s `DoneFunc`, `TransferTagHelper.cs`'s `ChangeFunc`, `SliderTagHelper.cs`'s
-`ChangeFunc`, and `DateTimeTagHelper.cs`'s `ReadyFunc`/`ChangeFunc`/`DoneFunc` (both the single-field
-and the two-hidden-input `IsRange` path — 6 of the 9 sites) all interpolated the developer-supplied
-callback string directly ahead of its own invocation parens. A function-literal value there
-(`function(v){...}`) produced `function(v){...}(...)` — JS parses a statement starting with the
-`function` keyword as a FunctionDeclaration, which requires a name; an anonymous one is a hard
-SyntaxError that fails the whole enclosing `<script>` block, not just the one callback. Fixed the
-same way #965/PR #998 (not yet merged, tracked separately) fixed the first discovered instance
-(`DataTableTagHelper.cs`'s `GridAction.OnClickFunc`, deliberately untouched here to avoid a
-same-line collision with that branch): wrap in parens, `({X})(...)`, forcing expression context.
-**This does not fix every `*Func` unwrapped-IIFE site** — an exhaustive 47-site enumeration (#999)
-found 12 further sites reached through `BaseElementTag.FormatFuncName`, which truncates the
-developer's value at its first `(` and appends `(data)` *before* it reaches any syntactic position
-(`function(v){...}` becomes the string `function(data)`; paren-wrapping that,
-`(function(data));`, is itself a SyntaxError) — those need a different fix and are tracked
-separately on #999 part (B), pending cross-vendor design review. Two sites this same sweep
-confirmed are already safe and were deliberately left unwrapped: `SliderTagHelper.cs`'s
-`OnTipsFunc` (reached only via `return {OnTipsFunc}(...)`, expression position) and
-`DataTableTagHelper.cs`'s `CheckedFunc` (a `table.on(...)` call argument, also expression
-position) — both verified, not assumed, by feeding a function-literal value through the real
-TagHelper and parsing the actual emitted output. **Full site table, the RED-before-fix
-transcripts, the two pre-existing byte-identity tests this necessarily changed, and the mutant
-non-entry reasoning are in `docs/production-readiness.md` § "LayUI TagHelper：9 個「statement 位置
-原樣內插 `*Func` callback」的 unwrapped-IIFE 修復（#999 part (A)）" — this entry does not repeat or
-exceed those claims.**
-
-- Test-only: `Directory.Packages.props`/`WalkingTec.Mvvm.Core.Test.csproj` gain the same
-  `Acornima 1.6.2` test-only `PackageReference` PR #998 already adds, at the same version and in
-  the same place, so the two branches' lines merge as a trivial identical-line conflict rather
-  than a semantic one.
-- New `test/WalkingTec.Mvvm.Core.Test/TagHelpers/RawFuncInterpolationParens999Tests.cs`: renders
-  each real TagHelper, extracts the actual emitted `<script>` block, and parses it with Acornima —
-  9 tests (one per fixed site) proven RED before the fix and GREEN after, plus 2 tests proving the
-  two deliberately-unwrapped sites already parsed correctly with no change.
-
 ### Migration
 
 - **#956 — a persisted `rest` widget whose `Headers` includes `Host`, `Transfer-Encoding`, `Content-Length`, `Connection`, `Upgrade`, `TE`, `Trailer`, `Expect`, or any `Proxy-*` name, more than 20 headers, or a combined name+value length over 8 KB, will fail to fetch (`502`, from the new send-time rejection) after upgrading, and will fail to save (`400`) if edited again.** No deployment is known to configure any of these on purpose — they cannot appear through the shipped designer UI (no headers-editing UI at all) — but check any REST widget definitions authored through a direct API call or hand-edited JSON store before upgrading. There is no config flag to restore the old behaviour: this set breaks #948's own SSRF-guard invariants and is not safe to make configurable. `Authorization` and any other custom header are unaffected.
 - **#952 — REST widget response caching is now scoped per tenant and per exact `Headers` set, where it previously was not.** This is a correctness fix (a shared cache entry across tenants/credential sets was the defect), but it also means widgets that were previously (accidentally) sharing a cache entry — most likely: the same public URL fetched by multiple tenants or by widgets with different header configurations — now fetch independently. A deployment with many tenants/widgets hitting the same rate-limited upstream API should expect a higher outbound request volume post-upgrade than the pre-fix (incorrect) sharing produced. No configuration change is required or available; `CacheTtlSeconds` still controls how long each now-correctly-scoped entry lives.
-
-### Fixed — `DataTableTagHelper` emitted an unwrapped IIFE, breaking the whole toolbar/row-action `<script>` block for any `GridAction.OnClickFunc` set to a function literal (#965)
-
-**Full re-derivation of the affected surface (exact grep commands and raw output), the JS-validity test's mechanism and why it was chosen over shelling out to `node` or hand-parsing, and the complete RED/GREEN transcript are in `docs/production-readiness.md`'s new "DataTableTagHelper 未包裹 IIFE" section — this entry does not repeat or exceed those claims.**
-
-`DataTableTagHelper.cs`'s `AddSubButton` (`src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.cs:1284`) emitted `actionScript = $"{item.OnClickFunc}(ids,ff.GetSelectionData('{Id}'));"` — a raw, unwrapped invocation of whatever string `GridAction.OnClickFunc` holds. `GridActionExtension.Legacy.cs`'s own XML doc documents the intended shape as a bare identifier naming a page-global function, but nothing enforces that: `EtlJobListVM`'s "執行記錄" toolbar action and `ProcessDefinitionListVM`'s two designer actions instead pass a raw anonymous function literal (`function(ids,data){...}`). This is not merely "an IIFE missing its wrapping parens" — a statement cannot open with the bare `function` keyword at all (it parses as an anonymous `FunctionDeclaration`, which requires a name, so it is a syntax error on its own, independent of what follows). The `SyntaxError` kills parsing of the WHOLE enclosing `<script>` block, not just that one action — `BuildTableOptionsScript` writes the toolbar-event dispatcher and the real `table.render()` call into the SAME `<script>` tag — so `/_EtlJob/Index`'s entire grid never renders via any real navigation route.
-
-**Fix** (one line): `actionScript = $"({item.OnClickFunc})(ids,ff.GetSelectionData('{Id}'));"`. Wrapping the whole expression in parens turns the function-literal case into a legal `(function(...){...})(...)` IIFE and is a no-op for every other shape already in use (bare identifier, dotted member, call expression) — JavaScript's grouping operator does not strip a Reference's `this` binding, so `(obj.method)(args)` still calls with `this === obj`, same as `obj.method(args)`.
-
-**Re-derived the affected surface across the whole tree** (`src/`, `demo/`, and the `GeneratorFiles/` CodeGen templates — not scoped from the issue text). Exactly one emission site (`DataTableTagHelper.cs:1284`); the opt-in island-render path (`DataTableTagHelper.Island.cs`, default off via `WtmUIOptions.UseSelectIslandRender`) cannot reach this shape by construction — `DetermineGridIslandDecision`/`FindNonIdentifierOnClickFunc` force any non-identifier `OnClickFunc` onto the legacy path before island rendering is even considered, and legacy is also the ONLY path taken by default regardless. No `GeneratorFiles/` template emits `OnClickFunc` or any bare `function(` literal — scaffolded downstream code does not carry this shape. Two real consumers: `EtlJobListVM`'s "執行記錄" action (reachable today via `/_EtlJob/Index`) and `ProcessDefinitionListVM`'s two designer actions. The latter are defined in source and exercised only by `NotifierTests.cs`; `docs/workflow.md` §8 shows a `WfProcessDefinitionController` as a documentation example of how a downstream area controller could wire this VM up, but no such controller exists anywhere in this tree (`find . -iname "*WfProcessDefinition*"` → nothing) — consistent with this repo's own earlier dead-link history for the same VM (`CHANGELOG.md`'s existing "Dead-link repair" entry: these two GridActions previously pointed at a controller "verified nonexistent anywhere"). Fixed anyway, since the same generator-level fix covers it for free.
-
-**Correction to an earlier draft of this entry, caught on re-review**: a structurally-similar direct-concatenation pattern also exists on sibling `Func` properties elsewhere in this codebase (`SliderTagHelper`'s `ChangeFunc`, `DateTimeTagHelper`'s `ReadyFunc`/`ChangeFunc`/`DoneFunc`, `TransferTagHelper`'s own legacy `ChangeFunc` emission, `TextBoxTagHelper`'s legacy `onchange`/`oninput` attribute construction, `DataTableTagHelper`'s own `DoneFunc`). These are **not** protected by the `xxxIsIdentifier ? xxxFuncName : null` guard found in `ComboBoxTagHelper.cs`/`TransferTagHelper.cs`/`TreeTagHelper.cs`/`TextBoxTagHelper.cs` — that guard gates only the value written into the opt-in island-render JSON descriptor (same `UseSelectIslandRender` flag, default off); it never runs for the always-active legacy inline-script path these same properties also feed, unguarded, exactly like `GridAction.OnClickFunc`. Every real (non-test) `.cshtml` usage of these properties in this tree today (`grep -rnoE '(change|done|ready|checked|ontips)-func="[^"]*"' demo/ src/`) is a bare identifier or a simple call expression — none is a function literal — so nothing currently triggers this on the sibling sites; that is an empirical fact about today's callers, not a structural guarantee. Flagging this as a latent, unfixed risk class rather than claiming a protection that does not exist — out of scope for this fix, which is #965's exact reported shape.
-
-**Test — parses the real emitted script, not a string comparison**, per the issue's own explicit ask: `DataTableTagHelperUnwrappedIife965Tests.cs` renders the real, unmodified `DataTableTagHelper.Process()` output for a `GridAction` shaped exactly like `EtlJobListVM`'s, extracts the actual bare `<script>` block (never the `type="text/html"` LayUI template blocks, which are HTML, not JS), and feeds it to **Acornima** — a pure-.NET, Test262-complete ECMAScript parser, asserting it parses without throwing `Acornima.ParseErrorException` (the base type the concrete `SyntaxErrorException` derives from; the test catches the base type). This repo's own `DataTableByteIdentityTests` exercises this exact code path (`AddSubButton`'s `actionScript` line) with a bare-identifier `OnClickFunc` fixture (`"myGridOnClickHandler"`) and stayed green throughout the defect's lifetime — precisely because its own fixture never triggers the bug, byte-comparison would have stayed equally green had it: a golden string is captured from whatever the code currently emits, bugs included, so pinning bytes proves nothing about JavaScript validity. That is the blind spot this new test closes.
-
-**New NuGet dependency, flagged prominently**: `Acornima 1.6.2` (`Directory.Packages.props`, BSD-3-Clause), referenced ONLY by `test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj` — no shipping `WalkingTec.Mvvm.*` package references it. Chosen over shelling out to `node`: `.github/workflows/ci-build.yml`'s `build-and-test` job (the only job running `dotnet test`) has `actions/setup-dotnet` but no `actions/setup-node` — that only exists in the separate `js-test` job that runs this repo's Jest suite — so a `node`-on-PATH assumption would be sound in a local dev shell and silently break on the self-hosted Gitea runner that actually gates merges.
-
-**RED-before-fix, captured verbatim** (full transcript in production-readiness.md): with the fix reverted, the new test fails with `Assert.Fail failed. ... Parser error: Unexpected token '(' (10:9)`, printing the literal unwrapped `function(ids,data){...}(ids,ff.GetSelectionData('wtTable_965'));` from the emitted script. Restoring the fix: `Passed ... [142 ms]`.
-
-**e2e — TC-29's KNOWN-GAP removed** (`test/e2e/wtm_e2e_tests.py`). TC-29 (from the #898/#905 entry above) is where this defect was originally found and deliberately left unfixed as out-of-scope; its docstring named `DataTableTagHelper.cs:1284` as root cause and asserted only what the bug did not affect. Converted to positive assertions: `/_EtlJob/Index`'s grid (`.layui-table-body`) and its `Status`/`SourceDbType` xmSelect filter fields, using the same `open_grid_via_direct_tab()` helper `/_EtlRunLog/Index` already used.
-
-**Correction, found by CI on the first push and fixed in a review round**: this entry originally said the e2e change was "not exercised against a live browser this session." CI ran it and `e2e (baseline)`/`e2e (island)` both failed identically on TC-29 (`Total: 36 | PASS: 34 | FAIL: 1`) — the C# fix and the new unit test were unaffected, only this test's own assertions. The failure data (`EtlJob .layui-table-body: 3` — the grid DID render; `No browser console errors`) directly contradicted the assertion's own error message ("page route itself has a problem"), which was a stale diagnosis carried over from when the page was genuinely broken. Root-caused by launching the real demo (`dotnet run`) and running Playwright against it directly: `open_grid_via_direct_tab()`'s wait condition (`Object.keys(window.layui.table.cache).length > 0` — "at least one entry exists") is correct only for the *first* call in a session; `table.cache` is never cleared, and TC-29 calls this helper twice (RunLog, then EtlJob) — on the second call RunLog's own cache entry already satisfies the condition, so the helper returns before EtlJob's own grid has actually loaded (~0.1–0.2s later, per direct polling measurement), a gap wide enough to lose the race on a cold demo process (JIT/Razor not yet warmed) but not on a warm one — reproduced locally on a fresh cold start, matching CI's numbers exactly. Fixed the helper itself: wait for a key that was NOT present before this call, not merely "any key" — a no-op for the first call, correct for the second. Verified locally, not simulated: 2 independent cold restarts (kill process, delete `demo.db`, relaunch) both pass on the very first run, plus 3 consecutive warm reruns, plus the full 36-TC suite (`Total: 36 | PASS: 35 | FAIL: 0 | SKIP: 1` — the only change from CI's failing run is TC-29 flipping to PASS). Also directly tested the reversed navigation order (EtlJob before RunLog) with the fixed helper — passes reliably too, which is the evidence behind the docstring correction below.
-
-**Execution-order rationale corrected**: the docstring claimed RunLog must run before EtlJob to avoid the (pre-fix) broken `<script>` poisoning the session. That reason is now moot (the syntax error is fixed), and this same review found that ordering had also been *accidentally* masking the `table.cache` race above — RunLog, always called first, could never hit the "second call" condition; EtlJob, always second, always could. With the helper itself fixed and the reversed order empirically verified to pass, the order is no longer load-bearing for any known reason; the code keeps it only because it is the already-validated configuration, not because changing it would break anything now.
-
-**Mutant: considered, not added.** This is a `core`/correctness defect, not a security one — no unauthorized access, injection, or tenant-isolation dimension. `run_mutant.py`'s `VALID_KINDS` (`security`/`selftest`) has no honest classification for it; forcing one in as `security` would repeat the exact `kind`-classification drift the #970 entry (above) already had to accept and #968 (above) just spent a whole PR containing the fallout of. The manual RED/GREEN proof above already provides the same evidence a mutant run would.
-
-Tests: `test/WalkingTec.Mvvm.Core.Test` (unfiltered) 5041 → 5042 passed, 0 failed (1 new test). Two pre-existing golden-string assertions updated to match the new (still syntactically legal) emission shape for their own fixtures (`DataTableByteIdentityTests.Fixtures.cs`, `RenderGridToolbar470SliceO2Tests.cs`) — both fixtures' `OnClickFunc` values were already valid JS before this fix (a bare identifier and a call expression, respectively), so this is a byte-shape update, not a behaviour fix for those two. Full `core.slnf` suite (`dotnet test core.slnf -m:1 --no-build -c Release --filter "TestCategory!=Integration"` — same `-m:1`/`--filter` test-selection flags `ci-build.yml`'s `build-and-test` job uses; its `--logger`/`--collect`/`--settings`/`--results-directory` flags are TRX/coverage-artifact options that do not affect which tests run or their pass/fail outcome, so were omitted): all 7 projects `Test Run Successful`, 0 failed, only pre-existing skips (23 WorkFlow.Test, 1 Api.Test mutation-gate-baseline selftest). e2e: full 36-TC suite run locally against a real `dotnet run` demo instance + real Playwright/chromium, `Total: 36 | PASS: 35 | FAIL: 0 | ERROR: 0 | SKIP: 1` (see the review-round correction above for the TC-29 diagnosis this replaced). **Not verified this session**: real Gitea Actions CI (hard constraint forbids any Gitea/GitHub API call and opening a PR) — local verification used this session's own demo process and Playwright install, not the CI runner's.
 
 ## [10.18.0] - 2026-07-22
 

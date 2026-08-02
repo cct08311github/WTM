@@ -527,7 +527,7 @@ python3 test/mutants/run_mutant.py --mutant 876-wtmcontrolleractivator-neutraliz
 
 ## LayUI TagHelper：9 個「statement 位置原樣內插 `*Func` callback」的 unwrapped-IIFE 修復（#999 part (A)，2026-08-02）
 
-**背景**：#965（PR #998，尚未合併進 `dotnet10`）修了第一個被發現的站點——`DataTableTagHelper.cs` 的 `GridAction.OnClickFunc`，在 statement 起始位置原樣內插一個開發者提供的 callback 字串，若該值是匿名函式字面量（`function(ids,data){...}`）會產生 `function(ids,data){...}(ids,...)`——JS 對「statement 以 `function` 關鍵字起頭」有固定文法：一定被解析成 FunctionDeclaration（要求具名），匿名的在這個位置直接是 SyntaxError，且這個錯誤會讓**整個**外層 `<script>` block 解析失敗，不只是壞掉那一個 handler。#999 一次窮舉了全部 47 個內插站點，依**機制**分成兩類：(a) **RAW 內插**——開發者的值原封不動抵達輸出，`({X})(...)` 是完整修法；(b) **`FormatFuncName` 站點**（`BaseElementTag.cs:225-242`）——在抵達任何語法位置**之前**就先在 `(` 處截斷、補上 `(data)`，`function(v){...}` 變成字串 `function(data)`，對這種站點加括號（`(function(data));`）本身就是 SyntaxError，需要不同修法。本項只處理 (a)；(b) 的 12 個站點在 #999 part (B) 追蹤，待跨廠設計審查，**這裡不宣稱、也不暗示 `*Func` unwrapped-IIFE 這個類別已經修完**。
+**背景**：#965（PR #998，已合併為 `7c9887d4b`）修了第一個被發現的站點——`DataTableTagHelper.cs` 的 `GridAction.OnClickFunc`，在 statement 起始位置原樣內插一個開發者提供的 callback 字串，若該值是匿名函式字面量（`function(ids,data){...}`）會產生 `function(ids,data){...}(ids,...)`——JS 對「statement 以 `function` 關鍵字起頭」有固定文法：一定被解析成 FunctionDeclaration（要求具名），匿名的在這個位置直接是 SyntaxError，且這個錯誤會讓**整個**外層 `<script>` block 解析失敗，不只是壞掉那一個 handler。#999 一次窮舉了全部 47 個內插站點，依**機制**分成兩類：(a) **RAW 內插**——開發者的值原封不動抵達輸出，`({X})(...)` 是完整修法；(b) **`FormatFuncName` 站點**（`BaseElementTag.cs:225-242`）——在抵達任何語法位置**之前**就先在 `(` 處截斷、補上 `(data)`，`function(v){...}` 變成字串 `function(data)`，對這種站點加括號（`(function(data));`）本身就是 SyntaxError，需要不同修法。本項只處理 (a)；(b) 的 12 個站點在 #999 part (B) 追蹤，待跨廠設計審查，**這裡不宣稱、也不暗示 `*Func` unwrapped-IIFE 這個類別已經修完**。
 
 **本項修復的 9 個站點**（statement 位置，逐一用 JS 文法手動驗證過，非抄 issue 文字）：
 
@@ -551,7 +551,7 @@ python3 test/mutants/run_mutant.py --mutant 876-wtmcontrolleractivator-neutraliz
 
 **測試——真的用 JS parser 解析輸出，不是字串比對**：新增 `test/WalkingTec.Mvvm.Core.Test/TagHelpers/RawFuncInterpolationParens999Tests.cs`，11 個測試方法：對 9 個修復站點各一個（渲染真實 TagHelper、抽出實際輸出的 `<script>` block、餵給 Acornima 解析，解析失敗即 Fail），另外 2 個對上方兩個排除站點做**正面驗證**——用同樣函式字面量餵進去，斷言**不加括號**也已經能正確解析（證明這兩個站點過去就沒壞、不該被動）。
 
-**Acornima 相依重複、刻意如此**：本 repo `origin/dotnet10` 目前沒有任何 JS parser 相依。PR #998（#965，尚未合併）以完全相同的方式引入 **Acornima 1.6.2**（BSD-3-Clause、純 .NET、Test262-complete、test-only）——`Directory.Packages.props` 一行 `<PackageVersion Include="Acornima" Version="1.6.2" />`＋`WalkingTec.Mvvm.Core.Test.csproj` 一行 `<PackageReference Include="Acornima" />`，不被任何出貨專案引用。本項在**完全相同的版本、完全相同的位置**重複這兩行——兩支分支之後合併時，這兩個檔案的衝突會是逐字相同、trivial 的重複行衝突，不是語意衝突。
+**Acornima 相依重複、刻意如此**：本 repo `origin/dotnet10` 目前沒有任何 JS parser 相依。PR #998（#965，已合併為 `7c9887d4b`）以完全相同的方式引入 **Acornima 1.6.2**（BSD-3-Clause、純 .NET、Test262-complete、test-only）——`Directory.Packages.props` 一行 `<PackageVersion Include="Acornima" Version="1.6.2" />`＋`WalkingTec.Mvvm.Core.Test.csproj` 一行 `<PackageReference Include="Acornima" />`，不被任何出貨專案引用。本項在**完全相同的版本、完全相同的位置**重複這兩行——兩支分支之後合併時，這兩個檔案的衝突會是逐字相同、trivial 的重複行衝突，不是語意衝突。
 
 **RED-before-fix（暫時 `git stash push` 還原 4 個 source 檔案、只保留測試與套件改動，重跑）**：
 
