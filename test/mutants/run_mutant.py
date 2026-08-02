@@ -69,6 +69,25 @@ Exit code is 0 only when every check above resolves to the expected outcome
 a scope violation, a non-green baseline, an empty red_tests list, an over-broad
 assertion pattern, or a positive-control failure -- exits non-zero.
 
+BEFORE REGISTERING AN ENTRY -- a KILLED/GATE:PASS verdict from step 6+7 above
+proves the green test stayed green and the red test failed with the expected
+message. It does NOT prove the green test's pass was caused by anything this
+patch left alone. A green_test whose call path reaches the mutated line, and
+whose outcome the mutation happens to leave unchanged for that one input, will
+still report KILLED -- silently proving nothing (issue #986: a green_test using
+a fixture with the exact FK shape the mutant neutralizes returned the same
+boolean under the mutant, via a different internal branch, and the gate never
+noticed). Step 6's own POSITIVE_CONTROL_FAILED verdict only catches the case
+where the coupling flips the assertion (issue #979) -- it cannot catch a
+coupled control that happens to still agree. Before writing green_tests, trace
+the test's call path through to the mutated condition and show EITHER it is
+never reached (a different code path for this input) OR the mutated and
+unmutated forms are provably equal for this specific input (a short-circuit
+upstream, or an invariant like an exact-type match agreeing under both an
+equality check and an IsAssignableFrom check). See .claude/rules/testing.md
+"A mutant's positive control must not touch the mutated decision path" for the
+worked examples and the full checklist.
+
 Usage:
     python3 test/mutants/run_mutant.py --mutant <id> [--manifest test/mutants/manifest.json]
     python3 test/mutants/run_mutant.py --mutant <id> --expect-verdict INVALID_MUTANT_BUILD_FAILURE

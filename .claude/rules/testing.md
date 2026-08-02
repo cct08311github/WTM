@@ -43,6 +43,25 @@ If a test builds its own version of the thing under test, it stays green when pr
 
 **Related check, on every run**: a test that cannot fail is a CI error — `scripts/check-e2e-test-integrity.py` (wired into `mutation-gate.yml`'s `changes` job) rejects a registered e2e TC with no `assert`, a handler that swallows `AssertionError` without a bare `raise`, `except AssertionError: raise TestSkipped(...)` laundering a FAIL into a SKIP, and a top-level `tc_*` that was never wired into `TC_REGISTRY`.
 
+## A mutant's positive control must not touch the mutated decision path
+
+A positive control exists to prove *everything except the mutated behaviour still works*. A `green_test` coupled to the line the patch mutates proves nothing — it is a second thing the mutation affects, not a control on it. This has shipped twice, in opposite failure modes:
+
+- **#979** (`979-callapi-header-exception-leak-reintroduce`): the first `green_test` choice was the sibling "header name still logged" assertion — it asserts on output produced by the SAME `catch` block the mutant rewrites. Running `run_mutant.py` reported `VERDICT: POSITIVE_CONTROL_FAILED` — loud, and caught before the entry was ever committed. See `docs/production-readiness.md`'s `#979` section for the full trace.
+- **#986** (`dcext824-derived-principal-neutralize`): the `green_test` called `IsFileAttachmentForeignKeyProperty` against a fixture whose only foreign key had a TPH-derived `FileAttachment` principal — the exact shape the mutant neutralizes recognition of. Under the mutant, the per-FK loop's `if (!IsFileAttachmentPrincipal(...)) continue;` gate now rejects that FK *before* the property-name comparison the test meant to exercise ever runs — so the test's `Assert.IsFalse` still passed, but by reaching `false` through a different branch than the unmutated code takes. **`run_mutant.py` reported `VERDICT: KILLED`/`GATE: PASS` — clean, because the *red* test still failed correctly.** The gate has no way to see that the green test's own proof was hollow; nothing was loud.
+
+The second case is strictly worse: a coupled positive control that happens to still pass produces no signal at all, while one that fails loudly (#979) at least forces a fix before the entry ships. **Assume every new `green_test` is the #986 shape until you have traced it, not the #979 shape.**
+
+**The check to run before registering an entry**, for every `(patch, green_test)` pair:
+
+1. Read the patch and identify the exact condition or comparison it changes — not just the function name, the specific branch.
+2. Read the green test and trace its call path to that condition. If the call graph never reaches the mutated line at all (a different code path, or the mutated function is never called for this input), it is decoupled — done.
+3. If it does reach the mutated line, determine whether the mutation can change *that specific invocation's* return value. Two ways to prove it cannot:
+   - **Short-circuit**: the surrounding boolean expression's earlier terms already resolve to skip evaluating the mutated term — `fileattachmentguard985-principal-key-check-neutralize` (`!IsCanonicalFileAttachmentPrincipalKey(...) && ... && false`): for the green test's model, `!IsCanonical...` is already `false`, so `&&` never evaluates the mutated `&& false` term at all.
+   - **Invariant result**: the mutated and unmutated forms are provably equal for this specific input — `dcext824`'s fix (`IsFileAttachmentForeignKeyProperty_UnrelatedProperty_NonDerivedPrincipal_ReturnsFalse`): `typeof(FileAttachment) == typeof(FileAttachment)` and `typeof(FileAttachment).IsAssignableFrom(typeof(FileAttachment))` are both `true` for an exact-type principal, so the derived-vs-exact-type mutation cannot change this invocation's outcome.
+4. If you cannot show either, the test is coupled — pick a different fixture/input, or a different existing test, until you can.
+5. `run_mutant.py`'s own `VERDICT: KILLED`/`GATE: PASS` is necessary but **not sufficient** — it only proves the red test still fails and the green test still passes, not *why* the green test passes. Step 3's argument is the part `run_mutant.py` cannot check for you; write it into the entry's `description` so the next reader does not have to re-derive it.
+
 ## Verify a guard where it runs, not where you wrote it
 
 Three checks shipped in one day that were sound in the authoring environment and broken in the execution environment: a fixture more permissive than the real API (#967), a CI job invoking a repo-relative script in a job that never checks out (#973), and a script importing PyYAML the runner does not have (#968). Every logic demonstration was valid; every one ran on the author's machine.

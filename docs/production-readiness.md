@@ -475,6 +475,44 @@ grep -rn "Headers\.Add(" --include="*.cs" . | grep -v '/bin/\|/obj/'
 
 ---
 
+## Mutation-gate 正控組（positive control）與被突變行的耦合（#986）
+
+**問題本質**：`run_mutant.py` 的 `green_test`（正控組）存在的理由是證明「除了被突變的行為以外，其他一切照常運作」。如果 `green_test` 自己的通過與否，其實也取決於被突變的那一行，它就不是控制組——它是第二個受影響的東西。這件事在本 repo 發生過兩次，方向相反：
+
+- **#979**（`979-callapi-header-exception-leak-reintroduce`）：一開始選的 `green_test` 斷言「header 名稱仍留在日誌裡」，剛好也是被突變的同一個 `catch` 區塊產生的輸出。`run_mutant.py` 直接回報 `VERDICT: POSITIVE_CONTROL_FAILED`——**大聲**，在這個 entry 被提交前就攔下來了。
+- **#986**（`dcext824-derived-principal-neutralize`）：`green_test` 呼叫 `IsFileAttachmentForeignKeyProperty`，用的 fixture 唯一的外鍵原則（principal）恰好是一個 TPH 衍生的 `FileAttachment` 子類別——正是這個 mutant 要讓「衍生類別辨識」失效的那個形狀。production code（`DCExtension.Schema.cs:211` 附近）在逐一走訪 FK 的迴圈裡，**先**呼叫被突變的 `IsFileAttachmentPrincipal`，**之後**才比對屬性名稱；mutant 套用後，這個 gate 提早把該 FK 判定為「不是 FileAttachment 外鍵」而 `continue`，屬性名稱比對根本沒被執行到。測試查詢的屬性名稱（`ID`）本來就不是外鍵屬性，所以不管走哪條路徑最終都回傳 `false`——`Assert.IsFalse` 照樣通過，但是透過一條跟未突變程式碼不同的分支。**`run_mutant.py` 全程回報 `VERDICT: KILLED` / `GATE: PASS`——乾淨，因為 red test 依然正確地失敗了。** gate 沒有辦法看出 green test 自己的證明是空的；沒有任何警訊。
+
+第二種比第一種更糟：耦合的正控組如果剛好還是通過，完全不會發出任何訊號；耦合但失敗（#979）至少會逼著人在合併前修正。
+
+**方法論（可重複、不是憑印象）**：對 `test/mutants/entries/` 底下每一個 `(patch, green_test)` 組合：
+
+1. 讀 patch，找出被改動的**確切**條件或比較式（不只是函式名稱，是哪一個分支）。
+2. 讀 green test，把它的呼叫路徑追到那一行。如果呼叫圖從未到達被突變的那一行（不同程式碼路徑，或這次輸入根本不會呼叫到那個函式），就是解耦——結束。
+3. 如果真的會到達，判斷這個突變能不能改變**這一次呼叫**的回傳值。兩種可證明「不能」的方式：
+   - **短路（short-circuit）**：外層布林運算式較早的項已經讓結果確定，根本不會求值到被突變的那一項——worked example 是 `fileattachmentguard985-principal-key-check-neutralize`（`!IsCanonicalFileAttachmentPrincipalKey(...) && ... && false`）：對該 green test 的 model，`!IsCanonical...` 已經是 `false`，`&&` 從未求值到 mutant 加的 `&& false`。
+   - **結果不變（invariant）**：對這個特定輸入，突變前後兩種寫法可證明相等——`dcext824` 的修法（`IsFileAttachmentForeignKeyProperty_UnrelatedProperty_NonDerivedPrincipal_ReturnsFalse`）：對一個 exact-type 的 `FileAttachment` principal，`typeof(FileAttachment) == typeof(FileAttachment)` 與 `typeof(FileAttachment).IsAssignableFrom(typeof(FileAttachment))` 都是 `true`，衍生類別辨識這個突變本身無法改變這一次呼叫的結果。
+4. 兩者都證明不了，就是耦合——換一個 fixture/輸入，或換一個既有測試，直到證明得出來為止。
+5. `run_mutant.py` 自己的 `VERDICT: KILLED` / `GATE: PASS` 是必要條件，**但不是充分條件**——它只證明 red test 依然失敗、green test 依然通過，不證明「為什麼」green test 通過。第 3 步的論證是 `run_mutant.py` 檢查不到的那一半，必須寫進 entry 的 `description`，下一個讀者才不用重新推導一次。
+
+**這次稽核實際跑了什麼**：對 74 個 entry（68 個 `kind: security` + 6 個 `kind: selftest`）逐一套用上面的方法——讀 patch 找出被改動的確切條件，讀 green test 原始碼追它的呼叫路徑，判定屬於「從未到達」「短路」「結果不變」三類之一，或標記為耦合。**只找到上面兩個耦合案例**；其餘 66 個 `security` entry 的 green test 已經正確解耦（多數 entry 自己的 `description` 就已經寫出解耦論證，這次是逐一對照實際 patch 與測試原始碼驗證過，不是照抄 description 本身）。6 個 `selftest` entry 是 `run_mutant.py` 這支腳本自己的 meta 測試（共用一個 no-op 或刻意編譯失敗的 patch），不屬於這個缺陷類別的管轄範圍。
+
+**#876 的耦合，程度較輕**：`876-wtmcontrolleractivator-neutralize`（`WtmControllerActivator.Create` 提早填入 `Wtm` 的 guard）原本的 `green_test` 是 `EtlMonitorController_Running_NonAdmin_Forbidden`——用的是**同一個** ETL controller 的角色判斷式 `Wtm?.LoginUserInfo?.Roles?.Select(...) ?? Array.Empty<string>()`。mutant 套用後 `Wtm` 從未被提早填入，這行走的是 `?? Array.Empty<string>()` 的 fallback 分支（而非真的求值出一個非管理員使用者的真實角色清單），最終一樣算出 `isAdmin=false` 而拒絕——跟未突變、真的判斷出「這個使用者不是管理員」得到的結論**一樣**，但是走不同的路徑。方向是安全的（fail-closed，兩條路都拒絕存取，不是 #986 命名案例那種 fail-open 方向），但原本的 description 宣稱「不影響仍然正確的 non-admin 拒絕路徑」這句話本身站不住腳。修法：改用 `MvcAuthHolesTests.Selector_AuthenticatedRequest_Succeeds`——`_FrameworkController.Selector` 完全不在自己的 `OnActionExecuting` 裡讀 `Wtm`，走的是 `PrivilegeFilter` 宣告式、以 URL 為準的授權；`DataContextFilter`/`PrivilegeFilter`（兩個都是普通的 `ActionFilterAttribute`，不受這個 mutant 影響）各自都會呼叫 `context.SetWtmContext()`，不管 `WtmControllerActivator` 有沒有提早填過——**直接讀原始碼確認**（`src/WalkingTec.Mvvm.Mvc/Filters/DataContextFilter.cs:29`、`PrivilegeFilter.cs:35`）過這件事，不是憑推測。這個 mutant 對 `Selector` 的行為完全沒有影響，是真正不同的程式碼路徑，不是碰巧結果相同。
+
+**驗證**：
+
+```
+find . -name 'demo.db*' -path '*bin*' -delete
+python3 scripts/check-mutant-entries-parse.py   # OK: all 74 mutant entry file(s) ... parse and validate.
+python3 test/mutants/run_mutant.py --mutant dcext824-derived-principal-neutralize
+python3 test/mutants/run_mutant.py --mutant 876-wtmcontrolleractivator-neutralize
+```
+
+兩者皆 `VERDICT: KILLED` / `GATE: PASS`；每次執行後 `git status --porcelain` 對兩個目標原始碼檔案皆為空輸出，確認 patch 乾淨還原。**只跑過這兩個修改過的 entry**，其餘 72 個 entry 這次稽核僅讀原始碼與 patch 靜態推導，未逐一重新執行 `run_mutant.py`（那需要對每個 entry 個別建置＋跑測試，落在這次工作階段的時間預算之外）——這代表**這份稽核證明的是「對照 patch 與測試原始碼手推，這 72 個 entry 的 green test 邏輯上解耦」，不是「這 72 個 entry 剛剛被重新執行過一遍都還是 `KILLED`」**；兩者不是同一件事，且靜態推導無法排除程式碼與這次讀到的版本之間的競爭條件、環境相依行為等 `run_mutant.py` 自己才驗得出來的問題（見上面「Verify a guard where it runs, not where you wrote it」一節的教訓）。
+
+**新增規則的位置**：寫進 `.claude/rules/testing.md`（新增一節「A mutant's positive control must not touch the mutated decision path」，緊接在既有「A fixture must not supply what production is supposed to supply」之後——兩者都是「看起來像證明、其實沒證明」這一類問題）與 `test/mutants/run_mutant.py` 檔頭（緊接在 exit code 說明之後，指向 testing.md 的完整規則）。選這兩個位置是因為 `.claude/rules/testing.md` 有 `paths: test/**` 的條件式載入，任何人一碰 `test/mutants/entries/*.json` 就會自動看到這條規則；`run_mutant.py` 則是每個 mutant 作者實際會打開、讀過整段檔頭說明的腳本本身。`test/mutants/` 底下沒有獨立的 README 可以寫。
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。

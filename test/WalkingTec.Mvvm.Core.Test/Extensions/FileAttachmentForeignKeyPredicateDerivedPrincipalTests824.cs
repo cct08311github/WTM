@@ -23,6 +23,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core.Extensions;
+using WalkingTec.Mvvm.Core.Test.VM;
 
 namespace WalkingTec.Mvvm.Core.Test.Extensions
 {
@@ -152,6 +153,55 @@ namespace WalkingTec.Mvvm.Core.Test.Extensions
             var result = ((IDataContext)ctx).IsFileAttachmentForeignKeyProperty(typeof(InvoiceTph824), nameof(InvoiceTph824.ID));
 
             Assert.IsFalse(result, "#824 Finding 1 non-regression: ID is not a FileAttachment FK and must not be flagged as one");
+        }
+
+        /// <summary>
+        /// #986: replaces the mutant's former positive control (the test above,
+        /// <see cref="IsFileAttachmentForeignKeyProperty_UnrelatedProperty_ReturnsFalse"/>). That
+        /// test reused THIS class's own <see cref="DerivedPrincipalTphContext824"/>/
+        /// <see cref="InvoiceTph824"/> fixture — the SAME derived-principal FK
+        /// (<c>InvoiceTph824.SignedFileId</c> → <c>SignedFileTph824</c>, a TPH subclass of
+        /// <see cref="FileAttachment"/>) the dcext824-derived-principal-neutralize mutant targets.
+        /// Production (<c>DCExtension.Schema.cs</c>'s <c>IsFileAttachmentForeignKeyProperty</c>)
+        /// calls the mutated <c>IsFileAttachmentPrincipal(fk.PrincipalEntityType?.ClrType)</c>
+        /// FIRST, inside the per-FK loop, and <c>continue</c>s past the FK entirely when it
+        /// returns false — only a FK that survives that gate ever reaches the property-name
+        /// comparison below it. Querying <c>InvoiceTph824.ID</c> (not an FK property) returns
+        /// <see langword="false"/> either way, but for two DIFFERENT reasons: unmutated, the gate
+        /// passes (true) and the property-name loop correctly finds no match; mutated, the gate
+        /// itself now returns false (exact-type comparison rejects the TPH subclass) and the FK is
+        /// skipped before any property name is ever compared. Same boolean, different control
+        /// path — not a control at all.
+        /// <para>
+        /// This test avoids that coupling by using <see cref="BypassGuardContext824"/>'s
+        /// <see cref="ProductWithOptionalPhoto"/> instead: its only FK
+        /// (<see cref="ProductWithOptionalPhoto.PhotoId"/>) targets <see cref="FileAttachment"/>
+        /// ITSELF, not a derived subclass. <c>IsFileAttachmentPrincipal(typeof(FileAttachment))</c>
+        /// evaluates to <see langword="true"/> under BOTH the real
+        /// <c>typeof(FileAttachment).IsAssignableFrom(principalClrType)</c> comparison and the
+        /// mutant's reverted <c>principalClrType == typeof(FileAttachment)</c> comparison — an
+        /// exact type match satisfies either test identically, so the mutation cannot change this
+        /// invocation's return value. The FK therefore always reaches the SAME property-name loop
+        /// below the gate, which correctly finds no match for <c>ID</c> against <c>PhotoId</c> and
+        /// returns false regardless of whether the mutant is applied. The assertion's outcome is
+        /// provably invariant to this mutation, which is what makes it a genuine positive control.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [Description("#824/#986 positive control: an unrelated scalar property on an entity whose ONLY FK principal is FileAttachment itself (not a derived TPH/TPT subclass) must still be reported false, via the unchanged property-name-comparison path — decoupled from the derived-principal gate the dcext824 mutant targets")]
+        public void IsFileAttachmentForeignKeyProperty_UnrelatedProperty_NonDerivedPrincipal_ReturnsFalse()
+        {
+            using var ctx = new BypassGuardContext824(ConnectionString, DBTypeEnum.SQLite);
+            ctx.Database.EnsureCreated();
+
+            var result = ((IDataContext)ctx).IsFileAttachmentForeignKeyProperty(typeof(ProductWithOptionalPhoto), nameof(ProductWithOptionalPhoto.ID));
+
+            Assert.IsFalse(result,
+                "#824/#986: ID is not a FileAttachment FK and must not be flagged as one -- this " +
+                "fixture's only FK (PhotoId) targets FileAttachment itself (non-derived), so " +
+                "IsFileAttachmentPrincipal returns true identically whether the derived-principal " +
+                "comparison is IsAssignableFrom or exact-type equality, and this assertion's " +
+                "outcome does not depend on the #824 Finding 1 derived-principal comparison at all");
         }
     }
 
