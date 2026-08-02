@@ -187,6 +187,78 @@ Tests (TDD — RED captured against the unfixed code before implementing, not si
 
 **Not verified this session**: neither fix has run on real Gitea Actions CI — this session's hard constraints forbid any Gitea/GitHub API call and forbid opening a PR, so CI verification is deferred to whenever this branch is actually opened as a PR.
 
+### Security — `FileAttachmentSaveChangesGuard.BuildMap` now rejects a FileAttachment-principal FK whose principal key is not `FileAttachment.ID` (#985, cross-vendor review of #824 Part 2)
+
+**Full defect analysis (the concrete false-allow/false-reject reproductions), the EF Core API/
+invariant verification, RED-before-fix messages, and the mutation-gate evidence are in
+`docs/production-readiness.md`'s new "#985" row — this entry does not repeat or exceed those
+claims.**
+
+A cross-vendor review of #824 Part 2 found that `BuildMap` recognised a FileAttachment-principal FK
+purely by relationship SHAPE (principal is `FileAttachment` or derived) and discarded
+`fk.PrincipalKey` entirely, so every Guid-typed candidate was resolved through
+`DCExtension.ResolveFileAttachmentIds`/`-Async`'s hardcoded `x.ID` query regardless of which key the
+relationship actually targets. For a downstream model configured via
+`HasForeignKey(...).HasPrincipalKey(x => x.SomeGuidAlternateKey)` this produced both a **false
+allow** (an attacker whose own row's `ID` happens to equal the victim's alternate-key value is
+waved through by the `x.ID` query) and a **false reject** (a legitimate alternate-key value is
+never found by `ID`, so a correct write throws). `BuildMap` now requires the relationship's
+`PrincipalKey` to be exactly the single `Guid` `TopBasePoco.ID` primary key — not merely
+`IsPrimaryKey()`, since a downstream context can re-declare `FileAttachment`'s own primary key —
+before adding a Guid-typed candidate to the map. A non-canonical principal key with at least one
+Guid-typed FK property (a Guid alternate key, single or composite — EF Core's own FK/principal-key
+property-count parity means a composite FK can never target the single-column `ID` PK, so this
+needs no separate composite branch) now throws a `NotSupportedException` — deliberately not
+`UnresolvableFileAttachmentReferenceException`, which means "a posted id failed tenant-scoped
+resolution" and would make a configuration mistake look like a detected attack — the first time the
+model is used, deterministically, at `BuildMap`/`GetOrBuildMap` time (`_fkMapCache.GetOrAdd` does
+not cache a throwing factory, so every `SaveChanges` on that model rethrows). The pre-existing
+Finding 7 path (non-Guid alternate key → `LogNonGuidAttachmentFk` + exclude from map) is untouched,
+byte-for-byte — the new check runs strictly before that loop and only ever throws for the one shape
+the loop cannot already handle safely.
+
+**No in-tree model is affected — but for a downstream consumer this is a BREAKING change, and the
+earlier wording ("not a behaviour change to any supported configuration") is retracted.** No
+`FileAttachment`-derived type or relationship shipped in this repository, or exercised by any in-tree
+test, configures `HasPrincipalKey` against anything but the implicit `ID` primary key; the positive
+control confirms the canonical shape's own map entry and behaviour are unchanged. That half is
+verified and stands.
+
+The retracted half claimed too much. `HasPrincipalKey` is a legal EF Core API, and nothing in this
+framework ever marked it unsupported — no Roslyn analyzer, no `.editorconfig` rule, no runtime
+validation, and no documented contract. This guard's own class doc comment called the alternate-key
+shape "the one legal EF Core shape" before this change. So a downstream model using it was a
+supported configuration by any reasonable reading, and after upgrading it goes from **writes
+succeeding** to **every `SaveChanges` on that whole context failing** — including saves that touch no
+`FileAttachment` at all, because `BuildMap` walks the entire model and `ConcurrentDictionary.GetOrAdd`
+never caches a throwing factory. That is a behaviour change, and by this project's own rules a
+breaking one.
+
+**Migration for an affected downstream**, in order of preference: (1) add and backfill a `Guid` FK
+pointing at `FileAttachment.ID`, keeping the business alternate key as an ordinary unique column;
+(2) if the alternate key must stay, bring the model upstream as its own issue so a typed,
+tenant-scoped resolver can be registered for that relationship. `FileAttachmentSaveChangesGuard.Enabled
+= false` is **not** offered as a migration step: it is process-wide, and it re-enables the exact
+Guid-alternate-key false-allow this check exists to close, for every entity in the application. It
+remains only as an emergency switch.
+
+Tests (TDD — RED captured against the unfixed code before implementing):
+`test/WalkingTec.Mvvm.Core.Test/VM/FileAttachmentSaveChangesGuardPrincipalKeyRejectionTests985.cs`,
+5 new — a Guid-alternate-key FK throws at first use; a composite key with a Guid component throws
+(proving "composite comes free", no dedicated branch needed); a non-Guid alternate key still warns
+and skips (Finding 7 regression pin, reusing the existing fixture); the in-tree canonical
+`FileAttachment.ID`-keyed shape's positive control (map unchanged, normal saves still work); and a
+dedicated false-allow reproduction (attacker's own row `ID` deliberately equal to the victim's
+alternate-key value) used as the mutation gate's own red test. `test/WalkingTec.Mvvm.Core.Test`
+5041 → 5046 passed, 0 failed. One pre-existing, unrelated `NETSDK1082` browser-wasm build error
+confirmed present on the unmodified base commit too, not a regression. New mutant
+`fileattachmentguard985-principal-key-check-neutralize` (neutralizes the new check,
+compile-preserving `&& false`), `VERDICT: KILLED` / `GATE: PASS` on two independent `run_mutant.py`
+runs; its red test is the concrete false-allow reproduction (SaveChanges succeeds silently under the
+mutant instead of throwing), and its green test (the positive control above) is provably decoupled
+from the mutated line — `IsCanonicalFileAttachmentPrincipalKey` short-circuits the `&&` before the
+mutated term is ever evaluated for that model's own (canonical) FK.
+
 ### Fixed — publish-nuget.yml release-gate cross-vendor review (#925, #937)
 
 Eight verified findings from a cross-vendor review of #925's initial release-gate implementation, fixed on the same branch, CI-only (no `WalkingTec.Mvvm.*` package code changed — nothing here affects any shipped package's runtime behaviour). **Full accounting of what is proven vs. assumed at publish time, and exactly which checks run before the first push, is in `docs/production-readiness.md` § "Release 供應鏈完整性（#925）" — this entry does not repeat or exceed those claims; that section is the ceiling, not this one.**

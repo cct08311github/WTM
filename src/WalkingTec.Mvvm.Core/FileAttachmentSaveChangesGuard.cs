@@ -39,18 +39,30 @@ namespace WalkingTec.Mvvm.Core
     /// NOT get this guard for free — see the CHANGELOG's #824 migration note.
     /// </para>
     /// <para>
-    /// <b>Guid-keyed only (Issue #824 adversarial review Finding 7):</b> a FileAttachment-principal
-    /// FK is resolved by <see cref="Guid"/> id exclusively. Every FileAttachment-derived type
-    /// shipped in this repository inherits <c>TopBasePoco.ID</c> (<see cref="Guid"/>,
-    /// non-virtual), so a convention-discovered relationship is always Guid-typed in practice —
-    /// the one legal EF Core shape that is NOT is a relationship configured via
-    /// <c>HasForeignKey(...).HasPrincipalKey(x =&gt; x.SomeAlternateKey)</c> against a non-Guid
-    /// alternate key. Such a field is recognised by <c>BuildMap</c> (the relationship SHAPE still
-    /// matches) but can never produce a candidate and is therefore NOT covered by this guard at
-    /// all — disclosed via a throttled <c>LogWarning</c> the first time such a field is seen
-    /// (<see cref="LogNonGuidAttachmentFk"/>) rather than silently ignored, since full support for
-    /// an arbitrary alternate-key type is out of scope for a boundary guard whose entire design is
-    /// one batched Guid-keyed resolution query.
+    /// <b>Resolved against <c>FileAttachment.ID</c> only (Issue #824 adversarial review Finding 7;
+    /// Issue #985 hardened this from a disclosed gap into an enforced model requirement):</b>
+    /// <see cref="DCExtension.ResolveFileAttachmentIds"/>/<see cref="DCExtension.ResolveFileAttachmentIdsAsync"/>
+    /// hardcode the query <c>x.ID</c> — so "this FK's relationship SHAPE matches" (principal is
+    /// <see cref="FileAttachment"/> or derived) is not the same fact as "the resolution query
+    /// answers the right question for THIS FK". <c>BuildMap</c> therefore requires the
+    /// relationship's <c>PrincipalKey</c> to be exactly the single <see cref="Guid"/>
+    /// <c>TopBasePoco.ID</c> primary key before trusting a Guid-typed candidate to that query.
+    /// Two other legal EF Core shapes exist, both configured via
+    /// <c>HasForeignKey(...).HasPrincipalKey(x =&gt; x.SomeAlternateKey)</c>:
+    /// <list type="bullet">
+    /// <item>a non-Guid alternate key (e.g. a <see cref="string"/> column) can never produce a
+    /// Guid candidate at all — recognised by shape, excluded from the map, and disclosed via a
+    /// throttled <c>LogWarning</c> the first time such a field is seen
+    /// (<see cref="LogNonGuidAttachmentFk"/>), unchanged from Finding 7's original behaviour;</item>
+    /// <item>a Guid-typed alternate key (single, or a composite key with at least one Guid
+    /// component) would otherwise silently resolve its candidates against <c>x.ID</c> instead of
+    /// the actual principal key — producing BOTH a false allow (an attacker whose own row's ID
+    /// happens to equal the victim's alternate-key value is waved through) and a false reject (a
+    /// legitimate alternate-key value is never found by ID). <c>BuildMap</c> now throws
+    /// <see cref="NotSupportedException"/> the first time such a model is used, rather than
+    /// silently mis-resolving it — a model-configuration error, not a per-request rejection. See
+    /// the CHANGELOG's #985 entry for the full false-allow/false-reject analysis and remediation.</item>
+    /// </list>
     /// </para>
     /// <para>
     /// <b>Never rewrite a posted value.</b> Earlier rounds on this issue cleared an unauthorized
@@ -263,6 +275,29 @@ namespace WalkingTec.Mvvm.Core
                     {
                         continue;
                     }
+
+                    // Issue #985 (cross-vendor review of #824, PR #978 follow-up): the shape
+                    // check above says only "the principal is FileAttachment-or-derived" — it
+                    // says nothing about WHICH key on that principal this relationship targets.
+                    // DCExtension.ResolveFileAttachmentIds(Async)'s resolution query hardcodes
+                    // `x.ID` (DCExtension.FileAttachmentResolution.cs:72,:114), so a relationship
+                    // that targets any OTHER key resolves its candidates against the WRONG
+                    // column. A design gate settled this as a model-configuration error to
+                    // reject LOUDLY here, not a resolution query to generalize — see this class's
+                    // own doc comment. This check deliberately runs BEFORE the Finding 7
+                    // per-property loop below (which stays byte-for-byte unchanged) and
+                    // only ever throws for the ONE shape that loop cannot already handle safely:
+                    // a non-canonical principal key with at least one Guid-typed FK property. A
+                    // non-canonical principal key with NO Guid-typed FK property falls straight
+                    // through to that unchanged loop, which takes the existing Finding 7
+                    // warn-and-exclude path for every one of its properties, exactly as before.
+                    var principalKey = fk.PrincipalKey;
+                    if (!IsCanonicalFileAttachmentPrincipalKey(principalKey)
+                        && fk.Properties.Any(p => IsGuidTypedProperty(p.ClrType)))
+                    {
+                        throw BuildPrincipalKeyRejectionException(entityType, fk, principalClrType!, principalKey);
+                    }
+
                     infos ??= [];
                     foreach (var property in fk.Properties)
                     {
@@ -293,6 +328,77 @@ namespace WalkingTec.Mvvm.Core
                 }
             }
             return map;
+        }
+
+        /// <summary>
+        /// Issue #985: true when <paramref name="clrType"/> — a candidate/nullable-unwrapped
+        /// property CLR type — is <see cref="Guid"/>. Shared by the new principal-key check and
+        /// (in spirit — kept as its own inline expression there for locality) the pre-existing
+        /// Finding 7 per-property loop, both of which need the exact same nullable-unwrap-then-
+        /// compare test.
+        /// </summary>
+        private static bool IsGuidTypedProperty(Type clrType)
+        {
+            return (Nullable.GetUnderlyingType(clrType) ?? clrType) == typeof(Guid);
+        }
+
+        /// <summary>
+        /// Issue #985: true only when <paramref name="principalKey"/> IS the single <see cref="Guid"/>
+        /// <c>TopBasePoco.ID</c> primary key that <see cref="DCExtension.ResolveFileAttachmentIds"/>
+        /// and <see cref="DCExtension.ResolveFileAttachmentIdsAsync"/> hardcode (<c>x.ID</c>).
+        /// <para>
+        /// <see cref="IReadOnlyKey.IsPrimaryKey"/> ALONE is not the invariant this guard's
+        /// resolution query relies on: a downstream context is free to re-declare
+        /// <see cref="FileAttachment"/>'s primary key in its own <c>OnModelCreating</c> (a
+        /// composite key, or a differently-named single column) — that would still pass
+        /// <c>IsPrimaryKey()</c> while still not being the <c>ID</c> column the resolution query
+        /// actually filters on. This requires ALL FOUR: it is the primary key, it is exactly one
+        /// property, that property is named <c>"ID"</c>, and its (nullable-unwrapped) CLR type is
+        /// <see cref="Guid"/>.
+        /// </para>
+        /// </summary>
+        private static bool IsCanonicalFileAttachmentPrincipalKey(IReadOnlyKey principalKey)
+        {
+            return principalKey.IsPrimaryKey()
+                && principalKey.Properties.Count == 1
+                && principalKey.Properties[0].Name == nameof(TopBasePoco.ID)
+                && IsGuidTypedProperty(principalKey.Properties[0].ClrType);
+        }
+
+        /// <summary>
+        /// Issue #985: builds the <see cref="NotSupportedException"/> thrown from <see cref="BuildMap"/>
+        /// when a FileAttachment-principal FK's principal key is neither the canonical single Guid
+        /// <c>ID</c> primary key nor entirely non-Guid (the still-supported, still-disclosed
+        /// Finding 7 shape). Deliberately a plain <see cref="NotSupportedException"/> rather than
+        /// <see cref="UnresolvableFileAttachmentReferenceException"/> — that type means "a POSTED id
+        /// failed tenant-scoped resolution at request time"; this is a MODEL CONFIGURATION error,
+        /// discovered once per distinct <see cref="IModel"/> at first use, not a per-request
+        /// security decision, and reusing the request-time type would make a configuration mistake
+        /// look like a detected attack. The message names the entity, the FK propert(y/ies), the
+        /// principal key's own propert(y/ies), and both remediations: re-point the FK at
+        /// <c>FileAttachment.ID</c>, or opt out of this whole guard via
+        /// <see cref="Enabled"/> = <see langword="false"/>.
+        /// </summary>
+        private static NotSupportedException BuildPrincipalKeyRejectionException(IEntityType entityType, IForeignKey fk, Type principalClrType, IReadOnlyKey principalKey)
+        {
+            var fkPropertyNames = string.Join(", ", fk.Properties.Select(p => p.Name));
+            var principalKeyPropertyNames = string.Join(", ", principalKey.Properties.Select(p => p.Name));
+            return new NotSupportedException(
+                $"Issue #985: {entityType.ClrType.Name}.{fkPropertyNames} is a foreign key onto " +
+                $"{principalClrType.Name} (a FileAttachment or a type derived from it) whose " +
+                $"principal key is ({principalKeyPropertyNames}), not the single Guid " +
+                $"{nameof(TopBasePoco.ID)} primary key. FileAttachmentSaveChangesGuard's " +
+                $"resolution query (DCExtension.ResolveFileAttachmentIds/-Async) hardcodes " +
+                $"`x.ID` — resolving a Guid-valued alternate key against it both permits a " +
+                $"forged reference (an attacker whose own row's ID happens to equal the " +
+                $"victim's alternate-key value is waved through) and rejects a legitimate one " +
+                $"(a real alternate-key value is never found by ID). This model shape is not " +
+                $"supported by the #824 SaveChanges boundary guard. To fix: either re-point " +
+                $"{entityType.ClrType.Name}.{fkPropertyNames} at {nameof(FileAttachment)}." +
+                $"{nameof(TopBasePoco.ID)} (remove the HasPrincipalKey(...) override for this " +
+                $"relationship), or opt out of this guard entirely for this context via " +
+                $"{nameof(FileAttachmentSaveChangesGuard)}.{nameof(Enabled)} = false (see this " +
+                $"class's own doc comment for what that disables).");
         }
 
         private static Guid? ExtractGuid(object? value)

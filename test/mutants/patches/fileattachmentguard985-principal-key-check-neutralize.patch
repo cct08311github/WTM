@@ -1,0 +1,18 @@
+diff --git a/src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs b/src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs
+index 9617262..376c420 100644
+--- a/src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs
++++ b/src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs
+@@ -292,8 +292,12 @@ namespace WalkingTec.Mvvm.Core
+                     // through to that unchanged loop, which takes the existing Finding 7
+                     // warn-and-exclude path for every one of its properties, exactly as before.
+                     var principalKey = fk.PrincipalKey;
++                    // MUTANT test/mutants fileattachmentguard985-principal-key-check-neutralize:
++                    // condition neutralized (compile-preserving, `&& false`) so BuildMap can never
++                    // reject a non-canonical Guid-typed principal key. See test/mutants/manifest.json.
+                     if (!IsCanonicalFileAttachmentPrincipalKey(principalKey)
+-                        && fk.Properties.Any(p => IsGuidTypedProperty(p.ClrType)))
++                        && fk.Properties.Any(p => IsGuidTypedProperty(p.ClrType))
++                        && false)
+                     {
+                         throw BuildPrincipalKeyRejectionException(entityType, fk, principalClrType!, principalKey);
+                     }

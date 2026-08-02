@@ -524,6 +524,43 @@ python3 test/mutants/run_mutant.py --mutant 876-wtmcontrolleractivator-neutraliz
 
 ---
 
+## `FileAttachmentSaveChangesGuard.BuildMap` 沒驗證 `fk.PrincipalKey`，Guid 替代鍵造成假允許與假拒絕（#985，cross-vendor review of #824 Part 2，2026-08-02）
+
+**缺陷（設計 gate 已裁定，本節只記錄裁定內容與驗證過程，不重新開放討論）**：`BuildMap`（`FileAttachmentSaveChangesGuard.cs:262` 附近）只用關聯**形狀**辨識候選 FK——principal 是 `FileAttachment` 或其衍生型別（`DCExtension.IsFileAttachmentPrincipal`）——通過後就只保留依賴端屬性名稱與 principal 的 CLR 型別，**完全丟棄 `fk.PrincipalKey`**。下游解析查詢（`DCExtension.ResolveFileAttachmentIds`/`-Async`，`DCExtension.FileAttachmentResolution.cs:72`/`:114`）卻寫死 `x.ID`。對一個透過 `HasForeignKey(...).HasPrincipalKey(x => x.SomeGuidAlternateKey)` 設定、principal key 是 Guid 型別替代鍵的關聯，這個落差同時產生兩個方向的錯誤：
+
+- **假允許**：受害者 `ID=V, AlternateGuid=A`；攻擊者 `ID=A, AlternateGuid=B`。攻擊者的依賴端 FK 帶 `A`（真正的關聯，透過 `AlternateGuid`，指向受害者的列——資料庫的 FK constraint 也確實這樣強制）。guard 的解析查詢卻是 `x.ID == A`，在攻擊者自己的租戶範圍內找到**攻擊者自己那一列**（其 `ID` 剛好等於 `A`），誤判為已解析、放行寫入。
+- **假拒絕**：一個合法的、真正透過 `AlternateGuid` 指向同租戶檔案的 FK 值，永遠不會被 `x.ID` 查詢找到，於是被拒絕，即使這是完全合法的寫入。
+
+複合鍵的情況會被同一個修法免費涵蓋，不需要獨立分支：EF Core 的 `ForeignKey.AreCompatible`（透過反編譯 `Microsoft.EntityFrameworkCore.dll` 10.0.9 確認，`ArePropertyCountsEqual` 不通過會丟 `ForeignKeyCountMismatch`）強制 FK 屬性數量必須等於 principal key 屬性數量——`FileAttachment` 繼承的主鍵永遠是單一 `[Key] Guid ID`（`TopBasePoco.cs:19`），所以任何複合 FK 都不可能指向這個單欄位 PK，同一條「principal key 不是那個單一 Guid ID」判斷式自然涵蓋它。
+
+**修法（設計 gate 裁定：在 `BuildMap` 時偵測並大聲拒絕，不把解析查詢改成通用查詢）**：`IsFileAttachmentPrincipal` 通過後（`:262` 之後），新增 `IsCanonicalFileAttachmentPrincipalKey` 判斷 `fk.PrincipalKey`：要求 `pk.IsPrimaryKey()` **且** `pk.Properties.Count == 1` **且** 該屬性名稱是 `nameof(TopBasePoco.ID)` **且** 其（去除 nullable 包裝後的）CLR 型別是 `Guid`——**不是**只查 `IsPrimaryKey()`：下游 context 可以在自己的 `OnModelCreating` 裡重新宣告 `FileAttachment` 的主鍵（例如改成複合鍵，或改名的單一欄位），那樣仍然會通過 `IsPrimaryKey()` 卻依然不是解析查詢實際查的那個 `ID` 欄位——這正是「`IsPrimaryKey()` 本身不是這個解析查詢依賴的不變式，『那個單一 Guid `ID`』才是」這句話的具體意思。三種分支：
+
+| principal key 形狀 | 行為 |
+|---|---|
+| 單一 Guid `ID` 主鍵（canonical） | 完全比照修法前——照舊往下跑 Finding 7 的逐屬性迴圈 |
+| 不是那個 canonical PK，且**沒有**任何 Guid 型別的 FK 屬性 | Finding 7 路徑**逐位元組不變**——`LogNonGuidAttachmentFk` + 排除出地圖（`:281`-`:286` 這段迴圈本身完全沒改一個字元，新檢查只是加在它前面、對這個分支永遠是 no-op） |
+| 不是那個 canonical PK，且**至少一個** Guid 型別的 FK 屬性（涵蓋單一 Guid 替代鍵，以及任何含 Guid 成分的複合鍵） | **拋 `NotSupportedException`**——模型設定錯誤，不是請求時的安全判斷，因此刻意不重用 `UnresolvableFileAttachmentReferenceException`（那個型別的語意是「posted 的 id 沒通過租戶範圍解析」，重用會讓設定錯誤看起來像被抓到的攻擊）。訊息點名實體、FK 屬性、principal key 的屬性，以及兩種補救：把 FK 改指回 `FileAttachment.ID`，或用既有的 opt-out `FileAttachmentSaveChangesGuard.Enabled = false`（`:93`，會跳過 `:524`-`:527`/`:612`-`:615` 的地圖建構本身） |
+
+`_fkMapCache.GetOrAdd(model, BuildMap)`（`:224`-`:227`）不會快取一個會拋例外的 factory——`ConcurrentDictionary.GetOrAdd` 對同一個 key 每次呼叫都會重新呼叫 factory，直到某次成功寫入為止，所以每一次 `SaveChanges` 碰到這個模型都會重新拋出，不是「第一次拋、之後靜默通過」——這個行為**是自己動手確認的**，不是採信 issue 文字：讀 `ConcurrentDictionary<TKey,TValue>.GetOrAdd(TKey, Func<TKey,TValue>)` 的官方文件與行為契約（factory 拋例外時不會有任何值被寫入字典），並用下方 Test 1/Test 2 兩支測試各自獨立呼叫 `dc.SaveChanges()` 兩次驗證兩次都拋，確認結論。
+
+**EF Core API 與不變式驗證（10.0.9，本 repo 釘住的版本，`Directory.Packages.props:51`）**：用 `ilspycmd` 反編譯 `~/.nuget/packages/microsoft.entityframeworkcore/10.0.9/lib/net10.0/Microsoft.EntityFrameworkCore.dll` 直接讀介面定義，不採信記憶或 issue 文字宣稱：`IReadOnlyForeignKey.PrincipalKey` 型別是 `IReadOnlyKey`（存在）；`IReadOnlyKey.IsPrimaryKey()` 是一個 default interface method，實作是 `this == DeclaringEntityType.FindPrimaryKey()`（存在）；`ForeignKey.AreCompatible`（`Microsoft.EntityFrameworkCore.Metadata.Internal.ForeignKey` 內部類別）在 `ArePropertyCountsEqual` 失敗時丟 `CoreStrings.ForeignKeyCountMismatch(...)`——確認 FK 屬性數量必須等於 principal key 屬性數量這個不變式在這個版本上成立，composite 分支因此不需要獨立處理。
+
+**測試（TDD，RED 先於實作，訊息全部實際跑出來、不是預期猜測）**：`test/WalkingTec.Mvvm.Core.Test/VM/FileAttachmentSaveChangesGuardPrincipalKeyRejectionTests985.cs`，5 支新測試：
+
+- `SaveChanges_GuidAlternateKeyPrincipal_ThrowsAtFirstUse`（單一 Guid 替代鍵）：修法前 RED——`Assert.ThrowsException failed. Expected exception type:<System.NotSupportedException>. Actual exception type:<WalkingTec.Mvvm.Core.Exceptions.UnresolvableFileAttachmentReferenceException>.`（posted 的隨機 Guid 沒有任何列的 `ID` 對得上，落在假拒絕那個症狀）。**這一支同時取代了 issue 原本要求的假允許與假拒絕兩種重現**——測試自己的註解說明原因：兩種症狀是同一個根因（`BuildMap` 信任任何 Guid 形狀的候選會被 `x.ID` 正確解析）的兩種不同表現；修法不是個別修補任一症狀，而是在 `BuildMap` 時就整個拒絕建圖，讓兩種症狀都**在解析查詢執行之前**就不可能發生——單獨用假允許或假拒絕的資料各自重現一次，只會證明同一個 `NotSupportedException` 從兩個不同呼叫點被拋出，對「這個形狀完全不可達」這件事沒有增加證據。刪除這一行會變紅：`if (!IsCanonicalFileAttachmentPrincipalKey(principalKey) && fk.Properties.Any(p => IsGuidTypedProperty(p.ClrType)))`。
+- `SaveChanges_CompositeKeyWithGuidComponent_ThrowsAtFirstUse`（複合鍵、含一個 Guid 成分）：修法前 RED，訊息同上（`Actual exception type:<...UnresolvableFileAttachmentReferenceException>`），驗證「複合鍵免費涵蓋」的宣稱不只是推理、是實測。刪除同一行會變紅。
+- `SaveChanges_NonGuidAlternateKeyPrincipal_StillWarnsAndSkips`（Finding 7 迴歸釘子）：重用既有的 `NonGuidFkContext824`/`DocumentByHash824` fixture（`FileAttachmentSaveChangesGuardNonGuidFkTests824.cs`），修法前後皆 PASS（這條路徑本來就沒被改動，不是「先紅後綠」）——這正是用來確認 Finding 7 分支逐位元組不變的**行為證據**：同一個 fixture、同一個斷言（不拋任何例外），在新檢查加入前後結果相同。刪除 `IsCanonicalFileAttachmentPrincipalKey` 判斷式本身、或刪除新檢查前的 `&&` 右側 `fk.Properties.Any(...)` 子句，都不會讓這支測試變紅（它本來就該一直是綠的）——這支測試的「刪哪一行會變紅」問法在此不適用，它的角色是「刪新程式碼後仍必須維持綠」的守門測試，不是偵測新程式碼存在的測試。
+- `SaveChanges_InTreeCanonicalGuidIdPrincipal_MapUnchanged_NormalSavesStillWork`（正控組）：重用既有的 `BypassGuardContext824`/`ProductWithOptionalPhoto`（慣例辨識、principal key 就是 `FileAttachment.ID` 的 canonical 形狀），修法前後皆 PASS，同一台語意：同租戶合法寫入必須照常持久化。
+- `SaveChanges_GuidAlternateKeyPrincipal_AttackerIdEqualsVictimAlternateKey_ThrowsAtFirstUse`（mutation gate 專用的假允許具體重現）：受害者 `FileAttachment`（`ID=V, AlternateGuid985=A, TENANT_VICTIM`）與攻擊者自己的 `FileAttachment`（`ID=A`——刻意等於受害者的 `AlternateGuid985`——`TENANT_ATTACKER`）都經由**不含這個問題 FK 的獨立 seed context**（`GuidAlternateKeySeedContext985`，避免 seed 本身就先觸發 `BuildMap` 的拒絕）建立；攻擊者的依賴端 FK 帶 `A`。修法前 RED——`Assert.ThrowsException failed. Expected exception type:<System.NotSupportedException> but no exception was thrown.`（不是「Actual exception type」，是「沒有任何例外」——這正是假允許的訊號：`SaveChanges` 靜默成功，代表偽造的參照被放行）。
+
+套件數字：`test/WalkingTec.Mvvm.Core.Test` **5041 → 5046 passed, 0 failed**（base commit 5041 是在乾淨 worktree、任何修改前直接跑出來的，不是沿用舊記錄）。`dotnet build WalkingTec.Mvvm.sln`：1 個已知、跟本次修改無關的 `NETSDK1082`（`BlazorDemo.Client` 缺 `browser-wasm` runtime pack）——**對 base commit（`origin/dotnet10` tip `7c70018ac`）單獨重建同一個 sln 確認過同一個錯誤存在**，不是本次修法造成的新問題。
+
+**Mutation gate**：`test/mutants/entries/fileattachmentguard985-principal-key-check-neutralize.json`，中和新檢查（`&& false`，compile-preserving，不是刪除，比照本文件其他 mutant 的既定慣例）。red_test 就是上面的假允許具體重現——`red_expected_assertion_patterns` 錨定在單行、穩定的片段 `Assert\.ThrowsException failed\. Expected exception type:<System\.NotSupportedException> but no exception was thrown\.`（避開 Python `re` 的 `.` 不吃換行這個本文件已經記過兩次的教訓，只取一行內的文字）。**green_test 與被 mutate 的程式碼可證明地解耦**：green_test 用的是 canonical 形狀（`ProductWithOptionalPhoto.PhotoId`），其唯一的 FileAttachment FK 在 `IsCanonicalFileAttachmentPrincipalKey(principalKey)` 會回傳 `true`；新檢查是 `if (!IsCanonicalFileAttachmentPrincipalKey(principalKey) && fk.Properties.Any(...))`——C# 的 `&&` 短路求值下，`!true` 已經是 `false`，右側（含被 mutate 的 `&& false` 那個子句）**根本不會被求值**，不是「資料剛好沒觸發」，是語言層級保證不可達。這正是 `.claude/rules/testing.md`「green_test 不得補償 production 邏輯本身」那條規則要求的等級——不只是「不同 fixture」，是可以指出程式語意上為什麼碰不到。實際驗證：`run_mutant.py --mutant fileattachmentguard985-principal-key-check-neutralize` 連續跑兩次，皆 `VERDICT: KILLED` / `GATE: PASS`，兩次執行後 `git status --porcelain -- src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs` 皆空輸出，確認目標檔案乾淨還原；`red_expected_assertion_patterns` 的實際文字先用手動 `git apply`＋`dotnet test -c Release`＋`git apply -R`（本 repo 對「先確認一次、再交給 `run_mutant.py` 正式跑」的既定方法）單獨捕捉過一次，跟正式 `run_mutant.py` 跑出來的結果一致。`python3 scripts/check-mutant-entries-parse.py`：75 個 mutant entry 全部通過（含本次新增這一個）。
+
+**框架定位，誠實陳述**：這是對一個從未正確過的模型形狀做 fail-closed 硬化，**不是對任何目前支援的設定做行為變更**。本 repo 出貨的每一個 `FileAttachment` 衍生型別或關聯都只用慣例辨識（隱含指向 `ID`），沒有任何地方用 `HasPrincipalKey` 指向替代鍵——正控組測試（上面第四支）直接證明這個 canonical 形狀的地圖內容與行為完全不受影響，本次修法**沒有任何 in-tree 模型能碰到新的 throw**。下游若真的組出這個形狀（`HasForeignKey(...).HasPrincipalKey(x => x.SomeGuidAlternateKey)` 指向一個 `FileAttachment`-principal 的 Guid 替代鍵），升級後第一次對該模型呼叫 `SaveChanges` 就會看到 `NotSupportedException`，三條路可走：把 FK 改指回 `FileAttachment.ID`、用文件化的 `FileAttachmentSaveChangesGuard.Enabled = false` opt-out（代價見本文件與 CHANGELOG 對這個開關既有的完整說明——會重新打開整個 #824 系列關掉的洞，不是只影響這一個模型），或把這個模型形狀本身回報成獨立 issue、帶回上游討論是否要擴充解析查詢支援任意 principal key（本次修法刻意不做這件事，設計 gate 已裁定範圍）。
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。
