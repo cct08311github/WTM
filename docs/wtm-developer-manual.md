@@ -2915,7 +2915,7 @@ const newTokens = await refreshRes.json();
 - **刪除 app-copy 的 `RefreshToken` action**：若你的專案抄過 demo 的 `_Admin/AccountController.RefreshToken`，必須刪除（與框架端點同路由會 `AmbiguousMatchException`）——**刪除前先確認該 action 上的 attributes**（範本掛著 `[WtmRateLimit(100, 60)]`；若它是你唯一的該 tuple 註冊源，刪除會連帶取消具名 policy 的註冊，引用它的 minimal-API 端點會每請求 500——10.17.0 起可改用 `RegisterPolicy` 顯式註冊，見 §10.9）。
 - **既有資料庫必須先有 `FrameworkRefreshTokens` 表**：#721 使 token 持久化首次真正寫入（每次成功登入 INSERT 一列、rotation 再一列，寫入失敗＝登入失敗）。舊版 `EnsureCreated()` 建立的 DB **沒有**這張表，升級後全站登入失敗；fresh DB 自動建表，staging/e2e 測不出來。欄位對照與 idempotent DDL 指引見 `CHANGELOG.md` `[10.15.0]` Migration 段。
 - **表無界成長 → opt-in retention（10.17.0，#757）**：`services.AddWtmRefreshTokenRetention()` 啟用每日清理（預設 04:00 本地時間，與 ActionLog 的 03:00 錯開；`ExpiredDays`/`RevokedDays` 預設 30 天、`BatchSize` 5000、任一 knob ≤0 停用該類）。**硬性安全不變量**：revoked-but-unexpired 的列（reuse-attack 鏈式撤銷的 tripwire）無論設定為何都不會被刪。未註冊擴充方法＝完全不啟用（零預設行為變更）。
-- **索引（10.17.0，#761）**：`Token` / `ExpiresUtc` / `(RevokedUtc, ExpiresUtc)` 三個索引隨 entity 內建——僅對 fresh DB 自動生效；既有 DB 需手動 `CREATE INDEX`（`EnsureCreated` 不回填索引）。
+- **索引（10.18.0，#761）**：`Token` / `ExpiresUtc` / `(RevokedUtc, ExpiresUtc)` 三個索引隨 entity 內建——僅對 fresh DB 自動生效；既有 DB 需手動 `CREATE INDEX`（`EnsureCreated` 不回填索引）。**建之前務必先查現況**：本 repo 的 `db-migration-8.1.13.sql` 已在 `Token` 上建過索引（名為 `IX_RefreshToken_Token`，與 entity 宣告的 `IX_FrameworkRefreshTokens_Token` 同欄位、不同名），名稱不衝突所以 `CREATE INDEX` 會成功並靜默留下兩個功能重複的索引。查詢語句與各 provider 的冪等 DDL 見 `CHANGELOG.md` `[10.18.0]` 的 Migration 段。
 
 ### 10.3 權限模型
 
