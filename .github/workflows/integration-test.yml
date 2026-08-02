@@ -54,11 +54,47 @@ jobs:
       # suite (test/WalkingTec.Mvvm.Integration.Test) only does plain EF Core CRUD via
       # DBTypeEnum.SqlServer — no full-text search, CLR, temporal tables, or other
       # features azure-sql-edge lacks — so the swap is compatible.
+      # Issue #1020: this service had no memory bound at all -- the mac-mini runner's
+      # Docker VM is a hard 4 CPU / 3.813GiB total (`docker info`, confirmed live
+      # against this exact repo's Gitea Actions daemon while investigating this
+      # issue), shared with the job container that's simultaneously restoring,
+      # building, and running `dotnet test` in the very same job. Run 6509 died in
+      # EnsureCreated() with "Error 945: insufficient system memory in resource pool
+      # 'internal'" after the one failing test ran 13x slower than its usual 957ms --
+      # thrashing before giving up, not a hard crash. The failure is intermittent
+      # (majority of runs pass), so a green run after this change proves nothing by
+      # itself; see the "Report MSSQL effective memory" step below for the actual
+      # verification.
+      #
+      # MSSQL_MEMORY_LIMIT_MB is Microsoft's documented Linux/container memory knob
+      # and is set below on that basis, but it was NOT possible to confirm it does
+      # anything on this host: local testing directly against this repo's own Gitea
+      # Actions Docker daemon (same image, same arch, same 4 CPU / 3.813GiB VM) at
+      # 1536, 768, and 400 MB produced `sys.dm_os_sys_info.committed_target_kb`
+      # values of 1480256, 1546520, and 1561152 respectively -- moving the WRONG way
+      # as the requested limit dropped, i.e. tracking ambient host memory at
+      # container start, not the env var. `container_type_desc` read `NONE` in every
+      # trial, meaning the engine never believed it was running in a container on
+      # this host at all, which is the likely reason its cgroup-aware memory sizing
+      # path never engages. `--memory` below is the part that's actually verified
+      # enforced: `/sys/fs/cgroup/memory.max` inside the container exactly matched
+      # whatever `--memory` was set to in every trial, regardless of what the SQL
+      # engine itself believed. `--memory=2560m` is set above the highest
+      # self-determined `committed_target_kb` observed across those trials
+      # (~2.03GiB, all measured at idle/startup, not under real test-suite load) so
+      # this bound doesn't trade today's occasional graceful "Error 945" for a
+      # deterministic cgroup OOM-kill of the whole container under normal load --
+      # while still being well below the 3.813GiB VM total, leaving roughly 1.25GiB
+      # for the job container plus this host's persistent Gitea infra containers
+      # (gitea/gitea-db/act_runner, observed ~576MiB combined at idle). If a live run
+      # shows this cap is still too tight (or too loose), see docs/ci-operations.md's
+      # "#1020" entry for the next step -- do not just raise the number blindly.
       mssql:
         image: mcr.microsoft.com/azure-sql-edge:latest
         env:
           ACCEPT_EULA: Y
           MSSQL_SA_PASSWORD: YourStr0ng!Pass
+          MSSQL_MEMORY_LIMIT_MB: 1536
         ports:
           - 1433:1433
         options: >-
@@ -67,6 +103,7 @@ jobs:
           --health-timeout 5s
           --health-retries 60
           --health-start-period 5s
+          --memory=2560m
     steps:
       - uses: actions/checkout@v5
         timeout-minutes: 5
@@ -100,6 +137,51 @@ jobs:
           docker ps -a || echo "docker CLI/socket not available in this job container"
           docker logs mssql || true
           exit 1
+
+      - name: Report MSSQL effective memory (issue #1020)
+        timeout-minutes: 5
+        run: |
+          # This step does not fix the flake described in #1020 -- it makes the
+          # effective memory picture observable so a human reading this log (not a
+          # green/red badge) can judge whether services.mssql.env.MSSQL_MEMORY_LIMIT_MB
+          # and services.mssql.options' --memory (both set above) are doing anything.
+          # A passing run proves nothing here since the failure is intermittent.
+          #
+          # sp_configure 'max server memory (MB)' does not exist on azure-sql-edge --
+          # confirmed locally against this exact image: it raises Msg 15123 ("the
+          # configuration option ... does not exist, or it may be an advanced
+          # option."), so it cannot be used. sys.dm_os_sys_info is the DMV that is
+          # actually supported and returns real data on this engine. docker exec +
+          # sqlcmd is not an option either: this image ships no sqlcmd on arm64 (see
+          # docker-compose.yml), and this job has no docker socket (see the previous
+          # step's diagnostics comment) -- confirmed both independently while
+          # investigating this issue.
+          #
+          # Uses a .NET 10 file-based app (`dotnet run --file`) with the same
+          # Microsoft.Data.SqlClient version already pinned in
+          # Directory.Packages.props, since dotnet is a client already proven to
+          # reach `mssql:1433` from this exact job (the next step does it too via EF
+          # Core, using the same package).
+          cat > "$RUNNER_TEMP/mssql-mem-check.cs" <<'EOF'
+          #:package Microsoft.Data.SqlClient@6.1.1
+
+          using Microsoft.Data.SqlClient;
+
+          // CI-only ephemeral container password -- not connected to any persistent resource
+          var connStr = "Server=mssql,1433;Database=master;User Id=sa;Password=YourStr0ng!Pass;TrustServerCertificate=True;Connection Timeout=15";
+          using var conn = new SqlConnection(connStr);
+          conn.Open();
+          using var cmd = conn.CreateCommand();
+          cmd.CommandText = "SELECT physical_memory_kb, committed_target_kb, committed_kb, container_type_desc FROM sys.dm_os_sys_info;";
+          using var reader = cmd.ExecuteReader();
+          while (reader.Read())
+          {
+              Console.WriteLine($"[mssql memory] physical_memory_kb={reader["physical_memory_kb"]} committed_target_kb={reader["committed_target_kb"]} committed_kb={reader["committed_kb"]} container_type_desc={reader["container_type_desc"]}");
+          }
+          EOF
+          echo "Configured in this file: MSSQL_MEMORY_LIMIT_MB=1536, services.mssql.options --memory=2560m"
+          echo "container_type_desc=NONE below is expected on this host (confirmed locally, #1020) -- it means the engine never detects it is containerized here, which is the likely reason MSSQL_MEMORY_LIMIT_MB has no confirmed effect. The numbers below are what SQL Server itself believes, not proof the Docker-level --memory cap above is honored (that cap is enforced by the kernel regardless of what the engine believes)."
+          dotnet run --file "$RUNNER_TEMP/mssql-mem-check.cs"
 
       - name: Run integration tests
         timeout-minutes: 15

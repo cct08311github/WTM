@@ -370,6 +370,65 @@ layout 穩定）之外，其餘四種失敗的根因是資源競爭本身，逐�
 
 ---
 
+## `integration-test.yml` 的 `mssql` service container 沒有記憶體上限（#1020，2026-08-03）
+
+Run 6509 在 `EnsureCreated()` 死於 `Error 945`（"insufficient system memory in
+resource pool 'internal'"）——同一支測試（`BasePagedListVM_Paging`）平常 957ms，那次
+跑了 13 秒才死，是先 thrashing 再放棄的樣子，不是硬 crash。**間歇性**，同一天多數 run
+是 9/9 全過；`services.mssql` 當時完全沒有任何記憶體邊界（`env` 沒有
+`MSSQL_MEMORY_LIMIT_MB`，`options` 沒有 `--memory`），會跟同一個 job 容器（同時在
+restore/build/`dotnet test`）搶這台 mac-mini act_runner 背後那顆硬 4 CPU /
+**3.813GiB**（`docker info`，本票直接對這個 repo 自己的 Gitea Actions daemon 現場量到）
+Docker VM。
+
+**修法前先在本機對同一顆 daemon 做的驗證**（不是查文件就假設能用，三次被「驗證環境成立、
+執行環境不成立」的守衛打過之後養成的習慣，見 `#967`/`#973`/`#968`）：
+
+- **`sqlcmd` 在 azure-sql-edge 的 arm64 image 上不存在**——`docker exec` 進容器找
+  `/opt/mssql-tools*/bin` 直接 `No such file or directory`，跟 `docker-compose.yml`/
+  `test/docker-compose.etl-test.yml` 既有註解一致（本票是第一次真的進容器裡驗證，不是
+  沿用註解）。這個 job 本身也沒有 docker socket（`Wait for MSSQL ready` step 既有註解已
+  記錄），所以就算 image 有 sqlcmd 也用不到。
+- **`sp_configure 'max server memory (MB)'` 在 azure-sql-edge 上不存在**——直接
+  `Msg 15123`："The configuration option 'max server memory (MB)' does not exist, or
+  it may be an advanced option."（`EXEC sp_configure;` 列出全部選項也搜不到任何
+  `memory` 字樣）。這是被文件警告過的「reduced engine」的實例。
+- **`sys.dm_os_sys_info` 有支援**，回傳 `physical_memory_kb`／`committed_target_kb`／
+  `committed_kb`／`container_type_desc` 等真實欄位——這是最後用在 workflow 裡的 DMV。
+- **`MSSQL_MEMORY_LIMIT_MB` 對這台host沒有可觀測的效果**：本機對同一顆 Docker daemon
+  分別用 1536／768／400（MB）起容器，`committed_target_kb` 量到
+  1480256／1546520／1561152——**隨著要求的上限越調越低，數字反而越高**，跟預期方向相反，
+  比較像是跟著容器啟動當下的 ambient 可用記憶體走，不是跟著這個環境變數走。
+  `container_type_desc` 五次測試全部是 `NONE`——引擎自己從來不認為它在容器裡跑，這大概
+  就是 cgroup-aware 記憶體管理路徑沒被觸發的原因。
+- **`--memory`（cgroup 上限）則是實測有效**：容器內 `/sys/fs/cgroup/memory.max`
+  每次都精確等於外部給的 `--memory` 值，跟 SQL 引擎自己相不相信這個上限無關——這是
+  kernel 層面強制的，不需要引擎配合。
+
+**修法**：`services.mssql.env` 加 `MSSQL_MEMORY_LIMIT_MB: 1536`（照 Microsoft 文件的
+建議機制設，但如上所述效果未獲確認）；`services.mssql.options` 加 `--memory=2560m`
+（實際生效的邊界，設在本機五次測試觀察到的最高 `committed_target_kb`——約 2.03GiB，
+且都只是 idle/startup 狀態、不是真正測試負載下——之上，避免把「偶爾一次 Error 945」換成
+「cgroup 直接把整個容器 OOM-kill」；`2560m` 距離 3.813GiB VM 總量還留約 1.25GiB 給 job
+容器 + 這台機器常駐的 Gitea 基礎設施容器）。同時新增一個
+`Report MSSQL effective memory (issue #1020)` step，用 .NET 10 file-based app
+（`dotnet run --file`，同一支 `Microsoft.Data.SqlClient` 版本，跟
+`Directory.Packages.props` 一致）查 `sys.dm_os_sys_info`，把上面四個欄位印進 log——
+**這是唯一能讓「CI 綠了」跟「這個修法真的有作用」脫鉤的東西**：這個缺陷本來就是間歇性的，
+單次 green run 什麼都不能證明。
+
+**如果之後真實 run 顯示這個上限太緊（mssql 容器被 OOM-kill）或太鬆（Error 945 還是出現）**：
+不要盲目調數字——下一步是把 job 移到 `ubuntu-24.04`（Azure overflow runner，15GiB），
+代價是吃 Azure 分鐘數，故本票刻意不做。
+
+**其他 workflow 有沒有一樣的形狀**：用 `yaml.safe_load` 逐一檢查
+`ci-build.yml`／`mutation-gate.yml`／`regression.yml`／`e2e-test.yml`／
+`publish-nuget.yml`／`timeout-selftest.yml`／`vue3demo-build.yml` 的每個 job，
+**沒有其他檔案有 `services:` 區塊**——`integration-test.yml` 是這個 repo唯一起資料庫
+service container 的 workflow，不需要另外開票。
+
+---
+
 ## 排錯 SOP
 
 當 PR 的 CI conclusion 是 failure：
