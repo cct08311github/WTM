@@ -149,6 +149,18 @@ namespace WalkingTec.Mvvm.Core
         // FileAttachment-derived type. See LogNonGuidAttachmentFk's doc comment.
         private static readonly ConcurrentDictionary<string, byte> _loggedNonGuidFks = new();
 
+        // Issue #1000 Part 1: BuildMap's fourth decision -- the #985 NotSupportedException thrown
+        // when a FileAttachment-principal FK's principal key is neither the canonical single Guid
+        // ID nor entirely non-Guid -- shipped with #985 emitting no log at all, unlike the other
+        // three decisions above. Same rationale as Finding 3's comment on _loggedRejections: a
+        // rejection with no server-side signal leaves an operator or a security-monitoring
+        // pipeline nothing to find. Throttled the same way, keyed on (entity type, FK
+        // propert(y/ies)), because _fkMapCache's own doc comment already establishes that
+        // ConcurrentDictionary.GetOrAdd does not cache a throwing factory -- BuildMap, and
+        // therefore this decision, reruns on EVERY SaveChanges against the same misconfigured
+        // model, not merely the first.
+        private static readonly ConcurrentDictionary<string, byte> _loggedPrincipalKeyRejections = new();
+
         /// <summary>
         /// Test/diagnostic seam: clears the static per-model cache. Production code never needs
         /// this — the cache is keyed on <see cref="IModel"/> reference identity and a given model
@@ -168,6 +180,7 @@ namespace WalkingTec.Mvvm.Core
             _loggedRejections.Clear();
             _loggedResolutionFailures.Clear();
             _loggedNonGuidFks.Clear();
+            _loggedPrincipalKeyRejections.Clear();
         }
 
         private static void LogRejection(Candidate candidate)
@@ -233,6 +246,36 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
+        /// <summary>
+        /// Issue #1000 Part 1: logs the same fact <see cref="BuildPrincipalKeyRejectionException"/>
+        /// throws for -- a FileAttachment-principal FK whose principal key is neither the
+        /// canonical single Guid <c>ID</c> nor entirely non-Guid -- at the decision point itself,
+        /// matching the shape, level, and once-per-process-per-field throttle discipline this
+        /// class already established for its other three decisions (<see cref="LogRejection"/>,
+        /// <see cref="LogResolutionFailure"/>, <see cref="LogNonGuidAttachmentFk"/>; see the
+        /// rationale on <see cref="_loggedRejections"/> above). Called immediately before the
+        /// throw in <see cref="BuildMap"/>; never called anywhere else.
+        /// </summary>
+        private static void LogPrincipalKeyRejection(IEntityType entityType, IForeignKey fk, Type principalClrType, IReadOnlyKey principalKey)
+        {
+            var fkPropertyNames = string.Join(", ", fk.Properties.Select(p => p.Name));
+            var key = $"{entityType.ClrType.FullName}.{fkPropertyNames}";
+            if (_loggedPrincipalKeyRejections.TryAdd(key, 0))
+            {
+                var principalKeyPropertyNames = string.Join(", ", principalKey.Properties.Select(p => p.Name));
+                CoreProgram.GetLogger("FileAttachmentSaveChangesGuard")?.LogWarning(
+                    "Issue #985: {EntityType}.{FkProperties} is a foreign key onto {PrincipalType} " +
+                    "(a FileAttachment or a type derived from it) whose principal key is " +
+                    "{PrincipalKeyProperties}, not the single Guid ID primary key — this model " +
+                    "shape is not supported by the #824 SaveChanges boundary guard, and every " +
+                    "SaveChanges call against this model will keep throwing NotSupportedException " +
+                    "until it is fixed (see the CHANGELOG's #985 entry). Logged once per (entity " +
+                    "type, FK propert(y/ies)) per process — further SaveChanges calls against the " +
+                    "same field still throw but are not logged again.",
+                    entityType.ClrType.FullName, fkPropertyNames, principalClrType.FullName, principalKeyPropertyNames);
+            }
+        }
+
         private static IReadOnlyDictionary<IEntityType, FkAttachmentInfo[]> GetOrBuildMap(IModel model)
         {
             return _fkMapCache.GetOrAdd(model, BuildMap);
@@ -295,6 +338,11 @@ namespace WalkingTec.Mvvm.Core
                     if (!IsCanonicalFileAttachmentPrincipalKey(principalKey)
                         && fk.Properties.Any(p => IsGuidTypedProperty(p.ClrType)))
                     {
+                        // Issue #1000 Part 1: log at this decision point before throwing -- see
+                        // LogPrincipalKeyRejection's own doc comment. Matches this class's
+                        // established pattern of logging BEFORE throw at every other rejection
+                        // site rather than leaving it to a caller's catch block.
+                        LogPrincipalKeyRejection(entityType, fk, principalClrType!, principalKey);
                         throw BuildPrincipalKeyRejectionException(entityType, fk, principalClrType!, principalKey);
                     }
 
@@ -396,9 +444,12 @@ namespace WalkingTec.Mvvm.Core
                 $"supported by the #824 SaveChanges boundary guard. To fix: either re-point " +
                 $"{entityType.ClrType.Name}.{fkPropertyNames} at {nameof(FileAttachment)}." +
                 $"{nameof(TopBasePoco.ID)} (remove the HasPrincipalKey(...) override for this " +
-                $"relationship), or opt out of this guard entirely for this context via " +
-                $"{nameof(FileAttachmentSaveChangesGuard)}.{nameof(Enabled)} = false (see this " +
-                $"class's own doc comment for what that disables).");
+                $"relationship), or opt out of this guard PROCESS-WIDE via " +
+                $"{nameof(FileAttachmentSaveChangesGuard)}.{nameof(Enabled)} = false — that single " +
+                $"static switch is shared by every context in this process, not scoped to this " +
+                $"one, and setting it false re-enables the exact Guid-alternate-key false allow " +
+                $"this check exists to close (plus the rest of the #824 write-path protection " +
+                $"this class's own doc comment describes).");
         }
 
         private static Guid? ExtractGuid(object? value)

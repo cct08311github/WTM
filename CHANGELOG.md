@@ -259,6 +259,81 @@ mutant instead of throwing), and its green test (the positive control above) is 
 from the mutated line — `IsCanonicalFileAttachmentPrincipalKey` short-circuits the `&&` before the
 mutated term is ever evaluated for that model's own (canonical) FK.
 
+### Improved — `FileAttachmentSaveChangesGuard`: log the #985 principal-key rejection at its throw site; correct the opt-out message, the #985 "framework framing" paragraph, and six stale doc anchors (#1000 Part 1, stacked on #985/#991)
+
+**Observability and documentation only — the set of writes this guard accepts or rejects is
+byte-for-byte unchanged. Full defect analysis, the corrected message text, and the anchor-by-anchor
+verification table are in `docs/production-readiness.md`'s new "#1000 Part 1" row — this entry does
+not repeat or exceed those claims.** Issue #1000 part (2), a design question about the fail-closed/
+fail-open asymmetry between Guid-typed and non-Guid-typed FKs, is under cross-vendor review and is
+**not** part of this change.
+
+`BuildPrincipalKeyRejectionException` (`FileAttachmentSaveChangesGuard.cs`, added by #985) and its
+throw site shipped with no log at all — the same Finding 3 (#824) gap this class's other three
+decision points (`LogRejection`, `LogResolutionFailure`, `LogNonGuidAttachmentFk`) already closed,
+just never applied to this fourth one. Because `ConcurrentDictionary.GetOrAdd` never caches a
+throwing factory, every `SaveChanges` against a misconfigured model rethrows — so a sustained
+misconfiguration or a repeated probe against the same field previously left nothing for an operator
+or a security-monitoring pipeline to find, and none of the seven downstream call sites' own
+exception handling (two bare `catch` blocks, four `SetExceptionMessage(e, null)` discards, one
+`catch` that collapses to `Sys.EditFailed` despite this same file's own comment arguing against
+exactly that collapse for the sibling `UnresolvableFileAttachmentReferenceException`) can substitute
+for a log at the decision point itself. Fixed the same way this class already established: a new
+throttled `LogWarning` (`_loggedPrincipalKeyRejections`, `LogPrincipalKeyRejection`), same logger
+name, same level, same once-per-(entity type, FK propert(y/ies))-per-process discipline, called
+immediately before the throw — deleting it cannot affect whether the throw fires.
+
+The exception's own message previously said the operator could opt out "for this context"; `Enabled`
+is a single process-wide `static` switch, not scoped to any one context, and turning it off
+specifically re-enables the Guid-alternate-key false allow this check exists to close, not merely
+"what the class doc says." Message corrected to state both facts plainly and to remain actionable in
+a stack trace; the existing test's substring assertion (`"FileAttachmentSaveChangesGuard.Enabled"`)
+still passes unchanged.
+
+`docs/production-readiness.md`'s #985 row asserted the tests prove this rethrows on every subsequent
+`SaveChanges`, but no test had actually called `SaveChanges` a second time. Added a second
+`Assert.ThrowsException<NotSupportedException>` on the same `dc` instance, immediately after the
+first, to `FileAttachmentSaveChangesGuardPrincipalKeyRejectionTests985.cs` — proving the claim rather
+than continuing to merely assert it. Also corrected six line-number anchors in that same doc section,
+all wrong since the #985 commit that introduced them (not later drift); two previously pointed at
+unrelated text elsewhere in the file (a log message string; a comment about a different code path)
+that happened to read plausibly in context.
+
+That same doc section's "framework framing" paragraph said this hardening is "not a behaviour change
+to any supported configuration." Verified against the tree, not assumed: nothing in this repository —
+not this class's own #824-era doc comment (which calls `HasPrincipalKey` "the one legal EF Core
+shape" for the non-canonical case), not `.editorconfig` (no analyzer exists), not the pre-#985
+CHANGELOG (which called it "non-standard... nothing in this repository uses today," never
+"unsupported") — ever declared `HasPrincipalKey` against a `FileAttachment` principal unsupported.
+It is a legal EF Core API; WTM ships as a NuGet package to downstream consumers who write their own
+models. A downstream context configured that way previously had `SaveChanges` succeed (subject to
+the #985 false-allow/false-reject this change's base branch fixes); after upgrading, every
+`SaveChanges` on that context now throws `NotSupportedException`. That is a breaking change for such
+a consumer, not a narrowing of an already-unsupported shape. Corrected the paragraph to keep the
+verified, valuable claim (no in-tree model is affected — the positive-control test proves it) while
+stating the downstream consequence plainly instead of implying no supported configuration is
+affected. No behaviour, guard, or migration tooling changed — documentation only.
+
+**Resolved, in PR #991 rather than here**: the #985 entry below in this same CHANGELOG carried the
+identical phrase ("not a behaviour change to any supported configuration"). This branch flagged it
+rather than editing it, because that entry belongs to PR #991. It has since been retracted there
+(commit `cf78cd15e`), reframed as BREAKING for downstream, with a migration path that no longer
+offers `Enabled = false` as a step. Both documents now say the same, honest thing — which matters,
+because "the CHANGELOG may not claim more than production-readiness" is a *relative* test and passes
+vacuously when both carry the same over-claim.
+
+No mutation-gate entry added: this class's other three log helpers have none either, and deleting the
+new log call leaves the throw — and therefore every accept/reject decision this guard makes —
+completely unaffected; only the one new test that directly asserts on the log's own content would go
+red.
+
+Tests: `test/WalkingTec.Mvvm.Core.Test` 5046 → 5047 passed, 0 failed (one new test method; the
+rethrow assertion was added to an existing test method, not counted as new).
+`python3 scripts/check-mutant-entries-parse.py`: 75 entries, unchanged, all still parse.
+
+**Branch note:** this change is stacked on `security/985-principal-key-rejection` (#991, not yet
+merged to `dotnet10`) — the code it edits does not exist on `dotnet10` yet. Merge #991 first.
+
 ### Fixed — publish-nuget.yml release-gate cross-vendor review (#925, #937)
 
 Eight verified findings from a cross-vendor review of #925's initial release-gate implementation, fixed on the same branch, CI-only (no `WalkingTec.Mvvm.*` package code changed — nothing here affects any shipped package's runtime behaviour). **Full accounting of what is proven vs. assumed at publish time, and exactly which checks run before the first push, is in `docs/production-readiness.md` § "Release 供應鏈完整性（#925）" — this entry does not repeat or exceed those claims; that section is the ceiling, not this one.**

@@ -27,6 +27,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
 
@@ -165,7 +166,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
         // ─────────────────────────────────────────────────────────────────────────────────────
 
         [TestMethod]
-        [Description("#985: SaveChanges on a model with a Guid-alternate-key FileAttachment FK throws NotSupportedException naming the entity, the FK property, and the principal key's own property -- confirmed via the guard's real entry point (SaveChanges), the first (and only) place BuildMap is ever invoked (FileAttachmentSaveChangesGuard.GetOrBuildMap, called from Guard/GuardAsync)")]
+        [Description("#985/#1000: SaveChanges on a model with a Guid-alternate-key FileAttachment FK throws NotSupportedException naming the entity, the FK property, and the principal key's own property -- confirmed via the guard's real entry point (SaveChanges), the first (and only) place BuildMap is ever invoked (FileAttachmentSaveChangesGuard.GetOrBuildMap, called from Guard/GuardAsync) -- AND rethrows on a second SaveChanges against the same dc instance, proving docs/production-readiness.md's #985 row's 'rethrows on every subsequent SaveChanges' claim rather than merely asserting it (#1000 Part 1)")]
         public void SaveChanges_GuidAlternateKeyPrincipal_ThrowsAtFirstUse()
         {
             using (var setupCtx = new GuidAlternateKeyContext985(ConnectionString, DBTypeEnum.SQLite))
@@ -198,6 +199,18 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             // make a configuration mistake look like a detected attack).
             Assert.IsFalse(ex is WalkingTec.Mvvm.Core.Exceptions.UnresolvableFileAttachmentReferenceException,
                 "#985: must NOT reuse UnresolvableFileAttachmentReferenceException.");
+
+            // Issue #1000 Part 1: docs/production-readiness.md's #985 row claims "每一次 SaveChanges
+            // 碰到這個模型都會重新拋出，不是「第一次拋、之後靜默通過」" (every SaveChanges against this
+            // model rethrows -- not "throws once, then silently succeeds"), reasoning from
+            // ConcurrentDictionary.GetOrAdd's documented contract (a throwing factory is never
+            // cached). That reasoning was never actually exercised by a second call before #1000 --
+            // this proves it, not merely asserts it: the SAME dc instance (the Added entity above is
+            // still tracked; nothing was rolled back by the guard's own throw) must also throw
+            // NotSupportedException on an immediately-following second SaveChanges call.
+            var ex2 = Assert.ThrowsException<NotSupportedException>(() => dc.SaveChanges());
+            StringAssert.Contains(ex2.Message, nameof(DocumentByGuidAltKey985),
+                "#1000: the SECOND SaveChanges on the same dc instance must also throw and name the same entity -- proving BuildMap reruns rather than the rejection being cached or silently bypassed after the first call.");
         }
 
         // ─────────────────────────────────────────────────────────────────────────────────────
@@ -406,6 +419,92 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             var reloaded = checkCtx.Set<ProductWithOptionalPhoto>().First(x => x.ID == newId);
             Assert.AreEqual(legitFileId, reloaded.PhotoId,
                 "#985 positive control: a legitimate same-tenant FK against the canonical FileAttachment.ID principal key must still persist exactly as before this fix.");
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────────────────
+        // Issue #1000 Part 1: BuildPrincipalKeyRejectionException's throw site previously logged
+        // nothing at all -- the same Finding 3 (#824) gap this class's OTHER three rejection
+        // decisions already closed, just never applied to this fourth one when #985 added it (see
+        // FileAttachmentSaveChangesGuard.cs's own rationale comment above _loggedRejections, and
+        // LogPrincipalKeyRejection's doc comment). Same CapturingLogger/CapturingLoggerFactory/
+        // RunWithCapturingLogger technique as FileAttachmentSaveChangesGuardLoggingTests824.cs,
+        // re-declared here per this codebase's own convention of NOT sharing that infrastructure
+        // across test files.
+        // ─────────────────────────────────────────────────────────────────────────────────────
+
+        private sealed class CapturingLogger : ILogger
+        {
+            public readonly List<(LogLevel Level, string Message)> Records = new();
+
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel, EventId eventId, TState state,
+                Exception? exception, Func<TState, Exception?, string> formatter)
+            {
+                Records.Add((logLevel, formatter(state, exception)));
+            }
+        }
+
+        private sealed class CapturingLoggerFactory : ILoggerFactory
+        {
+            public readonly CapturingLogger Logger = new();
+            public ILogger CreateLogger(string categoryName) => Logger;
+            public void AddProvider(ILoggerProvider provider) { }
+            public void Dispose() { }
+        }
+
+        private static CapturingLogger RunWithCapturingLogger(Action action)
+        {
+            var original = CoreProgram._loggerFactory;
+            var factory = new CapturingLoggerFactory();
+            CoreProgram._loggerFactory = factory;
+            try
+            {
+                action();
+            }
+            finally
+            {
+                CoreProgram._loggerFactory = original;
+            }
+            return factory.Logger;
+        }
+
+        [TestMethod]
+        [Description("#1000 Part 1: the #985 principal-key rejection must log a warning at the throw site itself -- naming the entity, the FK propert(y/ies), and the principal key's own propert(y/ies) -- the server-side signal this decision point never had before #1000, matching the shape/level this class already established for its other three rejection decisions")]
+        public void SaveChanges_GuidAlternateKeyPrincipal_LogsWarningAtThrow()
+        {
+            using (var setupCtx = new GuidAlternateKeyContext985(ConnectionString, DBTypeEnum.SQLite))
+            {
+                setupCtx.Database.EnsureCreated();
+            }
+
+            var dc = new GuidAlternateKeyContext985(ConnectionString, DBTypeEnum.SQLite);
+            dc.SetTenantCode("TENANT_A");
+            dc.Set<DocumentByGuidAltKey985>().Add(new DocumentByGuidAltKey985
+            {
+                ID = Guid.NewGuid(),
+                AttachmentRef = Guid.NewGuid(),
+            });
+
+            NotSupportedException? caught = null;
+            var logger = RunWithCapturingLogger(() =>
+            {
+                try { dc.SaveChanges(); }
+                catch (NotSupportedException ex) { caught = ex; }
+            });
+
+            Assert.IsNotNull(caught, "#1000: the guard must still have thrown NotSupportedException.");
+            var warnings = logger.Records.Where(r => r.Level == LogLevel.Warning).ToList();
+            Assert.AreEqual(1, warnings.Count,
+                "#1000: the principal-key rejection must log exactly one warning at the throw site.");
+            StringAssert.Contains(warnings[0].Message, nameof(DocumentByGuidAltKey985),
+                "#1000: the log must name the entity carrying the misconfigured FK.");
+            StringAssert.Contains(warnings[0].Message, nameof(DocumentByGuidAltKey985.AttachmentRef),
+                "#1000: the log must name the FK property.");
+            StringAssert.Contains(warnings[0].Message, "AlternateGuid985",
+                "#1000: the log must name the principal key's own property.");
         }
     }
 }
