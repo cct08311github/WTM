@@ -96,7 +96,12 @@ public class ResidualEmitters784BaseElementTests
         Assert.IsFalse(postHtml.Contains("console.warn("), "Flag OFF must contribute ZERO warning characters");
         StringAssert.Contains(postHtml, "layui.use(['form'],function(){");
         StringAssert.Contains(postHtml, "form.on('checkbox(chk1filter)', function(data){");
-        StringAssert.Contains(postHtml, "myCheckChange(data);");
+        // Issue #999 part (B): ChangeFunc is now paren-wrapped — (ChangeFunc)(data)
+        // — so a function-literal ChangeFunc can't produce an unwrapped
+        // "function(data)" SyntaxError. A bare identifier like this fixture's
+        // still calls through fine: (myCheckChange)(data) is exactly
+        // equivalent to myCheckChange(data).
+        StringAssert.Contains(postHtml, "(myCheckChange)(data);");
     }
 
     [TestMethod]
@@ -140,7 +145,10 @@ public class ResidualEmitters784BaseElementTests
 
         Assert.IsFalse(postHtml.Contains("wtm-dialog-init"));
         StringAssert.Contains(postHtml, "form.on('checkbox(chk3filter)', function(data){");
-        StringAssert.Contains(postHtml, "obj.myCheckChange(data);");
+        // Issue #999 part (B): now paren-wrapped — (obj.myCheckChange)(data)
+        // — exactly equivalent to obj.myCheckChange(data), and this is the
+        // shape that keeps `this` bound to `obj` at call time.
+        StringAssert.Contains(postHtml, "(obj.myCheckChange)(data);");
         StringAssert.Contains(postHtml, "console.warn(");
     }
 
@@ -176,7 +184,9 @@ public class ResidualEmitters784BaseElementTests
         Assert.IsFalse(postHtml.Contains("wtm-dialog-init"));
         Assert.IsFalse(postHtml.Contains("console.warn("));
         StringAssert.Contains(postHtml, "form.on('switch(sw1filter)', function(data){");
-        StringAssert.Contains(postHtml, "mySwitchChange(data);");
+        // Issue #999 part (B): now paren-wrapped — (mySwitchChange)(data) —
+        // exactly equivalent to mySwitchChange(data).
+        StringAssert.Contains(postHtml, "(mySwitchChange)(data);");
     }
 
     [TestMethod]
@@ -238,7 +248,9 @@ public class ResidualEmitters784BaseElementTests
 
         Assert.IsFalse(postHtml.Contains("console.warn("));
         StringAssert.Contains(postHtml, "form.on('radio(rad1filter)', function(data){");
-        StringAssert.Contains(postHtml, "myRadioChange(data);");
+        // Issue #999 part (B): now paren-wrapped — (myRadioChange)(data) —
+        // exactly equivalent to myRadioChange(data).
+        StringAssert.Contains(postHtml, "(myRadioChange)(data);");
     }
 
     [TestMethod]
@@ -386,7 +398,10 @@ public class ResidualEmitters784BaseElementTests
 
         Assert.IsFalse(postHtml.Contains("\"type\":\"autocomplete\""));
         StringAssert.Contains(postHtml, "layui.use(['autocomplete'],function(){");
-        StringAssert.Contains(postHtml, "obj.myTextChange(data);");
+        // Issue #999 part (B): now paren-wrapped — (obj.myTextChange)(data)
+        // — exactly equivalent to obj.myTextChange(data), and this is the
+        // shape that keeps `this` bound to `obj` at call time.
+        StringAssert.Contains(postHtml, "(obj.myTextChange)(data);");
         StringAssert.Contains(postHtml, "console.warn(");
     }
 }

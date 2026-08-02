@@ -365,7 +365,7 @@ ff.LoadComboItems('tree','{ItemUrl}','{Id}','{Field.Name}',{LayuiIslandJson.Seri
 	height: '400px',
     on:function(data){{
         {((LinkField != null || string.IsNullOrEmpty(LinkId) == false) ? @$"
-            if ({(string.IsNullOrEmpty(ChangeFunc) ? "true" : FormatFuncName(ChangeFunc))} != false) {{
+            if ({(string.IsNullOrEmpty(ChangeFunc) ? "true" : FormatFuncInvocation(ChangeFunc))} != false) {{
                 var u = ""{JavaScriptEncoder.Default.Encode(TriggerUrl ?? "")}"";
                 if (u.indexOf(""?"") == -1) {{
                     u += ""?t="" + new Date().getTime();
@@ -374,7 +374,7 @@ ff.LoadComboItems('tree','{ItemUrl}','{Id}','{Field.Name}',{LayuiIslandJson.Seri
                     u += ""&id="" + data.arr[i].value;
                 }}
                 ff.ChainChange(u, $('#{Id}')[0])
-        }}" : FormatFuncName(ChangeFunc))}
+        }}" : FormatFuncInvocation(ChangeFunc))}
    }},
 	data:  {LayuiIslandJson.Serialize(treeitems)}
 }});

@@ -455,7 +455,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 	height: '400px',
     on:function(data){{
         {((LinkField != null || string.IsNullOrEmpty(LinkId) == false)?@$"
-            if ({(string.IsNullOrEmpty(ChangeFunc)?"true":FormatFuncName(ChangeFunc))} != false) {{
+            if ({(string.IsNullOrEmpty(ChangeFunc)?"true":FormatFuncInvocation(ChangeFunc))} != false) {{
                 var u = ""{JavaScriptEncoder.Default.Encode(TriggerUrl??"")}"";
                 if (u.indexOf(""?"") == -1) {{
                     u += ""?t="" + new Date().getTime();
@@ -464,7 +464,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     u += ""&id="" + data.arr[i].value;
                 }}
                 ff.ChainChange(u, $('#{Id}')[0])
-        }}" : FormatFuncName(ChangeFunc))}
+        }}" : FormatFuncInvocation(ChangeFunc))}
    }},
 	data:  {LayuiIslandJson.Serialize(GetLayuiTree(listItems,selectVal))}
 }});

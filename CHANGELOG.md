@@ -240,6 +240,94 @@ exceed those claims.**
   9 tests (one per fixed site) proven RED before the fix and GREEN after, plus 2 tests proving the
   two deliberately-unwrapped sites already parsed correctly with no change.
 
+### Fixed — the 10 remaining LayUI `*Func` sites reached through `BaseElementTag.FormatFuncName` truncated a function-literal/arrow-function callback into a bare `function`/`(data)=>` before it ever reached a syntactic position, corrupting the emitted `<script>` block (#999 part (B))
+
+**Full site table, the RED-before-fix transcripts, the count reconciliation against part (A)'s
+own estimate, and the mutant non-entry reasoning are in `docs/production-readiness.md`'s new
+"#999 part (B)" section — this entry does not repeat or exceed those claims.**
+
+Part (A) (#1003) fixed the 9 sites where a developer's `*Func` value reached the emitted JS
+verbatim — `({X})(...)` was a complete fix there. It could not fix these 10: `FormatFuncName`
+(`BaseElementTag.cs:225-242`) truncates its input at the first `(` and appends `(data)` *before*
+paren-wrapping is even possible, so `function(v){...}` becomes the string `function(data)`, and
+`(function(data));` is itself a `SyntaxError` (confirmed with Acornima). Part (B)'s first design —
+keep the truncation when the text before the first `(` is a plain identifier — was killed by
+cross-vendor review: for a function literal that text IS `function`, a JS **keyword**, which
+still passes the identifier regex every 3-way island decision in this project uses
+(`^[A-Za-z_$][\w$]*\z`, no keyword awareness). That fix would have shipped and changed nothing.
+
+**Fix: `BaseElementTag.FormatFuncInvocation(string funcExpression, string args = "data")`, a NEW
+static method — `FormatFuncName` itself is untouched.** It does no grammar classification at all:
+it keeps the caller's expression completely unmodified and wraps it as `(expr)(args)`, valid JS
+for every shape these `*Func` attributes accept — a bare identifier, a dotted/member reference
+(the grouping operator does not strip the `Reference` a `MemberExpression` produces, so `this`
+stays bound exactly as `a.b.c(data)` would), or a function literal/arrow function/factory-call
+expression (parens make it unambiguous regardless of statement-vs-expression position, so the
+"function keyword at statement position" ambiguity never arises). Deliberately **static** (a
+pure string transform, directly unit-testable without constructing a TagHelper) and deliberately
+**not implemented in terms of `FormatFuncName`, nor vice versa** — the two must never share a code
+path, because letting one string serve as both the classification input and the executable output
+is the actual defect class #999 exists to fix, not a detail of it.
+
+**10 sites switched** (`TreeContainerTagHelper.cs:311`, `SelectorTagHelper.cs:478`,
+`BaseElementTag.cs` ×3 — `EmitFormChangeWiring`'s `form.on(...)` wiring and
+`EmitAutocompleteWiring`'s both TriggerUrl variants, `TreeTagHelper.cs` ×2 and
+`ComboBoxTagHelper.cs` ×2 — the link-chain `if (X != false)` expression-position gate and the
+no-link `on:function(data){X}` statement-position handler, `ColorPicker.cs:291`). **11 other
+`FormatFuncName` call sites are untouched and remain on `FormatFuncName`** — they consume its
+truncated bare name as a DECISION input (`...IsIdentifier` classification feeding an
+island/legacy render choice) or as an HTML data attribute (`wtm-cf`), never as emitted code;
+switching them would be a no-op at best and a correctness risk at worst, since
+`FormatFuncInvocation` deliberately does not truncate. **No `changeIsIdentifier`-style decision
+changed** — every switched site sits in a branch already reached (or not) by the SAME
+pre-existing classification logic; only the text placed at that reached branch's syntactic
+position changed. `FormatFuncName` is **not marked `[Obsolete]`** — those 11 decision-input/
+attribute consumers still need its truncate-and-classify behaviour exactly as before.
+
+**Count reconciliation with part (A)'s own commit message, which said "12" FormatFuncName
+sites**: re-deriving from the current tree (not trusting that number) found 21 real, live
+`FormatFuncName(` call sites, of which exactly 10 are emission sites and 11 are decision-input/
+attribute consumers. The other 2 of part (A)'s "12" are `BaseElementTag.cs:166`/`:182` —
+inside an entirely `//`-commented-out `ComboBoxTagHelper` `LinkField`/`TriggerUrl` block that does
+not compile and never executes, so they are not live defects requiring a fix. With that
+correction: of #999's 20 real, live sites (10 raw-interpolation + 10 `FormatFuncName`-truncation),
+**20/20 are now fixed** — 1 by #965, 9 by part (A), 10 here. The raw-interpolation count and its
+9-of-10 fixed claim are part (A)'s own re-derivation, not independently re-run this session; the
+`FormatFuncName` count and its 10-of-10 fixed claim are independently re-derived and verified this
+session (`docs/production-readiness.md` has the exact reproducible `grep` commands).
+
+**Tests**: new `test/WalkingTec.Mvvm.Core.Test/TagHelpers/FormatFuncInvocation999BTests.cs` — 18
+tests: a function-literal test for all 10 switched sites (proven RED before the fix, GREEN after),
+plus arrow-function, plain-identifier (behaviour-preservation), and dotted-member (`this`-binding
+preservation, asserted against the literal emitted text shape) coverage on representative
+statement-position (`CheckBoxTagHelper`, `ColorPicker.cs`) and expression-position
+(`TreeTagHelper`'s `if (X != false)` link-chain gate) exemplars. 5 pre-existing assertions in
+`ResidualEmitters784BaseElementTests.cs` pinned the exact pre-fix byte shape (e.g.
+`"myCheckChange(data);"`) and were updated to the new paren-wrapped shape (`"(myCheckChange)(data);"`)
+with a comment explaining why — the same kind of connective update part (A)'s own entry made to
+two different pre-existing tests, for the same reason (a deliberate, documented byte-shape change,
+not a silent one). Full suite: `test/WalkingTec.Mvvm.Core.Test` 5092 passed, 0 failed (no other
+assertion anywhere in the tree matched the old unwrapped shape for any of the 10 switched sites —
+verified by `grep`, not assumed).
+
+**Mutant: considered, not added — same reasoning as #965 and part (A).** This is a JS-parse-
+correctness fix, not a security vulnerability (no unauthorized access, injection, tenant-isolation,
+or credential dimension); `run_mutant.py`'s `VALID_KINDS` (`security`/`selftest`) has no honest
+classification for it, and forcing one in as `security` would repeat the `kind`-classification
+drift #970/#968 already had to absorb. The regression protection is CI-enforced directly: any of
+the 10 switched sites reverted to `FormatFuncName` makes its own function-literal test in
+`FormatFuncInvocation999BTests.cs` fail — the RED-before-fix run above is that mechanism's own
+proof, not an inference.
+
+**`test/mutants/patches/*.patch` re-verified**: `python3 scripts/check-mutant-entries-parse.py`
+(the #1005 CI-enforced check) and a manual `git apply --check` loop both confirm **68/68 patches
+still apply cleanly, 0 orphans**, against this branch's tree — this change does not touch any file
+a mutant patch's fixed context depends on.
+
+**Not verified this session**: real Gitea Actions CI (hard constraint forbids any Gitea/GitHub API
+call and forbids opening a PR) — local verification used `dotnet build`/`dotnet test` only, the
+same limitation part (A)'s own entry stated.
+
 ### Fixed — `DataTableTagHelper` emitted an unwrapped IIFE, breaking the whole toolbar/row-action `<script>` block for any `GridAction.OnClickFunc` set to a function literal (#965)
 
 **Full re-derivation of the affected surface (exact grep commands and raw output), the JS-validity test's mechanism and why it was chosen over shelling out to `node` or hand-parsing, and the complete RED/GREEN transcript are in `docs/production-readiness.md`'s new "DataTableTagHelper 未包裹 IIFE" section — this entry does not repeat or exceed those claims.**
