@@ -146,19 +146,57 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
 
         public IWtmFile? GetFile(string id, bool withData = true, IDataContext? dc = null)
         {
-            IWtmFile? rv;
-            if (dc == null)
-            {
-                dc = _wtm.CreateDC();
-            }
             // WTM-SEC-003 (#859): when EnforceTenantFileScope is true (default as of #859; was
             // false through 10.18.x), the global ITenant query filter is honoured and a file
             // cannot be resolved by GUID outside the caller's own tenant. When false (opt-out),
             // IgnoreQueryFilters() bypasses that boundary so a file can be resolved by its GUID
             // regardless of which tenant originally uploaded it (the pre-#859 backward-compatible
             // behaviour: tenant-agnostic by ID).
-            var tenantScope = _wtm.ConfigInfo.FileUploadOptions.EnforceTenantFileScope;
-            rv = (tenantScope
+            return GetFileCore(id, withData, dc, _wtm.ConfigInfo.FileUploadOptions.EnforceTenantFileScope);
+        }
+
+        /// <summary>
+        /// #1011: same as <see cref="GetFile(string, bool, IDataContext?)"/>, but resolves the
+        /// <see cref="FileAttachment"/> with the global <c>ITenant</c> query filter always kept
+        /// ON — unconditionally, regardless of
+        /// <see cref="WalkingTec.Mvvm.Core.ConfigOptions.FileUploadOptions.EnforceTenantFileScope"/>.
+        /// Every caller that resolves an id taken from untrusted, model-bound input (for example
+        /// <c>BaseImportVM.UploadFileId</c>, which its own doc comment already treats the same
+        /// way as <see cref="BaseVM.DeletedFileIds"/>) must use this overload rather than the
+        /// plain <see cref="GetFile(string, bool, IDataContext?)"/>, so a request cannot read
+        /// another tenant's file content even when the operator has explicitly opted BACK to
+        /// <c>EnforceTenantFileScope=false</c> for the documented tenant-agnostic-public-store
+        /// use case (<c>FileUploadOptions.cs</c>'s own doc comment on that flag). This mirrors
+        /// <see cref="DeleteFileTenantScoped(string, IDataContext?)"/>'s role on the delete side
+        /// (Issue #815): a caller-controlled id sink must be immune to the deployment-wide flag,
+        /// the flag is for routes where the caller does not choose the id.
+        /// <para>
+        /// <strong>What this does NOT do:</strong> it does not authenticate the caller or decide
+        /// which tenant is "correct" for this request — it only confines the read to whichever
+        /// tenant the supplied <paramref name="dc"/> (or, when <paramref name="dc"/> is null,
+        /// <see cref="WTMContext.CreateDC"/>'s own resolution) already resolved. An anonymous
+        /// caller who reaches <see cref="WTMContext.CreateDC"/> with a forged <c>Referer</c>
+        /// header — possible whenever
+        /// <see cref="WalkingTec.Mvvm.Core.Configs.DisableRefererTenantResolution"/>
+        /// is at its default <c>false</c> — can still have <c>CreateDC</c> resolve an
+        /// attacker-chosen tenant; this method then faithfully scopes to THAT tenant. Closing
+        /// that route needs <c>DisableRefererTenantResolution=true</c> or an authorizer that
+        /// rejects anonymous callers, not this method. See Issue #1011.
+        /// </para>
+        /// </summary>
+        public IWtmFile? GetFileTenantScoped(string id, bool withData = true, IDataContext? dc = null)
+        {
+            return GetFileCore(id, withData, dc, enforceTenantScope: true);
+        }
+
+        private IWtmFile? GetFileCore(string id, bool withData, IDataContext? dc, bool enforceTenantScope)
+        {
+            IWtmFile? rv;
+            if (dc == null)
+            {
+                dc = _wtm.CreateDC();
+            }
+            rv = (enforceTenantScope
                 ? dc.Set<FileAttachment>()
                 : dc.Set<FileAttachment>().IgnoreQueryFilters())
                 .CheckID(id).Select(x => new FileAttachment
@@ -274,14 +312,32 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
 
         public string GetFileName(string id, IDataContext? dc = null)
         {
+            // WTM-SEC-003: see GetFile for flag semantics.
+            return GetFileNameCore(id, dc, _wtm.ConfigInfo.FileUploadOptions.EnforceTenantFileScope);
+        }
+
+        /// <summary>
+        /// #1011: same as <see cref="GetFileName(string, IDataContext?)"/>, but resolves the
+        /// <see cref="FileAttachment"/> with the global <c>ITenant</c> query filter always kept
+        /// ON — unconditionally, regardless of
+        /// <see cref="WalkingTec.Mvvm.Core.ConfigOptions.FileUploadOptions.EnforceTenantFileScope"/>.
+        /// See <see cref="GetFileTenantScoped(string, bool, IDataContext?)"/>'s doc comment for
+        /// the full rationale (which callers must use this overload, and what it does NOT
+        /// protect against) — identical here, just for the filename-only projection.
+        /// </summary>
+        public string GetFileNameTenantScoped(string id, IDataContext? dc = null)
+        {
+            return GetFileNameCore(id, dc, enforceTenantScope: true);
+        }
+
+        private string GetFileNameCore(string id, IDataContext? dc, bool enforceTenantScope)
+        {
             string? rv;
             if (dc == null)
             {
                 dc = _wtm.CreateDC();
             }
-            // WTM-SEC-003: see GetFile for flag semantics.
-            var tenantScopeName = _wtm.ConfigInfo.FileUploadOptions.EnforceTenantFileScope;
-            rv = (tenantScopeName
+            rv = (enforceTenantScope
                 ? dc.Set<FileAttachment>()
                 : dc.Set<FileAttachment>().IgnoreQueryFilters())
                 .CheckID(id).Select(x => x.FileName).FirstOrDefault();

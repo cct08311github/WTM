@@ -993,6 +993,69 @@ LookupCacheService.cs:25:    public class LookupCacheService : ILookupCacheServi
 
 **未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。上方「class × method × has-check」survey 只是全樹一次性的靜態 grep 快照，不是持續稽核機制——未來若有人新增第三個 `ILookupCacheService` 實作或用替代寫法繞過 `_registry.ContainsKey(typeof(T))` 這個字面模式，這份 survey 不會自動重跑並抓到。
 
+## `WtmFileProvider.GetFileTenantScoped`/`GetFileNameTenantScoped`：`BaseImportVM` 的 `UploadFileId` 讀取點改走不受旗標影響的租戶範圍讀取（#1011，2026-08-03）
+
+**設計史（不重新開議，但完整記錄推翻過程，因為這正是 user 要求的流程）**：本 issue 第一輪判斷是「什麼都不用加」——論點是跨租戶*刪除*沒有正當部署形狀（刪除端理當強制範圍），但跨租戶*讀取*有正當部署形狀（`FileUploadOptions.cs` 對 `EnforceTenantFileScope` 自己的文件註解就記錄了「租戶無關公開檔案庫」這個明確的 opt-out 用途），所以部署層級的旗標才是讀取的正確控制層——修法應該到此為止。跨廠 review 用一條**實際存在、已驗證的呼叫路徑**推翻了這個判斷，不是假設性的：`BaseImportVM.cs:322` 與 `:1571` 兩處都用 flag-driven 的 `GetFile` 解析 `UploadFileId`——而 `UploadFileId` 是 model-bound 輸入，跟 `WtmFileProvider.DeleteFileTenantScoped` 自己的文件註解已經明講的 `BaseVM.DeletedFileIds` 同一類（未經驗證、呼叫端可控）；而且 `UploadFileId` 不是共用範本：`SetTemplateData`（`BaseImportVM.cs:311-315`）在它是 `null` 時回「請上傳範本」，`:317` 讀進來後直接餵給 NPOI——它就是使用者剛上傳的那份工作簿。真正的分界線從來不是讀取 vs 刪除，而是**呼叫端可控的 ID sink 必須不受全域旗標影響**——跟 `DeleteFileTenantScoped` 在刪除端（#815）已經確立的原則完全一樣。
+
+### 修了什麼
+
+**新增（additive，`src/WalkingTec.Mvvm.Core/Support/FileHandlers/WtmFileProvider.cs`）**：`GetFileTenantScoped(string id, bool withData = true, IDataContext? dc = null)` 與 `GetFileNameTenantScoped(string id, IDataContext? dc = null)`。兩者與既有 `GetFile`/`GetFileName` 共用私有 core（`GetFileCore`/`GetFileNameCore`），沿用這個檔案自己已經為 #815/#821 建立的 `DeleteFile`/`DeleteFileTenantScoped`/`DeleteFileCore` 形狀——沒有另開一套模式。Scoped 版本一律傳 `enforceTenantScope: true`；**`GetFile`/`GetFileName` 的既有 flag-driven 行為完全不變**——這次加法不動 `FileUploadOptions.cs:52-53` 記錄的那個 opt-out，既有呼叫端零影響。
+
+**行為變窄（`src/WalkingTec.Mvvm.Core/BaseImportVM.cs`）**：`UploadFileId` 的兩個讀取點——`SetTemplateData`（`:322`）與 `GetErrorJson`（`:1571`）——改呼叫 `GetFileTenantScoped`。**這是真實的行為變更，不是加法，而且範圍很窄**：只有明確把 `FileUploadOptions.EnforceTenantFileScope` 撥回 `false`（opt-out，不是 #859 之後的預設）的部署，之前匯入流程能用 GUID 跨租戶解析 `UploadFileId`；修法後不能，跟這個旗標無關。用 `EnforceTenantFileScope` 預設值（`true`）的部署對這條路徑沒有任何觀察得到的變化——修法前 `GetFile`/`GetFileTenantScoped` 對這種部署本來就給同一個答案。
+
+**刻意沒動：`Upload`**。`Upload` 自己的缺陷——`TenantCode` 蓋自環境身分（`_wtm.LoginUserInfo?.CurrentTenant`，`:135`），不是傳入的 `dc.TenantCode`——是不同性質的問題，追蹤在另一張票 #988。這裡加一個 `UploadTenantScoped` 會搶先決定 #988 還沒定案的設計方向。
+
+### 這個修法沒解決什麼——誠實列出，不能被讀成已關閉
+
+`GetFileTenantScoped` 只是把讀取範圍鎖進「傳入的 `IDataContext` 已經解析出來的那個租戶」——它不驗證呼叫端身分，也不判斷「這個請求正確的租戶應該是誰」。`Configs.DisableRefererTenantResolution` 預設 `false`（`Configs.cs:162-178`）時，一個知道某租戶網域的匿名呼叫者可以偽造 `Referer` header，讓 `WTMContext.CreateDC`（`WTMContext.CreateDC.cs:42-56`，#116 機制）解析出那個租戶的範圍；scoped API 接著會忠實地把讀取鎖進**那個被偽造出來的租戶**。要擋這條路徑需要 `DisableRefererTenantResolution=true`，或是一個在請求抵達 `WtmFileProvider` 之前就拒絕匿名呼叫者的 authorizer——不是改這個方法本身，它目前的行為就是文件註解寫的那樣。#859 的舊修法同樣不擋得住這條路徑（同一個根因：兩者都嚴格下游於 `CreateDC` 已經決定的租戶）。
+
+### 對下游的可達性
+
+三份 demo `FileApiController.cs` copy 已經呼叫 `DeleteFileTenantScoped`（#830），但它們從來沒有為 `UploadFileId` 呼叫過 `WtmFileProvider.GetFile`/`GetFileTenantScoped`——`BaseImportVM` 是框架自己的基底類別，所有 `*ImportVM` 都繼承它，所以單純升級 NuGet 套件（下游不用改任何自己的程式碼）就已經讓所有建立在 `BaseImportVM` 上的匯入流程套用這次修法。唯一真正沒受益的殘餘案例：某個下游在 #1011 出現之前就複製並自行修改過 `BaseImportVM` 本身（不只是 `FileApiController`）——那份複本要等它自己的維護者重新套用或重新 scaffold 才受益，跟任何框架基底類別的修法一樣。
+
+### 測試方法論：為什麼是 SQLite 不是 EF InMemory
+
+斷言的核心是全域 `ITenant` query filter 的 SQL 轉譯——EF Core 對 nullable 欄位 `==` 的 null-safe 轉譯——InMemory provider 用 LINQ-to-objects 直接跑 .NET 運算式，完全不做這層轉譯，綠燈證明不了真實關聯式資料庫（SQL Server/SQLite/Oracle）的行為。三份新測試檔案：
+
+- `test/WalkingTec.Mvvm.Core.Test/Security/WtmFileProviderTenantScopedReadTests1011.cs`（5 個測試，全部在 `EnforceTenantFileScope=false` 下跑）：釘住 `GetFile` 既有的跨租戶 opt-out（不「修」它）；斷言 `GetFileTenantScoped`/`GetFileNameTenantScoped` 擋下跨租戶；各配一個同租戶的正控組。
+- `test/WalkingTec.Mvvm.Core.Test/VM/BaseImportVMTenantScopedReadTests1011.cs`（2 個測試）：驅動**真正、沒有覆寫**的 `BaseImportVM.SetTemplateData()`——不像這個專案其他 `BaseImportVM` fixture 用 bytes-injection 覆寫繞過 `WtmFileProvider`——透過 DI mock 接上 `WtmFileProvider`，`WTMContext` 用 `CreateDC` bypass 直接回傳已經租戶範圍化的 context（跟 `FrameworkControllerFileAccessTest.SingleConnectionFileAccessWtmContext` 同一招；`Wtm.CreateDC('default')` 沒辦法直接 mock，見 `.claude/rules/testing.md`）。斷言跨租戶 `UploadFileId` 被擋（0 筆解析、1 條 `WrongTemplate` 錯誤），同租戶 `UploadFileId` 仍然成功（1 筆解析、0 錯誤）。
+- `test/WalkingTec.Mvvm.Core.Test/Security/GetFileTenantScopedRefererGapTests1011.cs`：誠實記錄 Referer 缺口——匿名呼叫者用偽造 `Referer` 讓 `CreateDC` 解析出某個已註冊租戶的網域，斷言 `GetFileTenantScoped` **會**解析（不是拒絕）那個被偽造出來的租戶的檔案。既有的 `FrameworkControllerFileScopeTests859.cs` 自己的類別文件註解就寫明它只涵蓋「已驗證跨租戶」與「未驗證但沒有 Referer」兩種形狀，刻意沒涵蓋「未驗證 + 偽造 Referer」——這條測試補的正是這個缺口，不是重複既有覆蓋。
+
+**RED-before-fix，逐字擷取**（各自獨立暫時 revert 後重跑，之後各自獨立還原）：
+
+```
+Assert.IsNull failed. #1011: GetFileTenantScoped must NOT resolve a file belonging to
+a different tenant, even though EnforceTenantFileScope=false — the scoped overload
+keeps the global ITenant query filter ON unconditionally, so a caller-controlled id
+(e.g. BaseImportVM.UploadFileId) cannot read across tenants regardless of the
+deployment-wide flag.
+```
+（`WtmFileProviderTenantScopedReadTests1011.GetFileTenantScoped_EnforceTenantFileScopeFalse_CrossTenantGuid_ReturnsNull`；暫時把 `GetFileTenantScoped` 改回吃旗標後重跑，1 failed / 4 passed。）
+
+```
+Assert.AreEqual failed. Expected:<0>. Actual:<1>. #1011: a cross-tenant UploadFileId
+must not be parsed into any template rows — got 1. Errors:
+```
+（`BaseImportVMTenantScopedReadTests1011.SetTemplateData_EnforceTenantFileScopeFalse_CrossTenantUploadFileId_Blocked`；暫時把 `SetTemplateData` 的呼叫改回 `GetFile` 後重跑，1 failed / 1 passed——`Actual:<1>` 證明修法前那份跨租戶種下的工作簿真的被解析、真的被 NPOI 成功剖析出一列，不是斷言本身接錯線。）
+
+兩處還原後重新確認全部回到 GREEN。
+
+### Mutation gate
+
+`test/mutants/entries/baseimportvm1011-settemplatedata-tenant-scope-revert.json`：patch 把 `SetTemplateData` 的 `fp.GetFileTenantScoped(...)` 換回 `fp.GetFile(...)`（compile-preserving 的方法名替換，兩個 overload 在 `WtmFileProvider` 上都存在）。`python3 test/mutants/run_mutant.py --mutant baseimportvm1011-settemplatedata-tenant-scope-revert` 逐字回報 `VERDICT: KILLED` / `GATE: PASS`。
+
+兩個 green（正控組）測試，各自對照 `.claude/rules/testing.md` 那條「正控組不能碰到被突變的決策路徑」硬性規則單獨追過呼叫圖：
+1. `WtmFileProviderTenantScopedReadTests1011.GetFileTenantScoped_EnforceTenantFileScopeFalse_SameTenantGuid_ReturnsFile` 直接呼叫 `WtmFileProvider.GetFileTenantScoped`——`BaseImportVM.SetTemplateData`（這個 patch 唯一動到的方法）根本不在它的呼叫圖上，被突變的那行程式碼對這個測試而言不可能執行到。屬於「呼叫圖從未觸及突變行」這一類最單純的解耦論證。
+2. `BaseImportVMTenantScopedReadTests1011.SetTemplateData_EnforceTenantFileScopeFalse_SameTenantUploadFileId_Succeeds` 確實會執行到被突變的那行（它也驅動真正的 `SetTemplateData()`），但這個輸入下的結果可證明是不變量：`EnforceTenantFileScope=false` 時，突變版的 `GetFile` 走 `IgnoreQueryFilters()`（完全沒有租戶條件），修法版的 `GetFileTenantScoped` 走 `TenantCode == 呼叫端租戶`；對一個 `TenantCode` 本來就等於呼叫端自己租戶的檔案，不論有沒有套用租戶過濾都會解析到同一列——突變改變的是「跑哪一個查詢」，不是「這一列找不找得到」，所以對這個特定輸入而言修法前後的結果可證明相等。這是比第 1 條更強的第二層檢查，驗證 patch 宣稱的影響範圍（只影響跨租戶案例）確實成立，不是巧合。
+
+完整解耦論證寫進了 entry 的 `description`/`green_test_decoupling` 欄位，不只留在這裡。
+
+### 驗證
+
+`find . -name 'demo.db*' -path '*bin*' -delete && dotnet build WalkingTec.Mvvm.sln -c Release`：0 錯誤。`dotnet test test/WalkingTec.Mvvm.Core.Test/ -c Release --filter "TestCategory!=Integration"`：**5063 passed, 0 failed**（含本次新增 8 個測試）。`dotnet test test/WalkingTec.Mvvm.Admin.Test/ -c Release`：**192 passed, 0 failed**。`dotnet test test/WalkingTec.Mvvm.Api.Test/ -c Release`：**103 passed, 0 failed**，1 個既有 skip（`AlwaysFails_MutationGateBaselineSelftestFixture`，mutation-gate 自我測試用，非本次相關）。
+
+**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。「三份 demo `FileApiController.cs` 都沒呼叫 `UploadFileId` 相關的 `GetFile`」這個結論是逐檔人工確認，不是全樹 grep 掃描的結果，如果未來有 demo 樣板繞過 `BaseImportVM` 自行讀取 `UploadFileId`，這份記錄不會自動抓到。CHANGELOG 的 Red Line 修正（`[10.21.0]` #859 條目原本寫「regardless of which route reached it」）改動的是這份文件已經記錄過的既有 caveat 的**措辭**，不是新增一個之前沒被覆核過的事實。
+
 ---
 
 ## mutant patch 逐檔 `git apply --check`：CI 補一個「同一個 PR 內就能證明」的 gate，不宣稱防住整個缺陷類別（#1005，2026-08-03）

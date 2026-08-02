@@ -269,10 +269,10 @@ namespace WalkingTec.Mvvm.Admin.Api
             // #830: DeleteFileTenantScoped, not DeleteFile — see its doc comment in
             // WtmFileProvider.cs. This is the PRIMARY control that stops a caller authenticated
             // as tenant A from deleting tenant B's FileAttachment row, independent of
-            // FileUploadOptions.EnforceTenantFileScope's default (false). Also switched from
-            // [HttpGet] to [HttpPost]: a GET performing a delete is itself a defect (CSRF via a
-            // plain <img>/<a> tag, browser prefetch, link scanners) separate from the
-            // authorization gap.
+            // FileUploadOptions.EnforceTenantFileScope's default (true as of #859; was false
+            // through 10.18.x). Also switched from [HttpGet] to [HttpPost]: a GET performing a
+            // delete is itself a defect (CSRF via a plain <img>/<a> tag, browser prefetch, link
+            // scanners) separate from the authorization gap.
             fp.DeleteFileTenantScoped(id, Wtm.CreateDC(cskey: csName));
             return Ok(true);
         }

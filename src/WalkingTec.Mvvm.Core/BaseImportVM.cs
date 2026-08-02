@@ -319,7 +319,11 @@ namespace WalkingTec.Mvvm.Core
                 {
                     var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();
                    // var tempdc = Wtm.DC;
-                    file = fp.GetFile(UploadFileId, true,Wtm!.CreateDC(false));
+                    // #1011: UploadFileId is model-bound the same way DeletedFileIds is (see the
+                    // #815/#821 doc comment on DeleteFileTenantScoped) — a caller-controlled id
+                    // sink, so it must be immune to FileUploadOptions.EnforceTenantFileScope
+                    // rather than trusting it like a route the caller does not choose.
+                    file = fp.GetFileTenantScoped(UploadFileId, true, Wtm!.CreateDC(false));
                     //Wtm.DC = tempdc;
                 }
                 if (file == null)
@@ -1568,7 +1572,9 @@ namespace WalkingTec.Mvvm.Core
                     return mse;
                 }
                 var fp = Wtm!.ServiceProvider.GetRequiredService<WtmFileProvider>();
-                fa = fp.GetFile(UploadFileId!, true, DC!);
+                // #1011: same caller-controlled UploadFileId sink as SetTemplateData above —
+                // must stay immune to FileUploadOptions.EnforceTenantFileScope.
+                fa = fp.GetFileTenantScoped(UploadFileId!, true, DC!);
                 // Use a local workbook so GetErrorJson does not overwrite (and leak) the
                 // field-level xssfworkbook that SetTemplateData already opened. (#150 L3)
                 using var localWb = new XSSFWorkbook(fa!.DataStream);

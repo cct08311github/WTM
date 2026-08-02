@@ -1,0 +1,17 @@
+diff --git a/src/WalkingTec.Mvvm.Core/BaseImportVM.cs b/src/WalkingTec.Mvvm.Core/BaseImportVM.cs
+index aef1ac7..ac2bdd1 100644
+--- a/src/WalkingTec.Mvvm.Core/BaseImportVM.cs
++++ b/src/WalkingTec.Mvvm.Core/BaseImportVM.cs
+@@ -323,7 +323,11 @@ namespace WalkingTec.Mvvm.Core
+                     // #815/#821 doc comment on DeleteFileTenantScoped) — a caller-controlled id
+                     // sink, so it must be immune to FileUploadOptions.EnforceTenantFileScope
+                     // rather than trusting it like a route the caller does not choose.
+-                    file = fp.GetFileTenantScoped(UploadFileId, true, Wtm!.CreateDC(false));
++                    // MUTANT test/mutants baseimportvm1011-settemplatedata-tenant-scope-revert: swaps
++                    // back to the flag-driven GetFile overload (compile-preserving -- both methods
++                    // exist on WtmFileProvider, this only changes which one is called). See
++                    // test/mutants/manifest.json.
++                    file = fp.GetFile(UploadFileId, true, Wtm!.CreateDC(false));
+                     //Wtm.DC = tempdc;
+                 }
+                 if (file == null)

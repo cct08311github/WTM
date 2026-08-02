@@ -1,11 +1,11 @@
 diff --git a/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs b/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs
-index f7955ffc3..ff572096d 100644
+index 7641cd7c1..c1ebfc416 100644
 --- a/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs
 +++ b/demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs
-@@ -266,7 +266,12 @@ namespace WalkingTec.Mvvm.Admin.Api
-             // [HttpGet] to [HttpPost]: a GET performing a delete is itself a defect (CSRF via a
-             // plain <img>/<a> tag, browser prefetch, link scanners) separate from the
-             // authorization gap.
+@@ -273,7 +273,12 @@ namespace WalkingTec.Mvvm.Admin.Api
+             // through 10.18.x). Also switched from [HttpGet] to [HttpPost]: a GET performing a
+             // delete is itself a defect (CSRF via a plain <img>/<a> tag, browser prefetch, link
+             // scanners) separate from the authorization gap.
 -            fp.DeleteFileTenantScoped(id, Wtm.CreateDC(cskey: csName));
 +            // MUTANT test/mutants fileapi830-deletedfile-tenant-scope-revert: swaps back to the
 +            // non-tenant-scoped DeleteFile overload (compile-preserving: both methods exist on
