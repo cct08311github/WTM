@@ -329,6 +329,16 @@ Tests: `python3 scripts/check-mutant-entries-parse.py --selftest` (5 embedded ca
 
 Tests: `test/WalkingTec.Mvvm.Core.Test` (Release, `TestCategory!=Integration`) 5063 passed, 0 failed (8 new). `test/WalkingTec.Mvvm.Admin.Test`: 192 passed, 0 failed. `test/WalkingTec.Mvvm.Api.Test`: 103 passed, 0 failed, 1 pre-existing skip (the mutation-gate-baseline selftest fixture). Full solution build (`dotnet build WalkingTec.Mvvm.sln -c Release`): 0 errors.
 
+### Corrected — the `[10.14.2]` #567 Phase-4a entry stated a downstream's production version that was wrong in the optimistic direction (#938)
+
+That entry justified deprecating `Layui:Asset=legacy` on a conservative timeline by describing the requesting downstream (BMS) as having "production still on WTM 8.x", with an "8→10 cutover" ahead of it. The maintainer confirmed on 2026-07-31 that production runs **WTM 6.3.27** — one major generation further back than stated. The sentence has been corrected in place and carries a dated note; the original wording is quoted inside that note rather than erased.
+
+**The decision that entry describes is unaffected.** It rested on production being far behind the shipped version, and the corrected number makes that premise stronger, not weaker. Nothing about the deprecation timeline, the `legacy` rollback path, or the #567 roadmap changes.
+
+**What is not settled**, and is recorded rather than smoothed over: three independent documents inside the BMS repository — a commit message, a pre-deployment audit report whose scope line reads "prod (WTM 8.6.1) → master (WTM 10.13.7)", and a migration-log phase note — all state 8.6.1/8.x. Either that 6→8 upgrade was completed in the repository but never deployed (making all three wrong in the same direction, because their authors read repository state as deployment state), or the maintainer's recollection is off. The ledger records 6.3.27 because a maintainer is authoritative about their own deployment, but no evidence resolves the conflict. `docs/release-adoption-ledger.md` §2 names a reproducible check that would — comparing the production database's `Framework*` table set against the 6.3.27 and 8.6.1 schemas, which needs only a read-only connection — and records that it has **not** been run.
+
+This correction is scoped to a factual claim about a third party's deployment. It changes no code, no behaviour, and no other entry's claims.
+
 ## [10.21.0] - 2026-07-31
 
 > **This section was published only as `10.21.0-rc.2`. The `10.21.0` version number is
@@ -1671,7 +1681,7 @@ A slice of the #470 eval-retirement epic (#627): an **opt-in kill-switch** that 
 
 ## [10.14.2] - 2026-07-06
 
-Phase-4a of the #567 LayUI roadmap: formally **deprecate** `Layui:Asset=legacy` and the bundled layui 2.6.3 asset tree, opening the removal window. Nothing is removed — this is advance notice only. The conservative path was chosen at the explicit request of the stability-sensitive downstream (BMS), whose production is still on WTM 8.x and which keeps `legacy` as a one-line rollback safety net for its eventual 8→10 cutover.
+Phase-4a of the #567 LayUI roadmap: formally **deprecate** `Layui:Asset=legacy` and the bundled layui 2.6.3 asset tree, opening the removal window. Nothing is removed — this is advance notice only. The conservative path was chosen at the explicit request of the stability-sensitive downstream (BMS), whose production is several major generations behind and which keeps `legacy` as a one-line rollback safety net for its eventual cutover. *(Corrected 2026-07-31, #938: this sentence originally read "still on WTM 8.x" and named the cutover as "8→10". The maintainer has since confirmed that production runs WTM **6.3.27**; the version stated here was wrong in the optimistic direction. The decision this entry describes is unaffected — it rested on production being far behind, which the corrected number makes more true, not less. The correction is recorded rather than silently applied because three independent BMS documents state 8.6.1 and that conflict is not yet resolved by evidence.)*
 
 ### Deprecated
 
