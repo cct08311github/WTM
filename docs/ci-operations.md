@@ -406,36 +406,52 @@ Docker VM。
   kernel 層面強制的，不需要引擎配合。
 
 **修法**：`services.mssql.env` 加 `MSSQL_MEMORY_LIMIT_MB: 1536`（照 Microsoft 文件的
-建議機制設，但如上所述效果未獲確認）；`services.mssql.options` 加 `--memory=2560m`
-（實際生效的邊界，設在本機五次測試觀察到的最高 `committed_target_kb`——約 2.03GiB，
-且都只是 idle/startup 狀態、不是真正測試負載下——之上，避免把「偶爾一次 Error 945」換成
-「cgroup 直接把整個容器 OOM-kill」；`2560m` 距離 3.813GiB VM 總量還留約 1.25GiB 給 job
-容器 + 這台機器常駐的 Gitea 基礎設施容器）。同時新增一個
-`Report MSSQL effective memory (issue #1020)` step，用 .NET 10 file-based app
-（`dotnet run --file`，同一支 `Microsoft.Data.SqlClient` 版本，跟
-`Directory.Packages.props` 一致）查 `sys.dm_os_sys_info`，把上面四個欄位印進 log——
-**這是唯一能讓「CI 綠了」跟「這個修法真的有作用」脫鉤的東西**：這個缺陷本來就是間歇性的，
-單次 green run 什麼都不能證明。
+建議機制設，如上所述**空跑，沒有效果**）；`services.mssql.options` 加 `--memory=2560m`
+（kernel 層面實際生效的邊界）；新增一個 `Report MSSQL effective memory (issue #1020)`
+step，用 .NET 10 file-based app（`dotnet run --file`，同一支 `Microsoft.Data.SqlClient`
+版本，跟 `Directory.Packages.props` 一致）查 `sys.dm_os_sys_info`，把
+`physical_memory_kb`/`committed_target_kb`/`committed_kb`/`container_type_desc` 印進
+每次 run 的 log。**三者當中，這個 step 才是有明確站得住腳的價值**：這個缺陷本來就是
+間歇性的，單次 green run 什麼都不能證明，能讓「CI 綠了」跟「這個修法真的有作用」脫鉤
+的只有它。
 
-**`2560m` 的安全邊際算對了嗎：用真正的測試負載覆核，不只用 idle 數字**——`--memory=2560m`
-最初是用 idle/startup 狀態量到的 `committed_target_kb`（約 2.03GiB）推出來的，但 run 6509
-死在第 9 個 create/drop 循環，也就是**持續負載之下**，剛好是 idle 數字最可能低估的情境。
-覆核方法：本機對一個用最終設定（`MSSQL_MEMORY_LIMIT_MB=1536`、`--memory=2560m`）起的
+**`--memory=2560m` 是不是「修好」這個缺陷，用真正的測試負載覆核之後判斷：不是，是一個
+backstop，不是對 run 6509 實際發生情況的修法**——`2560m` 最初是用 idle/startup 狀態量
+到的 `committed_target_kb`（約 2.03GiB）加安全邊界推出來的。run 6509 死在第 9 個
+create/drop 循環，也就是**持續負載之下**，剛好是 idle 數字最可能低估的情境，所以覆核
+了：本機對一個用最終設定（`MSSQL_MEMORY_LIMIT_MB=1536`、`--memory=2560m`）起的
 azure-sql-edge 容器，實際跑兩次完整的 9 項整合測試（`dotnet test` 對 Release build 的
 `WalkingTec.Mvvm.Integration.Test.dll`，`--filter "TestCategory=Integration"`，兩次都
 9/9 全過，各花 6.5s／7.0s），全程用 `docker stats` 取樣。**兩次的 MEM USAGE 峰值約
-663MiB（2560m 上限的 26%）**，測試跑完後 `sys.dm_os_sys_info.committed_kb` 約 152MiB
-——**都遠低於 idle 推出來的 2.03GiB，不是高於**。也就是說，這個修法擔心的方向（idle
-數字低估真實負載）在「mssql 自己的查詢負載」這個維度上沒有發生；如果有偏差，是反過來
-——idle 時的 `committed_target_kb` 比真實這種輕量負載下的實際用量高很多。
+663MiB，只有 2560m 上限的 26%**，測試跑完後 `sys.dm_os_sys_info.committed_kb` 約
+152MiB——**不只遠低於 2560m 上限，也遠低於 mssql 自己 idle 時的 2.03GiB 目標**。一個
+在真實負載下只用到上限 26% 的容器，不是那個「正在長大」的東西——`--memory=2560m` 沒有
+框住任何實際被觀察到在長大的東西。
 
-**這次覆核本身的界限，講清楚**：本機測試讓 mssql 單獨跑（旁邊沒有另一個容器同時在
-`dotnet restore`/build/test），`--memory` 這個 cgroup 上限本來就是逐容器獨立生效，跟
-旁邊容器做什麼無關，所以這個測試能回答「mssql 自己的查詢負載會不會超過上限」（不會，
-差很多），**但不能重現整台 VM 被 job 容器同時搶記憶體的情境**——run 6509 背後真正懷疑的
-機制。如果之後真實 run 顯示這個上限太緊（mssql 容器被 OOM-kill）或太鬆（Error 945
-還是出現）：不要盲目調數字——下一步是把 job 移到 `ubuntu-24.04`（Azure overflow
-runner，15GiB），代價是吃 Azure 分鐘數，故本票刻意不做。
+**比對照下真正吻合的機制**：`Error 945` 是 SQL Server 自己的記憶體管理員跟系統要記憶體
+被拒絕，而不是 mssql 自己用量爆掉；配合上面「`container_type_desc` 五次全部 `NONE`」
+——引擎在這台 host 上根本不是照 cgroup 範圍看記憶體，比較像是照整台 VM 的可用記憶體在
+判斷。這個形狀更吻合 **mssql 是整台 VM 記憶體被搶光的受害者，而不是加害者**——加害者
+的候選是同一個 job 容器同時在跑的 `dotnet build`/`dotnet test`，跟 `#902`（testhost
+OOM kill，靠 `-m:1` 序列化解掉）是同一種形狀。逐容器獨立生效的 `--memory` 上限，對
+「mssql 自己的 cgroup 沒有超標，但整台 VM 被別的容器榨乾」這件事完全沒有防護力——這正是
+上面數字指向的情境。
+
+**原本規劃要用一個更直接的測量把這個問題定案，但沒有做，講清楚為什麼**：讓 mssql 跑
+9 項整合測試的同時，另一個容器對同一個 solution 做完整 `dotnet build`，兩邊都取樣記憶
+體，直接看 mssql 會不會被旁邊的容器擠壓——這個量測理論上能比上面兩組獨立數字更直接回答
+問題。**沒有做**：投入這個工作階段的當下，這台機器上正有一個真實、不相關的 Gitea
+Actions job（`mutation-gate.yml` 的 `mutants` job）在跑，CPU 用到 ~260%、記憶體
+~800MiB，而這個 job 自己的文件記載的預算上看 ~125 分鐘——刻意在這個時間點疊加一個高
+負擔的 build+test 去搶同一顆 4 CPU / 3.813GiB 的 Docker daemon，代價是可能拖慢或搞壞
+一個真實、無關的 CI job，換來的量測品質還不見得乾淨。判斷是**留著不做，不是弱弱做一個
+拿來充當證據**。
+
+**下一步該往哪查，已經改了方向**：如果之後真實 run 又出現這個缺陷，**不要往上調
+`--memory` 這個數字**——上面的證據指向問題在 build/test 那一側的資源競爭，不是 mssql
+需要更多空間。該查的是同一個 job 容器同時在做的 restore/build/test，或是這個 runner
+的容量本身；`ubuntu-24.04`（Azure overflow runner，15GiB）仍然是最終備案，但那是解法
+換一個更大的機器，不是先調這個數字。
 
 **其他 workflow 有沒有一樣的形狀**：用 `yaml.safe_load` 逐一檢查
 `ci-build.yml`／`mutation-gate.yml`／`regression.yml`／`e2e-test.yml`／
