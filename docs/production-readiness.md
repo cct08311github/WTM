@@ -300,7 +300,7 @@ python3 scripts/audit-workflow-timeouts.py   # 應 PASS，132 個 real-work step
 
 **#944 —— 從程式碼重新推導後確認：真實但範圍比字面標題更精確。** `LookupCacheService.RefreshAsync<T>`（#804 修復後的現狀，`if (!acquired)` 逾時檢查已存在）沒有它自己的手足方法 `GetAll`/`GetAllAsync` 開頭就有的 Bug #112(2) 防護：`if (!_registry.ContainsKey(typeof(T))) { return LoadFromDb<T>(dc); }`。`RefreshAsync` 完全沒有對應檢查，任何 `T`（不論是否註冊）都會直接跑到 `Invalidate`/`LoadFromDbAsync`/`SetCache`。**為什麼這是真缺陷（從 `SetCache` 自己的程式碼重新推導，非採信 issue 文字）**：`SetCache<T>` 只有在 `_registry.TryGetValue(typeof(T), out var attr)` 成功時才設定 `entry.AbsoluteExpirationRelativeToNow`；對未註冊型別，這個分支被跳過，該筆快取沒有 TTL，也沒有可用的 per-type CTS 失效路徑（`InvalidateType` 從來沒有人會對一個沒被登記成 lookup 型別的東西呼叫）——於是這筆快取項會在 `IMemoryCache` 裡活到 process 重啟或 size-based 逐出壓力發生為止。**「未註冊」的定義直接取自 registry 自己的邏輯**（`IsCacheable(Type) == _registry.ContainsKey(entityType)`，`_registry` 只收錄具體、非抽象、掛 `[CacheLookup]` 的 `TopBasePoco` 子型別），不是猜測。生產路徑可觸及：`WTMContext.RefreshLookupAsync<T>()`（`WTMContext.LookupCache.cs:137`）呼叫 `svc.GetAttribute(typeof(T))`（未註冊型別回傳 `null`，沒有任何 guard），接著無條件呼叫 `svc.RefreshAsync<T>(...)`。**修法**：在方法最前面（`BuildKey`/`_keyLocks.GetOrAdd`/任何 semaphore 動作之前）加上同一個 registry 檢查，未命中就直接 `return`（no-op）——跟 #804/#943 的逾時分支不同，這裡不是操作失敗（沒拿到鎖），而是這個型別本來就從未被要求快取，靜默不做事才是正確語意，不是假象。不影響同方法內既有的 #804 `if (!acquired)` guard（獨立、更早的第二道檢查）。
 
-**Out of scope，明確不修，留待另立 issue**：`DistributedLookupCacheService.RefreshAsync` 結構上有相同的「缺 registry 檢查」缺口，但它的 `SetDistributedAsync` → `BuildCacheEntryOptions(attr)` 對未註冊型別的 fallback 是**有界的 30 分鐘 TTL**（`attr != null ? TimeSpan.FromMinutes(attr.TtlMinutes) : TimeSpan.FromMinutes(30)`），不是不死快取——是同一家族裡程度較輕、範圍不同的變體，不是 #944 標題所述「永不過期」那個症狀。本次刻意不修，因為它不是 #943 或 #944 字面所指的缺陷，擴大修復範圍會偏離兩張 issue 各自的授權範圍；本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea API 開票，故僅在此誠實記錄，留待使用者自行決定是否另立 issue。
+**曾經 out of scope，現已修復（見下方新章節）**：`DistributedLookupCacheService.RefreshAsync` 結構上有相同的「缺 registry 檢查」缺口，但它的 `SetDistributedAsync` → `BuildCacheEntryOptions(attr)` 對未註冊型別的 fallback 是**有界的 30 分鐘 TTL**（`attr != null ? TimeSpan.FromMinutes(attr.TtlMinutes) : TimeSpan.FromMinutes(30)`），不是不死快取——是同一家族裡程度較輕、範圍不同的變體，不是 #944 標題所述「永不過期」那個症狀。當時（#943/#944 修復當下）刻意不修，因為它不是 #943 或 #944 字面所指的缺陷，擴大修復範圍會偏離兩張 issue 各自的授權範圍；已依此誠實記錄另立 issue #975，本次工作階段一併修復——見下方「DistributedLookupCacheService.RefreshAsync 缺 registry 檢查——#944 留下的第三個實例（#975）」章節，此段落不再是 stale 的「留待使用者自行決定」。
 
 **測試（TDD 順序：先寫測試對著未修的程式碼跑紅，再實作，再確認變綠）**：
 
@@ -811,6 +811,58 @@ await page.wait_for_function(
 - `python3 wtm_e2e_tests.py`（全部 36 支 TC，同一個熱 process）：**Total: 36 | PASS: 35 | FAIL: 0 | ERROR: 0 | SKIP: 1**（唯一的 SKIP 是既有的 TC-36，demo 未啟用多租戶主機模式，與本次修法無關）——與 CI 那次失敗的「Total: 36 | PASS: 34 | FAIL: 1 | ERROR: 0 | SKIP: 1」相比，唯一變化就是 TC-29 從 FAIL 翻成 PASS，其餘 34 個 PASS + 1 個 SKIP 不變。
 
 **仍未能驗證的部分（誠實列出）**：這輪修法尚未在真正的 Gitea Actions CI 上跑過——本次工作階段的 hard constraint 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，只能本機驗證。本機的 demo process／SQLite／Playwright 版本與 CI 的自架 runner不保證逐一致（例如 CI runner 的 CPU/記憶體資源、Chromium 版本可能不同），因此「本機冷啟動可重現、修好後可穩定通過」不等於「CI runner 上保證不會有更極端的時序」——但 root cause（等待條件本身邏輯錯誤，不是單純的時間不夠長）已經修好，且新等待條件的正確性不依賴任何特定的時間常數。
+
+---
+
+## DistributedLookupCacheService.RefreshAsync 缺 registry 檢查——#944 留下的第三個實例（#975）（2026-08-01）
+
+上方 #944 條目本身已明確記錄：`DistributedLookupCacheService.RefreshAsync` 結構上有相同缺口，但因為 fallback TTL 有界（30 分鐘）而非不死，判斷為「同一家族裡程度較輕、範圍不同的變體」，當時刻意不修、留待另立 issue。本次工作階段的 issue #975 就是那張票，此處收尾。
+
+**先從這個類別自己的 `_registry`/`IsCacheable` 重新推導，不採信 #944 實作會直接搬過來**：`DistributedLookupCacheService.RefreshAsync<T>`（`if (!acquired)` 逾時檢查——#943 的修復——已存在）沒有它自己的手足方法 `GetAll`/`GetAllAsync`（`DistributedLookupCacheService.cs` 開頭就有的檢查，:188 同步／:245 非同步）：`if (!_registry.ContainsKey(typeof(T))) return LoadFromDb<T>(dc);`。`RefreshAsync` 完全沒有對應檢查，任何 `T`（不論是否註冊）都會直接跑到 `Invalidate`/`LoadFromDbAsync`/`SetDistributedAsync`。
+
+**與 #944 的差異（從這個類別自己的 `BuildCacheEntryOptions` 重新推導，非採信 issue 文字）**：`SetDistributedAsync` → `BuildCacheEntryOptions(attr)` 在 `_registry.TryGetValue(entityType, out var a)` 失敗（未註冊）時，走 `attr != null ? TimeSpan.FromMinutes(attr.TtlMinutes) : TimeSpan.FromMinutes(30)` 的 fallback 分支——**有界 30 分鐘**，不是 #944 那種「`SetCache` 對未註冊型別完全跳過 TTL 設定，於是條目在 `IMemoryCache` 裡活到 process 重啟」的不死快取。這就是本條目標題所述、也是 issue 本身指出的差異：後果不同（有界污染 vs. 永久洩漏），修法是否也該不同因此需要重新判斷，不能假設 #944 的實作直接搬過來就對。**結論：實測後，缺陷本身（缺 registry 檢查）與 #944 標題所述完全相符，只是後果嚴重度不同**——即使會自動過期，仍不該讓未註冊型別繞過 `GetAll`/`GetAllAsync` 已經強制的 `IsCacheable` 契約，於是修法本身跟 #944 一樣：在方法最前面（`BuildKey`/`_keyLocks.GetOrAdd`/任何 semaphore 動作之前）加上同一個 registry 檢查，未命中就直接 `return`（no-op），不影響同方法內既有的 #943 `if (!acquired)` guard（獨立、更早的第二道檢查）。生產路徑可觸及性與 #944 相同：`WTMContext.RefreshLookupAsync<T>()` 呼叫 `svc.GetAttribute(typeof(T))`（未註冊型別回傳 `null`，沒有任何 guard），接著無條件呼叫 `svc.RefreshAsync<T>(...)`。
+
+**修第三個實例前，先確認沒有第四個**：全樹重新推導 `ILookupCacheService` 的所有實作與其寫入路徑方法。指令與結果：
+
+```
+$ grep -rl "ILookupCacheService" src/ --include='*.cs'
+src/WalkingTec.Mvvm.Core/Cache/DistributedLookupCacheService.cs
+src/WalkingTec.Mvvm.Core/Cache/ILookupCacheService.cs
+src/WalkingTec.Mvvm.Core/Cache/LookupCacheService.cs
+src/WalkingTec.Mvvm.Core/Cache/LookupCacheStats.cs
+src/WalkingTec.Mvvm.Core/Cache/LookupCacheWarmupService.cs
+src/WalkingTec.Mvvm.Core/DataContext.cs
+src/WalkingTec.Mvvm.Core/WTMContext.cs
+src/WalkingTec.Mvvm.Core/WTMContext.LookupCache.cs
+src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs
+
+$ grep -n "class.*: ILookupCacheService" src/WalkingTec.Mvvm.Core/Cache/*.cs
+DistributedLookupCacheService.cs:59:    public sealed class DistributedLookupCacheService : ILookupCacheService
+LookupCacheService.cs:25:    public class LookupCacheService : ILookupCacheService
+```
+
+`DataContext.cs`/`WTMContext.cs`/`WTMContext.LookupCache.cs`/`FrameworkServiceExtension.cs` 逐一確認過都只是消費端（DI 解析、屬性型別、註冊委派），沒有第三個 `: ILookupCacheService` 實作——全樹只有這兩個類別。針對兩個類別各自的三個泛型寫入路徑方法（`GetAll<T>`／`GetAllAsync<T>`／`RefreshAsync<T>`——唯三個會呼叫 `SetCache`/`SetDistributedAsync` 寫入快取本體的方法），逐一以行號範圍配 grep 計數 `_registry.ContainsKey(typeof(T))`／`_registry.TryGetValue(typeof(T)` 在方法本文裡的出現次數：
+
+| 類別 | 方法 | 有 registry-check-on-T（寫入前置檢查） |
+|---|---|---|
+| `LookupCacheService` | `GetAll<T>` | 有 |
+| `LookupCacheService` | `GetAllAsync<T>` | 有 |
+| `LookupCacheService` | `RefreshAsync<T>` | 有（#944 修復） |
+| `DistributedLookupCacheService` | `GetAll<T>` | 有 |
+| `DistributedLookupCacheService` | `GetAllAsync<T>` | 有 |
+| `DistributedLookupCacheService` | `RefreshAsync<T>` | **原本沒有——這就是 #975** |
+
+另外確認過兩個檔案都沒有用 `IsCacheable(typeof(T))` 這種替代寫法繞過偵測（`grep -n "IsCacheable(typeof(T))"` 兩個檔案皆零筆），排除「檢查存在但寫法不同、grep 抓不到」的假陰性。**結論：找不到第四個實例**——`#975` 修完後，這個家族（未註冊型別繞過 registry 檢查被寫入快取）在全樹已無已知未修版本。
+
+**這個 survey 沒有證明的部分（誠實列出）**：純字面 grep pattern-match，不是語意驗證——三個方法各自的檢查是否真的擋在寫入之前、而非巧合出現在方法本文任意處，是人工讀碼確認的（見上方逐方法程式碼引用），grep 本身無法保證這點。`Invalidate<T>`／`InvalidateType` 是刪除／sentinel-only 路徑，不寫入快取本體，故不列入表格——這是刻意排除，不是遺漏，但也代表這個 survey 沒有涵蓋「刪除路徑是否有其他缺陷家族」這個問題。只搜尋 `src/` 樹下的 `.cs` 檔案；未涵蓋任何動態產生或反射建構的 `ILookupCacheService` 實作（本次沒有找到、也沒有證據存在這種東西，但 grep 本身不能排除）。
+
+**測試（TDD 順序：先寫測試對著未修的程式碼跑紅，再實作，再確認變綠）**：`test/WalkingTec.Mvvm.Core.Test/Cache/DistributedLookupCacheRefreshAsyncRegistryCheckTests975.cs`——沿用 `DistributedLookupCacheTests.cs` 裡既有的 `DistTestHelper`/`DCity`（已註冊，`[CacheLookup(TtlMinutes = 10, WarmOnStartup = true)]`）/`DOrder`（未掛 `[CacheLookup]`，未註冊，該檔自己的 `Uncacheable_type_always_loads_from_db` 測試已把它定調為這個服務的「未註冊」case）。**RED-before-fix（實測，逐字，Release build，經 `run_mutant.py` 的 dry run 再次確認）**：`Assert.IsNull failed. Bug #975: RefreshAsync<T> must not write an unregistered (non-[CacheLookup]) type to the distributed cache -- even though such an entry would self-expire after the bounded 30-minute fallback TTL (unlike #944's immortal IMemoryCache entry), it must never be written in the first place.` 刪掉修法裡的 `if (!_registry.ContainsKey(typeof(T))) { return; }` guard，這條測試就會變紅——單一行刪除即可讓斷言失敗，不需要更動測試本身。**負控組**：`RefreshAsync_RegisteredType_StillCachesNormally_NegativeControl`（本檔新增，自成一體）——驗證已註冊型別（`DCity`）透過 `RefreshAsync` 仍正常寫入分散式快取（`distCache.Get(key)` 非 null）且內容可經 `GetAllAsync` 正確讀回，修復前後皆綠，從未變紅（修法只在方法最前面加一個提早 `return`，已註冊型別永遠不會進入那個分支，因此這條測試本來就不依賴修法是否存在）。
+
+**Mutation gate**：一個新 entry，`test/mutants/entries/lookupcache975-distributed-refreshasync-registry-guard-neutralize.json`（patch 把 `if (!_registry.ContainsKey(typeof(T)))` 改成 `if (false)`，一行、compile-preserving，patch 用「暫改 → `git diff` → 還原」方式對著已提交的修復版本產生，非手寫）。`red_expected_assertion_patterns` 直接從 `run_mutant.py --trx-dir` 產生的 TRX 檔用 `xml.etree.ElementTree` 讀出——第一次 dry run（pattern 還是 placeholder）回報 `UNEXPECTED_RED`，證明 harness 真的有評估這個 mutant 而非短路通過；填入真實 pattern 後，**兩次獨立重跑**皆 **`VERDICT: KILLED` / `GATE: PASS`**。所選 pattern `Bug #975: RefreshAsync<T> must not write an unregistered` 為單行片段（訊息本身不含換行，繞開 Python `.*` 預設不跨行的陷阱），不含任何 regex 特殊字元需要跳脫，且不匹配 `run_mutant.py` 自己的任何 `PROBE_MESSAGES`。**`kind` 選擇**：`"security"`——`run_mutant.py` 的 `VALID_KINDS` 只接受 `{security, selftest}`，`selftest` 專屬 runner 自身邏輯測試，這個不是；本質是快取污染／契約繞過的完整性缺陷，不是傳統的未授權存取或 injection，但在現有 schema 下 `security` 是唯一能讓 mutant 被 CI 的 `mutants` job 實際執行、非 KILLED 會擋 gate 的功能性選項——跟 `lookupcache943-distributed-refreshasync-acquired-guard-neutralize.json`/`lookupcache944-refreshasync-registry-guard-neutralize.json`/`etl970-cancellation-classification-guard-neutralize.json` 記錄的同一種強制分類理由一致。**entry 數量**：直接對本次實際 base commit（`3887d7b11`，非文件裡任何舊數字）解析 `test/mutants/entries/*.json`——總數 72 → 73；`security`-kind（逐檔解析 `"kind"` 欄位，未依賴 script 本身）66 → 67。
+
+**驗證**（在本次實際 base commit `3887d7b11` 上量測，未採信文件裡任何舊數字——當天數字已變動多次）：`find . -name 'demo.db*' -path '*bin*' -delete && dotnet build WalkingTec.Mvvm.sln`——1 個已知、跟本次修改無關的錯誤：`NETSDK1082`（`BlazorDemo.Client` 缺 `browser-wasm` runtime pack），**直接對本次 base commit 單獨重建同一個專案確認過同一個錯誤存在**，不是本次修法造成的新問題。`dotnet test test/WalkingTec.Mvvm.Core.Test/`：修復前（base commit 加上本次新增的兩個測試方法、production 程式碼尚未修改）**5033 passed, 1 failed**（total 5034——唯一失敗即上方 RED-before-fix 那條）；修復後 **5034 passed, 0 failed**（total 不變，只有那條新測試從紅轉綠，其餘全部持平，未見任何連帶回歸）。
+
+**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。上方「class × method × has-check」survey 只是全樹一次性的靜態 grep 快照，不是持續稽核機制——未來若有人新增第三個 `ILookupCacheService` 實作或用替代寫法繞過 `_registry.ContainsKey(typeof(T))` 這個字面模式，這份 survey 不會自動重跑並抓到。
 
 ---
 

@@ -1,0 +1,13 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Cache/DistributedLookupCacheService.cs b/src/WalkingTec.Mvvm.Core/Cache/DistributedLookupCacheService.cs
+index 0f2d336f0..e8646b506 100644
+--- a/src/WalkingTec.Mvvm.Core/Cache/DistributedLookupCacheService.cs
++++ b/src/WalkingTec.Mvvm.Core/Cache/DistributedLookupCacheService.cs
+@@ -380,7 +380,7 @@ namespace WalkingTec.Mvvm.Core.Cache
+             // type in the first place, so silently doing nothing is correct, not a false
+             // assurance. Does not disturb the existing #943 `if (!acquired)` guard further down
+             // in this method -- this is a second, independent, earlier guard.
+-            if (!_registry.ContainsKey(typeof(T)))
++            if (false)
+             {
+                 return;
+             }

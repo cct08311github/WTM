@@ -353,6 +353,38 @@ namespace WalkingTec.Mvvm.Core.Cache
         public async Task RefreshAsync<T>(DbContext dc, string? tenantId = null, CancellationToken ct = default)
             where T : TopBasePoco
         {
+            // Bug #975: mirror this class's own GetAll/GetAllAsync bypass (see the first check
+            // at :188 sync / :245 above) and the #944 fix that closed the structurally identical
+            // gap in the sibling in-memory LookupCacheService.RefreshAsync -- an unregistered
+            // (non-[CacheLookup]) type must never be written to the cache. Placed as the very
+            // FIRST statement, before BuildKey/_keyLocks.GetOrAdd/anything semaphore-related, for
+            // the same reason GetAll/GetAllAsync run their own bypass before any locking: there
+            // is nothing to protect with a lock when the type was never asked to be cached.
+            //
+            // Unlike #944 (LookupCacheService/IMemoryCache, where SetCache's TTL branch is gated
+            // on _registry.TryGetValue succeeding -- an unregistered type got NO TTL and sat in
+            // IMemoryCache immortally), this class's own SetDistributedAsync ->
+            // BuildCacheEntryOptions falls back to a bounded 30-minute TTL when the type is not
+            // in _registry, so an unregistered type written here is NOT immortal -- it
+            // self-expires. That bounded-vs-immortal difference is why this is a separate issue
+            // (#975) rather than folded into #944, but it is still wrong to write it at all: it
+            // bypasses the exact IsCacheable(typeof(T)) contract GetAll/GetAllAsync already
+            // enforce for the same type, and it does so under the same "wtm:lookup:{type}:
+            // {tenant}" key namespace those methods deliberately skip. Reachable in production
+            // via WTMContext.RefreshLookupAsync<T>() exactly like #944 (svc.GetAttribute(typeof(T))
+            // returns null for an unregistered type with no guard, then svc.RefreshAsync<T>(...)
+            // is called unconditionally regardless).
+            //
+            // This makes the call a no-op rather than throwing, for the same reason #944 chose a
+            // no-op: there is nothing to refresh for a type that was never registered as a lookup
+            // type in the first place, so silently doing nothing is correct, not a false
+            // assurance. Does not disturb the existing #943 `if (!acquired)` guard further down
+            // in this method -- this is a second, independent, earlier guard.
+            if (!_registry.ContainsKey(typeof(T)))
+            {
+                return;
+            }
+
             var key = BuildKey(typeof(T), tenantId);
             var semaphore = _keyLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
             bool acquired = await semaphore.WaitAsync(StampedeTimeout, ct).ConfigureAwait(false);
