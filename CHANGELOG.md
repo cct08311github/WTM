@@ -283,6 +283,26 @@ Tests: `test/WalkingTec.Mvvm.Core.Test` (unfiltered) 5041 → 5042 passed, 0 fai
 Verification: `dotnet test test/WalkingTec.Mvvm.Core.Test/`: base **5062 passed, 0 failed** (measured on a clean stash of this branch's own changes, before any #982 edit) → **5066 passed, 0 failed** (4 new tests, unchanged count). `dotnet build WalkingTec.Mvvm.sln`: **0 Error(s)** — this session's own build did not reproduce the `NETSDK1082` browser-wasm warning #961/#979 reported at their base commits; not investigated further since it is unrelated to this fix either way. **Not verified this session**: neither fix has run on real Gitea Actions CI — this session's hard constraints forbid any Gitea/GitHub API call and forbid opening a PR.
 
 
+---
+
+### Added — `scripts/check-mutant-entries-parse.py` now also `git apply --check`s every `test/mutants/patches/*.patch` file, catching a stale fixed context one PR earlier than the mutation gate would (#1005)
+
+CI-only; no `WalkingTec.Mvvm.*` package code changed. **Full mechanism, the RED/GREEN proof (both captured verbatim), the precondition-vs-violation exit-code matrix, the orphan-patch count, and the honest scope statement are in `docs/production-readiness.md`'s new "#1005" section — this entry does not repeat or exceed those claims.**
+
+**The incident this closes one PR earlier**: a mutant patch's fixed context can be broken by an unrelated edit from a DIFFERENT PR that never touches the patch file itself. #1000 (above, this same release) inserted a `LogPrincipalKeyRejection(...)` call between the rejection `if` and the `throw` in `FileAttachmentSaveChangesGuard.cs` — a line landing inside the fixed context of `test/mutants/patches/fileattachmentguard985-principal-key-check-neutralize.patch`, a patch #985 itself shipped to pin its own fix. `git apply --check` on #985 alone succeeds; on #985 + #1000 together it fails with "patch does not apply" (both verified directly for this entry, not asserted from memory). **Neither PR's own CI could see this**: this repo's Gitea PR CI checks out `refs/pull/N/head` for the `pull_request` event, never a merge ref — the opposite of GitHub (docs/ci-operations.md's own § 5, confirmed still accurate — see production-readiness.md) — so no CI run for either PR ever has both branches' trees checked out at once. `run_mutant.py`'s own `apply_patch()` runs exactly this `git apply --check` and raises `GateError(VERDICT_PATCH_DID_NOT_APPLY)`, which correctly fails the mutation-gate job — but only once both branches finally share a tree, one gate cycle later than either PR's own CI (the first `push` to `dotnet10` after merge, or a rebase).
+
+**Why the existing `scripts/check-mutant-entries-parse.py` and not a new script**: it already globs every entry on every PR (unconditionally, via the `changes` job's own no-path-filter guarantee — see its #931 entry above), and `git apply --check` is a dry run (writes nothing to the working tree or index) costing milliseconds per patch, carrying none of the flaky-failure modes (build, test) that keep the rest of `run_mutant.py`'s patch/test-execution validation downstream, in the expensive `mutants`/`meta-selftest` jobs.
+
+- Every `test/mutants/patches/*.patch` file is checked — the file list comes from globbing the directory directly, not from walking entries' `patch` fields, so a patch is checked whether or not any `entries/*.json` file currently references it. An orphan patch (referenced by no entry) is reported informationally, separate from a pass/fail violation: **0 orphans found** in this repo's current 66 patches / 76 entries.
+- **Exit codes distinguish "could not analyse" from "a patch genuinely does not apply", per this repo's existing convention (0/1/2)**: `git` unavailable, not inside a git work tree, or a patch file that cannot be read all exit 2 (never 1) — verified directly for all three (empty `PATH`, a directory with no `.git` anywhere above it, and a `chmod 000`'d patch file), never conflated with a real finding.
+- A failing patch's message names the patch path, the target file (via `git apply --numstat`, the same technique `run_mutant.py`'s own `git_apply_touched_paths()` uses, not a text-level `diff --git` line), and git's own stderr reason — a reader does not have to re-run anything to know what to fix.
+- New `--selftest` mode (mirrors `scripts/check-e2e-test-integrity.py`'s identical pattern): builds a synthetic fixture in a scratch git repo (no files this repo ships) and proves a clean patch applies, a patch whose context no longer matches is reported as a violation naming the file, a missing patch file is a scanner problem not a violation, and `check_git_usable()` correctly reports both the clean and git-unavailable cases. Wired into `.github/workflows/mutation-gate.yml`'s `changes` job ahead of the real scan, `set -e`'d so a selftest failure stops the step before the real scan runs — the same wiring #917's e2e-integrity lint above uses. The selftest was itself proven non-vacuous: temporarily neutering `check_patch_applies()`'s violation branch made `--selftest` fail with the expected message, confirming it is not a check that always passes.
+- **No dependency added** — `subprocess` + `git` only, per this repo's existing stdlib-only convention for `changes`-job guards (this runner has previously been found lacking PyYAML).
+- **Honest scope, stated in both this entry and the script's own module docstring**: this does **not** prevent the defect class generally. It catches a PR breaking its own patch's fixed context, and closes the gap outright on every `push` to `dotnet10` (full tree, no other open PR to be blind to) — but it does **not**, and structurally cannot, catch the cross-branch case that produced #1005 itself: two PRs each green alone, whose trees are never checked out together by any CI run before they are merged. That gap is a property of this repo's Gitea PR-CI checkout model, not something a script running inside one PR's own job can close. This is "catches it one merge earlier than the gate would, and catches the single-branch case outright" — not "prevents #1005-shaped defects."
+- **`selftest`-kind mutant entry: considered, not added.** A `kind: selftest` entry under `test/mutants/entries/` is consumed by `run_mutant.py --mutant <id> --expect-verdict <V>` to regression-test `run_mutant.py`'s OWN verdict logic end-to-end (build failure, baseline-not-green, scope bypass, etc.) — a completely different code path from `scripts/check-mutant-entries-parse.py`, which never invokes `run_mutant.py` and doesn't consume entries the way the runner does. A `selftest` entry would exercise nothing this change added. The correct, and now-implemented, self-test mechanism for a `changes`-job guard script is its own `--selftest` embedded-fixture mode (see above) — the same shape `check-e2e-test-integrity.py`, `check-jwt-key-literal-blocklisted.py`, and the `test/mutants/_selftest/*.py` scripts already use.
+
+Tests: `python3 scripts/check-mutant-entries-parse.py --selftest` (5 embedded cases, all pass) and `python3 scripts/check-mutant-entries-parse.py` (76 entries + 66 patches, all clean) both pass on the unmodified tree. **RED-before-green, captured verbatim (not asserted from memory)**: a probe comment line was inserted into `FileAttachmentSaveChangesGuard.cs` inside `fileattachmentguard985-principal-key-check-neutralize.patch`'s own fixed context, reproducing the #1000-vs-#985 shape deliberately; `python3 scripts/check-mutant-entries-parse.py` exited `1`, naming the patch, `src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs` as the target, and git's own `patch does not apply` reason. Reverted (`git checkout --`); rerun exited `0`. Full verbatim RED and GREEN output, plus the three precondition-exit-2 captures, are in production-readiness.md. `python3 scripts/audit-workflow-timeouts.py`: 133/133 real-work steps still carry `timeout-minutes` (this change only edits one existing step's `run:` body and its surrounding comments — no new step). **Not exercised on real Gitea CI**: this session's hard constraints forbid any Gitea/GitHub API call and forbid opening a PR — verified by the RED/GREEN local reproduction above, `--selftest`, and local YAML parsing, not by a live CI run.
+
 ## [10.21.0] - 2026-07-31
 
 ### Security — `EmptyContext.SaveChanges`/`SaveChangesAsync` guard against forged `FileAttachment` foreign keys, closing the five remaining #824 write-path sinks + a cross-vendor-review fix to the Part 1 (#849) predicate itself (#824 Part 2)
@@ -459,8 +479,6 @@ standard method — never hand-written) and re-verified `KILLED`/`GATE: PASS` tw
 tree the rest of this PR ships as; see production-readiness.md's row on this for the same-behaviour
 argument and the process lesson.
 
-
-
 Both are the two follow-up issues #804's own fix explicitly filed rather than silently fixing inline. **Full defect analysis, code comparison against #804, RED-before-fix messages, negative controls, mutation-gate verdicts, and what was deliberately left out of scope are in `docs/production-readiness.md` § "LookupCache RefreshAsync 的兩個姊妹缺陷：#943（DistributedLookupCacheService 逾時繞過）與 #944（LookupCacheService 遺漏 registry 檢查）" — this entry does not repeat or exceed those claims.**
 
 - **#943 — `DistributedLookupCacheService.RefreshAsync<T>` computed `acquired` from the per-key stampede-protection semaphore's `WaitAsync` but never checked it before writing to the cache** — confirmed, by direct code comparison, to be verbatim the same defect #804 fixed in the sibling `LookupCacheService.RefreshAsync`. A caller that timed out did not hold the lock but proceeded to `Invalidate`/`LoadFromDbAsync`/`SetDistributedAsync` anyway, racing the legitimate lock holder's own write and able to overwrite a fresher cached value with a stale one for the entry's full TTL. Fixed the same way #804 fixed it: `if (!acquired)` now logs a warning and throws `TimeoutException` instead of proceeding — a caller-observable behaviour change from silent possibly-stale success (the same disclosure #804 already made for the sibling class). Also wired `StampedeTimeout` to the already-existing `LookupCacheOptions.StampedeTimeout` — it was still hardcoded in this class, unlike the sibling class #804 already wired; default value unchanged at 10s — needed purely so the timeout branch is testable without a real 10-second wait.
@@ -517,6 +535,8 @@ CI-only; no `WalkingTec.Mvvm.*` package code changed. `.github/workflows/mutatio
 **`kind` classification (considered, deferred)**: #970's `etl970-cancellation-classification-guard-neutralize` (above) had to be labelled `security` — the only enforceable option — despite being a correctness-only defect, because `run_mutant.py`'s `VALID_KINDS` is `{security, selftest}` and `selftest` is reserved for testing the runner itself. Once selection is in place, `kind` becomes classification-only (it no longer decides whether an entry runs), so adding a `correctness` kind would be cheaper now than before — but `mutants` still only selects `kind == 'security'`, so actually adding one would require changing that filter's semantics in the SAME PR that just changed the diff-selection semantics. Deferred to a follow-up rather than compounding two selection-logic changes in one PR.
 
 Verification: `python3 test/mutants/gate_lib.py ids --kind security | wc -l` → 61; `dotnet build WalkingTec.Mvvm.sln` (one pre-existing, unrelated failure confirmed identical on unmodified `origin/dotnet10` — `NETSDK1082`, missing `browser-wasm` runtime pack for `BlazorDemo.Client`, a local workload gap, not a regression); `python3 test/mutants/_selftest/selftest_select_relevant_entries.py` (new, 8/8 cases pass) plus the two now-wired pre-existing selftests, all passing; `python3 test/mutants/run_mutant.py --mutant 953-getbatchquery-wherereplacemodifier-reintroduce` → `VERDICT: KILLED` / `GATE: PASS` and `python3 test/mutants/run_mutant.py --mutant _selftest-empty-red-tests-invalid --expect-verdict INVALID_MUTANT_EMPTY_RED_TESTS` → `PASS`, both run to confirm individual mutant execution (unchanged code in `run_mutant.py`) is unaffected — not all 61 entries were re-run, since neither of those two ever call the changed `gate_lib.py`/workflow code. **Not exercised on real Gitea CI**: this session's hard constraints forbid any Gitea/GitHub API call and forbid opening a PR, so the workflow's actual behaviour on a real pull_request/push event (job scheduling, `GITHUB_OUTPUT` propagation, the `changes`→`mutants`/`meta-selftest`→`gate` job chain end-to-end) is verified by local YAML parsing, `scripts/audit-workflow-timeouts.py`, and direct invocation of the underlying Python — not by a live CI run.
+
+---
 
 ### Security
 
@@ -2617,7 +2637,6 @@ Deep optimization of the ETL and OLAP (Analysis) modules (#179): 52 profiled opp
 - **ProcessCommand divide-by-zero, DCExtension.Sort NRE on unknown property, invalid SortDir crash, and sort-order info-leak via sensitive fields fixed** (#151): `ProcessCommand` now normalises `Searcher.Limit` to the configured default before the `(Count-1)/Limit` page-count division so `Limit=0` no longer causes a swallowed `DivideByZeroException`; `DCExtension.Sort` skips sort fields that don't exist on `T` (prevents NRE via `Expression.Property(pe, null!)`); `OrderReplaceModifier` returns `node` unchanged when `SortDir` is outside `{Asc, Desc}` so an unknown direction value no longer yields a null expression that crashes `CreateQuery`; both `DCExtension.Sort` and `OrderReplaceModifier` now silently skip properties decorated with `[JsonIgnore]`/`[NotMapped]` and name-matched sensitive fields (`Password`, `PasswordHash`, `Salt`, `Token`), preventing an authenticated sort-order oracle attack.
 - **`EmptyContext.ReCreate()` now preserves `Version`; `CascadeDelete` guards against cyclic trees** (#152): `ReCreate()` previously used the 2-arg `(string, DBTypeEnum)` constructor in the null-`ConnectionString` branch, silently dropping the configured DB compatibility `Version`; it now prefers the 3-arg constructor so `Version` is propagated (falls back gracefully when the subtype only exposes 2-arg). `CascadeDelete<T>` used unbounded recursion — a cyclic parent-child reference (A.ParentId=B, B.ParentId=A) or an exceptionally deep tree would cause an uncatchable `StackOverflowException`; fixed by introducing an internal overload that carries a `HashSet<Guid> visited` set and short-circuits on already-visited nodes; the public signature is unchanged.
 
-
 - **REST widget SSRF hardening** (#101): seven security defects in the REST
   widget data source are fixed.
   - **CRITICAL** — Request-supplied `options` can no longer override
@@ -2828,7 +2847,6 @@ Deep optimization of the ETL and OLAP (Analysis) modules (#179): 52 profiled opp
   with 7 test cases was added to `test/WalkingTec.Mvvm.Core.Test/Security/`.
 
 - **ETL: MssqlBulkLoader schema-qualified existence check; EtlQuartzJob terminal-failure trigger label** (#136): `EnsureStagingTableAsync` now filters `INFORMATION_SCHEMA.TABLES` on both `TABLE_NAME` and `TABLE_SCHEMA` (defaulting to `dbo`) so a same-named staging table in another schema no longer causes `CREATE` to be silently skipped. `EtlQuartzJob.Execute` terminal-failure else branch no longer overwrites the original trigger value (e.g. `Scheduled`) with `Retry`, so `EtlRunLog.Trigger` accurately reflects how the job was initiated.
-
 
 - **`GetRemoteIpAddress` no longer trusts `X-Forwarded-For` by default** (#114):
   `HttpContextExtention.GetRemoteIpAddress` previously read the raw
@@ -3632,7 +3650,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 
 * **修改：**   修复工作流的一些bug
 
-
 ##8.0.2(2024-2-1)
 
 * **修改：**   修复EF8.0默认不支持sqlserver 2014一下的问题
@@ -3643,8 +3660,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 
 ##8.0.0(2024-1-11)
 * **修改：**  全面升级支持dotnet8
-
-
 
 ## v6.x.x
 
@@ -3685,7 +3700,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 * **修改：**  优化了LayUI模式下TreeContainer控件
 * **修改：**  默认的Json序列化，添加了可为空的类型的读写判断
 
-
 ##6.3.25(2023-6-8)
 * **新增：**  新增针对WtmPlus中生成的vue3的项目的简易代码生成器
 * **修改：**  修复了多租户模式下GetUserDC方法
@@ -3705,11 +3719,9 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 * **修改：**  修复LayUI模式中子表控件删除行之后赋值的问题
 * **修改：**  修复LayUI模式中设置默认搜索条件后导出的问题
 
-
 ##6.3.19(2023-2-11)
 * **修改：**  修复LayUI模式下联动Tree控件的选中问题
 * **修改：**  优化BatchVM中批量修改的默认操作
-
 
 ##6.3.18(2023-2-6)
 * **修改：**  修复LayUI模式下重置按钮不能重置下拉菜单的问题
@@ -3718,7 +3730,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 ##6.3.16(2023-2-2)
 * **修改：**  修复LayUI模式下Tree控件的选中问题
 * **修改：**  修复LayUI模式下DateTime控件绑定int的问题
-
 
 ##6.3.15(2023-1-30)
 * **修改：**  更新Blazor控件库到最新版本
@@ -3730,10 +3741,8 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 * **修改：**  修复Layui模式下Tree和Combobox的bug
 * **修改：**  修复OSS上传图片没有自动指定ContentType的问题
 
-
 ##6.3.9(2022-11-17)
 * **修改：**  系统自带的部门，角色，租户等表可以通过自定义类继承基类的方式增加字段
-
 
 ##6.3.8(2022-11-15)
 * **修改：**  更新版本以适应新版的Bootstrap Blazor 7
@@ -3824,8 +3833,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 * **中断性修改：**  新增新的系统表FrameworkTenant
 * **中断性修改：**  Appsettings文件中新增EnableTenant配置
 
-
-
 ##6.1.1(2022-4-1) 
 * **新增：**  集成Quartz作业调度，为后续工作流所需内部定时任务做好准备，使用方法参见文档 https://wtmdoc.walkingtec.cn/#/Global/Quartz
 * **修改：**  日志分类中增加了“作业”一项
@@ -3855,7 +3862,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 * **修改：**  修复登录用户保存信息是并发的问题
 * **修改：**  修复了layui模式radio控件绑定空值的bug
 
-
 ##6.0.2(2021-12-26) 
 * **修改：**  修改Blazor默认代码生成，适应BootstrapStrap 6.x新版本
 * **修改：**  再次更新数据权限逻辑，新的默认逻辑为，如果设定了数据权限的表本身继承了BasePoco，而且没有给当前用户配置任何数据权限，那么用户默认可以看到自己加的数据。如果给用户配置了数据权限，则根据数据权限的配置显示数据，不管是否是当前用户添加的。
@@ -3868,7 +3874,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 * **修改：**  修复创建默认数据库时，默认菜单Api方法的菜单显示为false
 * **修改：**  修复了LayUI模式联动会覆盖初始绑定的数据的问题
 * **修改：**  继承BaseApiController的控制器没有权限的时候会返回403错误
-
 
 ##5.10.29(2023-6-29)
 * **修改：**  默认的Json序列化，数字类型仍然会被输出为字符串，这是因为很多前端控件都需要对比字符串
@@ -3907,7 +3912,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 * **修改：**  修复LayUI模式下Tree控件的选中问题
 * **修改：**  修复LayUI模式下DateTime控件绑定int的问题
 
-
 ##5.10.15(2023-1-30)
 * **修改：**  更新Blazor控件库到最新版本
 * **修改：**  修复Layui模式下的一些js错误
@@ -3928,7 +3932,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 * **修改：**  LayUI模式子表现在可以通过SetEditType方法设置子表控件是否只读
 * **修改：**  LayUI模式子表现在可以通过SetEditType方法设置子表中日期控件的格式
 * **修改：**  修复内置Login方法大小写判断的bug
-
 
 ##5.10.7(2022-10-19)
 * **修改：**  更新版本以适应新版的Bootstrap Blazor控件库
@@ -3967,7 +3970,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 * **修改：**  修复WtmFileProvider直接使用的问题
 * **新增：**  为配合WtmPlus的新功能，框架底层增加SoftKey,SoftFK属性，用于标记非主键关联的模型
 
-
 ##5.9.3(2022-6-12)
 * **新增：**  QuartzRepeatAttribute增加了DelaySeconds参数，可以控制延迟多少秒启动服务
 * **修改：**  恢复LoginUserInfo中的UserId以兼容老系统
@@ -3989,7 +3991,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 * **修改：**  修复Blazor模式添加外部菜单的显示问题
 * **修改：**  修复LayUI模式Combobox在Https下无法下载数据的问题
 
-
 ##5.9.0(2022-6-5)
 
 本次为大版本更新，包含中断性更改，老项目升级时需要手动更新旧数据库
@@ -4010,7 +4011,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 * **中断性修改：**  系统自带的FrameworkGroup字段发生了改变，变为树形结构，且增加了Manager字段
 * **中断性修改：**  新增新的系统表FrameworkTenant
 * **中断性修改：**  Appsettings文件中新增EnableTenant配置
-
 
 ##5.8.3(2022-4-1) 
 * **新增：**  集成Quartz作业调度，为后续工作流所需内部定时任务做好准备，使用方法参见文档 https://wtmdoc.walkingtec.cn/#/Global/Quartz
@@ -4119,7 +4119,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 * **修改：**  修改了自带代码生成器生成单元测试的逻辑
 * **修改：**  修复了偶发登录后又跳出的问题
 * **修改：**  修复了Layui中维护菜单时添加api报错的问题
-
 
 ##5.4.5 (2021-8-27) 
 * **修改：**  修复了Layui模式下上传图片控件异步加载的问题
@@ -4361,7 +4360,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 ##3.7.8 以及 2.7.8 (2020-11-24)
 * **修改：**  彻底修复GetProperty反射与自定义主键引发的一些冲突
 
-
 ##3.7.7 以及 2.7.7 (2020-11-21)
 * **修改：**  修复了DpWhere方法的一些bug
 * **修改：**  Layui默认的数据权限管理添加了搜索功能
@@ -4491,8 +4489,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 * **修改：**  Vue模式增加多语言支持
 * **修改：**  VUE模式修复一些近期反馈的小bug
 
-
-
 ##3.5.7 以及 2.5.7 (2020-5-6)
 * **新增：**  SubmitButton中新增SubmitUrl属性，用于多个提交按钮提交到不同的地址
 * **新增：**  BaseController和BaseApiController增加可重写的GetLoginUserInfo方法，用于自定义用户认证
@@ -4528,7 +4524,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 * **新增：**  Layui. UIService中新增MakeButton方法替换之前有问题的MakeRedirectButton方法
 * **修改：**  修复GetGridActions会被调用两次的问题（这其实是.netcore的bug...)
 
-
 ##3.5.1 以及 2.5.1 (2020-3-26)
 * **修改：**  修复vue菜单相关的一些bug
 * **修改：**  修复vue代码生成器对于布尔值的控件生成的bug
@@ -4545,7 +4540,6 @@ Code Generator 新增 Analysis Mode 支援，自動產生 `[EnableAnalysis]`、`
 ## v3.1.x
 
 3.1版本正式发布，支持.netcore 3.1，与2.4.x最新版本在功能上同步更新
-
 
 ## v2.4.x
 
@@ -4590,11 +4584,6 @@ v2.4.6(2020-2-22)
 * **修改：**  修复了代码生成器生成React菜单的bug
 * **修改：**  修复了代码生成器生成标记了[Range(xxx.Max)]字段的bug
 
-
-
-
-
-
 v2.4.5 (2020-1-4)
 本次为累积更新，修复了一个月以来issue上提出的主要bug
 * **修改：**  修复了获取PersistPoco的下拉选项时，没有过滤IsVaild=false的问题
@@ -4623,7 +4612,6 @@ v2.4.5 (2020-1-4)
 * **修改：**  修复某些模型生成单元测试时的bug
 * **修改：**  修复自定义ID的模型attach时可能失败的bug
 * **修改：**  修复主子表操作时没有判断PersistPoco的bug
-
 
 ### v2.4.2 (2019-11-22)
 
@@ -4657,7 +4645,6 @@ v2.4.5 (2020-1-4)
 * **新增：**  Swagger jwt支持
 * **修改：**  修复多语言验证信息bug
 * **修改：**  菜单管理支持不同Area下同名Controller的配置
-
 
 ## v2.3.x
 
@@ -4736,7 +4723,6 @@ _controller.GlobaInfo.SetModuleGetFunc(() => new List\<FrameworkModule\>());
 * **修改：**  修复grid中分组之后排序的bug
 * **修改：**  修复grid中有时出现横向滚动条的bug
 * **修改：**  新登陆页面
-
 
 ### v2.3.1 (2019-8-31)
 修复了2.3.0版本中的一些bug

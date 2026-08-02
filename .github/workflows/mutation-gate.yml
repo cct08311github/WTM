@@ -196,11 +196,40 @@ jobs:
     # non-empty 'id', 'id' matches the filename, 'kind' is valid) while collecting every
     # failing file instead of stopping at the first -- see that script's own docstring for
     # the concrete incident that motivated it, its exit codes, and its stated scope (it does
-    # NOT replicate run_mutant.py's patch/test-execution validation, which needs an actual
-    # dotnet build and belongs downstream). Its exit code becomes this step's exit code
-    # directly.
-    - name: "Guard: every mutant entry file parses and validates (#931)"
-      run: python3 scripts/check-mutant-entries-parse.py
+    # NOT replicate run_mutant.py's test-execution validation, which needs an actual dotnet
+    # build and belongs downstream). Its exit code becomes this step's exit code directly.
+    #
+    # #1005: the same script also now runs `git apply --check` against every
+    # test/mutants/patches/*.patch file, independent of whether any entry references it.
+    # WHY here: this incident was #1000 (an unrelated PR) inserting a line inside the fixed
+    # context of a patch #985 shipped -- `git apply --check` passed for #985 alone and for
+    # #1000 alone, and failed only once both landed on the same tree. Neither PR's own CI
+    # could see that: this repo's Gitea PR CI checks out `refs/pull/N/head`, never a merge
+    # ref (docs/ci-operations.md), so no single-PR job ever has two branches' trees at once.
+    # Putting the check in `changes` -- already unconditional on every PR, already the home
+    # of the cheapest guards, with zero flaky failure mode (a dry-run `git apply --check`,
+    # no build, no test) -- catches it one PR earlier for a PR that breaks its own patch's
+    # context, and closes it outright on every `push` to dotnet10 (full tree, no other open
+    # PR to be blind to). It does NOT, and structurally cannot, catch two still-open PRs
+    # each green alone that conflict only once merged -- see the script's own docstring
+    # "HONEST SCOPE" section; that gap is this checkout model's, not this guard's to close.
+    #
+    # `--selftest` runs FIRST against a synthetic scratch git repo (no files this repo
+    # ships) covering: a well-formed patch applying cleanly (positive control -- without
+    # it, a check that always reports a violation would pass every negative case below);
+    # a patch whose context no longer matches the tree, reported as a violation naming
+    # both the patch and the target file; a missing patch file, reported as a scanner
+    # problem and never as "does not apply" (acceptance criterion 3); and
+    # check_git_usable() itself, both inside a real repo (clean) and with no `git` on
+    # PATH (reported unavailable) -- so the proof this guard can actually fire is
+    # re-verified by machine on every PR, not asserted once in a PR body and left to rot.
+    # `set -e` makes a selftest failure stop this step before the real scan runs; the
+    # real scan's exit code becomes this step's exit code directly.
+    - name: "Guard: every mutant entry parses/validates + every mutant patch still applies (#931, #1005)"
+      run: |
+        set -e
+        python3 scripts/check-mutant-entries-parse.py --selftest
+        python3 scripts/check-mutant-entries-parse.py
       timeout-minutes: 3
     # #926 cross-vendor review, finding 7 follow-up (2026-07-31): the honest-denominator
     # coverage audit (scripts/audit-workflow-timeouts.py) was committed but never wired

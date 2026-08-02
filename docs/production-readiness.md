@@ -995,6 +995,140 @@ LookupCacheService.cs:25:    public class LookupCacheService : ILookupCacheServi
 
 ---
 
+## mutant patch 逐檔 `git apply --check`：CI 補一個「同一個 PR 內就能證明」的 gate，不宣稱防住整個缺陷類別（#1005，2026-08-03）
+
+**這是 CI-only 基礎設施，不動任何 `WalkingTec.Mvvm.*` package 程式碼。**
+
+**事故本身**：mutant patch 的 fixed context 可以被「另一張、完全不碰這個 patch 檔案」的 PR 用一次無關編輯打壞。本次工作階段之前，`#1000`（同一個 release cycle，見上方該條目）在 `FileAttachmentSaveChangesGuard.cs` 的 rejection `if` 與 `throw` 之間插入一行 `LogPrincipalKeyRejection(...)` 呼叫——這一行剛好落在 `test/mutants/patches/fileattachmentguard985-principal-key-check-neutralize.patch`（`#985` 自己出的、用來釘住自己修法的 patch）的 fixed context 裡面。`git apply --check` 對 `#985` 單獨跑會過；對 `#985` + `#1000` 一起跑會失敗，訊息是 `patch does not apply`。**兩張 PR 自己的 CI 都看不到這件事**：見下方「Gitea checkout 機制的查證」。`run_mutant.py` 自己的 `apply_patch()` 跑的就是這一模一樣的 `git apply --check`，失敗時丟出 `GateError(VERDICT_PATCH_DID_NOT_APPLY)`；`PASSING_VERDICTS` 不含這個 verdict，所以下游的 `mutants`/`meta-selftest` job 會正確地讓 gate 失敗——但要等到兩個分支真正共享同一棵樹的那一刻才會發生，在這個 repo 的 checkout 模型下，那是合併後第一次對 `dotnet10` 的 `push`，比任何一張 PR 自己的 CI 晚了一整個 gate 週期。
+
+### Gitea checkout 機制的查證（issue 本身的斷言，逐字核對，不採信記憶）
+
+Issue 主張：這個 repo 的 Gitea PR CI 對 `pull_request` 事件 checkout 的是 `refs/pull/N/head`，不是 merge ref。查 `.github/workflows/*.yml` 與 `docs/ci-operations.md`：**這份記錄完全支持這個斷言，不需要修正 issue 的 framing**。`docs/ci-operations.md` 第 133-144 行（第 5 節）逐字寫著：
+
+> `actions/checkout@v5` 在 `pull_request` 事件只 checkout PR 自己的 head，不是 base+head 的 merge
+>
+> **事實**：job log 的 checkout step 印出：`[command]/usr/bin/git checkout --progress --force refs/remotes/pull/<N>/head`
+>
+> Gitea 對 `pull_request` 事件 checkout 的是 **PR 分支自己的快照**（`refs/remotes/pull/N/head`）。**這跟 GitHub Actions 相反**：GitHub 對同一事件 checkout 的是 base 與 head 的 merge 結果……Gitea 不會——PR 分支比 base 舊多少，CI 就看不到 base 上比它新的東西。
+
+同一小節也記錄了這個機制曾造成的實際案例（`#906`：`#882` 合併後 `production-readiness.md` 已更新、`dotnet10` 上測試全綠，但開在 `#882` 之前的 PR `#881`/`#904` 仍各自紅在同一斷言，因為它們的 checkout 停在合併前的快照）——這正是同一個機制的另一個展示，跟本票要修的「patch fixed-context 被跨 PR 打壞」是同一根因的不同症狀。`.github/workflows/*.yml` 逐一確認：8 個 workflow 檔案的 `pull_request` trigger 都用 `actions/checkout@v5` 的預設行為（沒有任何一處自行覆寫成 merge-ref checkout），跟 `docs/ci-operations.md` 記錄的一致。**結論：issue 的 framing 站得住腳，不需要更正。**
+
+### 為什麼修法擴充既有的 `scripts/check-mutant-entries-parse.py`，不是新開一支腳本
+
+讀過該腳本本身後確認：它已經在 `.github/workflows/mutation-gate.yml` 的 `changes` job（本 repo 兩個 trigger 都沒有 path filter、已透過 `gate` job 掛成 required check 的唯一 job）裡對每一次 PR 無條件執行；`git apply --check` 是 dry run（不寫入 working tree 或 index），對 66 個 patch 全部跑完只要毫秒等級，不像 `run_mutant.py` 下游那樣需要真的 build/test、因此完全不共享那些 flaky 失敗模式。這正是原本 `check-mutant-entries-parse.py` 自己 docstring 陳述的設計原則（「cheap job，沒有 flaky failure mode」）——延續原本的判斷準則，沒有找到更好的落點。
+
+### 修法內容
+
+- **規則**：對 `test/mutants/patches/*.patch` 下每一個檔案跑 `git apply --check`，對象是這個 job 當下 checkout 到的樹（跟 `run_mutant.py` 自己的 `apply_patch()` 看到的完全一樣）。檔案清單來自直接對 `test/mutants/patches/` 目錄 glob，不是走每個 entry 的 `patch` 欄位——所以不管有沒有 entry 引用它，每個 patch 都會被檢查（acceptance criterion 4）。
+- **Orphan patch（沒有任何 entry 引用的 patch）**：獨立、非阻斷性地回報，不影響 exit code。**這個 repo 現況：0 個 orphan**——用一支獨立腳本重新推導（不沿用 check-mutant-entries-parse.py 自己的邏輯，避免同一個 bug 兩邊都算對）：
+
+```
+$ python3 - <<'EOF'
+import json
+from pathlib import Path
+entries_dir = Path("test/mutants/entries")
+patches_dir = Path("test/mutants/patches")
+referenced = set()
+for p in sorted(entries_dir.glob("*.json")):
+    entry = json.loads(p.read_text(encoding="utf-8"))
+    patch = entry.get("patch")
+    if patch and patch.startswith("patches/"):
+        referenced.add(Path(patch).name)
+on_disk = set(p.name for p in patches_dir.glob("*.patch"))
+print("patches on disk:", len(on_disk))
+print("referenced from entries:", len(referenced))
+print("orphans:", sorted(on_disk - referenced))
+print("entries pointing at a missing patch file:", sorted(referenced - on_disk))
+EOF
+patches on disk: 66
+referenced from entries: 66
+orphans: []
+entries pointing at a missing patch file: []
+```
+
+  （查證過程的一個岔路，記錄下來避免下次重踩：第一次跑這支腳本時錯把 `Path(patch).name` 用在所有 entry 上，結果把 `test/mutants/_selftest/*.patch`——meta-selftest 專用、由 `run_mutant.py --expect-verdict` 消費、根本不在 `test/mutants/patches/` 目錄下——的 3 個檔案名算成「entry 指向的、但目錄裡沒有」的假警報。加回 `patches/` 前綴過濾後，這 3 個 selftest fixture 正確被排除，不計入本票的 orphan/missing 統計——它們屬於一個完全不同的機制，見下方 selftest-entry 判斷段落。）
+
+- **Exit code 區分「could not analyse」與「找到違規」，比照本 repo 既有慣例（0/1/2）**：`git` 不在 PATH、目前目錄不在任何 git work tree 裡、或 patch 檔案本身讀不到，這三種都是 exit 2（scanner error），絕不能跟「這個 patch 真的套不上」的 exit 1 混在一起——見下方三個逐字驗證。
+- **失敗訊息點名 patch、target file、原因**：target file 透過 `git apply --numstat` 取得（跟 `run_mutant.py` 自己的 `git_apply_touched_paths()` 同一招——用 git 自己的 header parser，不是文字層級解析 `diff --git a/<path> b/<path>` 那一行，後者可以被惡意或壞掉的 patch 弄得跟真正套用的路徑不一致），reason 直接引用 git 自己的 stderr。
+- **`--selftest` 模式**：仿照 `scripts/check-e2e-test-integrity.py` 同一種形狀——在一個全新建立的 scratch git repo（tempfile，不是本 repo 任何既有檔案）裡放一個 fixture 檔與兩個合成 patch（一個 context 對得上、一個對不上），加一個刻意不存在的「missing.patch」，逐一斷言：乾淨 patch 套用成功（positive control）、context 對不上的 patch 回報 violation 且訊息同時點名 patch 路徑與 target file、missing patch 回報 scanner problem 而非 violation、`check_git_usable()` 在真實 repo 裡回報乾淨、把 `PATH` 指到一個保證沒有 `git` 的空目錄時正確回報 git 不可用。已接進 `mutation-gate.yml` 的 `changes` job，`--selftest` 先跑、`set -e` 確保它失敗會擋下真掃描——跟 `#917`（上方 e2e-integrity lint）同一種接法。
+- **沒有加任何依賴**：只用 `subprocess` + `git`，符合本 repo `changes` job guard 一律 stdlib-only 的既有慣例（這個 runner 曾被發現沒裝 PyYAML）。
+
+### RED-before-green，逐字擷取（不是憑記憶宣稱，兩次都是本次工作階段實際執行）
+
+**手法**：在 `FileAttachmentSaveChangesGuard.cs`（`fileattachmentguard985-principal-key-check-neutralize.patch` 唯一的 target file）裡、該 patch 自己的 fixed context 範圍內（`var principalKey = fk.PrincipalKey;` 與 `if (!IsCanonicalFileAttachmentPrincipalKey(...` 之間）插入一行探針註解，刻意重現「無關編輯落在另一個 patch 的 context 裡」這個形狀本身——不是編出來的假設，是 `#1000` 對 `#985` 真的做過的同一種動作，只是這次是刻意、暫時、且會被還原的。
+
+**RED**（`python3 scripts/check-mutant-entries-parse.py`，樹被探針行擾動後，逐字）：
+
+```
+::error::1 of 66 mutant patch file(s) under test/mutants/patches do NOT apply to the current tree (named above, one per line, each with its target file and git's own reason) -- test/mutants/run_mutant.py's apply_patch() will raise GateError(VERDICT_PATCH_DID_NOT_APPLY) for each of these the moment its entry is selected, failing the mutation-gate 'mutants'/'meta-selftest' job. The most common cause (issue #1005): an unrelated commit -- often from another PR whose own CI could not see this patch at all, since Gitea PR CI checks out refs/pull/N/head, never a merge ref (docs/ci-operations.md) -- edited a line INSIDE one of these patches' fixed context. Regenerate the patch(es) named above against the current tree.
+INFO: 0 orphan patch file(s) under test/mutants/patches (every patch is referenced by an entry).
+test/mutants/patches/fileattachmentguard985-principal-key-check-neutralize.patch does not apply to the current tree (target: src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs) -- error: patch failed: src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs:335
+error: src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs: patch does not apply
+EXIT CODE: 1
+```
+
+（同一時間直接跑 `git apply --check test/mutants/patches/fileattachmentguard985-principal-key-check-neutralize.patch` 本身確認一致：`error: patch failed: ...:335` / `error: ...: patch does not apply`，exit 1——不是這支腳本自己編出來的訊息，是 git 本身的判定，腳本只是原樣帶出來加上 target file 標註。）
+
+**還原**（`git checkout -- src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs`）後 **GREEN**（同一支腳本，逐字）：
+
+```
+INFO: 0 orphan patch file(s) under test/mutants/patches (every patch is referenced by an entry).
+OK: all 76 mutant entry file(s) under test/mutants/entries parse and validate; all 66 mutant patch file(s) under test/mutants/patches apply cleanly to the current tree.
+EXIT CODE: 0
+```
+
+### Exit code 三個 precondition 案例，逐字驗證（criterion 3：不得跟「patch 真的套不上」混在一起）
+
+**Case A：目前目錄不在任何 git work tree 裡**（在 repo 外的一個乾淨 scratch 目錄跑，該目錄底下複製了 `scripts/`、`test/mutants/run_mutant.py`、一份 entry、一份 patch，但沒有 `.git`）：
+
+```
+::error::guard scanner: current directory is not inside a git work tree: fatal: not a git repository (or any of the parent directories): .git
+EXIT: 2
+```
+
+**Case B：`git` 不在 `PATH` 上**（`PATH` 指向一個只放了 `python3` symlink、保證沒有 `git` 的目錄，在一個真實的 scratch git repo 裡跑）：
+
+```
+::error::guard scanner: 'git' executable is not available on PATH: [Errno 2] No such file or directory: 'git'
+EXIT: 2
+```
+
+**Case C：patch 檔案本身讀不到**（對 `fileattachmentguard985-...patch` 執行 `chmod 000`，在本次工作用的 worktree 裡直接跑）：
+
+```
+::error::test/mutants/patches/fileattachmentguard985-principal-key-check-neutralize.patch: patch file is not readable (missing or permission denied)
+::error::1 of 66 mutant patch file(s) under test/mutants/patches could not even be analysed (shown above) -- whether they apply to the current tree is UNKNOWN, not confirmed clean, and must not be reported as either. Distinct from a patch that genuinely does not apply (exit 1) -- acceptance criterion 3.
+EXIT: 2
+```
+
+三案例皆 exit 2，逐字確認訊息本身也沒有借用「does not apply」這個 exit-1 專屬措辭；`chmod 644` 還原權限後重跑，回到 exit 0。三個測試都在完成後清理（scratch 目錄整個刪除；worktree 內的權限與檔案內容都還原、`git status`/`git diff --stat` 確認乾淨）。
+
+### `--selftest` 本身不是裝飾——用 mutation 證明過會失敗
+
+比照本 repo「mutation 證據必須實測，不能只憑手動宣稱」的既有原則：暫時把 `check_patch_applies()` 判斷「套不上」的分支改成 `if False:`（永遠不回報 violation），重跑 `--selftest`：
+
+```
+SELFTEST FAILED:
+  - negative control: a patch whose context no longer matches the tree must be reported as a VIOLATION (exit-1 class), never a scanner problem (got violation=None, scanner_problem=None)
+EXIT: 1
+```
+
+確認 `--selftest` 真的會抓到邏輯被破壞，不是一支永遠印 OK 的裝飾腳本。還原後 `--selftest` 重跑回到 `SELFTEST OK`（exit 0）。
+
+### `selftest`-kind mutant entry：考慮過，判斷不加
+
+`test/mutants/entries/*.json` 裡 `kind: "selftest"` 的 entry，消費方式是 `run_mutant.py --mutant <id> --expect-verdict <V>`——用來對 `run_mutant.py` 自己的 verdict 邏輯（build failure、baseline-not-green、scope bypass 等）做端對端回歸測試，走的是「真的 apply patch → 真的 build → 真的跑 test → 比對 runner 自己回報的 verdict」這整條路徑。`scripts/check-mutant-entries-parse.py` 是完全獨立的腳本，從不呼叫 `run_mutant.py`，也不透過 entry 的 `kind` 欄位驅動任何行為——一個 `kind: selftest` entry 不會執行到本票新增的任何一行程式碼，加了也測不到東西。正確、且已經實作的自我驗證機制是這支腳本自己的 `--selftest`（見上方）——跟 `check-e2e-test-integrity.py`、`check-jwt-key-literal-blocklisted.py`、`test/mutants/_selftest/*.py` 那幾支既有 `changes`-job guard 使用的同一種形狀，不是 mutant-entry 機制。
+
+### 誠實揭露的範圍（不宣稱防住整個缺陷類別）
+
+這個修法**不**防住 #1005 這個缺陷類別本身。它防住的是：(1) 一張 PR 自己的 commit 打壞自己某個 patch 的 fixed context——在那張 PR 自己的 CI 裡，比 `mutants`/`meta-selftest` job 更早、更便宜地擋下；(2) 合併到 `dotnet10` 之後的每一次 `push`——這時全樹已經是合併後的真實狀態，沒有第二張還沒合併的 PR 需要看不到。它**沒有、也不可能**防住 #1005 本身發生的那種跨分支情況：兩張 PR 各自獨立看都是綠的，只有兩者都合併之後才會衝突——因為 Gitea 的 PR CI checkout 模型下，沒有任何一次 CI 執行會同時看到兩個還沒合併的分支的樹。這是這個 repo checkout 機制本身的結構性限制，不是這支腳本能從單一 PR 的 job 裡解決的東西。**誠實的說法是「比 gate 早一個合併週期擋下，且對單分支情況完全防住」，不是「防住 #1005 這一整類缺陷」。**
+
+### 未能驗證的部分
+
+本次工作階段的硬性限制禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這個修法尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到：`python3 scripts/check-mutant-entries-parse.py --selftest`/真掃描、上方逐字擷取的 RED/GREEN 與三個 precondition 案例、`python3 -c "import yaml; yaml.safe_load(...)"` 與 `scripts/audit-workflow-timeouts.py`（133/133 real-work step 仍全部帶 `timeout-minutes`，本票只改了既有一個 step 的 `run:` 內容與周圍註解，沒有新增 step，數字不變）。這個 checkout 機制本身（`refs/pull/N/head` vs. merge ref）的查證，是讀 `docs/ci-operations.md` 既有記錄，不是本次重新在真實 Gitea PR 上觸發驗證——該文件本身的紀錄是本次工作階段之外、既有的既有事實。
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。
