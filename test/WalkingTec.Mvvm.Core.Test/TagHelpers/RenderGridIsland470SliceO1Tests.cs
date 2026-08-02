@@ -425,7 +425,12 @@ public class RenderGridIsland470SliceO1Tests
 
         Assert.IsFalse(post.Contains("\"type\":\"renderGrid\""));
         Assert.IsFalse(attrs.Contains("data-wtm-grid-id"));
-        StringAssert.Contains(post, "myObj.notAnIdentifier(res,curr,count)");
+        // Issue #999 part (A): DoneFunc is now paren-wrapped — (DoneFunc)(res,curr,count)
+        // — so a function-literal DoneFunc can't produce an unwrapped-IIFE SyntaxError
+        // that would kill the whole enclosing <script> block. A bare identifier/dotted
+        // expression like this fixture's still calls through fine: (myObj.notAnIdentifier)(...)
+        // is exactly equivalent to myObj.notAnIdentifier(...).
+        StringAssert.Contains(post, "(myObj.notAnIdentifier)(res,curr,count)");
         StringAssert.Contains(post, "console.warn('[WTM] DataTableTagHelper #wtTable_O1:");
         StringAssert.Contains(post, "DoneFunc");
     }

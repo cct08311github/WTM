@@ -196,9 +196,13 @@ public class RenderTransferIsland470SliceKTests
         StringAssert.Contains(postHtml, "console.warn('[WTM] TransferTagHelper",
             "A deprecation warn must fire naming the field/ChangeFunc when the flag is ON but the island was skipped");
         StringAssert.Contains(postHtml, "some.dotted.expr");
-        // The legacy fallback must still splice ChangeFunc directly into the
-        // onchange handler exactly as before — never silently dropped.
-        StringAssert.Contains(postHtml, "some.dotted.expr(data, index,transferIns);");
+        // The legacy fallback must still splice ChangeFunc into the onchange
+        // handler — never silently dropped. Issue #999 part (A): now paren-wrapped
+        // — (ChangeFunc)(...) — so a function-literal ChangeFunc can't produce an
+        // unwrapped-IIFE SyntaxError that would kill the whole enclosing <script>
+        // block. A dotted expression like this fixture's still calls through fine:
+        // (some.dotted.expr)(...) is exactly equivalent to some.dotted.expr(...).
+        StringAssert.Contains(postHtml, "(some.dotted.expr)(data, index,transferIns);");
     }
 
     // ── ItemUrl still islands via loadComboItems (#633) — unaffected ───────

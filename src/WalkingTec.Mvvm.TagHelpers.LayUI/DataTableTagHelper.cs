@@ -806,7 +806,7 @@ layui.use(['table'], function(){{
       {(MultiLine == true ? $"tab.find('.layui-table-cell').css('height','auto').css('white-space','normal');" : string.Empty)}
        tab.find('div [lay-event=\'LAYTABLE_COLS\']').attr('title','{THProgram._localizer["Sys.ColumnFilter"]}');
        tab.find('div [lay-event=\'LAYTABLE_PRINT\']').attr('title','{THProgram._localizer["Sys.Print"]}');
-      {(string.IsNullOrEmpty(DoneFunc) ? string.Empty : $"{DoneFunc}(res,curr,count)")}
+      {(string.IsNullOrEmpty(DoneFunc) ? string.Empty : $"({DoneFunc})(res,curr,count)")}
       {(EnableHeaderFilter ? $"wtmHeaderFilter.refresh('{Id}');" : "")}
       if(typeof wtmColVis !== 'undefined'){{ wtmColVis.init('{Id}'); }}
       {BuildAggregateFooterScript(aggregateFields)}

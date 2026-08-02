@@ -1218,6 +1218,45 @@ Verification: `dotnet build WalkingTec.Mvvm.sln` — the same pre-existing `NETS
 
 **Not a `### Security` entry**: no production `src/` code changed. Both `dcext824-derived-principal-neutralize` and `876-wtmcontrolleractivator-neutralize`'s own `red_test`s already correctly detected their mutants throughout — this fixes the strength of the *positive control's* evidence, not a gap in detection.
 
+---
+
+### Fixed — 9 more LayUI TagHelper sites raw-interpolated a `*Func` callback at JS statement-start, an unwrapped-IIFE SyntaxError that killed the whole enclosing `<script>` block for a function-literal value (#999 part (A))
+
+`DataTableTagHelper.cs`'s `DoneFunc`, `TransferTagHelper.cs`'s `ChangeFunc`, `SliderTagHelper.cs`'s
+`ChangeFunc`, and `DateTimeTagHelper.cs`'s `ReadyFunc`/`ChangeFunc`/`DoneFunc` (both the single-field
+and the two-hidden-input `IsRange` path — 6 of the 9 sites) all interpolated the developer-supplied
+callback string directly ahead of its own invocation parens. A function-literal value there
+(`function(v){...}`) produced `function(v){...}(...)` — JS parses a statement starting with the
+`function` keyword as a FunctionDeclaration, which requires a name; an anonymous one is a hard
+SyntaxError that fails the whole enclosing `<script>` block, not just the one callback. Fixed the
+same way #965/PR #998 (not yet merged, tracked separately) fixed the first discovered instance
+(`DataTableTagHelper.cs`'s `GridAction.OnClickFunc`, deliberately untouched here to avoid a
+same-line collision with that branch): wrap in parens, `({X})(...)`, forcing expression context.
+**This does not fix every `*Func` unwrapped-IIFE site** — an exhaustive 47-site enumeration (#999)
+found 12 further sites reached through `BaseElementTag.FormatFuncName`, which truncates the
+developer's value at its first `(` and appends `(data)` *before* it reaches any syntactic position
+(`function(v){...}` becomes the string `function(data)`; paren-wrapping that,
+`(function(data));`, is itself a SyntaxError) — those need a different fix and are tracked
+separately on #999 part (B), pending cross-vendor design review. Two sites this same sweep
+confirmed are already safe and were deliberately left unwrapped: `SliderTagHelper.cs`'s
+`OnTipsFunc` (reached only via `return {OnTipsFunc}(...)`, expression position) and
+`DataTableTagHelper.cs`'s `CheckedFunc` (a `table.on(...)` call argument, also expression
+position) — both verified, not assumed, by feeding a function-literal value through the real
+TagHelper and parsing the actual emitted output. **Full site table, the RED-before-fix
+transcripts, the two pre-existing byte-identity tests this necessarily changed, and the mutant
+non-entry reasoning are in `docs/production-readiness.md` § "LayUI TagHelper：9 個「statement 位置
+原樣內插 `*Func` callback」的 unwrapped-IIFE 修復（#999 part (A)）" — this entry does not repeat or
+exceed those claims.**
+
+- Test-only: `Directory.Packages.props`/`WalkingTec.Mvvm.Core.Test.csproj` gain the same
+  `Acornima 1.6.2` test-only `PackageReference` PR #998 already adds, at the same version and in
+  the same place, so the two branches' lines merge as a trivial identical-line conflict rather
+  than a semantic one.
+- New `test/WalkingTec.Mvvm.Core.Test/TagHelpers/RawFuncInterpolationParens999Tests.cs`: renders
+  each real TagHelper, extracts the actual emitted `<script>` block, and parses it with Acornima —
+  9 tests (one per fixed site) proven RED before the fix and GREEN after, plus 2 tests proving the
+  two deliberately-unwrapped sites already parsed correctly with no change.
+
 ### Migration
 
 - **#956 — a persisted `rest` widget whose `Headers` includes `Host`, `Transfer-Encoding`, `Content-Length`, `Connection`, `Upgrade`, `TE`, `Trailer`, `Expect`, or any `Proxy-*` name, more than 20 headers, or a combined name+value length over 8 KB, will fail to fetch (`502`, from the new send-time rejection) after upgrading, and will fail to save (`400`) if edited again.** No deployment is known to configure any of these on purpose — they cannot appear through the shipped designer UI (no headers-editing UI at all) — but check any REST widget definitions authored through a direct API call or hand-edited JSON store before upgrading. There is no config flag to restore the old behaviour: this set breaks #948's own SSRF-guard invariants and is not safe to make configurable. `Authorization` and any other custom header are unaffected.

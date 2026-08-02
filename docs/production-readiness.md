@@ -522,6 +522,74 @@ python3 test/mutants/run_mutant.py --mutant 876-wtmcontrolleractivator-neutraliz
 
 **新增規則的位置**：寫進 `.claude/rules/testing.md`（新增一節「A mutant's positive control must not touch the mutated decision path」，緊接在既有「A fixture must not supply what production is supposed to supply」之後——兩者都是「看起來像證明、其實沒證明」這一類問題）與 `test/mutants/run_mutant.py` 檔頭（緊接在 exit code 說明之後，指向 testing.md 的完整規則）。選這兩個位置是因為 `.claude/rules/testing.md` 有 `paths: test/**` 的條件式載入，任何人一碰 `test/mutants/entries/*.json` 就會自動看到這條規則；`run_mutant.py` 則是每個 mutant 作者實際會打開、讀過整段檔頭說明的腳本本身。`test/mutants/` 底下沒有獨立的 README 可以寫。
 
+
+---
+
+## LayUI TagHelper：9 個「statement 位置原樣內插 `*Func` callback」的 unwrapped-IIFE 修復（#999 part (A)，2026-08-02）
+
+**背景**：#965（PR #998，尚未合併進 `dotnet10`）修了第一個被發現的站點——`DataTableTagHelper.cs` 的 `GridAction.OnClickFunc`，在 statement 起始位置原樣內插一個開發者提供的 callback 字串，若該值是匿名函式字面量（`function(ids,data){...}`）會產生 `function(ids,data){...}(ids,...)`——JS 對「statement 以 `function` 關鍵字起頭」有固定文法：一定被解析成 FunctionDeclaration（要求具名），匿名的在這個位置直接是 SyntaxError，且這個錯誤會讓**整個**外層 `<script>` block 解析失敗，不只是壞掉那一個 handler。#999 一次窮舉了全部 47 個內插站點，依**機制**分成兩類：(a) **RAW 內插**——開發者的值原封不動抵達輸出，`({X})(...)` 是完整修法；(b) **`FormatFuncName` 站點**（`BaseElementTag.cs:225-242`）——在抵達任何語法位置**之前**就先在 `(` 處截斷、補上 `(data)`，`function(v){...}` 變成字串 `function(data)`，對這種站點加括號（`(function(data));`）本身就是 SyntaxError，需要不同修法。本項只處理 (a)；(b) 的 12 個站點在 #999 part (B) 追蹤，待跨廠設計審查，**這裡不宣稱、也不暗示 `*Func` unwrapped-IIFE 這個類別已經修完**。
+
+**本項修復的 9 個站點**（statement 位置，逐一用 JS 文法手動驗證過，非抄 issue 文字）：
+
+| 檔案 | 屬性 | 位置 |
+|---|---|---|
+| `DataTableTagHelper.cs:809` | `DoneFunc` | `done: function(res,curr,count){ DoneFunc(...) }`——`table.render` 主渲染 script 裡固定會發、不受任何 island/legacy 分流影響 |
+| `TransferTagHelper.cs:341` | `ChangeFunc` | `onchange: function(data,index){ defaultFunc(...); ChangeFunc(...); }`——`defaultFunc(...)` 呼叫之後的第二條 statement |
+| `SliderTagHelper.cs:469` | `ChangeFunc` | `change: function(value){ defaultFunc(...); ChangeFunc(...) }`——同上形狀 |
+| `DateTimeTagHelper.cs:477/478/479` | `ReadyFunc`/`ChangeFunc`/`DoneFunc` | 單欄位（非 `IsRange`）路徑，各自獨立的 `function(...){ X(...) }` callback，內插值是該 function body 唯一（起始）的 statement |
+| `DateTimeTagHelper.cs:577/578` | `ReadyFunc`/`ChangeFunc` | 兩隱藏 input 的 `IsRange` 路徑，同上形狀 |
+| `DateTimeTagHelper.cs:582` | `DoneFunc` | `IsRange` 路徑共用的 `done: function(value,date,endDate){...}`——`DoneFunc(...)` 是內建 split（`document.getElementById(...).value=...`）兩條 statement**之後**的第三條 statement，一樣是 statement 位置 |
+
+修法與 #965 相同：`({X})(...)`——把值強制推進 expression context，parser 不會再走 FunctionDeclaration 分支。#965 已驗證這個包法對 bare-identifier（`(myFn)(a,b)`）、dotted（`(obj.method)(a,b)`）、call-expression（`(getHandler())(a,b)`）三種既有合法形狀都相容中立（加括號不改變求值結果）；本項的 9 個站點內插值型別與 #965 完全同構，同一條 JS 文法論證直接適用。
+
+**任務指示裡的分類核對，含一處誠實更正**：任務原文列出「exactly these sites」的清單合計是 1（DataTable）+1（Transfer）+1（Slider）+6（DateTime）= **9** 個站點，但同一份任務指示稍後的驗證段落寫「Verify each of the ten in-scope sites」——**這是一處計數誤植，不是漏掉了第 10 個站點**：對這 4 個檔案做過詳盡 `grep -nE '\{[A-Za-z_]*Func\}'` 全站點掃描（見下方可重跑指令），結果與「exactly these sites」清單逐一對應、沒有多、沒有少。同一次掃描也覆核了任務指示要求排除的兩個站點，兩者皆屬 expression 位置，確認**不應該**包括在本次修法範圍：
+
+- `SliderTagHelper.cs:471`——`,setTips: function(value){{return {OnTipsFunc}(value,sliderIns);}}`：`return` 之後的內插值是 return expression 的一部分，parser 一開始就走 expression 文法，不會誤判成 FunctionDeclaration。
+- `DataTableTagHelper.cs:838`——`table.on('checkbox({Id})',{CheckedFunc});`：內插值是 `table.on(...)` 呼叫的第二個引數，同樣是 expression 位置。
+
+`DataTableTagHelper.cs:1284`（`GridAction.OnClickFunc`）依任務指示刻意不動——留給仍在同一分支族但獨立的 `fix/965-datatable-unwrapped-iife`（PR #998）處理，避免兩支分支在同一行衝突。
+
+**測試——真的用 JS parser 解析輸出，不是字串比對**：新增 `test/WalkingTec.Mvvm.Core.Test/TagHelpers/RawFuncInterpolationParens999Tests.cs`，11 個測試方法：對 9 個修復站點各一個（渲染真實 TagHelper、抽出實際輸出的 `<script>` block、餵給 Acornima 解析，解析失敗即 Fail），另外 2 個對上方兩個排除站點做**正面驗證**——用同樣函式字面量餵進去，斷言**不加括號**也已經能正確解析（證明這兩個站點過去就沒壞、不該被動）。
+
+**Acornima 相依重複、刻意如此**：本 repo `origin/dotnet10` 目前沒有任何 JS parser 相依。PR #998（#965，尚未合併）以完全相同的方式引入 **Acornima 1.6.2**（BSD-3-Clause、純 .NET、Test262-complete、test-only）——`Directory.Packages.props` 一行 `<PackageVersion Include="Acornima" Version="1.6.2" />`＋`WalkingTec.Mvvm.Core.Test.csproj` 一行 `<PackageReference Include="Acornima" />`，不被任何出貨專案引用。本項在**完全相同的版本、完全相同的位置**重複這兩行——兩支分支之後合併時，這兩個檔案的衝突會是逐字相同、trivial 的重複行衝突，不是語意衝突。
+
+**RED-before-fix（暫時 `git stash push` 還原 4 個 source 檔案、只保留測試與套件改動，重跑）**：
+
+```
+Failed DataTable_DoneFunc_FunctionLiteral_ParsesAsValidJavaScript
+Failed Transfer_ChangeFunc_FunctionLiteral_ParsesAsValidJavaScript
+Failed Slider_ChangeFunc_FunctionLiteral_ParsesAsValidJavaScript
+Failed DateTime_SingleField_ReadyFunc_FunctionLiteral_ParsesAsValidJavaScript
+Failed DateTime_SingleField_ChangeFunc_FunctionLiteral_ParsesAsValidJavaScript
+Failed DateTime_SingleField_DoneFunc_FunctionLiteral_ParsesAsValidJavaScript
+Failed DateTime_Range_ReadyFunc_FunctionLiteral_ParsesAsValidJavaScript
+Failed DateTime_Range_ChangeFunc_FunctionLiteral_ParsesAsValidJavaScript
+Failed DateTime_Range_DoneFunc_FunctionLiteral_ParsesAsValidJavaScript
+Passed Slider_OnTipsFunc_FunctionLiteral_AlreadyParsesAsValidJavaScript_NoWrappingNeeded
+Passed DataTable_CheckedFunc_FunctionLiteral_AlreadyParsesAsValidJavaScript_NoWrappingNeeded
+Total tests: 11 / Passed: 2 / Failed: 9
+```
+
+每個 RED 的失敗訊息都是 Acornima 的 `ParseErrorException`（例如 `Unexpected token '(' (17:41)`），指向內插值後面緊跟著的呼叫括號——與診斷完全吻合，不是巧合性的其他失敗。還原修法（`git stash pop`）後同一組測試：**GREEN，11/11 全綠**。
+
+**既有 byte-identity 測試的連帶修正（誠實揭露這不是零成本的加括號）**：全 `test/WalkingTec.Mvvm.Core.Test` 套件（5052 個測試，含新增的 11 個）先跑出 2 個既有失敗——`RenderGridIsland470SliceO1Tests.cs`（`NonIdentifierDoneFunc_FlagOn_FallsBackToLegacy_WithWarn`）與 `RenderTransferIsland470SliceKTests.cs`（`Transfer_FlagOn_NonIdentifierChangeFunc_KeepsInlineRender_EmitsWarn`）各自釘死了修復前**沒有括號**的確切子字串（`myObj.notAnIdentifier(res,curr,count)`／`some.dotted.expr(data, index,transferIns);`）。這是預期中的連帶影響，不是回歸：兩者都改成斷言加括號後的形狀（`(myObj.notAnIdentifier)(res,curr,count)`／`(some.dotted.expr)(data, index,transferIns);`），並在旁加註解說明原因。全庫 `grep` 過一輪這 6 個站點的舊形狀子字串，確認這兩處是**唯一**受影響的既有測試，沒有第三個遺漏。修正後全套件：**5052 passed, 0 failed**（測試數：修復前 5041 個既有 + 本項新增 11 個 = 5052，數量吻合）。
+
+**Mutant 判斷：本項不新增 `test/mutants/entries/*.json`**。理由：(1) 這是 JS 解析正確性／相容性修復，不涉及未授權存取、injection、跨租戶或憑證外洩，不是傳統意義的安全漏洞——與 #970 條目記錄的 `etl970-cancellation-classification-guard-neutralize` 同一種「correctness-only 卻被迫套用 `security` kind」處境；(2) `run_mutant.py` 的 `VALID_KINDS` 目前只接受 `security`／`selftest`，若把本項強塞成 `security`，等於重複 #970 已經記錄在案、且 #968 花了一整張 PR 才吸收掉的 kind 分類漂移，本文件不應該再製造同一種漂移；(3) 更關鍵的差異：這個修復的回歸保護**已經**是 CI 強制的——`build-and-test`（required check）跑的 `dotnet test` 涵蓋新增的 9 個逐站點測試，任何一個站點被意外還原都會讓對應的那一個測試變紅（上方 RED-before-fix 就是這個機制本身的決定性重現，不是推論），`mutants` job 的 `kind: security` 額度不是這個修復唯一的執行保證。若未來 `VALID_KINDS` 新增一個 `correctness`/`compat` kind（#970 條目已提過這個需求，本項不重複開票），屆時回頭補一個 mutant entry 是合理的；本次判斷是不在沒有適配 kind 的情況下勉強塞。
+
+**未能驗證的部分（誠實列出）**：本次工作階段 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test` 這兩層，`js-test`（Jest/jsdom）與 `e2e` 兩個 CI leg 完全沒有覆蓋到 TagHelper 產生的 inline `<script>` 是否真的被瀏覽器執行，本項也沒有另外起 demo app 手動驗證瀏覽器端行為（純 C# 字串輸出＋ JS parser 靜態驗證，沒有執行 JS）。`FormatFuncName` 的 12 個站點（part B）完全沒有動，也沒有重新驗證 #999 的 47 站點總表在其他維度（例如是否還有站點介於「statement 位置」與「`FormatFuncName` 截斷」兩種分類之外）是否窮盡——這次工作只覆核了任務指示明確列出的 9＋2 個站點，不宣稱重新窮舉了全部 47 個。
+
+**可重跑的盤點指令**：
+```bash
+grep -nE '\{[A-Za-z_]*Func\}' \
+  src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.cs \
+  src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/TransferTagHelper.cs \
+  src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/SliderTagHelper.cs \
+  src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/DateTimeTagHelper.cs
+find . -name 'demo.db*' -path '*bin*' -delete
+dotnet test test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj -c Release \
+  --filter "FullyQualifiedName~RawFuncInterpolationParens999Tests"
+```
+
 ---
 
 ## `FileAttachmentSaveChangesGuard.BuildMap` 沒驗證 `fk.PrincipalKey`，Guid 替代鍵造成假允許與假拒絕（#985，cross-vendor review of #824 Part 2，2026-08-02）

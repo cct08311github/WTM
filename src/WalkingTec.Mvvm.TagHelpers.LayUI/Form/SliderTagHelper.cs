@@ -466,7 +466,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     {(SliderType == null || SliderType.Value == SliderTypeEnum.Default ? string.Empty : (SliderHeight == null ? string.Empty : $",height:{SliderHeight.Value}"))}
     {(hasSafeTheme ? $",theme: '{JavaScriptEncoder.Default.Encode(Theme)}'" : string.Empty)}
     ,change: function(value){{defaultFunc(value,sliderIns);
-    {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $"{ChangeFunc}(value,sliderIns)")}
+    {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $"({ChangeFunc})(value,sliderIns)")}
     }}
     {(string.IsNullOrEmpty(OnTipsFunc) ? string.Empty : $",setTips: function(value){{return {OnTipsFunc}(value,sliderIns);}}")}
   }});
