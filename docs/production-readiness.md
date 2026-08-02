@@ -1677,6 +1677,18 @@ build/test）搶這台 mac-mini act_runner 背後那顆硬 **4 CPU / 3.813GiB** 
   加上安全邊界推出來的，如果真實 run 顯示太緊（容器被 OOM-kill）或太鬆（Error 945
   仍出現），下一步是把 job 移到 `ubuntu-24.04`（Azure overflow runner，15GiB）——
   本票刻意不做，因為那會消耗 Azure 分鐘數，且 `--memory` 這個機制值得先觀察是否有效。
+  **這個 idle-based 數字後來有用真實測試負載覆核過**（見下一條），但覆核本身也有沒
+  重現到的部分，一併寫在下一條——不是「覆核過就沒事了」。
+- **不宣稱本機的真實負載覆核重現了 run 6509 的情境。** run 6509 死在第 9 個
+  create/drop 循環（持續負載下），本機覆核方法是對一個用最終設定起的 azure-sql-edge
+  容器，跑兩次完整的 9 項整合測試（皆 9/9 通過），`docker stats` 峰值約 663MiB
+  （2560m 上限的 26%），`sys.dm_os_sys_info.committed_kb` 約 152MiB——**都遠低於**
+  idle 推出來的 2.03GiB，代表「idle 數字低估真實查詢負載」這個方向的疑慮沒有成立。
+  但這個覆核是讓 mssql **單獨**跑，旁邊沒有另一個容器同時在 `dotnet restore`/
+  build/test（`--memory` 的 cgroup 上限本來就逐容器獨立生效，這個隔離測試能回答
+  「mssql 自己的查詢負載夠不夠不到上限」，答案是夠不到，差很多），**但不能回答**
+  「整台 VM 被 job 容器同時搶記憶體時會不會擠壓 mssql」——這是 run 6509 背後真正被
+  懷疑、而本次工作階段沒有工具重現的機制。
 
 ### 其他 workflow 有沒有一樣的形狀
 
@@ -1696,7 +1708,13 @@ build/test）搶這台 mac-mini act_runner 背後那顆硬 **4 CPU / 3.813GiB** 
 容器端到端跑過一次，成功印出
 `physical_memory_kb=2048000 committed_target_kb=1478632 committed_kb=122352 container_type_desc=NONE`——
 證明 YAML 的 heredoc 縮排、`dotnet run --file`、`Microsoft.Data.SqlClient@6.1.1`
-restore 這條路徑本身是通的，不是紙上談兵。
+restore 這條路徑本身是通的，不是紙上談兵。額外對 `--memory=2560m` 這個上限本身做了
+真實負載覆核（細節見上方「沒有做、也不宣稱的事」倒數第二條）：本機 build 出
+`test/WalkingTec.Mvvm.Integration.Test` 的 Release DLL，對一個用最終設定起的
+azure-sql-edge 容器跑了兩次 `dotnet test ... --filter "TestCategory=Integration"`，
+**兩次都 9/9 通過**（6.5s／7.0s），`docker stats` 全程取樣，峰值 MEM USAGE
+約 663MiB／2560MiB（26%），跑完後 `committed_kb` 約 152MiB——遠低於原本拿來定
+`--memory` 數字的 idle 值（2.03GiB），沒有出現「idle 數字低估真實負載」的情況。
 
 ---
 

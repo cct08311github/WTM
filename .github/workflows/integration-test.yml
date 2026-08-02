@@ -86,9 +86,27 @@ jobs:
       # deterministic cgroup OOM-kill of the whole container under normal load --
       # while still being well below the 3.813GiB VM total, leaving roughly 1.25GiB
       # for the job container plus this host's persistent Gitea infra containers
-      # (gitea/gitea-db/act_runner, observed ~576MiB combined at idle). If a live run
-      # shows this cap is still too tight (or too loose), see docs/ci-operations.md's
-      # "#1020" entry for the next step -- do not just raise the number blindly.
+      # (gitea/gitea-db/act_runner, observed ~576MiB combined at idle).
+      #
+      # That 2.03GiB headroom target came from IDLE `committed_target_kb`, not from
+      # running the actual test suite -- run 6509's failure happened on the 9th
+      # create/drop cycle, i.e. under sustained load, which is exactly when a
+      # cap sized from idle numbers could turn out to be too low. This was checked
+      # afterwards, not assumed: the real 9-test suite was run twice back-to-back
+      # locally against a container with these exact settings (same image, same
+      # MSSQL_MEMORY_LIMIT_MB/--memory), with `docker stats` sampled throughout.
+      # Peak container memory was ~663MiB (~26% of the 2560m cap) across both runs;
+      # `sys.dm_os_sys_info.committed_kb` after the runs was ~152MiB -- both well
+      # BELOW the idle-derived 2.03GiB figure, not above it. That local check has
+      # its own limit, stated plainly: it ran mssql in isolation, without a sibling
+      # container simultaneously doing `dotnet restore`/build/test the way the real
+      # job does -- cgroup `--memory` caps are enforced per-container regardless of
+      # what siblings do, so this isolates "does mssql's own query load exceed the
+      # cap" (it doesn't, by a wide margin), but it does not reproduce whole-VM
+      # contention from the sibling job container, which is the mechanism actually
+      # suspected in run 6509. If a live run shows this cap is still too tight (or
+      # too loose), see docs/ci-operations.md's "#1020" entry for the next step --
+      # do not just raise the number blindly.
       mssql:
         image: mcr.microsoft.com/azure-sql-edge:latest
         env:
