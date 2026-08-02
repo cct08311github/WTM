@@ -1281,7 +1281,23 @@ case '{item.Area + item.ControllerName + item.ActionName + item.QueryString}':{{
                     }
                     else
                     {
-                        actionScript = $"{item.OnClickFunc}(ids,ff.GetSelectionData('{Id}'));";
+                        // Issue #965: item.OnClickFunc is developer-supplied and documented
+                        // (GridActionExtension.Legacy.cs's SetOnClickScript XML doc) as a bare
+                        // identifier naming a globally-defined function, but nothing enforces
+                        // that — EtlJobListVM's "執行記錄" action and ProcessDefinitionListVM's
+                        // two designer actions instead pass a raw anonymous function LITERAL
+                        // (`function(ids,data){...}`). Emitting that literal unwrapped directly
+                        // before the invocation parens produced `function(...){...}(...)`, which
+                        // is a hard JS syntax error: a statement cannot start with the `function`
+                        // keyword and be call-expression'd without wrapping parens (it parses as
+                        // an anonymous FunctionDeclaration, which is itself illegal). That syntax
+                        // error kills parsing of the WHOLE enclosing <script> block, not just this
+                        // one action. Wrapping the whole expression in parens fixes the literal
+                        // case `(function(...){...})(...)` and is a no-op for every other legal
+                        // shape (bare identifier, dotted member, call expression) — parenthesizing
+                        // a Reference does not strip its `this` binding, so `(obj.method)(args)`
+                        // still calls with `this === obj`, same as `obj.method(args)`.
+                        actionScript = $"({item.OnClickFunc})(ids,ff.GetSelectionData('{Id}'));";
                     }
                     if (string.IsNullOrEmpty(item.PromptMessage) == false)
                     {

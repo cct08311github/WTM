@@ -236,7 +236,24 @@ async def open_grid_via_direct_tab(page, path: str):
     因此這裡動態建立一個帶正確 lay-href 屬性的隱藏元素並點擊它，達成與側邊選單連結
     完全相同的載入路徑（已對照 /Student/Index 等既有側邊選單項目實測比對過，行為
     一致：table.cache 正確填入、無 console 錯誤），只是不需要該連結真的出現在選單裡。
+
+    issue #965 review round修正的既有 bug（本函式被 TC-29 在同一個 page/session 內
+    呼叫兩次時才會現形，之前只被呼叫一次因此從未踩到）：等待條件原本是
+    `Object.keys(caches).length > 0`——「全域 table.cache 至少有一個 key」。這在
+    本函式第一次被呼叫（RunLog）時是對的，但 table.cache 是整個 page 生命週期共用
+    的單一物件，從不清空；第二次呼叫（EtlJob）時 RunLog 那個 key 早就讓這個條件
+    在點擊當下瞬間成立，等於完全沒有真的等到 EtlJob 自己的 table 資料回來——實測
+    （本機重現、非臆測）：EtlJob 自己的 cache key 平均要再等 ~0.1–0.2s 才出現，
+    這段時間差在 CI 的自架 runner 上（尤其是 demo process 剛啟動、EF/Razor 尚未
+    JIT/預熱的第一次請求）會放大到讓後續的 `networkidle` 也來不及吸收，於是
+    open_grid_via_direct_tab() 提早回傳、後面接著讀的欄位在真正渲染完成前就被
+    斷言，導致間歇性地量到 0。修法：改成等待「出現一個先前不存在的 key」，而不是
+    「至少有一個 key」——對第一次呼叫（pre-click 集合是空的）行為完全不變，但能
+    正確等到第二次呼叫自己觸發的那個新 table 真的載入。
     """
+    pre_click_cache_keys = await page.evaluate(
+        "() => Object.keys(window.layui?.table?.cache || {})"
+    )
     await page.evaluate(
         """(href) => {
             const a = document.createElement('a');
@@ -248,10 +265,12 @@ async def open_grid_via_direct_tab(page, path: str):
         path,
     )
     await page.wait_for_function(
-        """() => {
+        """(preKeys) => {
             const caches = window.layui?.table?.cache || {};
-            return Object.keys(caches).length > 0;
+            const preSet = new Set(preKeys);
+            return Object.keys(caches).some((k) => !preSet.has(k));
         }""",
+        arg=pre_click_cache_keys,
         timeout=TIMEOUT,
     )
     await page.wait_for_load_state("networkidle", timeout=TIMEOUT)
@@ -2066,7 +2085,7 @@ async def tc_29_etl_management(page, **_):
     Demo 使用 WalkingTec.Mvvm.Etl module。
 
     預期結果：
-    - /_EtlJob/Index 可存取
+    - /_EtlJob/Index 可存取，grid 與搜尋面板（含 xmSelect 篩選欄位）皆正確渲染
     - /_EtlRunLog/Index 可存取
     - 各頁面有搜尋面板和 grid
 
@@ -2083,44 +2102,74 @@ async def tc_29_etl_management(page, **_):
     沒有斷言，這個選錯標籤的 bug 從未被發現。這裡改用不限定標籤的屬性選擇器
     `[name='...']`。
 
-    執行順序（EtlRunLog 在前、EtlJob 在後）：本次改寫時實測發現，先導覽到下面
-    KNOWN-GAP 段落描述的壞掉的 EtlJob 頁面，會讓同一個 page/session 內「之後」的
-    EtlRunLog 導覽也遭殃——EtlRunLog 的篩選欄位跟著找不到、並出現一個新的 400
-    Bad Request（很可能是 layuiadmin 的 router/全域狀態被 EtlJob 那個解析失敗的
-    <script> 搞壞，殃及後續導覽）。因此本測試刻意先測完全正常的 EtlRunLog，再測
-    已知有問題的 EtlJob，確保 EtlRunLog 的斷言不會被 EtlJob 的既有缺陷污染。
+    issue #965（KNOWN-GAP 已解除 —— 原本的 KNOWN-GAP 段落曾記錄在此）：改寫本測試
+    （#898）當時發現 _EtlJob/Index 透過真正的 tab 載入路徑開啟時 grid 從未渲染成功
+    （table.cache 恆不填入），console 拋出 "Function statements require a function
+    name"。根因是 src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.cs 的
+    AddSubButton：`actionScript = $"{item.OnClickFunc}(ids,ff.GetSelectionData
+    ('{Id}'));"` 沒有把 `item.OnClickFunc` 包在括號裡；EtlJobListVM 的「執行記錄」
+    自訂動作把 OnClickFunc 設成一段行內函式字面值（而非具名函式參照），產生的 JS
+    因此是未包裹、不合法的 IIFE：`function(ids,data){...}(ids,...)`，整個 <script>
+    區塊解析失敗，殃及同一區塊裡真正的 table.render() 呼叫。#965 把該行改成
+    `actionScript = $"({item.OnClickFunc})(ids,ff.GetSelectionData('{Id}'));"`——
+    對具名函式參照是 no-op，對行內函式字面值則修成合法的
+    `(function(...){...})(...)` IIFE，並有 DataTableTagHelperUnwrappedIife965Tests
+    （.NET 測試，實際解析 emitted script）RED/GREEN 證明。修好後這裡改用與
+    EtlRunLog 相同的 open_grid_via_direct_tab()，grid 與所有篩選欄位（含
+    Status/SourceDbType）一併斷言，不再只記錄。
 
-    KNOWN-GAP（本次改寫過程中發現，2026-07-31 對照本機跑起來的 demo 實測確認，與
-    #898/#905 兩個 issue 本身無關）：_EtlJob/Index 透過真正的 tab 載入路徑開啟時，
-    grid 從未渲染成功（table.cache 恆不填入，跨越多次重跑、不論導覽順序皆一致），
-    console 會拋出 "Function statements require a function name"。根因已定位到
-    src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.cs 第 1284 行：
-    `actionScript = $"{item.OnClickFunc}(ids,ff.GetSelectionData('{Id}'));";` 沒有把
-    `item.OnClickFunc` 包在括號裡；當 EtlJob 的 ListVM 把這個自訂動作的 OnClickFunc
-    設成一段行內函式字面值（而非具名函式參照）時，產生的 JS 會是
-    `function(ids,data){...}(ids,...)`——這是不合法的 IIFE 寫法（少了外層括號），
-    整個 <script> 區塊因此完全解析失敗，殃及同一區塊裡真正的 table.render() 呼叫。
-    這是一個真實、可重現的既有缺陷，不是本測試的導覽方式造成的假象（直接
-    page.goto() 也會拋出同一個例外）。修這個缺陷需要改 src/ 下的框架程式碼，超出
-    本 PR「只改 test/e2e」的範圍，也沒有對應的 issue 授權這個改動——這裡只據實記錄、
-    不動框架程式碼，並把它報告給使用者評估是否要另開 issue 追蹤。
+    issue #965 review round（真正在 CI／本機瀏覽器實測後才發現、修好的第二個
+    bug）：#965 第一輪送出後 CI 的 baseline／island 兩個 e2e leg 都在同一個測試上
+    FAIL，數據是 `EtlJob .layui-table-body: 3`（grid 確實渲染成功）、
+    `ETL Job 搜尋欄位: Name=0, Status=0, SourceDbType=0`（含純 HTML、完全不需要 JS
+    的 Searcher.Name `<input>` 都找不到）、且瀏覽器 console 無任何錯誤——這組數據
+    當場證明舊斷言訊息「代表頁面路由本身出了問題」是誤診（route 沒問題，grid 都
+    渲染出來了；也不是 JS 例外）。本機重建 demo（`dotnet run`）＋直接對這支測試
+    逐行加測時序後，真正原因鎖定在 `open_grid_via_direct_tab()` 自己：它的等待條件
+    `Object.keys(window.layui.table.cache).length > 0`（「全域至少有一個 key」）只
+    對*第一次*呼叫是對的；`table.cache` 是整個 page 生命週期共用、從不清空的物件，
+    TC-29 在同一個 page/session 內呼叫這支 helper 兩次（RunLog 一次、EtlJob 一
+    次）——第二次呼叫時 RunLog 那個 key 早就讓條件在點擊當下瞬間成立，等於完全沒
+    真的等到 EtlJob 自己的資料回來。實測 EtlJob 自己的 cache key 平均要再等
+    ~0.1–0.2s 才出現；這段差距在 demo process 剛啟動、EF/Razor 尚未 JIT 過的第一次
+    請求上會放大到讓後續的 `networkidle` 也來不及吸收，於是斷言在真正渲染完成前就
+    被讀取，量到 0——這正是 CI 觀察到的、且我在本機用一支未修改的冷啟動 demo
+    process 首次重現、之後每次重跑都能重現的行為。**修法在 open_grid_via_direct_
+    tab() 本身**（見其 docstring）：等待條件改成「出現一個先前不存在的 key」，不
+    再是「至少有一個 key」。**驗證**：本機啟動全新（無殘留 demo.db、剛 `dotnet
+    run` 起）的 demo process，修法後直接跑這支測試——冷啟動當下第一次執行即
+    PASS，另外兩次獨立冷啟動重跑（各自重新起 process）也都 PASS，加上同一個
+    process 上連續熱重跑 3 次全部 PASS，累計 5/5。也用同一支已修好的 helper 額外
+    測試過「EtlJob 先、RunLog 後」這個反過來的順序（見下方「執行順序」段落），
+    冷啟動照樣 PASS。**未能驗證**：這一輪修法尚未在真正的 Gitea Actions CI
+    上跑過（本次工作階段的 hard constraint 禁止任何 Gitea/GitHub API 呼叫、禁止開
+    PR），只在本機真實瀏覽器＋真實 demo process 上驗證過。
 
-    Status/SourceDbType 這兩個篩選欄位（獨立的 xmSelect.render() <script> 區塊，
-    document order 排在壞掉的那個區塊之前）則觀察到會隨導覽順序變化——EtlRunLog
-    排在 EtlJob 之前時穩定渲染成功（3 次重跑一致），EtlJob 是本次 session 第一個
-    造訪的 ETL 頁面時則不會渲染。這種跨頁面的順序依賴性沒有進一步追查根因（同樣
-    超出本 PR 範圍），因此這裡選擇保守：grid 與這兩個篩選欄位都只記錄、不斷言，
-    避免斷言綁在一個本身就不穩定、原因未明的行為上。只斷言「頁面路由正確、搜尋
-    面板的純 HTML 欄位存在」（Searcher.Name 是一般 <input>，不需要 JS 就會出現在
-    DOM 中，不受這個 bug 影響，且跨導覽順序都穩定）。EtlRunLog 沒有這個問題，
-    因此照常做完整斷言——但仍然刻意排在 EtlJob 之前執行，見下方「執行順序」說明。
+    執行順序（EtlRunLog 在前、EtlJob 在後）：#898 改寫時實測發現，在 #965 修好
+    IIFE 缺陷之前，先導覽到當時壞掉的 EtlJob 頁面，會讓同一個 page/session 內
+    「之後」的 EtlRunLog 導覽也遭殃——這個特定原因（壞掉的 <script> 殃及 layuiadmin
+    router 全域狀態）已經隨 IIFE 缺陷修好而不再成立。**上面這輪 review 額外發現**：
+    這個「先測 RunLog」的順序，同時也剛好是造成 open_grid_via_direct_tab() 的
+    table.cache 那個 bug**從未在 RunLog 自己身上現形**的原因——RunLog 永遠是本測
+    試第一個呼叫這支 helper 的地方，天生吃不到「第二次呼叫」的那個 race；EtlJob
+    則永遠是第二個呼叫，天生會踩到。也就是說這個順序過去其實是（並非刻意設計、
+    而是巧合）繞開了一個當時還沒被發現的 bug，不是因為 RunLog 本身比較不會遇到
+    race。**現在 open_grid_via_direct_tab() 本身已經修好**（改成等一個真正新出現
+    的 key，不管這是第幾次呼叫都一樣正確），這個順序不再是任何已知問題的必要
+    workaround——已經直接實測驗證過反過來的順序（EtlJob 先、RunLog 後，同樣冷
+    啟動）一樣穩定 PASS。程式碼仍保留「EtlRunLog 在前」這個順序，純粹因為它是
+    現有、已充分驗證過的設定，沒有理由在同一輪修法內再多改一件沒有必要性的事；
+    不是因為這個順序本身還有任何已知的正確性理由。
     """
     print("[TC-29] 開始執行...")
 
     await login(page)
 
-    # --- ETL Run Log 先測（見上方 docstring：必須排在 EtlJob 之前，避免被
-    # EtlJob 的既有缺陷污染同一個 page/session） ---
+    # --- ETL Run Log 先測（見上方 docstring「執行順序」段落：#898 當時是為了
+    # 避免舊版壞掉的 EtlJob <script> 污染同一個 page/session；#965 review round
+    # 額外發現、也一併修好 open_grid_via_direct_tab() 的 table.cache race 後，
+    # 已實測反過來的順序也能穩定 PASS——這裡繼續保留原順序純粹是沒有必要再改，
+    # 不代表這個順序現在還有任何已知的正確性理由） ---
     await open_grid_via_direct_tab(page, "/_EtlRunLog/Index")
     try:
         await page.wait_for_selector("[name='Searcher.Result'], .layui-table-body", state="visible", timeout=3000)
@@ -2138,39 +2187,51 @@ async def tc_29_etl_management(page, **_):
     assert result_count > 0, "_EtlRunLog/Index 缺少 Result 篩選欄位（[name='Searcher.Result']）"
     assert trigger_count > 0, "_EtlRunLog/Index 缺少 Trigger 篩選欄位（[name='Searcher.Trigger']）"
 
-    # --- ETL Job 後測（見上方 docstring 的 KNOWN-GAP：grid/下拉選單目前不會渲染） ---
-    await page.evaluate(
-        """(href) => {
-            const a = document.createElement('a');
-            a.setAttribute('lay-href', href);
-            a.style.display = 'none';
-            document.body.appendChild(a);
-            a.click();
-        }""",
-        "/_EtlJob/Index",
-    )
-    await page.wait_for_load_state("networkidle", timeout=TIMEOUT)
-    await page.wait_for_timeout(1000)
+    # --- ETL Job 後測（issue #965 修好 DataTableTagHelper.cs 的未包裹 IIFE 後，
+    # 改用與 EtlRunLog 相同的 open_grid_via_direct_tab()。第一輪送出後 CI 在這裡
+    # FAIL（Name=Status=SourceDbType=0，但 grid 有渲染、console 無錯誤）——見上方
+    # docstring「issue #965 review round」段落：真正原因是 open_grid_via_direct_
+    # tab() 自己等待條件不夠精確（在同一個 session 內第二次呼叫時會提早返回），
+    # 已經修好該 helper 本身，並在本機真實瀏覽器＋真實 demo process 上重複驗證
+    # 過，不再只是程式碼層級的推論）。 ---
+    await open_grid_via_direct_tab(page, "/_EtlJob/Index")
 
-    # 確認搜尋面板欄位——只斷言不需要 JS 就會出現的純 HTML 欄位（Name 是一般
-    # <input>）。Status/SourceDbType 是 xmSelect 渲染的篩選欄位，目前受 KNOWN-GAP
-    # 影響不會渲染，因此只記錄、不斷言。
-    name_input = page.locator("input[name='Searcher.Name']")
-    name_count = await name_input.count()
+    job_table_count = await page.locator(".layui-table-body").count()
+    print(f"  EtlJob .layui-table-body: {job_table_count}")
+    assert job_table_count > 0, (
+        "/_EtlJob/Index grid（.layui-table-body）未渲染——若此斷言失敗，"
+        "很可能是 #965 修的 DataTableTagHelper.cs AddSubButton 未包裹 IIFE 問題復發"
+        "（見本函式 docstring 的 issue #965 段落）"
+    )
+
+    # 確認搜尋面板欄位，含 Status/SourceDbType 這兩個 xmSelect 篩選欄位——原
+    # KNOWN-GAP 已解除，三個欄位一併斷言。
+    name_count = await page.locator("input[name='Searcher.Name']").count()
     status_count = await page.locator("[name='Searcher.Status']").count()
     db_count = await page.locator("[name='Searcher.SourceDbType']").count()
-    print(f"  ETL Job 搜尋欄位: Name={name_count}, Status={status_count}(KNOWN-GAP), "
-          f"SourceDbType={db_count}(KNOWN-GAP)")
+    print(f"  ETL Job 搜尋欄位: Name={name_count}, Status={status_count}, SourceDbType={db_count}")
+    # 這三條斷言訊息刻意不再宣稱「代表頁面路由本身出了問題」——CI 曾經在
+    # grid 已渲染、console 無錯誤的情況下量到 Name=Status=SourceDbType=0，
+    # 那組數據直接反證了「路由有問題」這個舊診斷（見上方 docstring「issue #965
+    # review round」段落）；真正原因當時是 open_grid_via_direct_tab() 的等待
+    # 條件不夠精確，已經修好。若這三條斷言未來又失敗，優先懷疑的方向是
+    # open_grid_via_direct_tab() 的等待條件是否又不夠（例如新增了第三次呼叫）、
+    # 其次才是 EtlJobListVM 搜尋面板定義本身或 DataTableTagHelper 生成器的回歸。
     assert name_count > 0, (
         "/_EtlJob/Index 連純 HTML 的 Searcher.Name 欄位都沒有渲染——"
-        "代表頁面路由本身出了問題，不只是 KNOWN-GAP 影響的 JS 元件"
+        "見本函式 docstring「issue #965 review round」段落記錄的已知失敗模式與排查順序"
     )
-    if status_count == 0 or db_count == 0:
-        print("  [KNOWN-GAP] Status/SourceDbType 篩選欄位未渲染，"
-              "根因見本函式 docstring（DataTableTagHelper.cs:1284 IIFE 少括號）")
+    assert status_count > 0, (
+        "/_EtlJob/Index 缺少 Status 篩選欄位（[name='Searcher.Status']）——"
+        "見本函式 docstring「issue #965 review round」段落記錄的已知失敗模式與排查順序"
+    )
+    assert db_count > 0, (
+        "/_EtlJob/Index 缺少 SourceDbType 篩選欄位（[name='Searcher.SourceDbType']）——"
+        "見本函式 docstring「issue #965 review round」段落記錄的已知失敗模式與排查順序"
+    )
 
     print("[TC-29] PASS -- ETL 管理頁面驗證通過"
-          "（EtlRunLog 完整驗證；EtlJob 的 grid/篩選欄位為已記錄根因的 KNOWN-GAP）")
+          "（EtlRunLog、EtlJob 皆完整驗證；#965 KNOWN-GAP 已解除）")
 
 
 # ─── TC-30: 匯入功能流程 ────────────────────────────────────────────────────

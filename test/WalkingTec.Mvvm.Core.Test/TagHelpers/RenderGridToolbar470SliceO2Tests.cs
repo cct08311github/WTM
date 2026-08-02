@@ -602,7 +602,10 @@ public class RenderGridToolbar470SliceO2Tests
         Assert.IsFalse(post.Contains("\"type\":\"renderGrid\""));
         Assert.IsFalse(attrs.Contains("data-wtm-grid-id"));
         StringAssert.Contains(post, "function wtToolBarFunc_wtTable_O2(obj)");
-        StringAssert.Contains(post, "myObj.notAnIdentifierO2()(ids,ff.GetSelectionData('wtTable_O2'));");
+        // Issue #965: legacy actionScript now wraps OnClickFunc in parens so a
+        // raw function-literal value parses as a valid IIFE — a no-op change for
+        // this non-identifier-but-still-a-call-expression fixture value.
+        StringAssert.Contains(post, "(myObj.notAnIdentifierO2())(ids,ff.GetSelectionData('wtTable_O2'));");
         Assert.IsFalse(post.Contains("data-wtm-click"));
     }
 

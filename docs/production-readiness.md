@@ -617,6 +617,203 @@ python3 test/mutants/run_mutant.py --mutant 876-wtmcontrolleractivator-neutraliz
 
 ---
 
+## DataTableTagHelper 未包裹 IIFE：GridAction.OnClickFunc 為函式字面值時整個 `<script>` 區塊解析失敗（#965，2026-08-02）
+
+**背景**：這個缺陷本身是 #898/#905（見上方「E2E 測試可靠度修正」條目）改寫 TC-29 時發現、但當時判斷超出「只改 test/e2e」範圍而刻意不修、只記成 KNOWN-GAP 的既有缺陷；#965 是授權修這個缺陷本身的 issue。
+
+### 1. 缺陷與修法
+
+`src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.cs`（修前）第 1284 行，`AddSubButton` 方法內：
+
+```csharp
+actionScript = $"{item.OnClickFunc}(ids,ff.GetSelectionData('{Id}'));";
+```
+
+這一行把 `GridAction.OnClickFunc` 這個字串原封不動接在呼叫括號前面。`src/WalkingTec.Mvvm.Core/Grid/GridActionExtension.Legacy.cs`（`SetOnClickScript`）的 XML doc 記載的預期形狀是一個具名、頁面全域函式的**識別字**（`function test(ids,datas){}`，呼叫端寫 `test(ids,data)`），但程式碼層級沒有任何東西強制這件事。實際上有兩處呼叫端把 `OnClickFunc`設成一段**行內匿名函式字面值**，而非識別字：
+
+- `src/WalkingTec.Mvvm.Etl/ViewModels/EtlJobListVM.cs:94`（「執行記錄」動作）：
+  ```csharp
+  OnClickFunc = @"function(ids,data){var id=ids&&ids.length>0?ids[0]:'';ff.OpenDialog('/_EtlRunLog/Index?jobId='+id,null,'執行記錄',900,null,undefined,false);}"
+  ```
+- `src/WalkingTec.Mvvm.WorkFlow/ViewModels/ProcessDefinitionListVM.cs:73,82`（「设计器」「版本历程」兩個動作，同形狀）
+
+產生的 JS 是 `function(ids,data){...}(ids,ff.GetSelectionData('...'));`——這**不只是「IIFE 少包一層括號」的表面問題**：一個以裸 `function` 關鍵字開頭的敘述式位置永遠會被解析成匿名 `FunctionDeclaration`，而 `FunctionDeclaration` 要求具名，所以光是 `function(ids,data){...}` 這幾個字元本身在敘述式位置就已經是語法錯誤，不需要看後面接了什麼。整個包住它的 `<script>` 區塊因此**整段解析失敗**，殃及同一區塊裡真正的 `table.render()` 呼叫（`BuildTableOptionsScript` 把 `wtToolBarFunc_{Id}` 分派函式與 `layui.use(['table'], function(){...})` 選項區塊寫在**同一個** `<script>` 標籤內）——`/_EtlJob/Index` 的整個 grid 因此永遠不會渲染成功，不限於「執行記錄」這個動作本身。
+
+**修法**（同一行，`src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.cs`）：
+
+```csharp
+actionScript = $"({item.OnClickFunc})(ids,ff.GetSelectionData('{Id}'));";
+```
+
+把整個 `item.OnClickFunc` 表達式包進一層括號。對函式字面值，這修成合法的 `(function(...){...})(...)` IIFE。對已經合法的其他形狀（裸識別字、`obj.method` 這種成員運算式、`obj.method()` 這種呼叫運算式）是 **no-op**——JavaScript 的分組運算子（括號）不會剝離其內部運算式的 Reference（`this` 綁定）：`(obj.method)(args)` 呼叫時 `this` 仍是 `obj`，跟 `obj.method(args)` 完全等價；只有逗號運算子（`(0, obj.method)(args)`）才會剝離。這點在改動前已用既有測試證實（見下方「測試」小節）。
+
+### 2. 全樹重新推導受影響範圍（不採信 issue 文字或既有 framing）
+
+**指令與原始輸出**（在乾淨的 `fix/965-datatable-unwrapped-iife` worktree、修改任何檔案之前執行）：
+
+```
+$ grep -rn "OnClickFunc" --include="*.cs" --include="*.cshtml" --include="*.tt" --include="*.txt" .
+```
+
+真正的（非測試檔案）命中只有四處，全部落在同一組型別上：
+
+```
+src/WalkingTec.Mvvm.Etl/ViewModels/EtlJobListVM.cs:94:                OnClickFunc = @"function(ids,data){var id=ids&&ids.length>0?ids[0]:'';ff.OpenDialog('/_EtlRunLog/Index?jobId='+id,null,'執行記錄',900,null,undefined,false);}"
+src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.cs:1229:                    if (string.IsNullOrEmpty(item.OnClickFunc))
+src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.cs:1284:                        actionScript = $"{item.OnClickFunc}(ids,ff.GetSelectionData('{Id}'));";
+src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.Island.cs:172,175,180,188,190,192:  （FindNonIdentifierOnClickFunc／island 判斷邏輯，見下方）
+src/WalkingTec.Mvvm.WorkFlow/ViewModels/ProcessDefinitionListVM.cs:73,82:               OnClickFunc      = @"function(ids,data){var code=data&&data.Code?data.Code:'';if(code){window.open(...)}}"（兩處，同形狀）
+src/WalkingTec.Mvvm.Core/Grid/GridAction.cs:99:        public string? OnClickFunc { get; set; }
+src/WalkingTec.Mvvm.Core/Grid/GridActionExtension.Legacy.cs:166:            self.OnClickFunc = onClickScript;
+```
+
+即 `GridAction.OnClickFunc` 只有一個型別宣告、一個設值 extension method、一個真正拼接進 JS 字串的產生端（`DataTableTagHelper.cs:1284`），以及**兩個**呼叫端把它設成函式字面值（EtlJobListVM、ProcessDefinitionListVM）。
+
+```
+$ find src/WalkingTec.Mvvm.Mvc/GeneratorFiles -type f | sort
+```
+（列出 CodeGen 範本，共 42 個 `.txt` 檔，`Mvc/` `Spa/Blazor|React|Vue|Vue3/` 各子目錄）——
+
+```
+$ grep -rln "OnClickFunc" src/WalkingTec.Mvvm.Mvc/GeneratorFiles/
+$ grep -rln 'function(' src/WalkingTec.Mvvm.Mvc/GeneratorFiles/
+```
+兩個指令**都是空輸出**——沒有任何 CodeGen 範本產生 `OnClickFunc` 或任何 `function(` 字面值。腳手架出來的下游程式碼不會複製這個缺陷形狀。
+
+```
+$ grep -rnE 'function[[:space:]]*\([^)]*\)[[:space:]]*\{.*\}\s*\(' --include="*.cs" --include="*.cshtml" --include="*.txt" .
+```
+排除 `demo/**/wwwroot/*.js`（第三方 vendor JS，如 jquery.min.js，本身就是壓縮過的合法 IIFE，不是本 repo 產生的程式碼）後，命中的都不是本缺陷形狀：`SliderTagHelper.cs`/`DateTimeTagHelper.cs` 的 `function(value){{return {OnTipsFunc}(value,sliderIns);}}` 是物件屬性值（`setTips: function(value){...}`），不是敘述式位置的裸呼叫；`src/WalkingTec.Mvvm.Mvc/Views/_DashboardPage/{Index,Render,Designer}.cshtml` 的 `(function () {...}());` 三處**本來就已經正確包裹**（`(function(){` 開頭），是同一種 IIFE 手法的另一種合法寫法，不是本缺陷。
+
+**識別字保護的架構性理由**：`DataTableTagHelper.Island.cs`（#470 opt-in island render）的 `DetermineGridIslandDecision`/`FindNonIdentifierOnClickFunc` 會把任何**非識別字**的 `GridAction.OnClickFunc`（含函式字面值）強制導向 legacy（非 island）渲染路徑（`GridAction.OnClickFunc '{badOnClick}' is not a plain identifier`），而 island 路徑對 `OnClickFunc` 唯一的處理（`DataTableTagHelper.Island.cs:685` `descriptor.OnClickFn = item.OnClickFunc;`）本身有註解明講「保證是裸識別字——非識別字在到這裡之前就已經被強制導向 legacy 路徑」，所以 island 路徑本身不可能重現這個缺陷。且 `DetermineGridIslandDecision` 第一條判斷就是 `WtmUIOptionsHolder.Options.UseSelectIslandRender` 這個旗標，**預設關閉**（`WtmUIOptions.cs:151` `public bool UseSelectIslandRender { get; set; } = false;`）——代表在預設設定下（絕大多數部署，含 demo 本身），legacy 路徑本來就是唯一路徑，不需要 island 判斷介入就會命中本缺陷。
+
+**再審視時發現、更正原稿的一句過度宣稱**：原稿在這裡宣稱 `DataTableTagHelper.cs` 內其餘結構相似的 `{Func}(...)` 直接串接（`DoneFunc`/`ChangeFunc`/`ReadyFunc`/`CheckedFunc`／`OnTipsFunc`）「全部只被設成識別字或走 `xxxIsIdentifier ? xxxFuncName : null` 這種自我驗證守衛」——重新讀程式碼後這句話**不成立**。那個 `xxxIsIdentifier ? xxxFuncName : null` 守衛（`ComboBoxTagHelper.cs`/`TransferTagHelper.cs`/`TreeTagHelper.cs`/`TextBoxTagHelper.cs`）只保護寫進 opt-in island JSON descriptor 的那個值，從未保護這些屬性同時餵給的、legacy（一律執行、不受旗標控制）直接串接路徑——例如 `TransferTagHelper.cs` 自己的 legacy 分支（約行 341）用未經任何識別字檢查的原始 `ChangeFunc` 值組出 `,onchange: function(data,index){{defaultFunc(data,index,transferIns); {ChangeFunc}(data, index,transferIns); }}`，如果 `ChangeFunc` 是函式字面值，這裡會產生跟 `GridAction.OnClickFunc` 完全同一類的未包裹 IIFE 語法錯誤。`SliderTagHelper.cs`/`DateTimeTagHelper.cs`/`DataTableTagHelper.cs` 自己的 `DoneFunc` 同樣是無守衛的直接串接。這些姊妹站點今天沒有出過同樣的缺陷，**真正的原因是目前沒有任何實際呼叫端傳入非識別字值，不是因為有任何機制擋著**——重新掃描這個 commit 點所有真實（非測試）`.cshtml` 用法：`grep -rnoE '(change|done|ready|checked|ontips)-func="[^"]*"' demo/ src/`，命中全部是裸識別字或簡單呼叫運算式（`MenuTypeChange(data)`、`DbTypeChange`、`gridCheckedFunc`、`abc`、`aaa` 等），沒有一個是函式字面值。這是這些姊妹站點今天沒事的經驗事實，不是結構性保證——標記為本次修復範圍外的潛在風險類別，留給未來一輪掃描/issue 處理，不在 #965 這次一併擴大修。
+
+**結論**：受影響的產生端只有一處（`DataTableTagHelper.cs:1284`），單一修法即可涵蓋兩個呼叫端。`EtlJobListVM` 的「執行記錄」動作**今天透過真實導覽路徑可達**（`/_EtlJob/Index`，見下方 e2e 小節）；`ProcessDefinitionListVM` 的兩個動作在這個 commit 點**未連接到任何 controller/view**——重新、更徹底地驗證（不只是原本那一條 grep）：`grep -rn "ProcessDefinitionListVM" --include="*.cs" --include="*.cshtml" .` 除了 VM 檔本身與 `test/WalkingTec.Mvvm.WorkFlow.Test/NotifierTests.cs` 之外沒有其他命中；`src/WalkingTec.Mvvm.WorkFlow/Controllers/` 下沒有任何檔案引用它；額外檢查是否存在某種泛型/反射式自動路由機制能繞過具名 controller 觸及它（`grep -rln "GetTypes().*ListVM\|Assembly.*ListVM\|typeof(BasePagedListVM" src/`）——命中的三個檔案（`_DashboardDesignerController.cs`／`_DashboardController.cs`／`AnalysisVmRegistry.cs`）皆屬 Dashboard／Analysis 這兩個不相關功能，沒有任何能觸及 WorkFlow ListVM 的通用機制。`docs/workflow.md` §8 確實展示了一段以 `WfProcessDefinitionController`（繼承 `BaseController`）呼叫 `CreateVM<ProcessDefinitionListVM>()` 的程式碼，但那是文件給下游整合者看的**範例**（"In your area controller (inherit BaseController):"），`find . -iname "*WfProcessDefinition*"` 在整棵樹裡找不到這個類別的任何實作檔——與本 repo 自己既有的 `CHANGELOG.md`「Dead-link repair」條目（`ProcessDefinitionListVM` 的 Details/Versions 動作原本連到的正是這個「已驗證不存在」的 `_WfProcessDefinition` controller）互相印證。因此目前無法透過導覽觸發，但原始碼裡確實帶著同一顆未爆彈——同一個生成器修法讓它在未來被接上任何 view 時就已經是修好的狀態，不需要屆時另外記得處理。
+
+### 3. 測試機制：實際解析 emitted script，而非字串比對
+
+**為什麼不是字串比對**：本 repo 自己的 `DataTableByteIdentityTests`（`test/WalkingTec.Mvvm.Core.Test/TagHelpers/DataTableByteIdentityTests.cs` + `.Fixtures.cs`）正是這個確切程式碼路徑（`AddSubButton` 的 `actionScript` 那一行）的 byte-identity 回歸測試——它的 fixture 把 `OnClickFunc` 設成裸識別字 `"myGridOnClickHandler"`（`DataTableByteIdentityTests.Vm.cs:209`），**在這個缺陷存在期間全程綠燈，精確原因是它的 fixture 從未真正觸發過這個缺陷**——即使觸發了，golden 字串一樣會把當下 emit 出來的內容（不論合法與否）原封不動凍結進期望值；字串比對測的是「跟上次一樣」，不是「這串文字是不是合法 JS」，兩者是不同的性質。
+
+**環境限制**：`.github/workflows/ci-build.yml`（本 repo 唯一跑 `dotnet test` 的 job，`build-and-test`）只有 `actions/setup-dotnet@v5`，**沒有 `actions/setup-node`**——`setup-node` 只出現在完全不同、跑 Jest 的 `js-test` job（`cd test/WalkingTec.Mvvm.Js.Tests && npm test`）裡。這個 repo 是本機 Gitea self-hosted act_runner，不是 GitHub-hosted image，不能假設兩個 job 共用同一份工具鏈。因此新測試**不能**依賴 `node` 在 `.NET test job` 的 PATH 上。
+
+**選擇 Acornima 而非其他方案**：
+- **不用 `node` 子行程**：上述環境限制直接排除。若堅持要跑 `node`，必須在工具缺席時給出清楚標記的獨立失敗，而不是靜默通過或給出不明所以的例外——這個成本與風險都比選一個純 .NET 套件高。
+- **不手寫正規表達式/自製迷你解析器判斷語法**：JS 語法（尤其函式表達式 vs 宣告式的敘述式位置規則）沒有簡單、可靠的正規表達式判準；手寫解析器等於自己重新發明一個不完整、可能有盲點的 parser，且失去「這是一個真正的、被廣泛驗證過的 JS 解析器」這個可信度。
+- **選 Acornima（NuGet, 1.6.2, BSD-3-Clause）**：pure .NET、無外部行程依賴、Test262-complete（作者宣稱通過完整 ECMAScript 2026 test262 套件）、`net8.0`/`netstandard2.0/2.1`/`net462` 皆有 target（`net8.0` 組件在 `net10.0` 測試專案下可直接載入，.NET 同系列前向相容，這是標準行為，不需要額外處理）。`new Parser().ParseScript(code)` 對合法輸入回傳 AST，對不合法輸入拋出 `Acornima.SyntaxErrorException`（`ParseErrorException` 的具體子類別之一）。曾經是同類套件的 Esprima.NET 已由同一作者的 Acornima 取代（README 明講兩者關係：acornjs + Esprima.NET 的融合），選現行維護中的套件而非停止維護的舊選項。
+
+**新增依賴，明確標註（依 CLAUDE.md 對依賴新增要嚴格審查的政策）**：`Acornima 1.6.2` 加進 `Directory.Packages.props`（「Test packages」區）與 `test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj`（唯一引用它的專案）。**僅供測試使用，不被任何出貨用的 `WalkingTec.Mvvm.*` 套件引用**——`dotnet restore`/`dotnet build` 確認過只有這一個 `.csproj` 拉它。
+
+**測試本身**（`test/WalkingTec.Mvvm.Core.Test/TagHelpers/DataTableTagHelperUnwrappedIife965Tests.cs`）：用一個 `GridAction`（`OnClickFunc` 與 `EtlJobListVM` 的「執行記錄」逐字相同）驅動真正的 `DataTableTagHelper.Process()`，從 `output.PostElement.GetContent()` 取出**第一個裸 `<script>...</script>` 區塊**（刻意不匹配 `<script type="text/html" ...>`——那是 LayUI 範本，是 HTML 不是 JS；`BuildTableOptionsScript` 為這個 fixture 只會產生一個裸 `<script>` 標籤，就是含 `wtToolBarFunc_*` 分派器＋`table.render()` 的那一個），先用 `StringAssert.Contains` 確認抓到的區塊確實含 `OpenDialog`／`執行記錄`（避免抽取器抓到空區塊而讓測試「無條件通過」），再交給 `new Parser().ParseScript(...)`，`catch (ParseErrorException)` 時 `Assert.Fail` 並把解析錯誤與整段 emitted script 印出來。
+
+### 4. RED-before-fix / GREEN-after，逐字擷取
+
+**RED**（`git checkout -- src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.cs` 把修法還原回原始未修狀態，重新 build 後跑同一支測試）：
+
+```
+Failed ToolbarActionScript_WithFunctionLiteralOnClickFunc_ParsesAsValidJavaScript [118 ms]
+  Error Message:
+   Assert.Fail failed. DataTableTagHelper emitted a <script> block that is not valid JavaScript
+   (Issue #965 — likely an unwrapped IIFE from a function-literal GridAction.OnClickFunc).
+   Parser error: Unexpected token '(' (10:9)
+--- emitted script ---
+...
+var isPost = false;
+var tempUrl = '',whereStr=null;
+function(ids,data){var id=ids&&ids.length>0?ids[0]:'';ff.OpenDialog('/_EtlRunLog/Index?jobId='+id,null,'執行記錄',900,null,undefined,false);}(ids,ff.GetSelectionData('wtTable_965'));};break;
+default:break;}
+...
+```
+
+第 10 行第 9 個字元正是 `function(ids,data){...}` 之後緊接的那個呼叫括號——與程式碼分析預期的失敗位置完全吻合。
+
+**GREEN**（把修法（`cp` 備份檔）還原回來，重新 build 後跑同一支測試）：
+
+```
+Passed ToolbarActionScript_WithFunctionLiteralOnClickFunc_ParsesAsValidJavaScript [142 ms]
+
+Test Run Successful.
+Total tests: 1
+     Passed: 1
+```
+
+### 5. TC-29（e2e）：KNOWN-GAP 解除
+
+**修前**：`test/e2e/wtm_e2e_tests.py`（改寫自 #898）的 `tc_29_etl_management` 對 `/_EtlRunLog/Index` 做完整斷言（grid `.layui-table-body` 存在、`Searcher.Result`/`Searcher.Trigger` 篩選欄位存在），但對 `/_EtlJob/Index`：因為透過 `open_grid_via_direct_tab()`（等待 `window.layui.table.cache` 填入才返回）導覽會逾時（table.cache 因為本缺陷永遠不會被填入），改用手動 `page.evaluate` 觸發導覽＋固定 `wait_for_timeout(1000)` 繞過那個等待；只斷言純 HTML 的 `Searcher.Name` 欄位存在（不需要 JS 就會出現在 DOM 中），對 grid（`.layui-table-body`）與兩個 xmSelect 篩選欄位（`Searcher.Status`/`Searcher.SourceDbType`）**只印出 `[KNOWN-GAP]` 訊息，完全不斷言**。docstring 明確記載根因指到 `DataTableTagHelper.cs:1284`。
+
+**修後**：`/_EtlJob/Index` 改用與 `/_EtlRunLog/Index` 相同的 `open_grid_via_direct_tab()`（生成器修好後 `table.cache` 應該會正常填入，該 helper 因此不再逾時），並把三項斷言全部轉成正面斷言：grid `.layui-table-body` count > 0、`Searcher.Name`／`Searcher.Status`／`Searcher.SourceDbType` 三個篩選欄位 count > 0，取代原本的「只記錄、不斷言」與 KNOWN-GAP 印出。docstring 更新為記載 #965 的根因與修法、並保留 #898 當時記錄的執行順序（EtlRunLog 先測、EtlJob 後測）理由。
+
+**（第一輪送出時的）誠實揭露驗證深度，已被下面「review round」取代**：第一輪 `#965` 的驗證沒有在真實瀏覽器 / 跑起來的 demo 站台上重新執行 TC-29，只靠 `.NET` 單元測試層級＋程式碼層級推論鏈。**這個推論鏈本身不完整**——見下方，CI 用真實數據直接反證了其中一段。
+
+### 5b. Review round：CI 實際跑出的第二個 bug，本機真實瀏覽器重現、診斷、修好、驗證
+
+**CI 結果**：`e2e (baseline)`／`e2e (island)` 兩個 leg 都在同一支測試 FAIL，數據逐字如下：
+
+```
+[TC-29] 開始執行...
+  RunLog .layui-table-body: 3
+  RunLog 搜尋: Result=2, Trigger=2
+  EtlJob .layui-table-body: 3
+  ETL Job 搜尋欄位: Name=0, Status=0, SourceDbType=0
+[TC-29] FAIL: /_EtlJob/Index 連純 HTML 的 Searcher.Name 欄位都沒有渲染——代表頁面路由本身出了問題
+[TC-29] No browser console errors
+```
+
+**先讀數據，不要相信斷言訊息自己的診斷**：`EtlJob .layui-table-body: 3` 代表 grid 確實渲染成功，`No browser console errors` 代表沒有 JS 例外——這兩點直接反證斷言訊息裡「代表頁面路由本身出了問題」這句話，那是舊版（route 本身壞掉時期）留下的過時診斷文字，不是這次失敗的真正原因。真正的訊號是：grid 渲染、search 欄位沒渲染，且 RunLog 自己的 `Result=2, Trigger=2` 同一支測試裡是成功的——兩個頁面的 searcher 定義本身先讀過（`EtlJobSearcher.cs`／`EtlJobListVM.cs` 的 `<wt:searchpanel>` vs `EtlRunLogSearcher.cs`／`EtlRunLogListVM.cs`／`_EtlRunLog/Index.cshtml`），兩者的 `<wt:searchpanel vm="@Model" reset-btn="true">` 寫法逐字對稱，都沒有 `SearcherExpanded`；controller 的 `Index()` 也逐字對稱（`Wtm.CreateVM<T>()` + `PartialView(vm)`）——**排除了「EtlJobListVM 的 searcher 定義本身有問題」這個假設**。
+
+**本機重現、找到真正原因**：在本機用 `dotnet run` 啟動一份全新（無殘留 `demo.db`）的 demo process，直接用 `test/e2e/wtm_e2e_tests.py --tc 29` 對著它跑——**第一次執行（冷啟動）就重現了與 CI 逐字相同的失敗**（`Name=0, Status=0, SourceDbType=0`）；同一個 process 重跑則穩定 PASS。這個「冷啟動失敗、熱重跑穩定過」的模式指向時序問題，不是恆定的邏輯錯誤。寫一支獨立診斷腳本（直接呼叫 `wtm_e2e_tests.py` 的 `login()`/`open_grid_via_direct_tab()`），在觸發 EtlJob 導覽後每 100ms 輪詢一次 `window.layui.table.cache` 的 key 與 `Searcher.Name` 的 DOM count，實測到：EtlJob 自己的 table.cache key 平均要再等 ~0.1–0.2s 才出現（且 search 面板欄位在那之前就已經出現，見下段），代表**現有等待條件本身太寬鬆**。
+
+**根因**：`open_grid_via_direct_tab()`（`test/e2e/wtm_e2e_tests.py`）的等待條件是：
+
+```python
+await page.wait_for_function(
+    """() => {
+        const caches = window.layui?.table?.cache || {};
+        return Object.keys(caches).length > 0;
+    }""",
+    timeout=TIMEOUT,
+)
+```
+
+「全域 `table.cache` 至少有一個 key」——這對*第一次*呼叫（RunLog）是對的（此時 cache 確實是空的）。但 `table.cache` 是整個 page 生命週期共用、從不清空的物件；TC-29 在同一個 page/session 內把這支 helper 呼叫兩次，第二次呼叫（EtlJob）時 RunLog 那個 key 早就讓這個條件在點擊當下瞬間成立——helper 提早回傳，後面的 `page.wait_for_load_state("networkidle")` 給的緩衝在 demo process 剛啟動、EF/Razor 尚未 JIT 過的第一次請求上不夠吸收 EtlJob 自己實際渲染所需的時間，斷言因此在真正渲染完成前就讀到 0。**這正是 #898 當時把 EtlJob 排在 RunLog 之後這個順序，意外（非刻意）替其掩蓋掉的同一個 bug**——RunLog 天生是第一個呼叫，吃不到「第二次呼叫」這個 race；EtlJob 天生是第二個，一定會踩到。
+
+**修法**（`open_grid_via_direct_tab()` 本身，`test/e2e/wtm_e2e_tests.py`）：等待條件改成「出現一個先前不存在的 key」而非「至少有一個 key」——呼叫前先記錄 `Object.keys(...)` 的快照，等待條件改成 `Object.keys(caches).some(k => !preSet.has(k))`。對第一次呼叫（快照是空集合）行為完全不變；對第二次（或未來任何一次）呼叫則正確等到「這次呼叫自己觸發的那個新 table」真正載入，不再被之前任何一次呼叫的殘留 key 騙過。
+
+**驗證（本機真實瀏覽器＋真實 demo process，非模擬）**：
+- 未修版（`git stash` 掉 helper 的修法）：`--tc 29` 對冷啟動的 demo process 執行，重現 `Name=0, Status=0, SourceDbType=0`，與 CI 逐字一致。
+- 修好後：**兩次獨立的冷啟動**（各自 `pkill` 掉 process、刪除殘留 `demo.db`、重新 `dotnet run`）第一次執行即 PASS；同一個 process 上再連續熱重跑 3 次，全部 PASS——累計 5/5。
+- 另外用同一支已修好的 helper 測試「EtlJob 先、RunLog 後」這個反過來的執行順序（獨立診斷腳本，非正式測試檔案），冷啟動照樣 3/3 PASS——見下方「執行順序」小節。
+- 用 `python3 scripts/check-e2e-test-integrity.py test/e2e/wtm_e2e_tests.py` 確認這輪修改沒有引入「測試不會失敗」這類違規：clean。
+- 用同一份本機 demo process 跑鄰近測試（TC-27/28/30，皆不使用 `open_grid_via_direct_tab()`）與全部 36 支 TC 的完整 e2e 套件，確認這次修法沒有波及其他測試——結果見下方「7. 驗證」。
+
+**執行順序，更正**：#898 當時「RunLog 先測」的理由（避免壞掉的 EtlJob `<script>` 污染同一個 session）已隨 IIFE 缺陷修好而不成立；這輪 review 額外發現，那個順序同時也巧合地讓 `open_grid_via_direct_tab()` 的 table.cache race 從未在 RunLog 自己身上現形過（原因見上方「根因」小節）——不是因為 RunLog 本身不會遇到這個 race，只是它天生不會踩到「第二次呼叫」這個條件。**helper 本身修好後，順序不再是任何已知問題的必要 workaround**——已直接實測反過來的順序（EtlJob 先、RunLog 後）冷啟動一樣穩定 PASS（見上方）。程式碼仍保留原順序（EtlRunLog 在前），純粹因為這是現有、已充分驗證過的設定，這輪修法沒有理由再多改一件沒有必要性的事。
+
+**未能驗證**：這輪修法尚未在真正的 Gitea Actions CI 上跑過（本次工作階段的 hard constraint 禁止任何 Gitea/GitHub API 呼叫、禁止開 PR）——只在本機真實 demo process＋真實瀏覽器上驗證過，不是模擬或程式碼層級推論。
+
+### 6. Mutant：考慮過，判斷不加
+
+這是一個 `core`／correctness 缺陷（生成器輸出的 JS 語法錯誤），不是安全缺陷——沒有未授權存取、注入或跨租戶維度。`test/mutants/run_mutant.py` 的 `VALID_KINDS` 只有 `{security, selftest}`，沒有對應的誠實分類；把它硬標成 `security` 才能讓 CI 強制執行，會重複 #970 那筆條目已經點名、且 #968（本文件上方獨立條目）才剛花一整張 PR 修過的同一種「`kind` 分類漂移」問題（`security`-kind entry 數量因為這類被迫分類而持續成長，直接推高 mutation-gate.yml 的時間預算，#968 為此把「每次 PR 跑全部 entries」改成「per-entry relevance selection」；`kind` 本身該不該加新分類目前刻意延後處理）。加一個必須造假分類才能被強制執行的 entry，不會比本節第 4 點已經完成的手動 RED/GREEN 證明（`git checkout` 還原修法、重新 build、跑同一支測試、逐字擷取失敗訊息，再還原修法重新驗證 GREEN）提供更多證據，卻會讓 `kind` 分類漂移這個已知問題再往前推一步。也不存在 `.claude/rules/testing.md`「fixture 不能自己供應本該由 production 供應的東西」那類風險（#899/#967 的失敗模式）——這支測試直接驅動真正的、未修改的 `DataTableTagHelper.Process()`，把真正 emitted 出來的字串交給真正的 parser，沒有任何地方用測試自己的邏輯取代被測程式碼的行為。
+
+### 7. 驗證
+
+`find . -name 'demo.db*' -path '*bin*' -delete && dotnet build core.slnf --no-restore -c Release`：0 error（101 個既有、與本次修改無關的 warning，含既有 nullable annotation/XML doc 警告）。
+
+`dotnet test test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj -c Release --no-build`（無 filter，量到本次改動前的乾淨基準）：base **5041 passed, 0 failed** → **5042 passed, 0 failed**（1 個新測試，其餘全部沿用既有 golden 斷言後仍然通過）。
+
+`dotnet test core.slnf -m:1 --no-build -c Release --verbosity normal --filter "TestCategory!=Integration"`（`-m:1`／`--filter` 這兩個決定「跑哪些測試」的旗標與 `.github/workflows/ci-build.yml` 的 `build-and-test` job 相同；該 job 另外還有 `--logger`／`--collect`／`--settings`／`--results-directory` 幾個只影響 TRX/coverage 產物、不影響測試是否通過的旗標，這裡略過，不是逐字重現整條指令）：7 個測試專案全部 `Test Run Successful`，0 failed——`WalkingTec.Mvvm.Core.Test` 5035 passed（此指令帶 `TestCategory!=Integration` filter，與上面無 filter 的 5042 不是同一個分母，故數字不同屬預期）、`WalkingTec.Mvvm.Admin.Test` 192 passed、`WalkingTec.Mvvm.Mvc.Tests` 64 passed、`WalkingTec.Mvvm.Etl.Test` 699 passed（含 `EtlJobListVmGridTests.cs` 既有的 `OnClickFunc` 相關測試，無回歸）、`WalkingTec.Mvvm.WorkFlow.Test` 589 passed + 23 skipped（既有；含 `NotifierTests.cs` 的 `ProcessDefinitionListVMTests`，無回歸）、`WalkingTec.Mvvm.Api.Test` 103 passed + 1 skipped（既有的 mutation-gate baseline selftest）、`WalkingTec.Mvvm.FileHandlers.S3.Test` 19 passed。
+
+`python3 -m py_compile test/e2e/wtm_e2e_tests.py`：語法檢查通過。`python3 scripts/check-e2e-test-integrity.py test/e2e/wtm_e2e_tests.py`：clean，無違規。
+
+**Review round 新增：本機真實瀏覽器＋真實 demo process 執行的 e2e 驗證**（見上方「5b」小節根因與修法全文）。`dotnet run -c Release --no-build` 啟動 `demo/WalkingTec.Mvvm.Demo`（`ASPNETCORE_ENVIRONMENT=Development`，`http://localhost:52837`，`IsQuickDebug: true`，SQLite `./demo.db`，每次冷啟動前先刪除殘留的 `demo.db`/`-shm`/`-wal`），`playwright`（1.58.0，chromium 已預裝）對它跑：
+
+- `python3 wtm_e2e_tests.py --tc 29`：未修版（`open_grid_via_direct_tab()` 修法暫時還原）對冷啟動 process 執行，逐字重現 CI 的失敗（`Name=0, Status=0, SourceDbType=0`）。修好後：兩次獨立冷啟動（各自 kill process、清 `demo.db`、重新 `dotnet run`）第一次執行即 PASS，同一個 process 上再連續熱重跑 3 次也全部 PASS，累計 **5/5**。
+- `python3 wtm_e2e_tests.py --tc 27,28,30`（鄰近測試，皆不使用 `open_grid_via_direct_tab()`）：3/3 PASS，確認這次修法沒有波及其他測試。
+- `python3 wtm_e2e_tests.py`（全部 36 支 TC，同一個熱 process）：**Total: 36 | PASS: 35 | FAIL: 0 | ERROR: 0 | SKIP: 1**（唯一的 SKIP 是既有的 TC-36，demo 未啟用多租戶主機模式，與本次修法無關）——與 CI 那次失敗的「Total: 36 | PASS: 34 | FAIL: 1 | ERROR: 0 | SKIP: 1」相比，唯一變化就是 TC-29 從 FAIL 翻成 PASS，其餘 34 個 PASS + 1 個 SKIP 不變。
+
+**仍未能驗證的部分（誠實列出）**：這輪修法尚未在真正的 Gitea Actions CI 上跑過——本次工作階段的 hard constraint 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，只能本機驗證。本機的 demo process／SQLite／Playwright 版本與 CI 的自架 runner不保證逐一致（例如 CI runner 的 CPU/記憶體資源、Chromium 版本可能不同），因此「本機冷啟動可重現、修好後可穩定通過」不等於「CI runner 上保證不會有更極端的時序」——但 root cause（等待條件本身邏輯錯誤，不是單純的時間不夠長）已經修好，且新等待條件的正確性不依賴任何特定的時間常數。
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。

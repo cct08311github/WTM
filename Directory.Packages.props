@@ -142,6 +142,14 @@
     <PackageVersion Include="Microsoft.SourceLink.Gitea" Version="10.0.301" />
 
     <!-- ===== Test packages ===== -->
+    <!--
+      Issue #965 — pure-.NET ECMAScript parser used ONLY to assert that
+      DataTableTagHelper's emitted GridAction toolbar-action script is valid
+      JavaScript (Test262-complete, no interpreter/execution, no external
+      process/node dependency — see DataTableTagHelperUnwrappedIife965Tests).
+      Not referenced by any shipping (non-test) project.
+    -->
+    <PackageVersion Include="Acornima" Version="1.6.2" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.14.0" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
     <PackageVersion Include="FluentAssertions" Version="6.12.2" />

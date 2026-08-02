@@ -555,7 +555,7 @@ if(data==undefined||data==null||data.ID==undefined||data.ID==null){
     tempUrl = ff.concatWhereStr(tempUrl,whereStr,data);
 }
 
-myGridOnClickHandler(ids,ff.GetSelectionData('wtTable_Fixed470O1'));};break;
+(myGridOnClickHandler)(ids,ff.GetSelectionData('wtTable_Fixed470O1'));};break;
 
 case 'ActForcePost':{
 var isPost = false;
