@@ -308,7 +308,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     }
                     else
                     {
-                        cusmtomclick = $"{FormatFuncName(ClickFunc)};";
+                        cusmtomclick = $"{FormatFuncInvocation(ClickFunc)};";
                     }
                     List<LayuiTreeItem2> treeitems = GetLayuiTree(mm);
                     var onclick = $@"

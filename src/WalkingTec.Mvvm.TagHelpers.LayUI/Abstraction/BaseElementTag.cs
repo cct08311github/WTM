@@ -241,6 +241,62 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             return rv;
         }
 
+        // Issue #999 part (B): FormatFuncName above truncates at the funcname's
+        // FIRST "(" and appends "(data)" — for a bare identifier ("myFunc")
+        // that is harmless, but for a function literal ("function(v){...}")
+        // the slice point is a syntactic accident, not a grammar decision: the
+        // text before the "(" is "function", which IS emitted, unmodified,
+        // followed by "(data)" — "function(data)" — a hard JS SyntaxError
+        // (confirmed with Acornima; see InvocationHelper999BTests.cs).
+        //
+        // Part (B)'s first design tried to teach FormatFuncName to keep the
+        // whole expression when the text before the first "(" is not a plain
+        // identifier. Cross-vendor review killed it: "function" itself
+        // matches the identifier regex every 3-way island decision in this
+        // project uses (^[A-Za-z_$][\w$]*\z) — it is a JS KEYWORD, not an
+        // identifier, and that regex has no keyword awareness. The fix would
+        // have shipped and changed nothing.
+        //
+        // FormatFuncInvocation takes the opposite approach: no classification
+        // at all. It keeps the caller's expression completely unmodified and
+        // wraps it in a grouping operator before appending the call —
+        // (expr)(args) — which is valid JavaScript for every shape this
+        // project's *Func attributes accept:
+        //   - a bare identifier:  (myFunc)(data)   === myFunc(data)
+        //   - a dotted reference: (a.b.c)(data)    — the grouping operator
+        //     does not strip the Reference a MemberExpression produces, so
+        //     `this` stays bound to `a.b`, exactly as `a.b.c(data)` would.
+        //   - a function literal, arrow function, or factory-call expression:
+        //     the parens make the expression unambiguous regardless of
+        //     statement-vs-expression position, so the "function declaration
+        //     at statement position" ambiguity (the bug #999 exists to fix)
+        //     never arises.
+        //
+        // Deliberately static, and deliberately NOT implemented in terms of
+        // FormatFuncName (or vice versa): the two methods must never share a
+        // code path. FormatFuncName's 11 other call sites feed a DECISION (is
+        // this a plain identifier?) or an HTML data attribute — never
+        // executable JS — and must keep doing exactly that, unchanged. This
+        // method's callers feed EXECUTABLE JS and must never also classify
+        // it. Collapsing "the string I classify" and "the string I execute"
+        // into one value is the root cause #999 exists to fix, not a detail
+        // of it — so the two paths stay textually separate here too.
+        //
+        // funcExpression is null/empty-safe, mirroring FormatFuncName's null
+        // passthrough: several callers (e.g. EmitAutocompleteWiring below,
+        // TreeTagHelper/ComboBoxTagHelper's `on:function(data){...}` handler)
+        // can legitimately reach this with an unset *Func, and the legacy
+        // inline <script> must keep emitting nothing for that slot, not the
+        // nonsensical "()(data);".
+        public static string FormatFuncInvocation(string funcExpression, string args = "data")
+        {
+            if (string.IsNullOrEmpty(funcExpression))
+            {
+                return null;
+            }
+            return $"({funcExpression})({args})";
+        }
+
         // Issue #784 (#470 residual): shared checkbox/switch/radio ChangeFunc ->
         // layui.form.on(...) wiring — used by the CheckBoxTagHelper/
         // SwitchTagHelper/RadioTagHelper cases above (identical shape apart
@@ -289,7 +345,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 {warn}layui.use(['form'],function(){{
   var form = layui.form;
   form.on('{kind}({filter})', function(data){{
-    {FormatFuncName(changeFunc)};
+    {FormatFuncInvocation(changeFunc)};
   }});
 }})
 </script>
@@ -349,7 +405,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     template_txt: '{{{{d.Text}}}}',
     onselect: function (data) {{
       $('#{id}').val(data.Value);
-     {FormatFuncName(changeFunc)};
+     {FormatFuncInvocation(changeFunc)};
      ff.ChainChange('{triggerUrl}/'+data.Value, data.elem);
     }}
   }});
@@ -370,7 +426,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     template_txt: '{{{{d.Text}}}}',
     onselect: function (data) {{
       $('#{id}').val(data.Value);
-     {FormatFuncName(changeFunc)};
+     {FormatFuncInvocation(changeFunc)};
     }}
   }});
 }})

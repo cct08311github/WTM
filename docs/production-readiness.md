@@ -653,6 +653,214 @@ dotnet test test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj -c R
 
 ---
 
+## LayUI TagHelper：`FormatFuncName` 截斷造成的 10 個站點修復——新增 `FormatFuncInvocation`（#999 part (B)，2026-08-03）
+
+**背景**：part (A)（#1003）修了 9 個「statement 位置原樣內插」的站點——開發者的 `*Func` 值原封不動抵達輸出，`({X})(...)` 加括號是完整修法。它明確排除了另一類站點：所有經過 `BaseElementTag.FormatFuncName`（`src/WalkingTec.Mvvm.TagHelpers.LayUI/Abstraction/BaseElementTag.cs:225-242`）的呼叫。`FormatFuncName` 在**抵達任何語法位置之前**就先在第一個 `(` 處截斷、補上 `(data)`：
+
+```csharp
+var ind = rv.IndexOf("(");
+if (ind > 0) { rv = rv.Substring(0, ind); }   // function(v){...}  ->  function
+if (appendparameter == true) { rv += "(data)"; }  //                ->  function(data)
+```
+
+`function(v){...}` 變成字串 `function(data)`，對這個結果加括號（`(function(data));`）本身就是 SyntaxError——已經實際執行 Acornima 解析確認過。
+
+**Part (B) 的第一版設計被跨廠 review 打回**：原計畫是「當第一個 `(` 前面的文字不是 plain identifier 時，`FormatFuncName` 停止截斷」。對函式字面量 `function(v){...}`，那段文字就是字面上的 `function`——這**通過**本專案到處在用的 identifier regex `^[A-Za-z_$][\w$]*\z`。`function` 是 JS **關鍵字**，不是 identifier，而這個 regex 完全不認識關鍵字。這個修法會上線但什麼都沒改到。
+
+**決定採用的設計：不動 `FormatFuncName`，新增一個獨立的 helper，只負責產生「完整可呼叫的 invocation」。**
+
+### 1. Helper 的位置與簽章，及理由
+
+```csharp
+public static string FormatFuncInvocation(string funcExpression, string args = "data")
+{
+    if (string.IsNullOrEmpty(funcExpression))
+    {
+        return null;
+    }
+    return $"({funcExpression})({args})";
+}
+```
+
+放在 `BaseElementTag`（`FormatFuncName`正下方），**static**（不是像 `FormatFuncName` 那樣的 instance 方法）。理由：
+
+- **不需要任何 instance 狀態**——`FormatFuncInvocation` 是純字串轉換，不像 `FormatFuncName` 目前雖為 instance method 但其實也用不到 `this`；用 static 更準確反映這件事。
+- **可測試性**——static 方法能不建構任何 TagHelper 子類別、直接單元測試（雖然本項驗收仍以「渲染真實 TagHelper 輸出」為主，static 只是讓這個選項保持開放）。
+- **與 `FormatFuncName` 的「不可 override」問題無關，且刻意如此**：`BaseElementTag` 是 `public abstract`，`FormatFuncName` 是 `public` 但**非 virtual**——下游只能用 `new` 隱藏它、無法 override。這件事對本次新 helper 完全不構成理由去改動 `FormatFuncName` 的簽章或可見度：`FormatFuncInvocation` 是一個全新、獨立的方法，不呼叫 `FormatFuncName`、也不被 `FormatFuncName` 呼叫，兩者的可覆寫性互不相干。
+- **考慮過但放棄的替代方案：獨立 static utility class**（例如 `Common/` 底下一個新的 `JsInvocationHelper`）。放棄理由：所有 10 個需要它的呼叫點都在 `BaseElementTag` 的子類別內（`TreeContainerTagHelper : BaseElementTag`；`TreeTagHelper`/`ComboBoxTagHelper`/`ColorPickerTagHelper`/`SelectorTagHelper` : `BaseFieldTag` : `BaseElementTag`），放在 `BaseElementTag` 上讓這些呼叫點沿用現有「呼叫繼承來的方法、不用額外 `using`」的寫法，diff 最小；且緊鄰 `FormatFuncName` 也讓日後讀者在看到 `FormatFuncName` 時容易發現這個姊妹方法。
+- **刻意不與 `FormatFuncName` 共用任何程式碼路徑**（互不呼叫）：這是本 issue 的核心教訓——讓同一條字串同時當「拿去分類的依據」與「拿去執行的程式碼」，是缺陷的根源，不是細節。`FormatFuncName` 的呼叫者把輸出當**決策輸入**（是不是 plain identifier？）或 **HTML 屬性值**；`FormatFuncInvocation` 的呼叫者把輸出當**要執行的 JS**。兩條路徑在原始碼層面就分開，任何人都不會不小心把一個方法的輸出接到另一個方法原本設計要接的地方。
+
+### 2. 站點表（10 個切換的站點，逐一重新推導，未信任任何既有清單）
+
+自行重跑 `grep -rn "FormatFuncName(" --include="*.cs" .`（排除 `bin/`/`obj/`），對整個 repo（不只 `src/`）逐行確認是否為註解、是否真的執行到、以及被截斷後的字串最終落在 JS 的什麼語法位置：
+
+| # | 檔案:行 | 分支 | JS 語法位置 | 呼叫參數 |
+|---|---|---|---|---|
+| 1 | `BaseElementTag.cs:348`（`EmitFormChangeWiring`） | CheckBox/Switch/Radio `ChangeFunc`，`form.on('{kind}({filter})', function(data){{ X; }})` | statement | `data` |
+| 2 | `BaseElementTag.cs:408`（`EmitAutocompleteWiring`，有 TriggerUrl） | TextBox `ChangeFunc`，`onselect: function(data){{ ...; X; ff.ChainChange(...); }}` | statement | `data` |
+| 3 | `BaseElementTag.cs:429`（`EmitAutocompleteWiring`，無 TriggerUrl） | TextBox `ChangeFunc`，`onselect: function(data){{ ...; X; }}` | statement | `data` |
+| 4 | `TreeContainerTagHelper.cs:311` | `ClickFunc`，賦值給 `cusmtomclick`，嵌入 `click: function(data){{ ...; X; }}` | statement | `data` |
+| 5 | `SelectorTagHelper.cs:478` | `BeforeOnpenDialogFunc`，`$('#..._Select').on('click',function(){{ var data={{}}; X; ... }})` | statement（`data` 是合成的空物件） | `data` |
+| 6 | `TreeTagHelper.cs:368` | `ChangeFunc`，`if (X != false) {{ ...ChainChange... }}`（`LinkField`/`LinkId` 有設） | **expression**（if 條件） | `data` |
+| 7 | `TreeTagHelper.cs:377` | `ChangeFunc`，`on:function(data){{ X }}`（`LinkField`/`LinkId` 未設） | statement | `data` |
+| 8 | `ComboBoxTagHelper.cs:458` | 同 #6 鏡像 | **expression**（if 條件） | `data` |
+| 9 | `ComboBoxTagHelper.cs:467` | 同 #7 鏡像 | statement | `data` |
+| 10 | `ColorPicker.cs:291` | `ChangeFunc`，`done: function(data){{ ...; X; }}` | statement | `data` |
+
+**為什麼 #6/#8 是「expression 位置」而不是 statement**：`if (X != false)` 裡的 `X` 是 if 條件的一部分，必須是一個能求值的 expression，不能是裸的 statement。舊行為下 `X = function(data)`（截斷後）——parser 進入 `if(...)` 後已經在 expression 文法裡，看到 `function` 關鍵字會嘗試把它解析成匿名 FunctionExpression，接著預期 `{` 開始函式本體，卻遇到 `!=`——一樣是 SyntaxError（原因與 statement 位置的「匿名 FunctionDeclaration 不合法」不同，但結論相同：解析失敗）。新設計不需要區分 statement/expression 就能一律安全：`(expr)(args)` 這個形狀在任何位置都合法（grouping operator 可以出現在任何 expression 允許出現的地方），這正是「不用猜語法位置」這條設計原則帶來的簡化——helper 完全不需要知道自己被放在哪裡。
+
+**args 全部是字面上的 `"data"`**：10 個站點原本都用 `FormatFuncName` 的預設 `appendparameter=true`（固定補 `"(data)"`），沒有一個站點用其他參數名。
+
+### 3. `FormatFuncName` 其餘 21 個呼叫點的驗證，及 `[Obsolete]` 判斷
+
+`FormatFuncName` 目前在整個 repo（`bin`/`obj` 除外）共有 **21 個非註解的真實呼叫點**（用 `grep -rn "FormatFuncName(" --include="*.cs" . | grep -v '/bin/\|/obj/'` 核對過，只有這 21 行是活的呼叫，另有數行是註解文字提及 `FormatFuncName` 但不是呼叫）。上表 10 個已切換到 `FormatFuncInvocation`；剩下 **11 個**維持呼叫 `FormatFuncName`，逐一核對用途：
+
+| 檔案:行 | 用途 |
+|---|---|
+| `BaseElementTag.cs:321`（`EmitFormChangeWiring`） | 決策輸入——算出 `changeFuncName` 餵給 `_changeFuncIdentifierRegex.IsMatch(...)`，決定 `useIsland` |
+| `BaseElementTag.cs:370`（`EmitAutocompleteWiring`） | 同上 |
+| `ComboBoxTagHelper.cs:129` | HTML 屬性——`output.Attributes.Add("wtm-cf", ...)`，寫進 data attribute，不是可執行 JS |
+| `ComboBoxTagHelper.cs:321` | 決策輸入——`changeIsIdentifier` 判斷，驅動 `useSelectIsland` |
+| `TreeTagHelper.cs:236` | 決策輸入——同上（Tree 版） |
+| `TreeContainerTagHelper.cs:130` | 決策輸入——`clickIsIdentifier` 判斷，驅動 `useTreeContainerIsland` |
+| `ColorPicker.cs:171` | 決策輸入——`changeIsIdentifier` 判斷，驅動 `useColorIsland`；同一個截斷後的 bare name 之後也被放進 island DTO 的 `ChangeFn` 欄位（JSON 資料，不是內嵌 JS） |
+| `TransferTagHelper.cs:262` | 決策輸入——同上（Transfer 版）；Transfer 自己的合法 JS 內插站點（`TransferTagHelper.cs:341`）在 part (A) 已經改成直接包裝**原始** `ChangeFunc`（`({ChangeFunc})(data, index,transferIns);`），根本不經過 `FormatFuncName`，所以不在本次 10 站點清單內 |
+| `TextBoxTagHelper.cs:98` | 決策輸入——`changeFuncName`／`changeIsIdentifier`，驅動要不要走 island |
+| `TextBoxTagHelper.cs:99` | 決策輸入——`doneFuncName`／`doneIsIdentifier`，同上 |
+| `CheckBoxTagHelper.cs:199` | HTML 屬性——`output.Attributes.Add("wtm-cf", ...)`，同 ComboBox |
+
+任務原始清單列的 11 個站點（`BaseElementTag.cs:265`/`:314`、`ComboBoxTagHelper.cs:129`/`:321`、`TreeTagHelper.cs:236`、`TreeContainerTagHelper.cs:130`、`ColorPicker.cs:171`、`TransferTagHelper.cs:262`、`TextBoxTagHelper.cs:98`/`:99`、`CheckBoxTagHelper.cs:199`）是舊行號（`FormatFuncInvocation` 加入後整個檔案位移），用語意重新定位後**逐一核對一致**——同一組 11 個呼叫點，只是行號因為新增了 `FormatFuncInvocation` 方法本體而往下移動（例如 `BaseElementTag.cs:265`→現在的 `:321`）。
+
+**重要發現：`TextBoxTagHelper.cs` 的 `oninput`/`onchange` HTML 屬性寫入（`:105`/`:109`）不在 `FormatFuncName` 的 21 個呼叫點內，但用的是同一個已截斷字串**——`changeFuncName`/`doneFuncName`（`:98`/`:99` 算出）稍後被手動接上 `(this.value)`：`output.Attributes.Add("oninput", $"{changeFuncName}(this.value)")`。這是同一個缺陷類別在第三個地方的變體，但**本次刻意不切換**：只有在 `!changeIsIdentifier` 時才會走到這行，而 `FormatFuncName` 對函式字面量 `"function(v){...}"` 的截斷結果剛好是 `"function"`——通過 identifier regex，所以函式字面量根本走不到這個屬性寫入分支（走的是 island 分支，`ChangeFunc="function"`，client 端解析不到這個名字，靜默跳過，不是 SyntaxError）。唯一會走到這個屬性分支的是「截斷後仍非 identifier」的形狀（例如 dotted `a.b.foo` 或以 `(` 開頭的 arrow function），這些形狀目前產生的屬性值（`a.b.foo(this.value)`、`(v)=>{...}(this.value)`）本身另有語法風險（後者的匿名 arrow function 直接呼叫語法本身可能不合法），但這是一個**與本次 10 個站點不同、需要另開 issue 追蹤的缺陷**——本次判斷任務指示明確列出的清單已經涵蓋且核對過的 11 個屬於「決策輸入或 HTML 屬性」，`oninput`/`onchange` 這兩行不在該清單內，也不在本次修復範圍，不擴大改動面。
+
+**`[Obsolete]` 判斷：不標記。** 上述 11 個呼叫點裡，除了 2 個純 HTML 屬性寫入（`wtm-cf`）外，其餘 9 個全部把 `FormatFuncName` 的截斷輸出當作 identifier 分類的輸入，直接驅動 `useIsland`/`useSelectIsland`/`useTreeContainerIsland`/`useColorIsland` 這些 3-way 決策的走向——這些呼叫點在可預見的未來都還需要「truncate-then-classify」這個行為本身，`FormatFuncInvocation` 完全不能取代它們（`FormatFuncInvocation` 故意不截斷，用在決策輸入上會讓「是不是 identifier」這個問題失去意義）。沒有證據顯示這 11 個呼叫點裡有任何一個是可以刪除或遷移的死碼。
+
+### 4. `changeIsIdentifier` 類決策未變
+
+逐一核對：10 個切換站點全部只動了「已經被某個既有分支選中之後、放在該分支哪個位置的文字」，沒有一個站點的**分支選擇本身**被觸碰——
+
+- `EmitFormChangeWiring`/`EmitAutocompleteWiring` 的 `useIsland` 判斷式（`isIdentifier`）完全不變，只是 `else`（legacy inline script）分支內、被寫進 `<script>` 的那行文字從 `FormatFuncName(changeFunc)` 換成 `FormatFuncInvocation(changeFunc)`。
+- `TreeTagHelper`/`ComboBoxTagHelper` 的 `useSelectIsland`/`changeIsIdentifier` 判斷式完全不變；`if (X != false)` 與 `on:function(data){{X}}` 兩處的 `X` 只是文字形狀變了。
+- `ColorPicker` 的 `useColorIsland`/`changeIsIdentifier` 判斷式完全不變；只有 `else`（legacy）分支內 `done:` callback 的那行文字變了。
+- `TreeContainerTagHelper`/`SelectorTagHelper` 完全沒有走到任何 `IsIdentifier` 判斷（`ClickFunc`/`BeforeOnpenDialogFunc` 不受 island flag 影響，一律走這條路徑）。
+
+**沒有任何一個 island/legacy 選擇、任何一個 `console.warn` 觸發條件、任何一個 `required` 驗證時機被改變**——這正是任務指示要求「若會翻轉就停下回報」的紅線；本次確認未翻轉，全套件（5092 測試，含 5 個既有斷言的 byte-shape 更新）全綠佐證。
+
+### 5. 測試
+
+新增 `test/WalkingTec.Mvvm.Core.Test/TagHelpers/FormatFuncInvocation999BTests.cs`，18 個測試：
+
+- **10 個函式字面量測試**（每個切換站點各一個）——渲染真實 TagHelper、抽出實際輸出的 `<script>` block、餵給 Acornima 解析。
+- **3 個 arrow function 測試**（`CheckBoxTagHelper`、`TreeTagHelper`/`ComboBoxTagHelper` 的 `if (X != false)` 分支）。
+- **2 個 plain identifier 行為保留測試**（`CheckBoxTagHelper`、`TreeTagHelper` 的 `if` 分支）——斷言 `(myFunc)(data)` 這個新形狀，證明語意與舊的 `myFunc(data)` 完全等價。
+- **3 個 dotted member `this`-binding 保留測試**（`CheckBoxTagHelper`、`TreeTagHelper` 的 `if` 分支、`ColorPicker`）——斷言完整 dotted 表達式被整個包在括號內、呼叫參數在括號外（例如 `(ns999.obj.doThing)(data);`），這個文字形狀正是保證 `this` 綁定不變的關鍵（grouping operator 不會剝離 `MemberExpression` 產生的 Reference）。
+
+**RED-before-fix（逐字擷取，18/18 全紅，先跑此檔再改 source）**：
+
+```
+Failed CheckBox_ChangeFunc_FunctionLiteral_ParsesAsValidJavaScript
+Failed CheckBox_ChangeFunc_ArrowFunction_ParsesAsValidJavaScript
+Failed CheckBox_ChangeFunc_PlainIdentifier_StillCallsThroughUnchanged
+Failed CheckBox_ChangeFunc_DottedMember_PreservesThisBindingShape
+Failed TextBox_ChangeFunc_WithTriggerUrl_FunctionLiteral_ParsesAsValidJavaScript
+Failed TextBox_ChangeFunc_NoTriggerUrl_FunctionLiteral_ParsesAsValidJavaScript
+Failed TreeContainer_ClickFunc_FunctionLiteral_ParsesAsValidJavaScript
+Failed Selector_BeforeOnpenDialogFunc_FunctionLiteral_ParsesAsValidJavaScript
+Failed Tree_ChangeFunc_WithLink_FunctionLiteral_ParsesAsValidJavaScript
+Failed Tree_ChangeFunc_WithLink_ArrowFunction_ParsesAsValidJavaScript
+Failed Tree_ChangeFunc_WithLink_PlainIdentifier_StillCallsThroughUnchanged
+Failed Tree_ChangeFunc_WithLink_DottedMember_PreservesThisBindingShape
+Failed Tree_ChangeFunc_NoLink_FunctionLiteral_ParsesAsValidJavaScript
+Failed ComboBox_ChangeFunc_WithLink_FunctionLiteral_ParsesAsValidJavaScript
+Failed ComboBox_ChangeFunc_WithLink_ArrowFunction_ParsesAsValidJavaScript
+Failed ComboBox_ChangeFunc_NoLink_FunctionLiteral_ParsesAsValidJavaScript
+Failed ColorPicker_ChangeFunc_FunctionLiteral_ParsesAsValidJavaScript
+Failed ColorPicker_ChangeFunc_DottedMember_PreservesThisBindingShape
+
+Failed! - Failed: 18, Passed: 0, Skipped: 0, Total: 18
+```
+
+三個代表性失敗訊息，逐字擷取，證明截斷確實發生（不是巧合性的其他失敗）：
+
+```
+Failed CheckBox_ChangeFunc_FunctionLiteral_ParsesAsValidJavaScript
+StringAssert.Contains failed. String '
+ cb999_litdefaultvalues = ["System.Collections.Generic.List`1[System.String]"];
+' does not contain string 'OpenDialog'.
+```
+
+```
+Failed Selector_BeforeOnpenDialogFunc_FunctionLiteral_ParsesAsValidJavaScript
+StringAssert.Contains failed. String '
+var sel999_litfilter = {};
+$('#sel999_lit_Select').on('click',function(){
+  var data={};function(data);
+  ...
+' does not contain string 'SelectorBeforeOpen999B'.
+```
+
+`Selector` 這個失敗訊息本身就是最直接的證據——`function(data){ff.OpenDialog(...)}` 這整個函式本體（含標記字串 `SelectorBeforeOpen999B`）在截斷後完全消失，只剩下 `function(data);`，與 issue 描述的 `function(v){...}` → `function(data)` 分毫不差。
+
+```
+Failed ComboBox_ChangeFunc_WithLink_ArrowFunction_ParsesAsValidJavaScript
+Assert.Fail failed. ComboBoxTagHelper's if (ChangeFunc != false) link-chain gate, arrow-function
+ChangeFunc emitted a <script> block that is not valid JavaScript ...
+Parser error: Unexpected token '(' (43:102)
+```
+
+**GREEN-after-fix**：套用 10 個站點的修改後，同一批 18 個測試 **18/18 全綠**。全套件（`dotnet test test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj -c Debug -m:1`）**5092 passed, 0 failed**（`-m:1` 依循 `.claude/rules`/`#902` 序列化 testhost 避免 OOM 的既有慣例）。
+
+**既有測試的連帶修正（誠實揭露這不是零成本的加括號）**：`test/WalkingTec.Mvvm.Core.Test/TagHelpers/ResidualEmitters784BaseElementTests.cs` 有 5 個既有斷言釘死了修復前**沒有括號**的確切子字串——`"myCheckChange(data);"`（CheckBox flag-off）、`"obj.myCheckChange(data);"`（CheckBox flag-on 非-identifier）、`"mySwitchChange(data);"`（Switch flag-off）、`"myRadioChange(data);"`（Radio flag-off）、`"obj.myTextChange(data);"`（TextBox flag-on 非-identifier）。全部改成加括號後的形狀（例如 `"(myCheckChange)(data);"`），並在旁加註解說明原因，同 part (A) 對 `RenderGridIsland470SliceO1Tests.cs`/`RenderTransferIsland470SliceKTests.cs` 的處理方式。用 `grep -rnE '"[A-Za-z_$][A-Za-z0-9_$.]*\(data\)' test/` 對整個 `test/` 目錄掃過一輪這個形狀，確認這 5 行是**唯一**受影響的既有斷言，沒有第 6 個遺漏（`ColorPickerTagHelperTests.cs`/`RenderSelectIsland470SliceJTests.cs`/`RenderTreeContainerIsland470SliceN1Tests.cs` 裡雖然也有斷言 ChangeFunc/ClickFunc 的原始值字串如 `"some.dotted.expr"`，但都只斷言**不含呼叫括號**的裸子字串，加括號後仍然包含該子字串，不受影響）。
+
+### 6. 站點計數核對——訂正 part (A) commit message 裡的「12」
+
+part (A) 的 commit message 寫「FormatFuncName sites (12)」。本次不信任這個數字，重新從目前的樹逐行核對：
+
+```bash
+grep -rn "FormatFuncName(" --include="*.cs" . | grep -v '/bin/\|/obj/'
+```
+
+整個 repo（含 `test/`，排除 `bin`/`obj`）共 34 行提及 `FormatFuncName`，其中：**21 行是真實、非註解的呼叫**（含方法定義本身之外的呼叫點），其餘是註解或方法簽章本身。21 個呼叫點裡：**10 個是本次切換的 emission 站點，11 個是決策輸入/HTML 屬性站點**。
+
+part (A) 估計的「12」比實際的「10」多 2——多出的 2 個是 `BaseElementTag.cs:166`/`:182`，位於一整段 `//` 註解掉的 `ComboBoxTagHelper` `LinkField`/`TriggerUrl` `form.on(...)` 區塊裡（`BaseElementTag.cs:150-189` 的 `case ComboBoxTagHelper item:` 分支，除了 `if(item.MultiSelect == true){break;}` 這行是活的，其餘全部被註解掉，不編譯、不執行）。這兩行**不是活的缺陷**——它們不會產生任何輸出，也不可能觸發 SyntaxError，因為它們根本不會被執行。part (A) 當時窮舉時很可能是連同註解文字一起數的，這是可以理解的（早期審計常見的過度計數，而非低估），但本次既然被要求「re-derive, don't trust」，就把這個訂正明確寫下來。
+
+**修訂後的 #999 總帳**：#999 原始估計的 22 個站點（10 raw + 12 truncation），扣掉 2 個死碼「站點」，實際活的缺陷母體是 **20 個**（10 raw-interpolation + 10 `FormatFuncName`-truncation）。目前狀態：
+
+| 分類 | 母體 | 已修 | 修復者 |
+|---|---|---|---|
+| raw interpolation | 10 | 10 | #965（1 個）+ part (A)/#1003（9 個） |
+| `FormatFuncName` truncation | 10 | 10 | part (B)（本次，10 個） |
+| **合計** | **20** | **20** | |
+
+**這個「20/20」的完整性宣稱，其驗證邊界要誠實劃清**：raw-interpolation 那一半的「10 個母體、9+1 已修」是 part (A) 自己的重新推導結果，本次工作階段**沒有**重新獨立核對（沒有重跑 part (A) 當時用來窮舉 raw interpolation 站點的方法）；`FormatFuncName`-truncation 那一半的「10 個母體、10/10 已修」則是本次工作階段獨立重新推導、並用上方可重跑的 `grep` 指令驗證過的。換句話說：「`FormatFuncName` 這一半已經 100% 修完」是本次驗證過的宣稱；「#999 整體 20/20 已經 100% 修完」則有一半是信任 part (A) 既有工作，不是本次重新證明。
+
+### 可重跑的盤點指令
+
+```bash
+# 21 個真實呼叫點（10 emission + 11 decision-input/attribute）
+grep -rn "FormatFuncName(" --include="*.cs" . | grep -v '/bin/\|/obj/' | grep -v "public string FormatFuncName"
+
+# 新 helper 的 10 個呼叫點
+grep -rn "FormatFuncInvocation(" --include="*.cs" src/ | grep -v "public static string FormatFuncInvocation"
+
+find . -name 'demo.db*' -path '*bin*' -delete
+dotnet test test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj -c Debug \
+  --filter "FullyQualifiedName~FormatFuncInvocation999BTests"
+
+# mutant patch 逐檔核對（68/68 apply 乾淨，0 orphan）
+python3 scripts/check-mutant-entries-parse.py
+```
+
+### Mutant：考慮過，不新增
+
+理由與 #965、part (A) 完全一致：這是 JS 解析正確性修復，不是傳統意義的安全漏洞（無未授權存取、injection、跨租戶、憑證外洩維度）；`run_mutant.py` 的 `VALID_KINDS`（`security`/`selftest`）沒有適合這個類別的 kind，硬塞成 `security` 只會重複 #970/#968 已經吸收過的 kind 分類漂移。回歸保護已經是 CI 強制的：10 個切換站點裡任何一個被意外還原成 `FormatFuncName`，`FormatFuncInvocation999BTests.cs` 裡對應的函式字面量測試就會變紅（上方 RED-before-fix 逐字輸出就是這個機制本身的決定性重現，不是推論）。
+
+### 未能驗證的部分（誠實列出）
+
+本次工作階段 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test` 這兩層，沒有另外起 demo app 手動驗證瀏覽器端行為（純 C# 字串輸出＋ JS parser 靜態驗證，沒有執行 JS，也沒有覆蓋 `js-test`/`e2e` 兩個 CI leg）。`TextBoxTagHelper.cs:105`/`:109` 的 `oninput`/`onchange` HTML 屬性寫入（同一缺陷類別的第三個變體，見上方第 3 節）本次刻意不動、也沒有另開 issue——僅在本文件與 CHANGELOG 記錄觀察到的現象，尚未建立追蹤票。raw-interpolation 那一半（part A 的 9+1 個站點）的母體重新推導本次沒有重跑，完整性宣稱的驗證邊界見上方第 6 節。
+
+---
+
 ## `FileAttachmentSaveChangesGuard.BuildMap` 沒驗證 `fk.PrincipalKey`，Guid 替代鍵造成假允許與假拒絕（#985，cross-vendor review of #824 Part 2，2026-08-02）
 
 **缺陷（設計 gate 已裁定，本節只記錄裁定內容與驗證過程，不重新開放討論）**：`BuildMap`（`FileAttachmentSaveChangesGuard.cs:317` 附近）只用關聯**形狀**辨識候選 FK——principal 是 `FileAttachment` 或其衍生型別（`DCExtension.IsFileAttachmentPrincipal`）——通過後就只保留依賴端屬性名稱與 principal 的 CLR 型別，**完全丟棄 `fk.PrincipalKey`**。下游解析查詢（`DCExtension.ResolveFileAttachmentIds`/`-Async`，`DCExtension.FileAttachmentResolution.cs:72`/`:114`）卻寫死 `x.ID`。對一個透過 `HasForeignKey(...).HasPrincipalKey(x => x.SomeGuidAlternateKey)` 設定、principal key 是 Guid 型別替代鍵的關聯，這個落差同時產生兩個方向的錯誤：

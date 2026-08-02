@@ -475,7 +475,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
 <script>
 var {Id}filter = {{}};
 $('#{Id}_Select').on('click',function(){{
-  {(string.IsNullOrEmpty(BeforeOnpenDialogFunc) == true ? "" : "var data={};" + FormatFuncName(BeforeOnpenDialogFunc) + ";")}
+  {(string.IsNullOrEmpty(BeforeOnpenDialogFunc) == true ? "" : "var data={};" + FormatFuncInvocation(BeforeOnpenDialogFunc) + ";")}
   var filter = {LayuiIslandJson.Serialize(Filter)};
   var vals = $('#{Id}_Container input[type=hidden]');
   filter.Ids = [];

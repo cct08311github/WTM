@@ -288,7 +288,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     {(prec == "" ?"":$",colors: [{prec}]")}
     ,done: function(data){{
       $('#{Id}').val(data);
-        {FormatFuncName(ChangeFunc)};
+        {FormatFuncInvocation(ChangeFunc)};
     }}
   }});
 }});</script>
