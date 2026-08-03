@@ -57,7 +57,7 @@ incident: #1000 inserted a `LogPrincipalKeyRejection(...)` call between the reje
 fixed context of test/mutants/patches/fileattachmentguard985-principal-key-check-
 neutralize.patch, a patch #985 itself shipped to pin its own fix. `git apply --check`
 on #985 alone succeeds; on #985 + #1000 together it fails with "patch does not
-apply". Neither PR's own CI could see this: this repo's Gitea PR CI checks out
+apply". Neither PR's own CI could see this: this repo's internal infrastructure PR CI checks out
 `refs/pull/N/head` for the `pull_request` event -- never a merge ref, the opposite of
 GitHub (docs/ci-operations.md, "actions/checkout@v5 在 pull_request 事件只 checkout PR
 自己的 head, 不是 base+head 的 merge") -- so no CI run for either PR ever has both
@@ -86,7 +86,7 @@ it, and catches the SINGLE-BRANCH case -- a PR whose own commits break one of it
 patches' fixed context -- outright, before any expensive build runs. It does NOT
 catch, and structurally cannot catch, the CROSS-BRANCH case that produced #1005
 itself: two PRs each green alone, whose trees are never checked out together by any CI
-run before they are merged. That gap is a property of this repo's Gitea PR-CI
+run before they are merged. That gap is a property of this repo's internal infrastructure PR-CI
 checkout model (no run ever sees two open PRs' trees at once), not something a script
 running inside one PR's own job can close. It DOES fully close the gap on `push` to
 dotnet10 (post-merge, full tree, no other open PR to be blind to) and on every PR that
@@ -552,7 +552,7 @@ def main(argv: list[str]) -> int:
                 "its entry is selected, failing the mutation-gate "
                 "'mutants'/'meta-selftest' job. The most common cause (issue #1005): "
                 "an unrelated commit -- often from another PR whose own CI could not "
-                "see this patch at all, since Gitea PR CI checks out "
+                "see this patch at all, since internal infrastructure PR CI checks out "
                 "refs/pull/N/head, never a merge ref (docs/ci-operations.md) -- "
                 "edited a line INSIDE one of these patches' fixed context. "
                 "Regenerate the patch(es) named above against the current tree.",

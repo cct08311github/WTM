@@ -18,8 +18,8 @@
     <PackageIcon>icon.png</PackageIcon>
     <!-- Issue #678: PackageReadmeFile shown on the NuGet package details page. -->
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <RepositoryUrl>https://mac-mini.tailde842d.ts.net/chiu0831/WTM</RepositoryUrl>
-    <PackageProjectUrl>https://mac-mini.tailde842d.ts.net/chiu0831/WTM</PackageProjectUrl>
+    <RepositoryUrl>https://internal.registry.invalid/chiu0831/WTM</RepositoryUrl>
+    <PackageProjectUrl>https://internal.registry.invalid/chiu0831/WTM</PackageProjectUrl>
     <PackageTags>aspnetcore, mvc, mvvm, layui, wtm</PackageTags>
     <!-- Issue #678: point at this fork's own CHANGELOG, not upstream's walkingtec.cn/QQ contacts. -->
     <PackageReleaseNotes>Changelog: $(RepositoryUrl)/raw/branch/dotnet10/CHANGELOG.md</PackageReleaseNotes>
@@ -37,7 +37,7 @@
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <!-- Gitea Actions runners (act_runner) execute GitHub-Actions-compatible workflow
+    <!-- internal CI runners (act_runner) execute GitHub-Actions-compatible workflow
          files (.github/workflows/*.yml) and set GITHUB_ACTIONS=true, same as GitHub's
          own runners; CI also sets the generic CI=true. Deterministic builds are gated to
          CI only so local `dotnet pack` for manual testing keeps prior (non-CI) PDB paths. -->
@@ -59,13 +59,13 @@
     <None Include="$(MSBuildThisFileDirectory)nuget-README.md" Pack="true" PackagePath="README.md" Visible="false" />
   </ItemGroup>
 
-  <!-- Issue #678: Gitea SourceLink provider — self-hosted origin needs the host mapped
+  <!-- Issue #678: internal infrastructure SourceLink provider — self-hosted origin needs the host mapped
        explicitly (the GitHub/GitLab providers URL-map differently and would embed wrong
        source-server links in the PDB). PrivateAssets=All: build-time only, never flows
        to consumers of the package. -->
   <ItemGroup>
     <PackageReference Include="Microsoft.SourceLink.Gitea" PrivateAssets="All" />
-    <SourceLinkGiteaHost Include="mac-mini.tailde842d.ts.net" ContentUrl="https://mac-mini.tailde842d.ts.net" />
+    <SourceLinkGiteaHost Include="internal.registry.invalid" ContentUrl="https://internal.registry.invalid" />
   </ItemGroup>
 
   <!--

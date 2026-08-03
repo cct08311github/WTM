@@ -42,7 +42,7 @@ on:
 #
 # The first fix attempt was `strategy.matrix.max-parallel: 1` on the single matrixed job.
 # It had NO effect: a live re-run still started all three legs' containers within 6 seconds
-# of each other. This is a known upstream Gitea Actions gap, not a config mistake —
+# of each other. This is a known upstream internal CI gap, not a config mistake —
 # go-gitea/gitea#35561 ("Cannot make steps run sequentially with matrix and
 # max-parallel = 1"). `needs:` is a basic job-dependency-graph feature already used
 # elsewhere in this repo's own workflows (ci-build.yml's security-scan needs

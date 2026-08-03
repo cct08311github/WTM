@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """CI guard + inventory tool: every `run:` step and every `uses:` step across this
-repo's GitHub/Gitea Actions workflows must declare its own `timeout-minutes:`.
+repo's GitHub/internal CI workflows must declare its own `timeout-minutes:`.
 
 WHY (issue #926 cross-vendor review, finding #7): a prior version of this repo's
 timeout work claimed "64 real-work steps checked, 13 documented exemptions, 0

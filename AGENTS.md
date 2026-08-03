@@ -9,7 +9,7 @@ docs live in `docs/` — this file is the entry point.
 Personal fork of WalkingTec MVVM Framework (WTM), taken over 2026-03.
 Goal: **stable, modernized, actively-evolved** .NET rapid-development framework.
 Current phase: **Feature growth on solid ground** — security audit cleared (10.2.0), Clean Architecture (10.1.0), and 10.4.0/10.5.0 added 20+ opt-in middleware + BI extensions; now iterating on observability, BI, and ETL.
-Active branch: `dotnet10`. Origin: Gitea (`mac-mini.tailde842d.ts.net/chiu0831/WTM.git`) — sole authoritative remote. NuGet publishes go to Gitea's NuGet registry (`/api/packages/chiu0831/nuget`). The same `dotnet10` branch is also published to a sanitized public GitHub mirror (`github.com/cct08311github/WTM`), synced daily from Gitea since 2026-05-23 via the `.sync/` mechanism (see `.sync/README.md`, the authoritative description), so external users can install via GitHub Packages. The `/sync-dependabot` and `/sync-github-security` slash commands serve that mirror's maintenance — Gitea is always the source of truth and we never merge on GitHub directly.
+Active branch: `dotnet10`. Origin: internal infrastructure (`internal.registry.invalid/chiu0831/WTM.git`) — sole authoritative remote. NuGet publishes go to internal infrastructure's NuGet registry (`/api/packages/chiu0831/nuget`). The same `dotnet10` branch is also published to a sanitized public GitHub mirror (`github.com/cct08311github/WTM`), synced daily from internal infrastructure since 2026-05-23 via the `.sync/` mechanism (see `.sync/README.md`, the authoritative description), so external users can install via GitHub Packages. The `/sync-dependabot` and `/sync-github-security` slash commands serve that mirror's maintenance — internal infrastructure is always the source of truth and we never merge on GitHub directly.
 
 ## Decision Priorities (in order)
 
@@ -52,7 +52,7 @@ dotnet test test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj \
   --filter "FullyQualifiedName~AnalysisControllerTests" -c Release
 ```
 
-> First-time setup: `dotnet restore` requires the Gitea NuGet source configured —
+> First-time setup: `dotnet restore` requires the internal NuGet source configured —
 > see `README.md` § Quick Start step 1, or `docs/gitea-packages.md`.
 
 No single consolidated command reference exists. The daily-loop commands are above;
@@ -62,7 +62,7 @@ full local build/test/e2e/vulnerability-scan reproduction is in `docs/ci-operati
 
 ## CI Status Caveat
 
-`actions/upload-artifact@v4` is incompatible with the local Gitea Actions API.
+`actions/upload-artifact@v4` is incompatible with the local internal CI API.
 `build-and-test` and `e2e` jobs can finish with `conclusion: failure` even when tests passed.
 **Always verify by reading the log:** look for `Test Run Successful` (.NET) and, for e2e,
 `FAIL: 0 | ERROR: 0` in the `Total: N | PASS: n | FAIL: 0 | ERROR: 0 | SKIP: n` summary line —
@@ -75,8 +75,8 @@ Detail + workaround SOP → `docs/ci-operations.md`. Tracking: Issue #11.
 
 - `/wtm-release-check` — BLOCKING gate before any release (build + test + LOCAL vuln scan)
 - `/wtm-manual-update` — Updates `docs/wtm-developer-manual.md` for the version
-- `/sync-dependabot` — Validates Dependabot PRs opened on the GitHub mirror and ports them to Gitea (never merged on GitHub directly)
-- `/sync-github-security` — Triages GitHub mirror Security tab alerts (Dependabot CVEs / CodeQL / secrets) and ports fixes to Gitea
+- `/sync-dependabot` — Validates Dependabot PRs opened on the GitHub mirror and ports them to internal infrastructure (never merged on GitHub directly)
+- `/sync-github-security` — Triages GitHub mirror Security tab alerts (Dependabot CVEs / CodeQL / secrets) and ports fixes to internal infrastructure
 
 ### Documented workflows (not slash commands)
 
@@ -97,7 +97,7 @@ These are one-liners kept as documented steps rather than command files:
 | `docs/analysis-mode.md` | Analysis Mode manual |
 | `docs/lookup-cache.md` | Lookup Cache manual |
 | `docs/production-readiness.md` | Prod-readiness scorecard (PR #17) |
-| `docs/ci-operations.md` | Gitea Actions CI quirks + SOP (PR #17) |
+| `docs/ci-operations.md` | internal CI CI quirks + SOP (PR #17) |
 
 ## Detailed Rules (`.claude/rules/`)
 
@@ -131,7 +131,7 @@ yet:
   pitfalls as a dedicated collection; that knowledge is undocumented.
 - **`workflow.md`** — never created. Branch strategy / commit message
   format / PR checklist / Issue-reference conventions are the operator's
-  own Gitea workflow, not repo content, so there is nothing to redirect
+  own internal infrastructure workflow, not repo content, so there is nothing to redirect
   to here; `release-changelog.md`'s commit-scope list is the only
   in-repo overlap.
 - **`tools-commands.md`** — never created. Commands are scattered across

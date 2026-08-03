@@ -19,7 +19,7 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers;
 /// Issue #470 Slice O2: opt-in (WtmUIOptions.UseSelectIslandRender, default OFF —
 /// the SAME flag Slices J-O1 use) eval-free grid toolbar/row-button descriptor +
 /// tool dispatch, completing the toolbar/row-button islandification O1 deferred
-/// (invariant 7). Design authority: Gitea issue #470 comment 18118 ("Slice O
+/// (invariant 7). Design authority: internal infrastructure issue #470 comment 18118 ("Slice O
 /// design brief", §2 O2).
 ///
 /// Reuses the SAME <c>CreateHelper</c>/<c>MakeContext</c>/<c>MakeOutput</c>/

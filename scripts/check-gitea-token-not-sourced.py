@@ -6,16 +6,16 @@ outside of a backtick-delimited inline code span.
 WHY: sourcing a bare-token file makes the shell execute the token as a
 command; the resulting "command not found: <token>" prints the plaintext
 token to stdout/CI logs. That is how a token leaked on 2026-07-11. Every site
-that reads ~/.gitea-token must extract it with scripts/resolve-gitea-token.py
+that reads .local-token-file must extract it with scripts/resolve-gitea-token.py
 (grep-based, never `source`s the file) instead.
 
 RULE: for each tracked file, for each line, strip every backtick-delimited
 inline code span (`` `...` ``), then check the remainder for `source` (as a
 whole word) or a standalone `.` (surrounded by whitespace/line-boundaries, so
-it can't match the dot inside "~/.gitea-token" itself) followed by whitespace
+it can't match the dot inside ".local-token-file" itself) followed by whitespace
 and a token containing "gitea-token". There is no path-based exception -- an
 earlier version of this guard exempted two specific docs by file path, which
-was a blind spot: a real `source ~/.gitea-token` added to either file later
+was a blind spot: a real `source .local-token-file` added to either file later
 would never be scanned again, and neither file's PR would trigger ci-build.yml
 either (paths-ignore covers .claude/**). Requiring backticks instead makes the
 exemption apply uniformly, including to files that don't exist yet: wrap the
@@ -30,7 +30,7 @@ gitea-token path in any surrounding text -- start of line, after `;`/`&&`/a
 keyword, inside a `bash -c '...'` string, inside a YAML `run:` step, inside a
 comment in any language -- as long as it is not wrapped in backticks. It does
 NOT catch indirection: a path held in a variable
-(`f=~/.gitea-token; source "$f"`), a shell alias, string concatenation, or a
+(`f=.local-token-file; source "$f"`), a shell alias, string concatenation, or a
 command name assembled at runtime. Closing that gap needs real shell parsing,
 out of scope for a repo-wide text lint. It also does not catch a *real*
 executing line that happens to be wrapped in backticks by mistake -- backticks

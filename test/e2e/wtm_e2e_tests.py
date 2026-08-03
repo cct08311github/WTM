@@ -93,7 +93,7 @@ KILLSWITCH_EXPECTED = os.environ.get("WTM_E2E_KILLSWITCH", "0").strip() == "1"
 # failure-only policy on the theory that "producing the image is the test's
 # purpose" — but no assertion in either TC actually consumes the image (TC-21's
 # verdict comes from the DOM asserts, TC-22's from the layout asserts), and CI
-# can't reliably hand them back anyway (`actions/upload-artifact@v4` vs Gitea's
+# can't reliably hand them back anyway (`actions/upload-artifact@v4` vs internal infrastructure's
 # GHES API, #11, continue-on-error). So they don't get an unconditional-by-default
 # pass; they're opt-in for a human doing a manual visual check.
 VISUAL_SNAPSHOTS = os.environ.get("WTM_E2E_VISUAL_SNAPSHOTS", "0").strip() == "1"
@@ -2141,8 +2141,8 @@ async def tc_29_etl_management(page, **_):
     PASS，另外兩次獨立冷啟動重跑（各自重新起 process）也都 PASS，加上同一個
     process 上連續熱重跑 3 次全部 PASS，累計 5/5。也用同一支已修好的 helper 額外
     測試過「EtlJob 先、RunLog 後」這個反過來的順序（見下方「執行順序」段落），
-    冷啟動照樣 PASS。**未能驗證**：這一輪修法尚未在真正的 Gitea Actions CI
-    上跑過（本次工作階段的 hard constraint 禁止任何 Gitea/GitHub API 呼叫、禁止開
+    冷啟動照樣 PASS。**未能驗證**：這一輪修法尚未在真正的 internal CI CI
+    上跑過（本次工作階段的 hard constraint 禁止任何 internal infrastructure/GitHub API 呼叫、禁止開
     PR），只在本機真實瀏覽器＋真實 demo process 上驗證過。
 
     執行順序（EtlRunLog 在前、EtlJob 在後）：#898 改寫時實測發現，在 #965 修好

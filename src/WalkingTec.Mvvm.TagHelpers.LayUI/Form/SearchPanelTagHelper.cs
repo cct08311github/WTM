@@ -186,7 +186,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             // ($(document).on('click myclick', 'a[IsSearchButton][data-wtm-search]', ...)
             // in framework_layui.js) plus a small 'searchPanelInit' JSON
             // island for the collapse/reset/IsExpanded pieces. Design
-            // authority: Gitea issue #470 comment 18118 §5 ("SearchPanel N2
+            // authority: internal infrastructure issue #470 comment 18118 §5 ("SearchPanel N2
             // co-design").
             //
             // Containment mirrors the legacy behaviour exactly (never a

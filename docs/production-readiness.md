@@ -34,8 +34,8 @@ WTM 設計為「快速 CRUD 開發框架」，**不**是高流量 SaaS 平台或
 - 單元測試：**~5,780 pass / 0 fail**（Core.Test ~4,313、WorkFlow.Test 564+23 skip、Etl.Test ~683+17 skip、Admin/Api/Mvc.Tests/S3.Test 等）— 較上一版評估的 1,647 增長約 3.5 倍
 - JS 測試：**~1,704 pass**（Jest + jsdom，涵蓋 framework_layui.js 的 island dispatch / kill-switch / sentinel-escape 路徑）
 - E2E 測試：**35 pass / 1 skip / 0 fail**（Playwright + Python，31→36 檢查；新增 JWT/combobox-cascade/selector/upload 流程 + **#627 kill-switch 專屬 CI matrix leg**）
-- CI（Gitea Actions）：build-and-test / js-test / e2e(baseline) / e2e(killswitch) / release-tooling-test / security-scan 全 green
-- **CI workflow step-level timeout 覆蓋（#926，2026-07-31 cross-vendor review，三輪更正）**：先前提交訊息宣稱「64 個 real-work step 已檢查、13 個已記錄例外、0 個未解釋缺口」，獨立覆核發現該分母排除了 27 個 `actions/checkout`/`actions/setup-*` 呼叫，是**挑出來讓宣稱成立的分母**，不是誠實計數。第一輪更正：改成誠實分母（每一個 `run:` step、每一個 `uses:` step，不篩選子集），但當時暫時排除 `publish-nuget.yml`（PR #937 正在重構它）。第二輪更正：稽核腳本 `scripts/audit-workflow-timeouts.py` 原本只是「可手動重跑」，未接進任何 CI 觸發點——已接進 `mutation-gate.yml` 的 `changes` job（唯一兩個 trigger 都沒有 path filter 的 job）。**第三輪更正**：#937 已合併（`3b894df80`），`publish-nuget.yml` 排除已解除——該檔案的最終形狀（29 個 real-work step：checkout/setup、6 個 Gitea pack、smoke test、vulnerability scan、GitHub mirror sync 全流程、兩次 `nuget push`）現在跟其他 6 個 workflow 檔案一視同仁，全部有自己的 timeout-minutes。**這一步本身修的是 cross-vendor review 的一個 HIGH finding**：#937 合併後，整個不可逆的發版 job 曾經完全沒有真正生效的 timeout（只有一個被此 runner 忽略的 job-level 值），一次 push 中途卡住會佔住 capacity-2 runner 兩個 slot 之一長達 Gitea 的 3 小時 `ENDLESS_TASK_TIMEOUT` 硬上限。兩個 `nuget push` step 的 timeout 刻意設得寬（Gitea 20 分鐘、GitHub Packages 25 分鐘）而非設成例外或砍緊：中途砍斷一次批次 push 不是零代價，但這兩個 push 之前各自的 `Verify version cohort not partially published` step 本來就是設計來偵測「上次留下的部分批次」並拒絕在髒狀態上繼續——放著不 bound 的確定代價（佔住 runner slot 3 小時）大於 bound 帶來的風險（一個已有復原機制的部分批次狀態）。現況：全部 7 個 workflow 檔案、**0 個檔案排除**，共 125 個 real-work step，125 個都有自己的 `timeout-minutes:`，0 個例外、0 個缺口，且這個檢查現在每次 PR 都由 `changes` job 重新驗證。全樹重新驗證（非只掃 `src/`）：`python3 scripts/audit-workflow-timeouts.py`。**已知、記錄在案、仍未修的缺口**（誠實揭露，不是「全部覆蓋」）：(1) `integration-test.yml` 的 `mssql` service container 由 runner 在任何 step 執行前拉取/啟動/health-check，任何 step-level timeout 都框不到這段——已於該檔案 `services:` 區塊上方註解記錄，判斷為文件化優於重構（見 docs/ci-operations.md 的 timeout-minutes 覆蓋率小節）；(2) ~~mutation-gate.yml 的 45-entry 安全 mutant 預算~~——**已由 #968 取代，見下方獨立條目**：45→61 entry 的第三次時間預算漂移，以及把「每次 PR 跑全部 entries」改成「per-entry relevance selection」的根因修法。這裡不再重複那個過時的 90 分鐘數字。
+- CI（internal CI）：build-and-test / js-test / e2e(baseline) / e2e(killswitch) / release-tooling-test / security-scan 全 green
+- **CI workflow step-level timeout 覆蓋（#926，2026-07-31 cross-vendor review，三輪更正）**：先前提交訊息宣稱「64 個 real-work step 已檢查、13 個已記錄例外、0 個未解釋缺口」，獨立覆核發現該分母排除了 27 個 `actions/checkout`/`actions/setup-*` 呼叫，是**挑出來讓宣稱成立的分母**，不是誠實計數。第一輪更正：改成誠實分母（每一個 `run:` step、每一個 `uses:` step，不篩選子集），但當時暫時排除 `publish-nuget.yml`（PR #937 正在重構它）。第二輪更正：稽核腳本 `scripts/audit-workflow-timeouts.py` 原本只是「可手動重跑」，未接進任何 CI 觸發點——已接進 `mutation-gate.yml` 的 `changes` job（唯一兩個 trigger 都沒有 path filter 的 job）。**第三輪更正**：#937 已合併（`3b894df80`），`publish-nuget.yml` 排除已解除——該檔案的最終形狀（29 個 real-work step：checkout/setup、6 個 internal infrastructure pack、smoke test、vulnerability scan、GitHub mirror sync 全流程、兩次 `nuget push`）現在跟其他 6 個 workflow 檔案一視同仁，全部有自己的 timeout-minutes。**這一步本身修的是 cross-vendor review 的一個 HIGH finding**：#937 合併後，整個不可逆的發版 job 曾經完全沒有真正生效的 timeout（只有一個被此 runner 忽略的 job-level 值），一次 push 中途卡住會佔住 capacity-2 runner 兩個 slot 之一長達 internal infrastructure 的 3 小時 `ENDLESS_TASK_TIMEOUT` 硬上限。兩個 `nuget push` step 的 timeout 刻意設得寬（internal infrastructure 20 分鐘、GitHub Packages 25 分鐘）而非設成例外或砍緊：中途砍斷一次批次 push 不是零代價，但這兩個 push 之前各自的 `Verify version cohort not partially published` step 本來就是設計來偵測「上次留下的部分批次」並拒絕在髒狀態上繼續——放著不 bound 的確定代價（佔住 runner slot 3 小時）大於 bound 帶來的風險（一個已有復原機制的部分批次狀態）。現況：全部 7 個 workflow 檔案、**0 個檔案排除**，共 125 個 real-work step，125 個都有自己的 `timeout-minutes:`，0 個例外、0 個缺口，且這個檢查現在每次 PR 都由 `changes` job 重新驗證。全樹重新驗證（非只掃 `src/`）：`python3 scripts/audit-workflow-timeouts.py`。**已知、記錄在案、仍未修的缺口**（誠實揭露，不是「全部覆蓋」）：(1) `integration-test.yml` 的 `mssql` service container 由 runner 在任何 step 執行前拉取/啟動/health-check，任何 step-level timeout 都框不到這段——已於該檔案 `services:` 區塊上方註解記錄，判斷為文件化優於重構（見 docs/ci-operations.md 的 timeout-minutes 覆蓋率小節）；(2) ~~mutation-gate.yml 的 45-entry 安全 mutant 預算~~——**已由 #968 取代，見下方獨立條目**：45→61 entry 的第三次時間預算漂移，以及把「每次 PR 跑全部 entries」改成「per-entry relevance selection」的根因修法。這裡不再重複那個過時的 90 分鐘數字。
 - **mutation-gate.yml 預算第三次漂移改為根因修復：per-entry selection 取代「每次 PR 跑全部 entries」（#968）**：`.github/workflows/mutation-gate.yml` 自己文件記錄的公式（`entries * 73s * 1.3 / 60 * 1.25`）原本是為 45 個 entry 推導的；`kind: security` entry 數量後來漲到 61（#970 的 `etl970-cancellation-classification-guard-neutralize` 是最後一個推手——一個 correctness-only mutant 因為 `run_mutant.py` 的 `VALID_KINDS` 只接受 `security`/`selftest` 兩種、`selftest` 保留給測 runner 自己，被迫標成 `security` 才能被 CI 強制執行），同一份公式算出來變成 ~119-121 分鐘，早已超過還沒改的 90 分鐘上限——這是「30-35 entries → 45 → 61」同一個漂移第三次發生，即使該 step 自己的註解白紙黑字寫著「Do not let this drift stale the way '30-35 entries' did」。**Part 1（機械式重算，已完成）**：61 entries 代入公式，`61 * 73s * 1.3 = 5788.9s ≈ 96.5 分鐘`，加 25% headroom 後 `≈ 120.6 分鐘`，無條件進位到 125 分鐘（step-level `timeout-minutes`）；job-level 維持「step + 10 分鐘 setup 緩衝」的既有比例，改為 135 分鐘。這個數字仍然是**靜態估計，不是量測到的 p95**——entry 數量或單一 entry 成本明顯變動時仍需重新推導，Part 1 本身不解決「每次都要有人手動重算」這個根因。
 
   **Part 2（根因修復：per-entry selection）**：`test/mutants/gate_lib.py` 新增 `select`/`select_relevant_entries`/`relevance_self_check`/`resolve_changed_files`/`reconcile`。`pull_request` 事件下，`mutants` job 不再跑全部 61 個 `kind: security` entry，改成只跑**這個 PR 的 diff 實際觸及**的 entry——`select_relevant_entries()` 完全建立在既有的 `is_change_relevant()` 之上（用單一 entry 的 list 呼叫它，只是把 target_file/test_source/test_project 三個分支的檢查範圍縮小到那一個 entry，ALWAYS_RELEVANT_* 分支維持對全部 entry 生效不變），**沒有第二套 relevance 邏輯**。`push` 事件（合併到 dotnet10 後的 post-merge backstop）**無條件**跑全部 61 個，不看 diff、不做任何 relevance 計算——`gate_lib.py select --event-name push` 這條分支完全不呼叫 `resolve_changed_files()`，字面意義上的「不 conditional 在任何東西上」。**這是刻意的取捨，不是「更快且覆蓋不變」**：單一 PR 自己的 mutation-gate 執行結果，現在只證明「這個 PR 的 diff 觸及的 entry 有被跑過」，不再證明「全部 61 個 entry 都被這個 PR 驗證過」——全 registry 覆蓋率移到每次合併到 dotnet10 才恢復，不是每個 PR 都有。這個 trade-off 明講在 `changes` job 自己的註解裡，不只寫在這份文件。
@@ -49,13 +49,13 @@ WTM 設計為「快速 CRUD 開發框架」，**不**是高流量 SaaS 平台或
 
   **根因**：#968 引進 per-entry selection 時，`changes` job 的 checkout 帶了 `fetch-depth: 0`；`mutants`／`meta-selftest` 兩個 job 的 checkout 從一開始就沒有帶，於是沿用 `actions/checkout@v5` 的預設值——shallow clone（`fetch-depth: 1`），PR 的 base commit 不在磁碟上。`changes` 與 `mutants` 兩個 job 各自獨立呼叫 `python3 test/mutants/gate_lib.py select --kind security`，帶的是**同一組** `BASE_SHA`／`HEAD_SHA` 環境變數——但 `select` 底層靠 `git diff --name-only base_sha head_sha`（`gate_lib.py` 的 `resolve_changed_files()`）把這兩個 SHA 解析成改動檔案清單，shallow clone 上這條 `git diff` 會直接失敗（`base_sha` 不可達）。`resolve_changed_files()` 把這個失敗接住、回傳 `None`；`select` 既有的 fail-open 規則（issue #855，#968 沿用至今）於是選出**整個** `kind='security'` 集合——不是因為 diff 算出來是空的，是因為 diff 根本算不出來。兩個 job 帶著一模一樣的 env var，卻踩在不一樣的 repository 狀態上：這份 workflow 檔案自己原本的註解「兩個 job 從 SAME event/SHA inputs 各自算出同一個選擇」只講對了一半——inputs 相同，checkout 深度不同，一樣會分岔。
 
-  **為什麼直到現在才被發現**：#998 之前的每一張 PR，要嘛動到 `test/mutants/**` 本身（`ALWAYS_RELEVANT_PREFIXES` 的一員——兩個 job 不管 checkout 深度都會選到全部，`changes` 的「正確全選」跟 `mutants` 的「fail-open 全選」剛好數字對得上，68 == 68），要嘛是純文件 PR（整個 job 被跳過，不會執行到 `select`）。PR #998（`aa4631179`）是第一張落在 **partial-selection**（#968 這個優化機制本來就是為了服務這種情況）的 PR：`changes`（full history）正確算出 30（`test/WalkingTec.Mvvm.Core.Test.csproj` 是 29 個 entry 的 `test_project`，那張 PR 剛好編輯了這個 `.csproj` 加一個測試專用套件參照，+1 是它改到的 `src/` 檔案）+ 6 個 selftest = 36；`mutants`（shallow，fail-open）執行了全部 68 個 security entry；`meta-selftest` 不受影響（`kind='selftest'` 從不被 relevance 篩選，一直是「無條件全選、無條件全執行」，所以它的 selected/executed 一直是 6/6，即使在 shallow clone 底下也一樣）；`gate` job 的 selected-vs-executed reconciliation 因此在 36 != 74（68 + 6）上失敗。**這裡引用的 #998 診斷數字（30/6/68 這幾個具體值）來自本票起手時已完成的既有診斷，非本次工作階段重新用 API 對過 PR #998 本身查證**——本工作階段的硬性限制禁止呼叫 Gitea/GitHub API，下面「本機驗證」段落列的才是本次獨立跑出來、可重現的證據。
+  **為什麼直到現在才被發現**：#998 之前的每一張 PR，要嘛動到 `test/mutants/**` 本身（`ALWAYS_RELEVANT_PREFIXES` 的一員——兩個 job 不管 checkout 深度都會選到全部，`changes` 的「正確全選」跟 `mutants` 的「fail-open 全選」剛好數字對得上，68 == 68），要嘛是純文件 PR（整個 job 被跳過，不會執行到 `select`）。PR #998（`aa4631179`）是第一張落在 **partial-selection**（#968 這個優化機制本來就是為了服務這種情況）的 PR：`changes`（full history）正確算出 30（`test/WalkingTec.Mvvm.Core.Test.csproj` 是 29 個 entry 的 `test_project`，那張 PR 剛好編輯了這個 `.csproj` 加一個測試專用套件參照，+1 是它改到的 `src/` 檔案）+ 6 個 selftest = 36；`mutants`（shallow，fail-open）執行了全部 68 個 security entry；`meta-selftest` 不受影響（`kind='selftest'` 從不被 relevance 篩選，一直是「無條件全選、無條件全執行」，所以它的 selected/executed 一直是 6/6，即使在 shallow clone 底下也一樣）；`gate` job 的 selected-vs-executed reconciliation 因此在 36 != 74（68 + 6）上失敗。**這裡引用的 #998 診斷數字（30/6/68 這幾個具體值）來自本票起手時已完成的既有診斷，非本次工作階段重新用 API 對過 PR #998 本身查證**——本工作階段的硬性限制禁止呼叫 internal infrastructure/GitHub API，下面「本機驗證」段落列的才是本次獨立跑出來、可重現的證據。
 
   **修法，兩部分**：(1) `mutants` job 的 checkout 加 `fetch-depth: 0`——這是真正修到的那個 bug。`meta-selftest` job 的 checkout 為了一致性同樣加了 `fetch-depth: 0`，但**誠實揭露：這個 job 本來就沒有被這個缺陷影響**——`kind='selftest'` 的 entry 從不被 relevance 篩選（永遠無條件全選），它自己的 selected/executed 對帳（6/6）在 shallow clone 底下也一直是對的；這一半是防禦性補強，不是修一個觀測到的真實缺陷。(2) `gate` job 的 selected-vs-executed reconciliation，原本是單純的 `!=`，現在改成不對稱：`executed < selected`（該跑的 entry 沒跑到）維持 hard fail——這是危險方向，也是這條檢查原本要擋的事；`executed > selected`（跑得比預期多）現在改成印出 `::warning::`（帶兩邊總數）後放行，不再失敗——這是安全方向，而且即使 fetch-depth 修好了，`select` 的 fail-open 規則仍然可能因為跟這次缺陷無關的其他理由觸發（暫時性的 git 錯誤、這份 workflow 沒完整涵蓋到的 event payload 形狀）——把安全方向也判定成失敗，等於在下一次任何這類分岔發生時，重新製造出 #998 的同一種症狀（一個站得住腳的選擇差異卻擋住合併），只是換一個根因。`test/mutants/gate_lib.py` 的 `reconcile()` 參考實作同步改成同一條不對稱規則，讓這份檔案原本「兩個實作，刻意重複，因為這條規則不可能真的分岔」的宣稱維持成立，而不是讓其中一個實作偷偷過期。
 
   **本機證明：不只是「required check 不再失敗」，是「現在真的少跑」**：對 `src/WalkingTec.Mvvm.Core/WTMContext.CallApi.cs`（剛好是唯一一個以它為 `target_file` 的 security entry）建構一個只改一個檔案的 diff，跨兩個真實 commit。在 full-history clone 上跑 `gate_lib.py select --kind security --event-name pull_request --base-sha <base> --head-sha <head>`：選出 **1 個（68 個裡的 1 個）**。在同一組 commit 的 `git clone --depth 1`（base commit 確實不在，重現修復前 `mutants`／`meta-selftest` checkout 的真實狀態）上跑同一條指令：選出 **68 個（全部）**，且 stderr 明確印出 `Could not compute a path diff ... SELECT mode=fallback-full`——跟 fail-open 分支的訊息逐字對得上。`actions/checkout@v5` 的 `fetch-depth: 0` 就是上面重現的「full history」條件本身，所以修好之後，`mutants`／`meta-selftest` 兩個 job 在真實 CI 上拿到的會是「1 of 68」那個答案，不是「68 of 68」。
 
-  **測試**：`python3 test/mutants/_selftest/selftest_gate_job_reconciliation.py`（直接從這份 workflow 檔案本身抽取 `gate` job 的真實 script，不是手抄複本；把原本的 match/mismatch/skip/failure 四情境改成 match/shortfall/surplus/skip/failure 五情境，新增 `check_surplus_tolerated_with_warning`——`SECURITY_COUNT` 帶到 62（`SELECTED_SECURITY_COUNT` 維持 61），斷言 `exit=0` 且 stdout 同時含 `MUTATION_GATE_RESULT: PASS` 與 `WARNING` 兩邊總數——7/7 全過）；`python3 test/mutants/_selftest/selftest_select_relevant_entries.py` 的 `check_reconcile()` 同步擴充成 match/shortfall（`reconcile(5,4)` 仍為 `False`）/surplus（`reconcile(4,5)` 為 `True` 且訊息含 `WARNING`）三案例，8/8 全過。`python3 scripts/check-mutant-entries-parse.py`（74 個 entry 檔案全部通過解析與驗證）、`python3 scripts/audit-workflow-timeouts.py`（133/133 real-work step 仍全部帶 `timeout-minutes`，這張 PR 只在既有兩個 checkout step 加 `with:` 區塊、其餘全是註解，沒有新增任何 step，數字不變）皆 PASS。**YAML 剖析**：本機環境剛好有 PyYAML（`python3 -c "import yaml,sys; yaml.safe_load(open('.github/workflows/mutation-gate.yml'))"` 直接成功），但因為這份 issue 特別點名「CI runner 最近才發現沒有 PyYAML」，這次同時額外用了 `scripts/audit-workflow-timeouts.py`（stdlib-only、為了同一個理由寫的 dependency-free YAML 子集剖析器）當第二層、不依賴 PyYAML 的結構驗證——上面那次 133/133 PASS 的執行本身就是這第二層證明，不是另外重複一次。**未在真實 Gitea CI 上跑過，跟上方 #968/#973 同一個限制**：本工作階段硬性限制禁止呼叫任何 Gitea/GitHub API、禁止開 PR，所以這個 workflow 在真實 pull_request/push 事件下的行為（job 排程、`GITHUB_OUTPUT` 跨 job 傳遞、`changes`→`mutants`/`meta-selftest`→`gate` 整條 chain）沒有被真實觸發過一次——本機驗證只到「YAML 剖析成功＋guard script 全線 PASS＋直接呼叫 `gate_lib.py select` 對著一個真的 shallow clone 重現修復前的行為」這三層，不是「#998 那次失敗被重新跑過一次、這次綠燈」。
+  **測試**：`python3 test/mutants/_selftest/selftest_gate_job_reconciliation.py`（直接從這份 workflow 檔案本身抽取 `gate` job 的真實 script，不是手抄複本；把原本的 match/mismatch/skip/failure 四情境改成 match/shortfall/surplus/skip/failure 五情境，新增 `check_surplus_tolerated_with_warning`——`SECURITY_COUNT` 帶到 62（`SELECTED_SECURITY_COUNT` 維持 61），斷言 `exit=0` 且 stdout 同時含 `MUTATION_GATE_RESULT: PASS` 與 `WARNING` 兩邊總數——7/7 全過）；`python3 test/mutants/_selftest/selftest_select_relevant_entries.py` 的 `check_reconcile()` 同步擴充成 match/shortfall（`reconcile(5,4)` 仍為 `False`）/surplus（`reconcile(4,5)` 為 `True` 且訊息含 `WARNING`）三案例，8/8 全過。`python3 scripts/check-mutant-entries-parse.py`（74 個 entry 檔案全部通過解析與驗證）、`python3 scripts/audit-workflow-timeouts.py`（133/133 real-work step 仍全部帶 `timeout-minutes`，這張 PR 只在既有兩個 checkout step 加 `with:` 區塊、其餘全是註解，沒有新增任何 step，數字不變）皆 PASS。**YAML 剖析**：本機環境剛好有 PyYAML（`python3 -c "import yaml,sys; yaml.safe_load(open('.github/workflows/mutation-gate.yml'))"` 直接成功），但因為這份 issue 特別點名「CI runner 最近才發現沒有 PyYAML」，這次同時額外用了 `scripts/audit-workflow-timeouts.py`（stdlib-only、為了同一個理由寫的 dependency-free YAML 子集剖析器）當第二層、不依賴 PyYAML 的結構驗證——上面那次 133/133 PASS 的執行本身就是這第二層證明，不是另外重複一次。**未在真實 internal infrastructure CI 上跑過，跟上方 #968/#973 同一個限制**：本工作階段硬性限制禁止呼叫任何 internal infrastructure/GitHub API、禁止開 PR，所以這個 workflow 在真實 pull_request/push 事件下的行為（job 排程、`GITHUB_OUTPUT` 跨 job 傳遞、`changes`→`mutants`/`meta-selftest`→`gate` 整條 chain）沒有被真實觸發過一次——本機驗證只到「YAML 剖析成功＋guard script 全線 PASS＋直接呼叫 `gate_lib.py select` 對著一個真的 shallow clone 重現修復前的行為」這三層，不是「#998 那次失敗被重新跑過一次、這次綠燈」。
 - 安全 audit 歷史：v10.2.0 完整 audit + 其後連續多輪對抗式（cross-vendor + perspective-diverse）審計；本次批次期間對抗式審查在合併前攔下多個真實缺陷（見 § 品質保證機制）
 
 ### 架構評估
@@ -80,7 +80,7 @@ WTM 設計為「快速 CRUD 開發框架」，**不**是高流量 SaaS 平台或
 
 ## Release 供應鏈完整性（#925，2026-07-31）
 
-`publish-nuget.yml` 是把六個套件從 Gitea 推到兩個公開/私有 registry 的唯一自動化路徑。#925 起這個 workflow 本身經過一輪 cross-vendor review，8 項發現全部驗證後修復（#937）。**這裡只寫這次改動實際證明了什麼，不寫「gate every publish」這種本文件無法逐項驗證的整句宣稱**——CHANGELOG 對這批改動的描述不得超出以下清單。
+`publish-nuget.yml` 是把六個套件從 internal infrastructure 推到兩個公開/私有 registry 的唯一自動化路徑。#925 起這個 workflow 本身經過一輪 cross-vendor review，8 項發現全部驗證後修復（#937）。**這裡只寫這次改動實際證明了什麼，不寫「gate every publish」這種本文件無法逐項驗證的整句宣稱**——CHANGELOG 對這批改動的描述不得超出以下清單。
 
 **已驗證、每次 publish 執行**：
 - 觸發來源完整性：`workflow_dispatch` 必須打在 `dotnet10` 分支本身；tag push 的 tag 必須指到 `origin/dotnet10` 歷史上的一個 commit（用 `git merge-base --is-ancestor`，不要求等於當下 tip——刻意相容既有的 tag-object 去重重建 SOP）。
@@ -88,19 +88,19 @@ WTM 設計為「快速 CRUD 開發框架」，**不**是高流量 SaaS 平台或
 - 本機 vulnerability scan 改走 `dotnet list package --vulnerable --format json` 直接寫檔 + 結構化解析（`scripts/check-vulnerable-packages.py`），不再靠 `echo | grep -q` 這種在 `set -o pipefail` 下會被 SIGPIPE 誤判成乾淨的管線。**（#934，2026-07-31 追加）這支掃描跑在 `WalkingTec.Mvvm.sln` 上，不是消費端安裝到的東西**——同一個 job 現在額外對 smoke-install 步驟裝好六個套件的那個 consumer 專案，重跑一次同一支 `scripts/check-vulnerable-packages.py`（見下一條），兩邊分別覆蓋「solution 乾不乾淨」與「出貨物乾不乾淨」，不能互相取代。
 - 六個套件的 smoke test 在**任何 push 之前**執行，對 `WalkingTec.Mvvm.Etl` 的 13 個 #883 changed members 做的是**執行期 reflection 斷言**（`ParameterInfo` 逐一比對名稱／型別／順序／`IsOptional`／`DefaultValue`／`IsVirtual`），不是編譯期呼叫——後者曾經誤稱自己證明了 optionality/順序/virtuality，實際上四者都證明不了（見 `test/smoke/publish-nuget-fixture/Program.cs` 的檔頭說明與 PR 描述裡的實測）。**這個 fixture 證明的是編譯期 metadata 與文件相符，不證明任何執行期行為**——`declaredSystemQuery: true` 真的會繞過租戶過濾這件事，由 `test/WalkingTec.Mvvm.Etl.Test` 涵蓋，不是這支 smoke fixture。
 - **（#934，2026-07-31 新增）Consumer-graph vulnerability scan**：對 smoke-install 步驟已裝好六個套件（從候選 nupkgs 安裝，兩個 registry 都還沒看過）的同一個 consumer 專案，跑 `dotnet list package --vulnerable --include-transitive` 並沿用同一支 `scripts/check-vulnerable-packages.py`。修復前對六個未修的 nupkg 本機實測：8 個 HIGH finding（`System.Security.Cryptography.Xml` 8.0.2）；對修復後的 nupkg 實測：0 finding——兩個方向都跑過，不是只驗證了「綠」那一半。
-- Gitea/GitHub Packages 各自的 version-cohort 檢查（`scripts/check-package-cohort.py`，NuGet V3 標準協定）：同一版本若只有部分套件已存在，直接拒絕，不會用 `--skip-duplicate` 悄悄補齊、混進兩個不同 commit 的產物。
-- GitHub mirror 的 sanitize/leak-gate/nuspec 檢查全部在**第一個 push（Gitea）之前**跑完；GitHub Packages 的重新 pack 改成從 `git archive` 對一個在任何 merge-fallback 分支跑之前就先釘住的 commit SHA 抽取到一個沒有 `.git` 的乾淨目錄——merge 產生的內容不可能進到打包輸入。
+- internal infrastructure/GitHub Packages 各自的 version-cohort 檢查（`scripts/check-package-cohort.py`，NuGet V3 標準協定）：同一版本若只有部分套件已存在，直接拒絕，不會用 `--skip-duplicate` 悄悄補齊、混進兩個不同 commit 的產物。
+- GitHub mirror 的 sanitize/leak-gate/nuspec 檢查全部在**第一個 push（internal infrastructure）之前**跑完；GitHub Packages 的重新 pack 改成從 `git archive` 對一個在任何 merge-fallback 分支跑之前就先釘住的 commit SHA 抽取到一個沒有 `.git` 的乾淨目錄——merge 產生的內容不可能進到打包輸入。
 - 既有 GitHub 上的同名 tag 若要被 force-move，先比對兩邊的 tree hash 是否相同；不同就拒絕，不再無條件 force-push。
 
 **刻意沒做、且這裡明講原因**：
 - 不重跑完整 .NET 測試套件或 mutation-gate（跑一次要跨越這台 2-capacity runner 的容量，而且 CI 的 `build-and-test` conclusion 欄位在本 repo 是不可靠訊號，見 CLAUDE.md「CI red does not mean failed」——引用它取代真的重跑，等於用一個已知不可靠的訊號冒充驗證，這個決定本身寫在 workflow 檔案的註解裡）。
-- 這次修復撰寫期間**刻意不呼叫任何 Gitea/GitHub API、不 push 任何 tag**（含 PR 本身也未開）。以下邏輯因此只做到 bash 語法檢查 + 邏輯覆查 + 對標準 git plumbing 指令（`git fetch`/`rev-parse`/`ls-remote`）的行為推導，**沒有對 mac-mini Gitea 或 GitHub Packages 的真實 registry / 真實 tag push 端到端跑過**：`scripts/check-package-cohort.py` 的 HTTP 呼叫邏輯（只在本機對 nuget.org 這個公開、非 Gitea/GitHub 的標準 NuGet V3 端點，以及一個假造的本機 fixture server 驗證過協定正確性，見 `test/check-package-cohort-tests.sh`）；「Push release tag to GitHub」步驟的 tree-比對 force-move guard；`is_prerelease` 帶進 GitHub Release payload 那段。下次真實 tag 發版時應視為這幾段邏輯的首次生產驗證。**（#967 更正，2026-08-01）`scripts/check-package-cohort.py` 這一段的「未端到端驗證」已不成立——這支腳本原本用的 `HEAD` 探測法讓這個 gate 對 Gitea **每一次**都失敗（見下方新章節），問題在 #967 修好之後才真正對 mac-mini Gitea 跑過端到端；GitHub Packages 只驗證到一半，同見下方新章節。**
+- 這次修復撰寫期間**刻意不呼叫任何 internal infrastructure/GitHub API、不 push 任何 tag**（含 PR 本身也未開）。以下邏輯因此只做到 bash 語法檢查 + 邏輯覆查 + 對標準 git plumbing 指令（`git fetch`/`rev-parse`/`ls-remote`）的行為推導，**沒有對 internal-host internal infrastructure 或 GitHub Packages 的真實 registry / 真實 tag push 端到端跑過**：`scripts/check-package-cohort.py` 的 HTTP 呼叫邏輯（只在本機對 nuget.org 這個公開、非 internal infrastructure/GitHub 的標準 NuGet V3 端點，以及一個假造的本機 fixture server 驗證過協定正確性，見 `test/check-package-cohort-tests.sh`）；「Push release tag to GitHub」步驟的 tree-比對 force-move guard；`is_prerelease` 帶進 GitHub Release payload 那段。下次真實 tag 發版時應視為這幾段邏輯的首次生產驗證。**（#967 更正，2026-08-01）`scripts/check-package-cohort.py` 這一段的「未端到端驗證」已不成立——這支腳本原本用的 `HEAD` 探測法讓這個 gate 對 internal infrastructure **每一次**都失敗（見下方新章節），問題在 #967 修好之後才真正對 internal-host internal infrastructure 跑過端到端；GitHub Packages 只驗證到一半，同見下方新章節。**
 - `scripts/publish-to-gitea.sh` 的真實發佈路徑已停用（見 `docs/gitea-packages.md` §7）——這是「runner 不可用時的本機 fallback」，不是這個 gate 的一部分，過去被文件誤導成等效替代品。
 
 **可重跑的盤點指令**（驗證上面「每次 publish 執行」清單裡各檢查確實排在第一個 push 之前，而不是憑記憶）：
 ```bash
 grep -n '^\s*- name:' .github/workflows/publish-nuget.yml | \
-  grep -B999 'Push to Gitea Packages' | tail -20
+  grep -B999 'Push to internal package registry' | tail -20
 ```
 執行時間點：2026-07-31，對應 commit 見同一批次的 git log；上面兩份清單如果與 workflow 檔案實際內容不符，以 `.github/workflows/publish-nuget.yml` 為準，這份文件過期。
 
@@ -157,19 +157,19 @@ for idx in range(len(starts) - 1):
 
 ## check-package-cohort.py 的 HEAD→GET 修復（#967，2026-08-01，release-blocking）
 
-`scripts/check-package-cohort.py`（見上一節）原本用 `method="HEAD"` 探測版本是否已存在。**Gitea 的 NuGet flat-container endpoint 對 HEAD 一律回 405 Method Not Allowed，不論該版本存不存在**——腳本只把 404 特判成「不存在」，其餘一律 re-raise 當成 fail-closed 錯誤，405 落在「其餘」，所以這個 gate **每一次 publish 都會失敗**，無論套件實際狀態如何。這是 release-blocking：`workflow_dispatch` 與 tag push 兩條路徑都會在「Verify version cohort not partially published (Gitea)」這一步卡死。修法：探測方式改成 `GET`，且不重用會把整個回應體讀進記憶體的 `fetch()` helper——改成直接開連線、靠 `urlopen` 對非 2xx 狀態碼丟 `HTTPError`（404 分支邏輯不變)、2xx 時最多讀 1 byte（`resp.read(1)`）就讓 `with` block 關閉連線，不會把整個 `.nupkg`（可能數 MB）緩衝進記憶體。
+`scripts/check-package-cohort.py`（見上一節）原本用 `method="HEAD"` 探測版本是否已存在。**internal infrastructure 的 NuGet flat-container endpoint 對 HEAD 一律回 405 Method Not Allowed，不論該版本存不存在**——腳本只把 404 特判成「不存在」，其餘一律 re-raise 當成 fail-closed 錯誤，405 落在「其餘」，所以這個 gate **每一次 publish 都會失敗**，無論套件實際狀態如何。這是 release-blocking：`workflow_dispatch` 與 tag push 兩條路徑都會在「Verify version cohort not partially published (internal infrastructure)」這一步卡死。修法：探測方式改成 `GET`，且不重用會把整個回應體讀進記憶體的 `fetch()` helper——改成直接開連線、靠 `urlopen` 對非 2xx 狀態碼丟 `HTTPError`（404 分支邏輯不變)、2xx 時最多讀 1 byte（`resp.read(1)`）就讓 `with` block 關閉連線，不會把整個 `.nupkg`（可能數 MB）緩衝進記憶體。
 
-**已驗證（對真實 mac-mini Gitea registry 端到端跑過，2026-08-01）**：
+**已驗證（對真實 internal-host internal registry 端到端跑過，2026-08-01）**：
 - `WalkingTec.Mvvm.Core 10.18.0`（已發布的版本）→ 正確回報「1/1 already published」，exit 0。
 - `WalkingTec.Mvvm.Core 10.21.0-rc.1`（未發布的版本）→ 正確回報「0/1 already published」（not yet published），exit 0。
 - 完全比照 `publish-nuget.yml` 呼叫方式、六個套件、`PKG_VERSION=10.21.0-rc.1` 的完整 cohort check → `0/6 already published`，`Cohort check passed`，exit 0——即這個版本目前乾淨、可以安全發布，gate 不再誤擋。
-- 修復前（`method="HEAD"`）對同一台真實 Gitea、同一個已存在版本（`10.18.0`）的實測輸出：`ERROR: could not check existence of WalkingTec.Mvvm.Core 10.18.0: HTTP Error 405: Method Not Allowed`，exit 2——這就是 release-blocking 的實際錯誤訊息，不是推導。
+- 修復前（`method="HEAD"`）對同一台真實 internal infrastructure、同一個已存在版本（`10.18.0`）的實測輸出：`ERROR: could not check existence of WalkingTec.Mvvm.Core 10.18.0: HTTP Error 405: Method Not Allowed`，exit 2——這就是 release-blocking 的實際錯誤訊息，不是推導。
 
 **GitHub Packages（`nuget.pkg.github.com`）—— 只驗證到一半，誠實揭露**：
-- 已驗證：未帶 auth 的情況下，HEAD 對 `https://nuget.pkg.github.com/cct08311github/index.json`（service index）與一個合理猜測的 flat-container download URL 都回 405；同樣未帶 auth 的 GET 對同兩個 URL 回 401（正常的「需要認證」回應，代表請求有被路由/認證層處理，不是被方法層擋掉）——重複測試皆一致。這代表 GitHub Packages 對 HEAD 的拒絕方式與 Gitea 相同（方法層直接拒絕，不因路徑或認證而異），所以把探測方式統一改成 GET 對兩邊都是正確、而非只碰運氣對了一邊。
+- 已驗證：未帶 auth 的情況下，HEAD 對 `https://nuget.pkg.github.com/cct08311github/index.json`（service index）與一個合理猜測的 flat-container download URL 都回 405；同樣未帶 auth 的 GET 對同兩個 URL 回 401（正常的「需要認證」回應，代表請求有被路由/認證層處理，不是被方法層擋掉）——重複測試皆一致。這代表 GitHub Packages 對 HEAD 的拒絕方式與 internal infrastructure 相同（方法層直接拒絕，不因路徑或認證而異），所以把探測方式統一改成 GET 對兩邊都是正確、而非只碰運氣對了一邊。
 - **未驗證**：GitHub Packages 帶正確 PAT 之後，GET 能否正確區分「該版本存在（200）」與「不存在（404）」——這次工作階段沒有可用的 `GH_MIRROR_PAT`，無法測試。這一段**不宣稱已修好**，留待下一次真正的 tag 發版（`publish-nuget.yml` 的「Verify version cohort not partially published (GitHub Packages)」步驟）作為首次生產驗證。
 
-**測試**：`test/check-package-cohort-tests.sh` 新增一個獨立的 fixture HTTP server，用自訂 handler 讓 `do_HEAD` 一律回 405（模擬 Gitea/GitHub 的真實行為），`do_GET` 對特定版本正確回 200/404，另對保留版本號 `0.0.500` 回 500（模擬非 405-masking 的真正異常）。舊的 fixture 直接用 Python `http.server` 的 `SimpleHTTPRequestHandler`，它對 HEAD 的處理是「正確」的（200/404），這正是舊測試套件從未抓到這個缺陷的原因——它跟真實 Gitea/GitHub 的行為不一樣。RED-before-fix 已獨立重現（把腳本換回 `method="HEAD"`、跑新測試案例）：`ERROR: could not check existence of WalkingTec.Mvvm.Core 10.21.0: HTTP Error 405: Method Not Allowed`，該 test case 判定 `FAIL: ... expected exit 0, got 2`。修復後 7 個 case（4 個既有 + 3 個新增）全線變綠，`check-package-cohort-tests: PASS`。**指出哪一行刪除會讓測試變紅**：把 `scripts/check-package-cohort.py` 的 `package_exists()` 內 `method="GET"` 改回 `method="HEAD"`，會讓 `test/check-package-cohort-tests.sh` 新增的「version exists -- detected correctly against HEAD-405 Gitea-like registry」與「version absent -- ...」兩個 case 從 exit 0 變成 exit 2（RED）——這兩行就是這次修復的證明。
+**測試**：`test/check-package-cohort-tests.sh` 新增一個獨立的 fixture HTTP server，用自訂 handler 讓 `do_HEAD` 一律回 405（模擬 internal infrastructure/GitHub 的真實行為），`do_GET` 對特定版本正確回 200/404，另對保留版本號 `0.0.500` 回 500（模擬非 405-masking 的真正異常）。舊的 fixture 直接用 Python `http.server` 的 `SimpleHTTPRequestHandler`，它對 HEAD 的處理是「正確」的（200/404），這正是舊測試套件從未抓到這個缺陷的原因——它跟真實 internal infrastructure/GitHub 的行為不一樣。RED-before-fix 已獨立重現（把腳本換回 `method="HEAD"`、跑新測試案例）：`ERROR: could not check existence of WalkingTec.Mvvm.Core 10.21.0: HTTP Error 405: Method Not Allowed`，該 test case 判定 `FAIL: ... expected exit 0, got 2`。修復後 7 個 case（4 個既有 + 3 個新增）全線變綠，`check-package-cohort-tests: PASS`。**指出哪一行刪除會讓測試變紅**：把 `scripts/check-package-cohort.py` 的 `package_exists()` 內 `method="GET"` 改回 `method="HEAD"`，會讓 `test/check-package-cohort-tests.sh` 新增的「version exists -- detected correctly against HEAD-405 internal infrastructure-like registry」與「version absent -- ...」兩個 case 從 exit 0 變成 exit 2（RED）——這兩行就是這次修復的證明。
 
 ---
 
@@ -197,7 +197,7 @@ for idx in range(len(starts) - 1):
 
 **穩定性**：`RetryWithBackoffTests` 整個測試類別（10 個測試方法，含上述兩個 cancellation 測試）連續執行 **50 次，50/50 全綠**，0 flake——驗證新的訊號式同步機制（而非計時）確實消除了原本的 wall-clock 賽跑。
 
-**Mutation gate**：`test/mutants/entries/etl970-cancellation-classification-guard-neutralize.json`，移除修法核心的 `cancellationToken.ThrowIfCancellationRequested();`（`:760`）呼叫（compile-preserving——`cancellationToken` 在同方法其餘兩處仍被使用，不會產生未使用變數警告）。`VERDICT: KILLED`。**`kind` 選擇與理由**：本缺陷是「cancellation 分類錯誤」的可觀測性／正確性問題，不涉及未授權存取、injection、租戶隔離或憑證——不是傳統意義的安全漏洞。但 `run_mutant.py` 的 `VALID_KINDS` 目前只接受 `security`／`selftest` 兩種，`selftest` 明文保留給測試 runner 自身邏輯（見 `test/mutants/manifest.json` 的 `$comment`），不適用於一個真實的 production mutant。在現有 schema 下 `security` 是唯一能讓這個 mutant 被 CI 的 `mutants` job 實際執行、且非 KILLED 會擋 gate 的功能性選項，因此選了 `security`，但誠實記錄：這會把 `security`-kind entry 數從 60 推到 61，讓 #968（gate 逐項 timeout budget 是照 45 個 entry 的公式推導，在 60 個時已經吃緊）的落差再拉大一點——本次修復沒有動 #968 本身（scope 之外），值得另開一個「幫非安全性 mutant 加一個新 kind」的 issue，但 HARD CONSTRAINT 禁止本次呼叫任何 Gitea API 開票，故僅在此與 CHANGELOG 明講，留待 user 自行決定是否開票。
+**Mutation gate**：`test/mutants/entries/etl970-cancellation-classification-guard-neutralize.json`，移除修法核心的 `cancellationToken.ThrowIfCancellationRequested();`（`:760`）呼叫（compile-preserving——`cancellationToken` 在同方法其餘兩處仍被使用，不會產生未使用變數警告）。`VERDICT: KILLED`。**`kind` 選擇與理由**：本缺陷是「cancellation 分類錯誤」的可觀測性／正確性問題，不涉及未授權存取、injection、租戶隔離或憑證——不是傳統意義的安全漏洞。但 `run_mutant.py` 的 `VALID_KINDS` 目前只接受 `security`／`selftest` 兩種，`selftest` 明文保留給測試 runner 自身邏輯（見 `test/mutants/manifest.json` 的 `$comment`），不適用於一個真實的 production mutant。在現有 schema 下 `security` 是唯一能讓這個 mutant 被 CI 的 `mutants` job 實際執行、且非 KILLED 會擋 gate 的功能性選項，因此選了 `security`，但誠實記錄：這會把 `security`-kind entry 數從 60 推到 61，讓 #968（gate 逐項 timeout budget 是照 45 個 entry 的公式推導，在 60 個時已經吃緊）的落差再拉大一點——本次修復沒有動 #968 本身（scope 之外），值得另開一個「幫非安全性 mutant 加一個新 kind」的 issue，但 HARD CONSTRAINT 禁止本次呼叫任何 internal infrastructure API 開票，故僅在此與 CHANGELOG 明講，留待 user 自行決定是否開票。
 
 **已知、本次沒有稽核／沒有動的相關路徑（誠實揭露，不是缺陷清單的延伸）**：`EtlPipelineExecutor.cs` 裡另外三個 dead-letter 清理／flush 呼叫（`:157` 執行前清理、`:344` 週期性 flush、`:448`/`:460` 成功後 flush）全部包在會吞下**所有**例外（含 `OperationCanceledException`）且從不 rethrow 的 best-effort try/catch 裡——cancellation 若剛好撞上這幾個呼叫，不會立刻讓這次 run 中止，但也不會被永久遺失，下一個會檢查 token 的地方（例如下一輪 `:198` 的 `ThrowIfCancellationRequested()`）仍然會抓到；這是修復前就存在、刻意設計的 best-effort 語意，本次修復沒有觸碰。另外，`:412`–`:435` 的 `AddLineageRecordAsync`（僅 `EnableLineage=true` 時執行）沒有包在任何吞例外的 catch 裡——如果 cancellation 剛好在 merge 與 watermark commit 都已經成功之後、寫 lineage 記錄的當下才被要求，整個 run 會回報 `Aborted=true`，即使實際的資料載入已經完全成功；這條路徑機制上正確收斂到 `:479`（跟第 1/3 條路徑同一機制，不是本次修復動過的程式碼），但「run 明明成功了卻回報 Aborted」是不是正確的語意，是本次 issue 沒有要求、也沒有稽核過的獨立問題，這裡只誠實點名，不宣稱已經處理。
 
@@ -216,13 +216,13 @@ for idx in range(len(starts) - 1):
 **驗證這支 lint 真的會擋下違規——兩個獨立證明，皆可重跑**：
 
 1. **`--selftest`，每次 CI 執行都會重新驗證**（embedded fixture，無外部檔案）：zero-assert TC → exit 1，訊息點名 `tc_01_no_assert`；bare-except 吞掉一個真 assert 的 handler → exit 1；`except AssertionError: raise TestSkipped(...)` 洗白形狀 → exit 1，訊息含 `TestSkipped`；一個定義了但沒接進 `TC_REGISTRY` 的 `tc_*` function → exit 1，訊息點名 `tc_02_orphan`；**clean fixture（positive control）→ exit 0**——沒有這條，一支永遠回傳 1 的假 lint 會通過上面每一個負面案例；unparseable input → exit 2，與 0/1 明確有別。六個 case 全部通過（`python3 scripts/check-e2e-test-integrity.py --selftest`，本機實測 exit 0）。
-2. **對一個真實歷史 commit 的永久可重跑 replay**：`git show 59444a657:test/e2e/wtm_e2e_tests.py > /tmp/old.py && python3 scripts/check-e2e-test-integrity.py /tmp/old.py` 對 commit `59444a657`（`origin/test/898-905-e2e-cannot-fail` 分支的 tip，該分支仍在 Gitea 上，任何人都能重新 fetch）——這個 commit 的 `tc_03_csrf_token` 仍是零 assert（含 `#898`/`#905` 那次修復也刻意沒動它，見上方章節）——本機實測：exit 1，違規訊息點名 `tc_03_csrf_token`。對本 PR head（含下方 tc_03 修復）跑同一支 lint：`OK: no e2e test integrity violations found`，exit 0。
+2. **對一個真實歷史 commit 的永久可重跑 replay**：`git show 59444a657:test/e2e/wtm_e2e_tests.py > /tmp/old.py && python3 scripts/check-e2e-test-integrity.py /tmp/old.py` 對 commit `59444a657`（`origin/test/898-905-e2e-cannot-fail` 分支的 tip，該分支仍在 internal infrastructure 上，任何人都能重新 fetch）——這個 commit 的 `tc_03_csrf_token` 仍是零 assert（含 `#898`/`#905` 那次修復也刻意沒動它，見上方章節）——本機實測：exit 1，違規訊息點名 `tc_03_csrf_token`。對本 PR head（含下方 tc_03 修復）跑同一支 lint：`OK: no e2e test integrity violations found`，exit 0。
 
-**CI 接線**：加進 `.github/workflows/mutation-gate.yml` 的 `changes` job——本 repo唯一兩個 trigger 都沒有 path filter、且已透過 `gate` job 掛成 required check 的 job，跟既有四個 guard（#924/#931×2/#926）同一種形狀。這步驟先跑 `--selftest`、`set -e` 確保 selftest 失敗會擋下後面的真掃描，再跑對 `test/e2e/wtm_e2e_tests.py` 的真掃描，兩者的 exit code 直接變成這個 step 的 exit code。**沒有新增 required-check context**（#838/#844 的教訓：workflow trigger 本身沒有 path filter，所以不會出現「永遠 expected、卡住合併鍵」的陷阱）——這一項只是在既有 `changes` job 裡多加一個 step。**這裡沒有、也不能宣稱「已在 Gitea CI 上跑過一次綠燈」**：這次工作階段的硬性限制禁止呼叫任何 Gitea/GitHub API、禁止開 PR，所以 CI 真的觸發、`gate` job 真的把這個 step 的結果算進最終判定，要等這個分支真正開 PR 之後才會是第一次生產驗證；本機驗證只到「`python3 -c "import yaml"` 剖析整份 workflow 檔案成功、新 step 出現在 `changes` job 的正確位置」與「`scripts/audit-workflow-timeouts.py`（本身也是 `changes` job 的既有 guard之一）對修改後的 `mutation-gate.yml` 判定全部 127 個 real-work step（含這個新 step 自己）都有 `timeout-minutes`，PASS」這兩層靜態確認。
+**CI 接線**：加進 `.github/workflows/mutation-gate.yml` 的 `changes` job——本 repo唯一兩個 trigger 都沒有 path filter、且已透過 `gate` job 掛成 required check 的 job，跟既有四個 guard（#924/#931×2/#926）同一種形狀。這步驟先跑 `--selftest`、`set -e` 確保 selftest 失敗會擋下後面的真掃描，再跑對 `test/e2e/wtm_e2e_tests.py` 的真掃描，兩者的 exit code 直接變成這個 step 的 exit code。**沒有新增 required-check context**（#838/#844 的教訓：workflow trigger 本身沒有 path filter，所以不會出現「永遠 expected、卡住合併鍵」的陷阱）——這一項只是在既有 `changes` job 裡多加一個 step。**這裡沒有、也不能宣稱「已在 internal infrastructure CI 上跑過一次綠燈」**：這次工作階段的硬性限制禁止呼叫任何 internal infrastructure/GitHub API、禁止開 PR，所以 CI 真的觸發、`gate` job 真的把這個 step 的結果算進最終判定，要等這個分支真正開 PR 之後才會是第一次生產驗證；本機驗證只到「`python3 -c "import yaml"` 剖析整份 workflow 檔案成功、新 step 出現在 `changes` job 的正確位置」與「`scripts/audit-workflow-timeouts.py`（本身也是 `changes` job 的既有 guard之一）對修改後的 `mutation-gate.yml` 判定全部 127 個 real-work step（含這個新 step 自己）都有 `timeout-minutes`，PASS」這兩層靜態確認。
 
 **`tc_03_csrf_token` 的修復（唯一違規，P0，本 PR 內修復）**：原本這個函式只 print `[KNOWN-GAP]` 訊息、無條件回傳，記錄「WTM 未實作 CSRF token」這個已知安全缺口但完全沒有 assert 保護——不論 CSRF 有沒有被實作，這個 TC 永遠 PASS。改為 **characterization assertions**（比照 `test/WalkingTec.Mvvm.WorkFlow.Test/TenantFilterInvariantTests.cs` 的 `WfDemoShapedObsoleteContext` 同一種誠實作法：釘住觀察到的現狀，不是宣稱現狀是規格）：`assert token_count == 0`（頁面上沒有 `__RequestVerificationToken`）、`assert response.status == 200`（無 token 的 POST 被無條件接受，不是被拒絕）。**這兩個 marker 字串/數值皆對著本機真的起的 demo app 實測過，不是照抄 sibling 測試假設存在**——本機以 dotnet 10 + Playwright + headless Chromium 起 demo app（`dotnet run -c Release --no-build --urls http://0.0.0.0:52837`），單獨跑 `python3 wtm_e2e_tests.py --tc 3`，實際觀察輸出：`  __RequestVerificationToken 數量: 0` 與 `  無 Token POST 回應: HTTP 200`，兩者與新增的斷言完全一致，TC-03 本身 PASS。一旦 CSRF 保護被實作，這兩個斷言會如預期地變紅——這是刻意設計，紅燈本身就是這個測試存在的意義，需要被重寫成驗證保護生效，而不是驗證保護不存在。
 
-**e2e 全套件本機重跑（before/after，非 CI 執行，明講原因）**：這次工作階段的硬性限制禁止呼叫任何 Gitea/GitHub API，所以無法觸發 Gitea Actions 上的真實 e2e workflow；改為本機起 demo app（同上）與全 36 個 TC，兩次都在同一台機器、同一個本機 demo app 實例上跑：
+**e2e 全套件本機重跑（before/after，非 CI 執行，明講原因）**：這次工作階段的硬性限制禁止呼叫任何 internal infrastructure/GitHub API，所以無法觸發 internal CI 上的真實 e2e workflow；改為本機起 demo app（同上）與全 36 個 TC，兩次都在同一台機器、同一個本機 demo app 實例上跑：
 
 - **修復前**（`tc_03` 仍是零 assert）：`Total: 36 | PASS: 35 | FAIL: 0 | ERROR: 0 | SKIP: 1`
 - **修復後**（`tc_03` 改為 characterization assertions，且加了 lint 但目標檔案本身乾淨）：`Total: 36 | PASS: 35 | FAIL: 0 | ERROR: 0 | SKIP: 1`——與修復前逐位元組相同，`tc_03` 本身也維持 PASS（1.4s~1.9s，兩次執行時間微幅浮動屬正常），因為新斷言釘住的正是本機實測到的現狀，不是改變了任何行為。這證明**這次修復沒有改變任何一個 TC 的最終判定**，只是讓 `tc_03` 從「不可能失敗」變成「現在會如實反映現狀，且現狀改變時會變紅」。
@@ -245,7 +245,7 @@ python3 scripts/audit-workflow-timeouts.py                 # 確認新 step 也�
 **重新推導與 issue 標題比對**：
 - **`#939`**（`npm ci` 因 Dependabot 把 `vite` 升到 `^7.3.2` 但沒有同步升 `@vitejs/plugin-vue`〔仍 `^4.1.0`〕而直接失敗，peer 衝突）——**本機重現，與標題完全一致**。對修復前的樹跑 `npm ci`，實際輸出：`npm error ERESOLVE could not resolve` / `peer vite@"^4.0.0" from @vitejs/plugin-vue@4.4.0` / `Found: vite@7.3.5`，exit 1。`git log -S vite -- .../package.json` 確認正是 Dependabot commit `a6e9a32ec`（`4.5.14` → `7.3.1`）造成，未動 `@vitejs/plugin-vue`。
 - **`#940`**（`DashboardView.vue` 用裸 `@/` 前綴，但 `vite.config.ts`/`tsconfig.json` 只註冊 `/@/`〔前導斜線〕alias，`vite build` 解析失敗）——**本機重現，與標題完全一致**。修好 `#939` 後跑 `npm run build`，實際輸出：`[vite]: Rollup failed to resolve import "@/utils/dashboard/responsive" from ".../DashboardView.vue?vue&type=script&setup=true&lang.ts"`，exit 1。`grep -rlE "from ['\"]@/" src` 全樹搜尋確認：117 個檔案正確使用 `/@/`，只有 `DashboardView.vue` 這一個檔案的兩行（原 53、54 行）用裸 `@/`。
-- **`#941`**（三個必現缺陷同時存活）——這次工作階段只拿到 `#939`/`#940` 兩個具名 issue 的**標題**，且硬性限制禁止呼叫任何 Gitea API，**無法讀取任一張 issue 的完整內文**，所以無法逐字確認標題裡「三個」具體所指是否就是下面獨立發現的第三類缺陷。可以確認的是：把 `#939` 單獨修好後，`npm ci` **並未變綠**——連續浮現三個先前完全被 `#939` 擋住、從未被任何人或任何 CI 跑到過的額外 peer-dependency 衝突（見下）。這與標題「三個缺陷」的計數相符，但這是本次工作獨立重新推導出來的，不是對 issue 內文的確認，在此誠實記錄這個落差。
+- **`#941`**（三個必現缺陷同時存活）——這次工作階段只拿到 `#939`/`#940` 兩個具名 issue 的**標題**，且硬性限制禁止呼叫任何 internal infrastructure API，**無法讀取任一張 issue 的完整內文**，所以無法逐字確認標題裡「三個」具體所指是否就是下面獨立發現的第三類缺陷。可以確認的是：把 `#939` 單獨修好後，`npm ci` **並未變綠**——連續浮現三個先前完全被 `#939` 擋住、從未被任何人或任何 CI 跑到過的額外 peer-dependency 衝突（見下）。這與標題「三個缺陷」的計數相符，但這是本次工作獨立重新推導出來的，不是對 issue 內文的確認，在此誠實記錄這個落差。
 
 **修 `#939` 之後才浮現、原本被同一個 `#939` 擋住的額外衝突（不在原三個 issue 編號內，誠實揭露，非本次任務原始範圍但阻擋 gate 變綠、因此一併處理）**：
 
@@ -272,11 +272,11 @@ python3 scripts/audit-workflow-timeouts.py                 # 確認新 step 也�
 
 **Timeout 稽核**：`python3 scripts/audit-workflow-timeouts.py` 在新增 `vue3demo-build.yml`（5 個 real-work step：checkout／setup-node／cache／`npm ci`／`npm run build`，全部帶 `timeout-minutes`）後，全庫 8 個 workflow 檔案、132 個 real-work step，132 個都有 `timeout-minutes`，`WORKFLOW_TIMEOUT_AUDIT_RESULT: PASS`（新增前為 127 個 step 全過）。
 
-**新增的每次觸發 wall-clock 成本**：本機（非目標的 4-CPU self-hosted Gitea runner，warm npm cache）量測：`npm ci` 3.67s、`npm run build` 7.05s（vite 自報 `built in 7.21s`）。**這不能直接當作 runner 端實測值**——checkout／setup-node／cache 還原、以及 runner 上冷的 npm registry 下載都會另外加時間，而這次工作階段的硬性限制（禁止呼叫任何 Gitea/GitHub API、禁止開 PR）代表這支 workflow **從未在真實 Gitea Actions 上跑過一次**，無法給出 runner 端實測數字。硬上限是各 step `timeout-minutes` 總和 33 分鐘（5+5+5+8+10），這是超時就會被砍掉的天花板，不是預期耗時；保守推算單次觸發落在 1–3 分鐘量級，但這是推算、不是實測，且只在 PR 的 diff 真的碰到 `demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/**` 時才會觸發（見上方 path filter 證明）。
+**新增的每次觸發 wall-clock 成本**：本機（非目標的 4-CPU self-hosted internal infrastructure runner，warm npm cache）量測：`npm ci` 3.67s、`npm run build` 7.05s（vite 自報 `built in 7.21s`）。**這不能直接當作 runner 端實測值**——checkout／setup-node／cache 還原、以及 runner 上冷的 npm registry 下載都會另外加時間，而這次工作階段的硬性限制（禁止呼叫任何 internal infrastructure/GitHub API、禁止開 PR）代表這支 workflow **從未在真實 internal CI 上跑過一次**，無法給出 runner 端實測數字。硬上限是各 step `timeout-minutes` 總和 33 分鐘（5+5+5+8+10），這是超時就會被砍掉的天花板，不是預期耗時；保守推算單次觸發落在 1–3 分鐘量級，但這是推算、不是實測，且只在 PR 的 diff 真的碰到 `demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/**` 時才會觸發（見上方 path filter 證明）。
 
 **這個 gate 沒有涵蓋的部分（誠實揭露）**：ClientApp 目前沒有任何 Vue/JS 測試套件，這次也沒有新增一個——gate 只證明 `npm ci && npm run build` 這兩個指令仍然成功，**不驗證任何執行期行為**（沒有 unit test、沒有 e2e、沒有 lint、不驗證 `dist/` 產物在瀏覽器裡實際能跑）。`src/utils/build.ts` 裡註解掉的 CDN 設定清單仍保留對 `echarts-gl`／`echarts-wordcloud` 的字串引用（純註解，`//` 開頭，不影響任何建置或執行），本次沒有清理，屬於低風險文件殘留，未另開 issue。`npm audit` 回報 4 個 high severity 漏洞——這是既有狀態，本次工作只移除套件、沒有新增任何 runtime dependency，沒有處理也沒有加劇，屬於未經本次工作稽核的既有技術債。
 
-**未驗證/無法驗證**：這支 workflow 從未在真實 Gitea Actions runner 上執行過一次（見上，硬性限制禁止開 PR／呼叫 API）；上述「額外浮現的三個衝突」是否恰好就是 `#941` 標題所稱的「三個必現缺陷」，無法對照 issue 原文確認。
+**未驗證/無法驗證**：這支 workflow 從未在真實 internal CI runner 上執行過一次（見上，硬性限制禁止開 PR／呼叫 API）；上述「額外浮現的三個衝突」是否恰好就是 `#941` 標題所稱的「三個必現缺陷」，無法對照 issue 原文確認。
 
 **可重跑的盤點指令**：
 ```bash
@@ -311,7 +311,7 @@ python3 scripts/audit-workflow-timeouts.py   # 應 PASS，132 個 real-work step
 
 **驗證**：`find . -name 'demo.db*' -path '*bin*' -delete && dotnet build WalkingTec.Mvvm.sln`——1 個已知、跟本次修改無關的錯誤：`NETSDK1082`（`BlazorDemo.Client` 缺 `browser-wasm` runtime pack），**直接對 base commit（未修改的 `origin/dotnet10`）單獨重建同一個專案確認過同一個錯誤存在**，不是修法造成的新問題。`dotnet test test/WalkingTec.Mvvm.Core.Test/`：修復前 **4997 passed**（在乾淨 worktree、修改任何檔案之前跑過確認），修復後 **5001 passed, 0 failed**（4997 + 本次新增的 4 個測試方法）。
 
-**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這兩個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層，跟 CI 實際排程、job 併發、runner 環境的行為一致與否，要等分支真正開 PR 之後才是第一次生產驗證。`DistributedLookupCacheService.RefreshAsync` 的 registry-check 缺口本身除了「TTL 有界」這一點之外沒有進一步稽核（例如它的失效語意在缺 registry 檢查時是否還有其他非預期副作用），因為明確不在本次修復範圍內。
+**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 internal infrastructure/GitHub API、禁止開 PR，因此這兩個修復尚未在真正的 internal CI CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層，跟 CI 實際排程、job 併發、runner 環境的行為一致與否，要等分支真正開 PR 之後才是第一次生產驗證。`DistributedLookupCacheService.RefreshAsync` 的 registry-check 缺口本身除了「TTL 有界」這一點之外沒有進一步稽核（例如它的失效語意在缺 registry 檢查時是否還有其他非預期副作用），因為明確不在本次修復範圍內。
 
 ---
 
@@ -373,7 +373,7 @@ X-Injected: evil' is invalid. ..." to contain "s3cr3t-A1B2C3-do-not-log-me" beca
 
 Rebase 後重新測量（`origin/dotnet10` 新 tip `3887d7b11`，非原本的 `7a1695f80`）：`dotnet build WalkingTec.Mvvm.sln`——同一個 `NETSDK1082` browser-wasm 錯誤，重新對新 base commit 單獨重建同一個專案再次確認存在，非本次改動造成。`dotnet test test/WalkingTec.Mvvm.Core.Test/`：新 base **5032 passed, 0 failed**（#824/#978 淨增 31 個測試，5001→5032，與本次修法無關）→ 本分支 **5035 passed, 0 failed**（5032 + 本次新增的 3 個測試方法，數量不變）。`dotnet test test/WalkingTec.Mvvm.Etl.Test/`：**699 passed, 17 skipped（既有 Oracle 相關）, 0 failed**（含本次新增的 2 個測試方法，跟 rebase 前一致——#978 沒有動到 Etl.Test）。Mutant `961-restwidget-header-exception-chain-reintroduce`：rebase 後**連續重跑三次**，三次皆 `VERDICT: KILLED` / `GATE: PASS`，每次執行後 `git status` 確認目標檔案乾淨還原——entry JSON 本身在 rebase 前後**完全沒有編輯**，因為驗證顯示不需要。
 
-**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這兩個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。`WTMContext.CallApi.cs`/`Services/WtmApiClient.cs` 兩處同根因缺陷已由使用者另立 **#979** 追蹤，本文件僅記錄「找到了、為何不修」，不宣稱「已修」或「全樹已無殘留同形狀缺陷」——後者需要的是「同根因、不同形狀」的窮舉，本次的 grep 指令只窮舉了「同形狀」那一個維度。
+**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 internal infrastructure/GitHub API、禁止開 PR，因此這兩個修復尚未在真正的 internal CI CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。`WTMContext.CallApi.cs`/`Services/WtmApiClient.cs` 兩處同根因缺陷已由使用者另立 **#979** 追蹤，本文件僅記錄「找到了、為何不修」，不宣稱「已修」或「全樹已無殘留同形狀缺陷」——後者需要的是「同根因、不同形狀」的窮舉，本次的 grep 指令只窮舉了「同形狀」那一個維度。
 
 **更新（2026-08-01，#979）**：上面「刻意不修」的兩處已在 #979 修復——不是留待「後續獨立處理」的空話，這次真的關閉了。細節、探針證據（含對 #979 issue 文字本身一處描述錯誤的實測更正）、修法、掃描出的第三個同根因站點（同樣刻意不修）、測試與 mutation gate，見下一節「`WTMContext.CallApi`／`WtmApiClient` 的 header 值透過廣義例外洩漏進應用程式日誌（#979）」。
 
@@ -482,7 +482,7 @@ grep -rn "Headers\.Add(" --include="*.cs" . | grep -v '/bin/\|/obj/'
 
 **驗證**：`find . -name 'demo.db*' -path '*bin*' -delete && dotnet build WalkingTec.Mvvm.sln`——1 個已知、跟本次修改無關的錯誤：`NETSDK1082`（`BlazorDemo.Client` 缺 `browser-wasm` runtime pack），**直接對本次 base commit（`origin/dotnet10` tip `46d5bc576`）單獨重建同一個專案確認過同一個錯誤存在**，不是修法造成的新問題。`dotnet test test/WalkingTec.Mvvm.Core.Test/`：base **5035 passed, 0 failed**（在乾淨 worktree、修改任何檔案之前跑過確認），修復後 **5041 passed, 0 failed**（5035 + 本次新增的 6 個測試方法，數量吻合）。
 
-**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。`WTMContext.CallApi.cs:77`/`WtmApiClient.cs:93`（Authorization header 透過 `RemoteToken`/`authToken` 組成）兩處同根因缺陷本文件僅記錄「找到了、為何不修」，不宣稱「已修」；全樹掃描指令這次涵蓋了整個 repo（不只 `src/`），但只窮舉了「呼叫 `Headers.Add`」這一個 API 形狀，不證明沒有其他方式（例如 `TryAddWithoutValidation` 之後在別處被驗證/記錄、或非 `HttpRequestHeaders` 的其他 header 表示方式）可能存在結構不同但根因相同的洩漏路徑。
+**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 internal infrastructure/GitHub API、禁止開 PR，因此這個修復尚未在真正的 internal CI CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。`WTMContext.CallApi.cs:77`/`WtmApiClient.cs:93`（Authorization header 透過 `RemoteToken`/`authToken` 組成）兩處同根因缺陷本文件僅記錄「找到了、為何不修」，不宣稱「已修」；全樹掃描指令這次涵蓋了整個 repo（不只 `src/`），但只窮舉了「呼叫 `Headers.Add`」這一個 API 形狀，不證明沒有其他方式（例如 `TryAddWithoutValidation` 之後在別處被驗證/記錄、或非 `HttpRequestHeaders` 的其他 header 表示方式）可能存在結構不同但根因相同的洩漏路徑。
 
 **更新（2026-08-03，#982）**：上面這兩處「找到了、刻意不修」的殘留站點已修——見下一節「`WTMContext.CallApi`／`WtmApiClient` 的 `Authorization` header 值透過廣義例外洩漏進應用程式日誌（#982）」。
 
@@ -543,7 +543,7 @@ Services/WtmApiClient.cs:93  client.DefaultRequestHeaders.Add("Authorization", "
 
 **驗證**：`find . -name 'demo.db*' -path '*bin*' -delete`。`dotnet test test/WalkingTec.Mvvm.Core.Test/`：base **5062 passed, 0 failed**（在這個分支自己的修改被 `git stash` 移除後、乾淨測得）→ 修復後 **5066 passed, 0 failed**（5062 + 本次新增的 4 個測試方法，數量吻合）。`dotnet build WalkingTec.Mvvm.sln`：**0 Error(s)**——本次 session 自己重建整個 solution 沒有重現 #961/#979 base commit 上報告過的 `NETSDK1082` browser-wasm 錯誤，跟本次修法無關，不深究。
 
-**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。#979 文件裡提過的「全樹掃描只窮舉了呼叫 `Headers.Add` 這一個 API 形狀」這個限制原樣延續到本次；`authToken`/`RemoteToken` 的呼叫端清查只窮舉了「repo 內目前存在的呼叫端」，不代表「這個公開參數永遠不會被下游宿主應用以不受信任的字串呼叫」——這正是判它 MEDIUM 而非把它跟 `RemoteToken` 一起判 LOW 的理由。
+**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 internal infrastructure/GitHub API、禁止開 PR，因此這個修復尚未在真正的 internal CI CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。#979 文件裡提過的「全樹掃描只窮舉了呼叫 `Headers.Add` 這一個 API 形狀」這個限制原樣延續到本次；`authToken`/`RemoteToken` 的呼叫端清查只窮舉了「repo 內目前存在的呼叫端」，不代表「這個公開參數永遠不會被下游宿主應用以不受信任的字串呼叫」——這正是判它 MEDIUM 而非把它跟 `RemoteToken` 一起判 LOW 的理由。
 
 ---
 
@@ -637,7 +637,7 @@ Total tests: 11 / Passed: 2 / Failed: 9
 
 **Mutant 判斷：本項不新增 `test/mutants/entries/*.json`**。理由：(1) 這是 JS 解析正確性／相容性修復，不涉及未授權存取、injection、跨租戶或憑證外洩，不是傳統意義的安全漏洞——與 #970 條目記錄的 `etl970-cancellation-classification-guard-neutralize` 同一種「correctness-only 卻被迫套用 `security` kind」處境；(2) `run_mutant.py` 的 `VALID_KINDS` 目前只接受 `security`／`selftest`，若把本項強塞成 `security`，等於重複 #970 已經記錄在案、且 #968 花了一整張 PR 才吸收掉的 kind 分類漂移，本文件不應該再製造同一種漂移；(3) 更關鍵的差異：這個修復的回歸保護**已經**是 CI 強制的——`build-and-test`（required check）跑的 `dotnet test` 涵蓋新增的 9 個逐站點測試，任何一個站點被意外還原都會讓對應的那一個測試變紅（上方 RED-before-fix 就是這個機制本身的決定性重現，不是推論），`mutants` job 的 `kind: security` 額度不是這個修復唯一的執行保證。若未來 `VALID_KINDS` 新增一個 `correctness`/`compat` kind（#970 條目已提過這個需求，本項不重複開票），屆時回頭補一個 mutant entry 是合理的；本次判斷是不在沒有適配 kind 的情況下勉強塞。
 
-**未能驗證的部分（誠實列出）**：本次工作階段 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test` 這兩層，`js-test`（Jest/jsdom）與 `e2e` 兩個 CI leg 完全沒有覆蓋到 TagHelper 產生的 inline `<script>` 是否真的被瀏覽器執行，本項也沒有另外起 demo app 手動驗證瀏覽器端行為（純 C# 字串輸出＋ JS parser 靜態驗證，沒有執行 JS）。`FormatFuncName` 的 12 個站點（part B）完全沒有動，也沒有重新驗證 #999 的 47 站點總表在其他維度（例如是否還有站點介於「statement 位置」與「`FormatFuncName` 截斷」兩種分類之外）是否窮盡——這次工作只覆核了任務指示明確列出的 9＋2 個站點，不宣稱重新窮舉了全部 47 個。
+**未能驗證的部分（誠實列出）**：本次工作階段 HARD CONSTRAINT 禁止呼叫任何 internal infrastructure/GitHub API、禁止開 PR，因此這個修復尚未在真正的 internal CI CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test` 這兩層，`js-test`（Jest/jsdom）與 `e2e` 兩個 CI leg 完全沒有覆蓋到 TagHelper 產生的 inline `<script>` 是否真的被瀏覽器執行，本項也沒有另外起 demo app 手動驗證瀏覽器端行為（純 C# 字串輸出＋ JS parser 靜態驗證，沒有執行 JS）。`FormatFuncName` 的 12 個站點（part B）完全沒有動，也沒有重新驗證 #999 的 47 站點總表在其他維度（例如是否還有站點介於「statement 位置」與「`FormatFuncName` 截斷」兩種分類之外）是否窮盡——這次工作只覆核了任務指示明確列出的 9＋2 個站點，不宣稱重新窮舉了全部 47 個。
 
 **可重跑的盤點指令**：
 ```bash
@@ -857,7 +857,7 @@ python3 scripts/check-mutant-entries-parse.py
 
 ### 未能驗證的部分（誠實列出）
 
-本次工作階段 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test` 這兩層，沒有另外起 demo app 手動驗證瀏覽器端行為（純 C# 字串輸出＋ JS parser 靜態驗證，沒有執行 JS，也沒有覆蓋 `js-test`/`e2e` 兩個 CI leg）。`TextBoxTagHelper.cs:105`/`:109` 的 `oninput`/`onchange` HTML 屬性寫入（同一缺陷類別的第三個變體，見上方第 3 節）本次刻意不動、也沒有另開 issue——僅在本文件與 CHANGELOG 記錄觀察到的現象，尚未建立追蹤票。raw-interpolation 那一半（part A 的 9+1 個站點）的母體重新推導本次沒有重跑，完整性宣稱的驗證邊界見上方第 6 節。
+本次工作階段 HARD CONSTRAINT 禁止呼叫任何 internal infrastructure/GitHub API、禁止開 PR，因此這個修復尚未在真正的 internal CI CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test` 這兩層，沒有另外起 demo app 手動驗證瀏覽器端行為（純 C# 字串輸出＋ JS parser 靜態驗證，沒有執行 JS，也沒有覆蓋 `js-test`/`e2e` 兩個 CI leg）。`TextBoxTagHelper.cs:105`/`:109` 的 `oninput`/`onchange` HTML 屬性寫入（同一缺陷類別的第三個變體，見上方第 3 節）本次刻意不動、也沒有另開 issue——僅在本文件與 CHANGELOG 記錄觀察到的現象，尚未建立追蹤票。raw-interpolation 那一半（part A 的 9+1 個站點）的母體重新推導本次沒有重跑，完整性宣稱的驗證邊界見上方第 6 節。
 
 ---
 
@@ -948,9 +948,9 @@ python3 scripts/check-mutant-entries-parse.py
 
 **Mutation gate：刻意不加，理由陳述而非省略**。這個類別另外三個既有 log helper（`LogRejection`、`LogResolutionFailure`、`LogNonGuidAttachmentFk`）本身都沒有專屬 mutant——`test/mutants/entries/` 裡跟這個檔案有關的兩個 mutant（`fileattachmentguard824-reject-condition-neutralize`、`fileattachmentguard985-principal-key-check-neutralize`）都是中和**拒絕條件本身**（`!outcome.ResolvedIds.Contains(...)`/`IsCanonicalFileAttachmentPrincipalKey(...) && ...`），不是中和任何 log 呼叫——這是本檔案既有、一致的分類方式：log 是觀測性，不是安全控制。本次新增的 `LogPrincipalKeyRejection` 呼叫同樣符合這個分類：把它整行刪掉，`throw BuildPrincipalKeyRejectionException(...)` 仍然無條件執行（見上方第 1 點），guard 拒絕的寫入集合不變一個位元——刪掉這行 log 不會讓任何一支既有的行為測試（不是本次新加的 log 斷言測試）從紅變綠或從綠變紅，唯一會變紅的是本次新增的 `SaveChanges_GuidAlternateKeyPrincipal_LogsWarningAtThrow`（一支直接斷言 log 內容的測試，不是 mutation gate 的 `run_mutant.py` 機制）。因此依本文件既有慣例，不另外登記 mutant entry。`python3 scripts/check-mutant-entries-parse.py`：75 個 mutant entry 全部通過（本次未新增任何 mutant entry，數字不變）。
 
-**Stacked 分支破壞了下層自己的 mutation-gate 補丁——已修正，並記下這一類問題本身**：本節在 `LogPrincipalKeyRejection(...)` 呼叫（`:345`）與其後的 `throw BuildPrincipalKeyRejectionException(...)`（`:346`）之間，插進了四行新註解＋一行 log 呼叫；這段插入落在 `fileattachmentguard985-principal-key-check-neutralize.patch`（#985 自己用來釘住其修法的 mutation-gate 補丁）的 fixed context 範圍內，導致該補丁對本分支 tip 的 `git apply --check` 失敗（`error: patch failed: src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs:292`）——`run_mutant.py` 的 `apply_patch()` 就是跑這行 `git apply --check`，失敗會拋 `GateError(VERDICT_PATCH_DID_NOT_APPLY, ...)`，而 `PASSING_VERDICTS` 不含這個結果，於是 `mutation-gate`（`dotnet10` 的必過 status check）整條紅。**已修正**：補丁重新對本分支目前的程式碼產生（`git diff` 對著已手動套用同一個 `&& false` 中和的檔案跑出來），中和的條件本身逐字不變——`!IsCanonicalFileAttachmentPrincipalKey(principalKey) && fk.Properties.Any(p => IsGuidTypedProperty(p.ClrType)) && false`，`// MUTANT test/mutants ...` 註解也原樣保留——只有補丁的 context 行跟著新插入的 log 呼叫往下移了幾行。條目 JSON 的 `target_symbol` 同時也是過期的（寫著「line ~295-296」，實際條件現在在 `:338`-`:339`），一併訂正；逐項查過這個條目 JSON 其餘欄位，沒有其他行號類的宣稱。重新用 `python3 test/mutants/run_mutant.py --mutant fileattachmentguard985-principal-key-check-neutralize` 驗證，得到 `VERDICT: KILLED` / `GATE: PASS`。**這件事本身值得記一筆**：`test/mutants/patches/` 下每一個補丁都是對某個檔案在某個歷史時間點的固定 context 快照；任何後續分支只要改動同一個檔案裡落在補丁 context 範圍內的程式碼（哪怕只是插進註解與一行 log，不動任何判斷式），就可能讓補丁的 `git apply --check` 失效，而這個失效**沒有被任一邊的 PR 自己的 CI 抓到**——#1000 Part 1 這個分支的 CI 只看得到自己這棵樹（Gitea PR CI checkout 的是 head，不是 merge ref），從未套用過 #985 的補丁；#985 自己的 CI 早在 #1000 存在前就跑過、通過。是這次針對兩者疊加後狀態的 heterogeneous review 才發現的，不是任何自動化擋下來的。**誠實陳述現況，不誇大**：這次是人工在派工前逐一 `git apply --check` 過 `test/mutants/patches/` 下全部 65 個補丁才抓到（結果：64 個原本就過、這 1 個原本失敗、修正後 65 個全過）——目前沒有任何機制強制這件事，下一個 stacked 分支一樣可能重演同一個問題，這一段只是記錄問題與這次的修法，不是宣稱「這類問題以後不會再發生」。
+**Stacked 分支破壞了下層自己的 mutation-gate 補丁——已修正，並記下這一類問題本身**：本節在 `LogPrincipalKeyRejection(...)` 呼叫（`:345`）與其後的 `throw BuildPrincipalKeyRejectionException(...)`（`:346`）之間，插進了四行新註解＋一行 log 呼叫；這段插入落在 `fileattachmentguard985-principal-key-check-neutralize.patch`（#985 自己用來釘住其修法的 mutation-gate 補丁）的 fixed context 範圍內，導致該補丁對本分支 tip 的 `git apply --check` 失敗（`error: patch failed: src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs:292`）——`run_mutant.py` 的 `apply_patch()` 就是跑這行 `git apply --check`，失敗會拋 `GateError(VERDICT_PATCH_DID_NOT_APPLY, ...)`，而 `PASSING_VERDICTS` 不含這個結果，於是 `mutation-gate`（`dotnet10` 的必過 status check）整條紅。**已修正**：補丁重新對本分支目前的程式碼產生（`git diff` 對著已手動套用同一個 `&& false` 中和的檔案跑出來），中和的條件本身逐字不變——`!IsCanonicalFileAttachmentPrincipalKey(principalKey) && fk.Properties.Any(p => IsGuidTypedProperty(p.ClrType)) && false`，`// MUTANT test/mutants ...` 註解也原樣保留——只有補丁的 context 行跟著新插入的 log 呼叫往下移了幾行。條目 JSON 的 `target_symbol` 同時也是過期的（寫著「line ~295-296」，實際條件現在在 `:338`-`:339`），一併訂正；逐項查過這個條目 JSON 其餘欄位，沒有其他行號類的宣稱。重新用 `python3 test/mutants/run_mutant.py --mutant fileattachmentguard985-principal-key-check-neutralize` 驗證，得到 `VERDICT: KILLED` / `GATE: PASS`。**這件事本身值得記一筆**：`test/mutants/patches/` 下每一個補丁都是對某個檔案在某個歷史時間點的固定 context 快照；任何後續分支只要改動同一個檔案裡落在補丁 context 範圍內的程式碼（哪怕只是插進註解與一行 log，不動任何判斷式），就可能讓補丁的 `git apply --check` 失效，而這個失效**沒有被任一邊的 PR 自己的 CI 抓到**——#1000 Part 1 這個分支的 CI 只看得到自己這棵樹（internal infrastructure PR CI checkout 的是 head，不是 merge ref），從未套用過 #985 的補丁；#985 自己的 CI 早在 #1000 存在前就跑過、通過。是這次針對兩者疊加後狀態的 heterogeneous review 才發現的，不是任何自動化擋下來的。**誠實陳述現況，不誇大**：這次是人工在派工前逐一 `git apply --check` 過 `test/mutants/patches/` 下全部 65 個補丁才抓到（結果：64 個原本就過、這 1 個原本失敗、修正後 65 個全過）——目前沒有任何機制強制這件事，下一個 stacked 分支一樣可能重演同一個問題，這一段只是記錄問題與這次的修法，不是宣稱「這類問題以後不會再發生」。
 
-**Not verified this session**：跟本文件上方 #943/#944 條目相同的 hard constraint——本次工作階段禁止任何 Gitea/GitHub API 呼叫、禁止開 PR，因此尚未在真正的 Gitea Actions CI 上跑過；本機驗證只到 `dotnet build`/`dotnet test`/`check-mutant-entries-parse.py` 這三層。
+**Not verified this session**：跟本文件上方 #943/#944 條目相同的 hard constraint——本次工作階段禁止任何 internal infrastructure/GitHub API 呼叫、禁止開 PR，因此尚未在真正的 internal CI CI 上跑過；本機驗證只到 `dotnet build`/`dotnet test`/`check-mutant-entries-parse.py` 這三層。
 
 ---
 
@@ -1032,7 +1032,7 @@ $ grep -rnE 'function[[:space:]]*\([^)]*\)[[:space:]]*\{.*\}\s*\(' --include="*.
 
 **為什麼不是字串比對**：本 repo 自己的 `DataTableByteIdentityTests`（`test/WalkingTec.Mvvm.Core.Test/TagHelpers/DataTableByteIdentityTests.cs` + `.Fixtures.cs`）正是這個確切程式碼路徑（`AddSubButton` 的 `actionScript` 那一行）的 byte-identity 回歸測試——它的 fixture 把 `OnClickFunc` 設成裸識別字 `"myGridOnClickHandler"`（`DataTableByteIdentityTests.Vm.cs:209`），**在這個缺陷存在期間全程綠燈，精確原因是它的 fixture 從未真正觸發過這個缺陷**——即使觸發了，golden 字串一樣會把當下 emit 出來的內容（不論合法與否）原封不動凍結進期望值；字串比對測的是「跟上次一樣」，不是「這串文字是不是合法 JS」，兩者是不同的性質。
 
-**環境限制**：`.github/workflows/ci-build.yml`（本 repo 唯一跑 `dotnet test` 的 job，`build-and-test`）只有 `actions/setup-dotnet@v5`，**沒有 `actions/setup-node`**——`setup-node` 只出現在完全不同、跑 Jest 的 `js-test` job（`cd test/WalkingTec.Mvvm.Js.Tests && npm test`）裡。這個 repo 是本機 Gitea self-hosted act_runner，不是 GitHub-hosted image，不能假設兩個 job 共用同一份工具鏈。因此新測試**不能**依賴 `node` 在 `.NET test job` 的 PATH 上。
+**環境限制**：`.github/workflows/ci-build.yml`（本 repo 唯一跑 `dotnet test` 的 job，`build-and-test`）只有 `actions/setup-dotnet@v5`，**沒有 `actions/setup-node`**——`setup-node` 只出現在完全不同、跑 Jest 的 `js-test` job（`cd test/WalkingTec.Mvvm.Js.Tests && npm test`）裡。這個 repo 是本機 internal infrastructure self-hosted act_runner，不是 GitHub-hosted image，不能假設兩個 job 共用同一份工具鏈。因此新測試**不能**依賴 `node` 在 `.NET test job` 的 PATH 上。
 
 **選擇 Acornima 而非其他方案**：
 - **不用 `node` 子行程**：上述環境限制直接排除。若堅持要跑 `node`，必須在工具缺席時給出清楚標記的獨立失敗，而不是靜默通過或給出不明所以的例外——這個成本與風險都比選一個純 .NET 套件高。
@@ -1125,7 +1125,7 @@ await page.wait_for_function(
 
 **執行順序，更正**：#898 當時「RunLog 先測」的理由（避免壞掉的 EtlJob `<script>` 污染同一個 session）已隨 IIFE 缺陷修好而不成立；這輪 review 額外發現，那個順序同時也巧合地讓 `open_grid_via_direct_tab()` 的 table.cache race 從未在 RunLog 自己身上現形過（原因見上方「根因」小節）——不是因為 RunLog 本身不會遇到這個 race，只是它天生不會踩到「第二次呼叫」這個條件。**helper 本身修好後，順序不再是任何已知問題的必要 workaround**——已直接實測反過來的順序（EtlJob 先、RunLog 後）冷啟動一樣穩定 PASS（見上方）。程式碼仍保留原順序（EtlRunLog 在前），純粹因為這是現有、已充分驗證過的設定，這輪修法沒有理由再多改一件沒有必要性的事。
 
-**未能驗證**：這輪修法尚未在真正的 Gitea Actions CI 上跑過（本次工作階段的 hard constraint 禁止任何 Gitea/GitHub API 呼叫、禁止開 PR）——只在本機真實 demo process＋真實瀏覽器上驗證過，不是模擬或程式碼層級推論。
+**未能驗證**：這輪修法尚未在真正的 internal CI CI 上跑過（本次工作階段的 hard constraint 禁止任何 internal infrastructure/GitHub API 呼叫、禁止開 PR）——只在本機真實 demo process＋真實瀏覽器上驗證過，不是模擬或程式碼層級推論。
 
 ### 6. Mutant：考慮過，判斷不加
 
@@ -1147,7 +1147,7 @@ await page.wait_for_function(
 - `python3 wtm_e2e_tests.py --tc 27,28,30`（鄰近測試，皆不使用 `open_grid_via_direct_tab()`）：3/3 PASS，確認這次修法沒有波及其他測試。
 - `python3 wtm_e2e_tests.py`（全部 36 支 TC，同一個熱 process）：**Total: 36 | PASS: 35 | FAIL: 0 | ERROR: 0 | SKIP: 1**（唯一的 SKIP 是既有的 TC-36，demo 未啟用多租戶主機模式，與本次修法無關）——與 CI 那次失敗的「Total: 36 | PASS: 34 | FAIL: 1 | ERROR: 0 | SKIP: 1」相比，唯一變化就是 TC-29 從 FAIL 翻成 PASS，其餘 34 個 PASS + 1 個 SKIP 不變。
 
-**仍未能驗證的部分（誠實列出）**：這輪修法尚未在真正的 Gitea Actions CI 上跑過——本次工作階段的 hard constraint 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，只能本機驗證。本機的 demo process／SQLite／Playwright 版本與 CI 的自架 runner不保證逐一致（例如 CI runner 的 CPU/記憶體資源、Chromium 版本可能不同），因此「本機冷啟動可重現、修好後可穩定通過」不等於「CI runner 上保證不會有更極端的時序」——但 root cause（等待條件本身邏輯錯誤，不是單純的時間不夠長）已經修好，且新等待條件的正確性不依賴任何特定的時間常數。
+**仍未能驗證的部分（誠實列出）**：這輪修法尚未在真正的 internal CI CI 上跑過——本次工作階段的 hard constraint 禁止呼叫任何 internal infrastructure/GitHub API、禁止開 PR，只能本機驗證。本機的 demo process／SQLite／Playwright 版本與 CI 的自架 runner不保證逐一致（例如 CI runner 的 CPU/記憶體資源、Chromium 版本可能不同），因此「本機冷啟動可重現、修好後可穩定通過」不等於「CI runner 上保證不會有更極端的時序」——但 root cause（等待條件本身邏輯錯誤，不是單純的時間不夠長）已經修好，且新等待條件的正確性不依賴任何特定的時間常數。
 
 ---
 
@@ -1199,7 +1199,7 @@ LookupCacheService.cs:25:    public class LookupCacheService : ILookupCacheServi
 
 **驗證**（在本次實際 base commit `3887d7b11` 上量測，未採信文件裡任何舊數字——當天數字已變動多次）：`find . -name 'demo.db*' -path '*bin*' -delete && dotnet build WalkingTec.Mvvm.sln`——1 個已知、跟本次修改無關的錯誤：`NETSDK1082`（`BlazorDemo.Client` 缺 `browser-wasm` runtime pack），**直接對本次 base commit 單獨重建同一個專案確認過同一個錯誤存在**，不是本次修法造成的新問題。`dotnet test test/WalkingTec.Mvvm.Core.Test/`：修復前（base commit 加上本次新增的兩個測試方法、production 程式碼尚未修改）**5033 passed, 1 failed**（total 5034——唯一失敗即上方 RED-before-fix 那條）；修復後 **5034 passed, 0 failed**（total 不變，只有那條新測試從紅轉綠，其餘全部持平，未見任何連帶回歸）。
 
-**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。上方「class × method × has-check」survey 只是全樹一次性的靜態 grep 快照，不是持續稽核機制——未來若有人新增第三個 `ILookupCacheService` 實作或用替代寫法繞過 `_registry.ContainsKey(typeof(T))` 這個字面模式，這份 survey 不會自動重跑並抓到。
+**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 internal infrastructure/GitHub API、禁止開 PR，因此這個修復尚未在真正的 internal CI CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。上方「class × method × has-check」survey 只是全樹一次性的靜態 grep 快照，不是持續稽核機制——未來若有人新增第三個 `ILookupCacheService` 實作或用替代寫法繞過 `_registry.ContainsKey(typeof(T))` 這個字面模式，這份 survey 不會自動重跑並抓到。
 
 ## `WtmFileProvider.GetFileTenantScoped`/`GetFileNameTenantScoped`：`BaseImportVM` 的 `UploadFileId` 讀取點改走不受旗標影響的租戶範圍讀取（#1011，2026-08-03）
 
@@ -1264,7 +1264,7 @@ must not be parsed into any template rows — got 1. Errors:
 
 `find . -name 'demo.db*' -path '*bin*' -delete && dotnet build WalkingTec.Mvvm.sln -c Release`：0 錯誤。`dotnet test test/WalkingTec.Mvvm.Core.Test/ -c Release --filter "TestCategory!=Integration"`：**5063 passed, 0 failed**（含本次新增 8 個測試）。`dotnet test test/WalkingTec.Mvvm.Admin.Test/ -c Release`：**192 passed, 0 failed**。`dotnet test test/WalkingTec.Mvvm.Api.Test/ -c Release`：**103 passed, 0 failed**，1 個既有 skip（`AlwaysFails_MutationGateBaselineSelftestFixture`，mutation-gate 自我測試用，非本次相關）。
 
-**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這個修復尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。「三份 demo `FileApiController.cs` 都沒呼叫 `UploadFileId` 相關的 `GetFile`」這個結論是逐檔人工確認，不是全樹 grep 掃描的結果，如果未來有 demo 樣板繞過 `BaseImportVM` 自行讀取 `UploadFileId`，這份記錄不會自動抓到。CHANGELOG 的 Red Line 修正（`[10.21.0]` #859 條目原本寫「regardless of which route reached it」）改動的是這份文件已經記錄過的既有 caveat 的**措辭**，不是新增一個之前沒被覆核過的事實。
+**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 internal infrastructure/GitHub API、禁止開 PR，因此這個修復尚未在真正的 internal CI CI 上跑過——本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py` 這三層。「三份 demo `FileApiController.cs` 都沒呼叫 `UploadFileId` 相關的 `GetFile`」這個結論是逐檔人工確認，不是全樹 grep 掃描的結果，如果未來有 demo 樣板繞過 `BaseImportVM` 自行讀取 `UploadFileId`，這份記錄不會自動抓到。CHANGELOG 的 Red Line 修正（`[10.21.0]` #859 條目原本寫「regardless of which route reached it」）改動的是這份文件已經記錄過的既有 caveat 的**措辭**，不是新增一個之前沒被覆核過的事實。
 
 ---
 
@@ -1272,17 +1272,17 @@ must not be parsed into any template rows — got 1. Errors:
 
 **這是 CI-only 基礎設施，不動任何 `WalkingTec.Mvvm.*` package 程式碼。**
 
-**事故本身**：mutant patch 的 fixed context 可以被「另一張、完全不碰這個 patch 檔案」的 PR 用一次無關編輯打壞。本次工作階段之前，`#1000`（同一個 release cycle，見上方該條目）在 `FileAttachmentSaveChangesGuard.cs` 的 rejection `if` 與 `throw` 之間插入一行 `LogPrincipalKeyRejection(...)` 呼叫——這一行剛好落在 `test/mutants/patches/fileattachmentguard985-principal-key-check-neutralize.patch`（`#985` 自己出的、用來釘住自己修法的 patch）的 fixed context 裡面。`git apply --check` 對 `#985` 單獨跑會過；對 `#985` + `#1000` 一起跑會失敗，訊息是 `patch does not apply`。**兩張 PR 自己的 CI 都看不到這件事**：見下方「Gitea checkout 機制的查證」。`run_mutant.py` 自己的 `apply_patch()` 跑的就是這一模一樣的 `git apply --check`，失敗時丟出 `GateError(VERDICT_PATCH_DID_NOT_APPLY)`；`PASSING_VERDICTS` 不含這個 verdict，所以下游的 `mutants`/`meta-selftest` job 會正確地讓 gate 失敗——但要等到兩個分支真正共享同一棵樹的那一刻才會發生，在這個 repo 的 checkout 模型下，那是合併後第一次對 `dotnet10` 的 `push`，比任何一張 PR 自己的 CI 晚了一整個 gate 週期。
+**事故本身**：mutant patch 的 fixed context 可以被「另一張、完全不碰這個 patch 檔案」的 PR 用一次無關編輯打壞。本次工作階段之前，`#1000`（同一個 release cycle，見上方該條目）在 `FileAttachmentSaveChangesGuard.cs` 的 rejection `if` 與 `throw` 之間插入一行 `LogPrincipalKeyRejection(...)` 呼叫——這一行剛好落在 `test/mutants/patches/fileattachmentguard985-principal-key-check-neutralize.patch`（`#985` 自己出的、用來釘住自己修法的 patch）的 fixed context 裡面。`git apply --check` 對 `#985` 單獨跑會過；對 `#985` + `#1000` 一起跑會失敗，訊息是 `patch does not apply`。**兩張 PR 自己的 CI 都看不到這件事**：見下方「internal infrastructure checkout 機制的查證」。`run_mutant.py` 自己的 `apply_patch()` 跑的就是這一模一樣的 `git apply --check`，失敗時丟出 `GateError(VERDICT_PATCH_DID_NOT_APPLY)`；`PASSING_VERDICTS` 不含這個 verdict，所以下游的 `mutants`/`meta-selftest` job 會正確地讓 gate 失敗——但要等到兩個分支真正共享同一棵樹的那一刻才會發生，在這個 repo 的 checkout 模型下，那是合併後第一次對 `dotnet10` 的 `push`，比任何一張 PR 自己的 CI 晚了一整個 gate 週期。
 
-### Gitea checkout 機制的查證（issue 本身的斷言，逐字核對，不採信記憶）
+### internal infrastructure checkout 機制的查證（issue 本身的斷言，逐字核對，不採信記憶）
 
-Issue 主張：這個 repo 的 Gitea PR CI 對 `pull_request` 事件 checkout 的是 `refs/pull/N/head`，不是 merge ref。查 `.github/workflows/*.yml` 與 `docs/ci-operations.md`：**這份記錄完全支持這個斷言，不需要修正 issue 的 framing**。`docs/ci-operations.md` 第 133-144 行（第 5 節）逐字寫著：
+Issue 主張：這個 repo 的 internal infrastructure PR CI 對 `pull_request` 事件 checkout 的是 `refs/pull/N/head`，不是 merge ref。查 `.github/workflows/*.yml` 與 `docs/ci-operations.md`：**這份記錄完全支持這個斷言，不需要修正 issue 的 framing**。`docs/ci-operations.md` 第 133-144 行（第 5 節）逐字寫著：
 
 > `actions/checkout@v5` 在 `pull_request` 事件只 checkout PR 自己的 head，不是 base+head 的 merge
 >
 > **事實**：job log 的 checkout step 印出：`[command]/usr/bin/git checkout --progress --force refs/remotes/pull/<N>/head`
 >
-> Gitea 對 `pull_request` 事件 checkout 的是 **PR 分支自己的快照**（`refs/remotes/pull/N/head`）。**這跟 GitHub Actions 相反**：GitHub 對同一事件 checkout 的是 base 與 head 的 merge 結果……Gitea 不會——PR 分支比 base 舊多少，CI 就看不到 base 上比它新的東西。
+> internal infrastructure 對 `pull_request` 事件 checkout 的是 **PR 分支自己的快照**（`refs/remotes/pull/N/head`）。**這跟 GitHub Actions 相反**：GitHub 對同一事件 checkout 的是 base 與 head 的 merge 結果……internal infrastructure 不會——PR 分支比 base 舊多少，CI 就看不到 base 上比它新的東西。
 
 同一小節也記錄了這個機制曾造成的實際案例（`#906`：`#882` 合併後 `production-readiness.md` 已更新、`dotnet10` 上測試全綠，但開在 `#882` 之前的 PR `#881`/`#904` 仍各自紅在同一斷言，因為它們的 checkout 停在合併前的快照）——這正是同一個機制的另一個展示，跟本票要修的「patch fixed-context 被跨 PR 打壞」是同一根因的不同症狀。`.github/workflows/*.yml` 逐一確認：8 個 workflow 檔案的 `pull_request` trigger 都用 `actions/checkout@v5` 的預設行為（沒有任何一處自行覆寫成 merge-ref checkout），跟 `docs/ci-operations.md` 記錄的一致。**結論：issue 的 framing 站得住腳，不需要更正。**
 
@@ -1333,7 +1333,7 @@ entries pointing at a missing patch file: []
 **RED**（`python3 scripts/check-mutant-entries-parse.py`，樹被探針行擾動後，逐字）：
 
 ```
-::error::1 of 66 mutant patch file(s) under test/mutants/patches do NOT apply to the current tree (named above, one per line, each with its target file and git's own reason) -- test/mutants/run_mutant.py's apply_patch() will raise GateError(VERDICT_PATCH_DID_NOT_APPLY) for each of these the moment its entry is selected, failing the mutation-gate 'mutants'/'meta-selftest' job. The most common cause (issue #1005): an unrelated commit -- often from another PR whose own CI could not see this patch at all, since Gitea PR CI checks out refs/pull/N/head, never a merge ref (docs/ci-operations.md) -- edited a line INSIDE one of these patches' fixed context. Regenerate the patch(es) named above against the current tree.
+::error::1 of 66 mutant patch file(s) under test/mutants/patches do NOT apply to the current tree (named above, one per line, each with its target file and git's own reason) -- test/mutants/run_mutant.py's apply_patch() will raise GateError(VERDICT_PATCH_DID_NOT_APPLY) for each of these the moment its entry is selected, failing the mutation-gate 'mutants'/'meta-selftest' job. The most common cause (issue #1005): an unrelated commit -- often from another PR whose own CI could not see this patch at all, since internal infrastructure PR CI checks out refs/pull/N/head, never a merge ref (docs/ci-operations.md) -- edited a line INSIDE one of these patches' fixed context. Regenerate the patch(es) named above against the current tree.
 INFO: 0 orphan patch file(s) under test/mutants/patches (every patch is referenced by an entry).
 test/mutants/patches/fileattachmentguard985-principal-key-check-neutralize.patch does not apply to the current tree (target: src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs) -- error: patch failed: src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs:335
 error: src/WalkingTec.Mvvm.Core/FileAttachmentSaveChangesGuard.cs: patch does not apply
@@ -1394,11 +1394,11 @@ EXIT: 1
 
 ### 誠實揭露的範圍（不宣稱防住整個缺陷類別）
 
-這個修法**不**防住 #1005 這個缺陷類別本身。它防住的是：(1) 一張 PR 自己的 commit 打壞自己某個 patch 的 fixed context——在那張 PR 自己的 CI 裡，比 `mutants`/`meta-selftest` job 更早、更便宜地擋下；(2) 合併到 `dotnet10` 之後的每一次 `push`——這時全樹已經是合併後的真實狀態，沒有第二張還沒合併的 PR 需要看不到。它**沒有、也不可能**防住 #1005 本身發生的那種跨分支情況：兩張 PR 各自獨立看都是綠的，只有兩者都合併之後才會衝突——因為 Gitea 的 PR CI checkout 模型下，沒有任何一次 CI 執行會同時看到兩個還沒合併的分支的樹。這是這個 repo checkout 機制本身的結構性限制，不是這支腳本能從單一 PR 的 job 裡解決的東西。**誠實的說法是「比 gate 早一個合併週期擋下，且對單分支情況完全防住」，不是「防住 #1005 這一整類缺陷」。**
+這個修法**不**防住 #1005 這個缺陷類別本身。它防住的是：(1) 一張 PR 自己的 commit 打壞自己某個 patch 的 fixed context——在那張 PR 自己的 CI 裡，比 `mutants`/`meta-selftest` job 更早、更便宜地擋下；(2) 合併到 `dotnet10` 之後的每一次 `push`——這時全樹已經是合併後的真實狀態，沒有第二張還沒合併的 PR 需要看不到。它**沒有、也不可能**防住 #1005 本身發生的那種跨分支情況：兩張 PR 各自獨立看都是綠的，只有兩者都合併之後才會衝突——因為 internal infrastructure 的 PR CI checkout 模型下，沒有任何一次 CI 執行會同時看到兩個還沒合併的分支的樹。這是這個 repo checkout 機制本身的結構性限制，不是這支腳本能從單一 PR 的 job 裡解決的東西。**誠實的說法是「比 gate 早一個合併週期擋下，且對單分支情況完全防住」，不是「防住 #1005 這一整類缺陷」。**
 
 ### 未能驗證的部分
 
-本次工作階段的硬性限制禁止呼叫任何 Gitea/GitHub API、禁止開 PR，因此這個修法尚未在真正的 Gitea Actions CI 上跑過——本機驗證只到：`python3 scripts/check-mutant-entries-parse.py --selftest`/真掃描、上方逐字擷取的 RED/GREEN 與三個 precondition 案例、`python3 -c "import yaml; yaml.safe_load(...)"` 與 `scripts/audit-workflow-timeouts.py`（133/133 real-work step 仍全部帶 `timeout-minutes`，本票只改了既有一個 step 的 `run:` 內容與周圍註解，沒有新增 step，數字不變）。這個 checkout 機制本身（`refs/pull/N/head` vs. merge ref）的查證，是讀 `docs/ci-operations.md` 既有記錄，不是本次重新在真實 Gitea PR 上觸發驗證——該文件本身的紀錄是本次工作階段之外、既有的既有事實。
+本次工作階段的硬性限制禁止呼叫任何 internal infrastructure/GitHub API、禁止開 PR，因此這個修法尚未在真正的 internal CI CI 上跑過——本機驗證只到：`python3 scripts/check-mutant-entries-parse.py --selftest`/真掃描、上方逐字擷取的 RED/GREEN 與三個 precondition 案例、`python3 -c "import yaml; yaml.safe_load(...)"` 與 `scripts/audit-workflow-timeouts.py`（133/133 real-work step 仍全部帶 `timeout-minutes`，本票只改了既有一個 step 的 `run:` 內容與周圍註解，沒有新增 step，數字不變）。這個 checkout 機制本身（`refs/pull/N/head` vs. merge ref）的查證，是讀 `docs/ci-operations.md` 既有記錄，不是本次重新在真實 internal infrastructure PR 上觸發驗證——該文件本身的紀錄是本次工作階段之外、既有的既有事實。
 
 ---
 
@@ -1408,7 +1408,7 @@ EXIT: 1
 
 ### 已用指令驗證的事實
 
-- **feed 乾淨**。Gitea packages API（`/api/v1/packages/chiu0831?type=nuget`）列出六個套件的全部版本，最高一律是 `10.21.0-rc.2`。`10.21.0`、`10.21.0-rc.7`、`99.0.0-rc.5`、`99.0.0-smoketest` 都不在上面。repo 內亦無任何 `10.21.0` / `99.0.0` 的 git tag。
+- **feed 乾淨**。internal infrastructure packages API（`/api/v1/packages/chiu0831?type=nuget`）列出六個套件的全部版本，最高一律是 `10.21.0-rc.2`。`10.21.0`、`10.21.0-rc.7`、`99.0.0-rc.5`、`99.0.0-smoketest` 都不在上面。repo 內亦無任何 `10.21.0` / `99.0.0` 的 git tag。
 - **時序與原假設相反**。`~/.nuget/packages` 內各版本的寫入時間：`99.0.0-rc.5` 07-31 07:33、`10.21.0-rc.7` 07-31 07:44、`99.0.0-smoketest` 07-31 09:06、**`10.21.0` 07-31 20:25**、`10.21.0-rc.1` 08-01 23:56、`10.21.0-rc.2` 08-02 01:12。那顆 `10.21.0` **早於兩個 rc**，是驗證性建置直接沿用了當時分支上 `version.props` 的裸版號，rc 後綴是隔天真正發版流程才加的。
 - **內容與來源**（nuspec `repository` 屬性 + `strings` 對組件比對完整型別名）：`10.21.0-rc.2` 來自 `refs/heads/dotnet10` `7e0d99b78`，含 `FileAttachmentSaveChangesGuard`×3、`UnresolvableFileAttachmentReferenceException`×1；`10.21.0` 來自 `refs/heads/docs/958-advisory-issue-keyed-corrections` `b0e4ebc02`，兩者皆 0；`10.21.0-rc.7` 來自 `refs/heads/ci/925-release-gate` `18a359ca0`，兩者皆 0。
 - **傳播通道是 global-packages 目錄，不是 feed**。WTM 與下游專案在同一台機器同一使用者下共用 `~/.nuget/packages`；NuGet 解析版本時先看這個目錄，命中就不連任何 source。這解釋了下游觀察到的表面矛盾：`dotnet list package --outdated` 正確回報「沒有更新」（它查 source），而污染產物其實只差把版本約束改成 `10.21.0` 就會被離線吃進去。
@@ -1609,7 +1609,7 @@ Failed!  - Failed:     1, Passed:     1, Skipped:     0, Total:     2, Duration:
 
 `find . -name 'demo.db*' -path '*bin*' -delete && dotnet build src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj -c Release`：0 錯誤（既有警告不變，跟本次改動無關的既有 XML doc/nullable 警告）。`dotnet test test/WalkingTec.Mvvm.Core.Test/ -c Release --filter "TestCategory!=Integration" -m:1`：**5092 passed, 0 failed**（含本次新增 7 個測試——round-trip 2 個＋釘點測試 5 個，後者含 review 之後補上的 v2 欄位集合推導測試與 v3 投影身分測試）。`test/mutants/patches/*.patch`（68 個檔案）逐一 `git apply --check`：**68/68 通過**（review 補測試後重新核對一次，結果不變），沒有 patch 動到 `WtmFileProvider.cs`。
 
-**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 Gitea/GitHub API、禁止開 PR，本機驗證只到 `dotnet build`/`dotnet test` 這兩層，沒有跑過真正的 Gitea Actions CI。**consequence 是追溯出來的，不是重現出來的**：沒有架設任何多群組 OSS 環境（真實 Aliyun OSS endpoint、多個 `FileHandlerOptions.GroupName`）去實際驗證「讀錯 bucket」「刪錯 bucket」——上面的因果鏈是讀 `WtmOssFileHandler.GetFileData`/`DeleteFile` 原始碼、對照 `HandlerInfo` 一路是 null 推出來的，不是對一個真的跑著兩個 bucket 的部署發過請求、看到過真的讀到 A bucket 的東西。`DeleteFileCore` 路徑仍然沒有一支透過真正的 file handler 直接觀察「`HandlerInfo` 被傳進 `fh.DeleteFile(file)` 那一刻」的 round-trip 測試（理由見上方「範圍聲明的更新」段落：唯一做法要動 `WtmFileProvider` 的 process-wide 可變靜態狀態，判斷風險大於效益）；但「`DeleteFileCore` 跟 `GetFileCore` 是不是共用同一個投影物件」這件事，第一版報告只是作者互動驗證過、沒有測試守著，這一輪已經補上（v3 IL 身分測試，RED/GREEN 皆已逐字擷取）——這是本次修正的範圍，不是新的未能驗證項目。
+**未能驗證的部分（誠實列出，不是隱藏）**：本次工作階段的 HARD CONSTRAINT 禁止呼叫任何 internal infrastructure/GitHub API、禁止開 PR，本機驗證只到 `dotnet build`/`dotnet test` 這兩層，沒有跑過真正的 internal CI CI。**consequence 是追溯出來的，不是重現出來的**：沒有架設任何多群組 OSS 環境（真實 Aliyun OSS endpoint、多個 `FileHandlerOptions.GroupName`）去實際驗證「讀錯 bucket」「刪錯 bucket」——上面的因果鏈是讀 `WtmOssFileHandler.GetFileData`/`DeleteFile` 原始碼、對照 `HandlerInfo` 一路是 null 推出來的，不是對一個真的跑著兩個 bucket 的部署發過請求、看到過真的讀到 A bucket 的東西。`DeleteFileCore` 路徑仍然沒有一支透過真正的 file handler 直接觀察「`HandlerInfo` 被傳進 `fh.DeleteFile(file)` 那一刻」的 round-trip 測試（理由見上方「範圍聲明的更新」段落：唯一做法要動 `WtmFileProvider` 的 process-wide 可變靜態狀態，判斷風險大於效益）；但「`DeleteFileCore` 跟 `GetFileCore` 是不是共用同一個投影物件」這件事，第一版報告只是作者互動驗證過、沒有測試守著，這一輪已經補上（v3 IL 身分測試，RED/GREEN 皆已逐字擷取）——這是本次修正的範圍，不是新的未能驗證項目。
 
 ---
 
@@ -1629,7 +1629,7 @@ Run 6509（`dotnet10@7cc2b864d`）在 `EnsureCreated()` 死於 `Error 945`
 （insufficient system memory in resource pool 'internal'），同一支測試平常 957ms、
 那次跑了 13 秒才死——thrashing 後放棄，不是硬 crash。**間歇性**：同一天多數 run
 9/9 全過。`services.mssql` 當時完全沒有記憶體邊界，會跟同一個 job 容器（同時在
-build/test）共用這台 mac-mini act_runner 背後那顆硬 **4 CPU / 3.813GiB** 的 Docker VM。
+build/test）共用這台 internal-host act_runner 背後那顆硬 **4 CPU / 3.813GiB** 的 Docker VM。
 
 ### 這次改動實際做了什麼，依實際證據價值排序（誠實邊界）
 
@@ -1656,8 +1656,8 @@ build/test）共用這台 mac-mini act_runner 背後那顆硬 **4 CPU / 3.813GiB
 ### 這次改動**沒有**做、也不宣稱的事
 
 - **不宣稱修好 #1020 描述的 flake。** 缺陷是間歇性的，本次修法能否讓它消失只能靠往後
-  多次真實 run 的觀察，這次工作階段本身完全沒有跑過真正的 Gitea Actions CI（環境的
-  HARD CONSTRAINT 禁止呼叫 Gitea API、禁止開 PR）。
+  多次真實 run 的觀察，這次工作階段本身完全沒有跑過真正的 internal CI CI（環境的
+  HARD CONSTRAINT 禁止呼叫 internal infrastructure API、禁止開 PR）。
 - **不宣稱 `MSSQL_MEMORY_LIMIT_MB` 對 azure-sql-edge 生效**——上面已經用實測數字說明
   為什麼不宣稱。
 - **不宣稱 `--memory=2560m` 框住了 run 6509 實際發生的情況——用真實測試負載覆核，結論
@@ -1684,7 +1684,7 @@ build/test）共用這台 mac-mini act_runner 背後那顆硬 **4 CPU / 3.813GiB
 - **不宣稱驗證過「mssql 會不會被同容器的 build/test 擠壓」這件事——這個更直接的量測
   規劃過，但沒有做。** 方法是讓 mssql 跑 9 項整合測試的同時，另一個容器對同一個
   solution 做完整 `dotnet build`，兩邊都取樣記憶體。沒有做的原因：投入這個工作階段的
-  當下，這台機器上正有一個真實、不相關的 Gitea Actions job（`mutation-gate.yml` 的
+  當下，這台機器上正有一個真實、不相關的 internal CI job（`mutation-gate.yml` 的
   `mutants` job）在跑，CPU 用到 ~260%、記憶體 ~800MiB，且該 job 自己的文件記載預算上
   看 ~125 分鐘——刻意疊加一個高負擔的 build+test 去搶同一顆 4 CPU / 3.813GiB 的
   Docker daemon，代價是可能拖慢或搞壞一個真實、無關的 CI job，換來的量測品質還不見得
@@ -1869,7 +1869,7 @@ azure-sql-edge 容器跑了兩次 `dotnet test ... --filter "TestCategory=Integr
 
 **新揭露的缺口（未修，已立案）**：目前無新揭露、未修的缺口——本節維持存在做為標準結構（`ProductionReadinessBaselineDriftTests863` 的結構性防呆會抓這個標題被靜默改名/移除），#948-F8 是本節最近一次的內容，已於上方移至「強化（已合併）」。
 
-**#863 更正**：這裡曾在下列三個都已關閉後仍列為未修，其中 #721 那條還進一步指示採用者「先確認已修」——等於叫人去查一個已經不存在的問題，而這份文件正是 CLAUDE.md Red Line 用來比對每個 commit/PR/CHANGELOG 宣稱強度的基準，基準本身漂移就讓整個機制失效。三者現況：#721（HTTP 層 refresh 路由衝突）已於 2026-07-17 修復；#722（`ff.OpenDialog2` 剝除 selector 對話框自身 `<script>`）已於 2026-07-18 修復；#696（public mirror 洩漏 macOS 使用者名稱/內部路徑）已於 2026-07-18 修復。維護機制：`ProductionReadinessBaselineDriftTests863`（`test/WalkingTec.Mvvm.Core.Test/Security/`）會抓出本節每個以 `- **#N` 起始的條目、查 Gitea API 狀態，若已關閉卻還列在這裡就會讓測試紅——需要網路與（非必要的）token，環境不可用時明確 Inconclusive，不會誤判成綠燈。
+**#863 更正**：這裡曾在下列三個都已關閉後仍列為未修，其中 #721 那條還進一步指示採用者「先確認已修」——等於叫人去查一個已經不存在的問題，而這份文件正是 CLAUDE.md Red Line 用來比對每個 commit/PR/CHANGELOG 宣稱強度的基準，基準本身漂移就讓整個機制失效。三者現況：#721（HTTP 層 refresh 路由衝突）已於 2026-07-17 修復；#722（`ff.OpenDialog2` 剝除 selector 對話框自身 `<script>`）已於 2026-07-18 修復；#696（public mirror 洩漏 macOS 使用者名稱/內部路徑）已於 2026-07-18 修復。維護機制：`ProductionReadinessBaselineDriftTests863`（`test/WalkingTec.Mvvm.Core.Test/Security/`）會抓出本節每個以 `- **#N` 起始的條目、查 internal infrastructure API 狀態，若已關閉卻還列在這裡就會讓測試紅——需要網路與（非必要的）token，環境不可用時明確 Inconclusive，不會誤判成綠燈。
 
 **未解的硬化 epic**：
 - **#470 / #567**：ff.OpenDialog eval sink 退役與 LayUI CSP 全硬化仍進行中。#627 kill-switch（可 opt-in 停用 legacy 動態腳本執行）+ islandification 已推進，`framework_layui.js` 全檔僅剩 1 個 `eval(`（deprecated IsScript 路徑）。**對一般 CRUD app，kill-switch 已可作為 staging 稽核工具**；生產全面啟用待 widget islandification 完成。**這是走 strict CSP 的採用者最需要追蹤的 roadmap。**
@@ -1941,7 +1941,7 @@ NPOI 2.7.6（也包含最新 2.8.0）transitive 拉 vulnerable `System.Security.
 | K8s 官方部署案例 | 缺 |
 | Distributed cache / session 文件 | 缺 |
 | Build 警告 | ~200–460（多為 nullable CS8632/CS8602、XML-doc cref 等風格警告，非錯誤；Mvc nullable 漸進中，#718） |
-| Open source 社群 | 小，主要溝通在 Gitea issues |
+| Open source 社群 | 小，主要溝通在 internal infrastructure issues |
 | 主流商業支援 | 無 SLA、無付費 support 管道 |
 | File cleanup（Add 路徑孤兒檔案） | #815 修 `DeletedFileIds` 任意檔案刪除漏洞——最終在寫入端（`BaseCRUDVM.DoAdd/DoEdit/DoDelete` 系列）kill 掉 primitive 本身：posted 的 `FileAttachment` FK 若在呼叫者自己的 tenant scope（query filter 強制開啟，不受 `EnforceTenantFileScope` 影響）下無法解析，直接在 `SaveChanges` 前被拒絕/還原，讀跟刪都連帶被擋。`DeleteFileTenantScoped`（sink 端 tenant-scoped 解析）與 entity-reference 檢查保留為第二層防禦。代價是 `DoAdd`/`DoAddAsync` 路徑上 `DeletedFileIds` 完全失效（新增中的一列沒有可驗證的既存 FK 參照）——「上傳後、儲存前取消」的檔案會變成永久孤兒 `FileAttachment` 列 + 實體 blob，無框架清理機制。已立案 #822（reaper，非 P0，僅儲存空間浪費）。 |
 | #815 tenant-scoping 的已知邊界（單一租戶部署） | tenant-scoped 檢查比對 `FileAttachment.TenantCode == DC.TenantCode`；未啟用多租戶時兩邊通常都是 `null`，比對永遠成立、等於沒有隔離。也就是說 #815 這輪修的是「任意租戶」的洞；在單一租戶部署裡剩下的是「任一使用者可刪除/引用任何其他使用者的檔案」，這條 tenant scoping 從未處理過，仍是 open（`FileAttachment` 本來就沒有 owner 欄位，需要另外的 per-caller 授權機制，如 #814/#811 系列）。 |
@@ -2008,7 +2008,7 @@ NPOI 2.7.6（也包含最新 2.8.0）transitive 拉 vulnerable `System.Security.
 - [`docs/release-adoption-ledger.md`](./release-adoption-ledger.md) — **「已修」與「已保護」的落差追蹤**：已知下游（BMS）的 repo pin／staging／production 三層版本現況、每項近期安全修復對該下游的可達性分類與證據、production 採用延遲／可達風險下降／rollback 次數這組新 KPI
 - [`docs/dependency-management.md`](./dependency-management.md) — 套件版本政策、NU1510 雙意義警告、NPOI security pin 詳解
 - [`docs/csp-hardening.md`](./csp-hardening.md) — #470/#627 CSP 硬化 roadmap 與 kill-switch 分級啟用
-- [`docs/ci-operations.md`](./ci-operations.md) — Gitea Actions 已知不相容與排錯
+- [`docs/ci-operations.md`](./ci-operations.md) — internal CI 已知不相容與排錯
 - [`docs/wtm-developer-manual.md`](./wtm-developer-manual.md) — 完整開發手冊（§ 安全機制）
 - [`docs/structured-logging.md`](./structured-logging.md) — 結構化 log 整合方式
 - [`CHANGELOG.md`](../CHANGELOG.md) — 版本演進與每版 breaking changes（[Unreleased] 含本批次全部條目）

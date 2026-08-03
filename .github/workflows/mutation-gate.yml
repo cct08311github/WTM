@@ -21,7 +21,7 @@ name: Mutation Gate
 # issue on whatever guard or test actually regressed.
 #
 # Also note (see CLAUDE.md "CI red does not mean failed"): actions/upload-artifact@v4
-# is incompatible with this Gitea Actions server and can flip a job's conclusion to
+# is incompatible with this internal CI server and can flip a job's conclusion to
 # failure even when every step it ran genuinely succeeded (issue #11). The artifact
 # upload steps below are `continue-on-error: true` and `if: always()` specifically so
 # that quirk can never be the reason THIS job is red -- when in doubt, read the
@@ -29,7 +29,7 @@ name: Mutation Gate
 #
 # NOTE ON SHAPE: an earlier version of this workflow used a `discover` job that read
 # test/mutants/manifest.json and fanned mutant ids out into a matrix via
-# `fromJson(needs.discover.outputs.*)`. On this repo's Gitea act_runner that matrix
+# `fromJson(needs.discover.outputs.*)`. On this repo's internal infrastructure act_runner that matrix
 # never expanded -- both a flat string array (`matrix.mutant_id`) and an array of
 # objects (`matrix.entry`) resolved to an empty string for every leg, so every job
 # "ran" against mutant id '' and failed for the wrong reason (caught only because
@@ -45,7 +45,7 @@ on:
   # workflow's "gate" job is a required status check (issue #834 rule #7): ANY filter
   # at the trigger level -- an allowlist of paths, or a docs-only paths-ignore --
   # means the workflow does not run at all for a PR/push outside that set, "gate"
-  # never posts a status, and Gitea (like GitHub) shows the required context as
+  # never posts a status, and internal infrastructure (like GitHub) shows the required context as
   # permanently "expected, waiting" and blocks the merge button forever. A docs-only
   # PR hit exactly this with the paths-ignore version of this trigger (would have hung
   # #838/#844). The `push` trigger used to carry its own hardcoded `paths:` allowlist
@@ -123,7 +123,7 @@ jobs:
     # #924: `source`/`.` applied directly to a bare-token file makes the shell execute the
     # token as a command; the resulting "command not found: <token>" prints the plaintext
     # token to stdout/CI logs. That is how a token leaked on 2026-07-11. Every site that
-    # reads ~/.gitea-token must extract it with scripts/resolve-gitea-token.py (or the
+    # reads .local-token-file must extract it with scripts/resolve-gitea-token.py (or the
     # equivalent `grep -oE '[a-f0-9]{40}'` for one-off interactive troubleshooting) instead
     # of sourcing it.
     #
@@ -204,7 +204,7 @@ jobs:
     # WHY here: this incident was #1000 (an unrelated PR) inserting a line inside the fixed
     # context of a patch #985 shipped -- `git apply --check` passed for #985 alone and for
     # #1000 alone, and failed only once both landed on the same tree. Neither PR's own CI
-    # could see that: this repo's Gitea PR CI checks out `refs/pull/N/head`, never a merge
+    # could see that: this repo's internal infrastructure PR CI checks out `refs/pull/N/head`, never a merge
     # ref (docs/ci-operations.md), so no single-PR job ever has two branches' trees at once.
     # Putting the check in `changes` -- already unconditional on every PR, already the home
     # of the cheapest guards, with zero flaky failure mode (a dry-run `git apply --check`,
@@ -697,14 +697,14 @@ jobs:
     # needs: [changes, mutants] -- this job used to declare `needs: changes` only, the
     # same as `mutants`, so both jobs were scheduled concurrently. That self-inflicted
     # co-tenancy was an independent contributor to the OOM kills documented in issue
-    # #900: this Gitea act_runner has capacity 2, so mutants+meta-selftest running
+    # #900: this internal infrastructure act_runner has capacity 2, so mutants+meta-selftest running
     # together already consumes both runner slots, before counting any other
     # workflow's job that might also be scheduled onto local-runner at the same time.
     # Adding `mutants` here serializes meta-selftest to start only after mutants
     # finishes, removing that specific co-tenancy at the cost of roughly 3 more
     # minutes of total wall-clock -- the same tradeoff PR #887 already made for
     # e2e-test.yml's matrix legs (see docs/ci-operations.md ~lines 199-221), because
-    # Gitea silently ignores `strategy.matrix.max-parallel` there just as it would
+    # internal infrastructure silently ignores `strategy.matrix.max-parallel` there just as it would
     # ignore any other parallelism cap here. The `if:` below is unchanged in shape --
     # it still reads only needs.changes.outputs.has_selection (renamed from
     # `relevant` by issue #968), not needs.mutants.
@@ -863,7 +863,7 @@ jobs:
   # and the required status check for dotnet10 (issue #834 rule #7). This job carries
   # NO path filter, and its own `if: ${{ !cancelled() }}` condition (see below), so it
   # still runs when an upstream job failed or was skipped -- it is the one job in this
-  # workflow that must post a status in every non-cancelled outcome, because Gitea's
+  # workflow that must post a status in every non-cancelled outcome, because internal infrastructure's
   # required-check evaluation for a PR hangs forever on a context that never arrives.
   # `mutants`/`meta-selftest` being SKIPPED (the `changes` job selected nothing) is
   # treated as a pass here, not a failure -- only an actual `failure`/`cancelled` result
@@ -873,7 +873,7 @@ jobs:
   # below -- these two are deliberately different job outcomes precisely so this
   # summary can tell them apart without any extra plumbing.
   #
-  # Judge this job's own log, not the Gitea badge, for the same reason as every other
+  # Judge this job's own log, not the internal infrastructure badge, for the same reason as every other
   # workflow in this repo (see CLAUDE.md "CI red does not mean failed") -- but see the
   # header comment above: for THIS workflow, a red `gate` step now means a real
   # regression, not the known upload-artifact quirk and not an accepted, documented

@@ -19,7 +19,7 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers;
 /// Issue #470 Slice O3 — LAST grid slice: opt-in (WtmUIOptions.UseSelectIslandRender,
 /// default OFF — the SAME flag Slices J-O2 use) grid <c>localData</c> island +
 /// delegated cell-change + <c>foldPanel</c> island, completing the grid
-/// islandification campaign. Design authority: Gitea issue #470 comment 18118
+/// islandification campaign. Design authority: internal infrastructure issue #470 comment 18118
 /// ("Slice O design brief", §2 O3).
 ///
 /// Reuses the SAME <c>CreateHelper</c>/<c>MakeContext</c>/<c>MakeOutput</c>/

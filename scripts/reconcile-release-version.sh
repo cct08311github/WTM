@@ -13,7 +13,7 @@
 #
 # Inputs (environment variables):
 #   EVENT_NAME       "push" (tag push) or "workflow_dispatch". Required.
-#   REF_NAME         For EVENT_NAME=push: the tag name exactly as Actions/Gitea Actions
+#   REF_NAME         For EVENT_NAME=push: the tag name exactly as Actions/internal CI
 #                     expose it via `github.ref_name` (e.g. "v10.21.0" or
 #                     "v10.21.0-rc.1"). Required when EVENT_NAME=push; ignored otherwise.
 #   VERSION_SUFFIX   workflow_dispatch's `version_suffix` input. Empty string (or unset)
@@ -105,7 +105,7 @@ case "$EVENT_NAME" in
       # validated at all before being embedded in the `version=${VERSION}` line this
       # script writes to $GITHUB_OUTPUT. A value containing a literal newline (e.g.
       # "beta.1\nversion=9.9.9-evil") would produce a SECOND `version=` record in that
-      # file -- a classic GitHub/Gitea Actions output-file injection, letting whichever
+      # file -- a classic GitHub/internal CI output-file injection, letting whichever
       # `key=value` line a workflow reads LAST win. The tag-triggered path above already
       # only accepts a suffix matched by a whole-string-anchored regex; this applies the
       # identical semver pre-release charset to the dispatch input. `[0-9A-Za-z.-]`
