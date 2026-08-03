@@ -1,0 +1,17 @@
+diff --git a/src/WalkingTec.Mvvm.Core/WTMContext.cs b/src/WalkingTec.Mvvm.Core/WTMContext.cs
+index a3dc9653d..3f98f6f4f 100644
+--- a/src/WalkingTec.Mvvm.Core/WTMContext.cs
++++ b/src/WalkingTec.Mvvm.Core/WTMContext.cs
+@@ -756,7 +756,11 @@ params string[] groupcode)
+ 
+             var snapshot = GlobaInfo?.AllTenant ?? [];
+             var matches = snapshot.Where(x => x.TCode == req).ToList();
+-            if (matches.Count > 1)
++            // MUTANT test/mutants entries/1007-ambiguous-collapse-firstmatch: widens the
++            // ambiguity threshold so L-ambiguous can never fire -- a duplicated TCode collapses
++            // to FirstOrDefault() below instead of being refused. See test/mutants/manifest.json
++            // for the mutant record.
++            if (matches.Count > int.MaxValue)
+             {
+                 return false;
+             }

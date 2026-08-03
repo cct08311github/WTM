@@ -672,7 +672,137 @@ params string[] groupcode)
         }
 
 
+        /// <summary>
+        /// Issue #1007 — admits or refuses a caller-proposed tenant-switch request. This is the
+        /// only explicit member-assignment path by which the four stock <c>SetTenant</c> HTTP
+        /// entry points (<c>_FrameworkController.cs:1817</c> and the three demo
+        /// <c>AccountController.SetTenant</c>s) can install a caller-supplied override into
+        /// <see cref="LoginUserInfo"/>.<see cref="Core.LoginUserInfo.CurrentTenant"/> — it is NOT
+        /// the only way <c>CurrentTenant</c> can change: cache-deserialization hydration
+        /// (<c>WTMContext.User.cs:285,299</c>), <c>ReloadUserFunc</c>, federation's
+        /// <c>CallAPI&lt;LoginUserInfo&gt;</c> (<c>WTMContext.cs:275,290</c>), and the public
+        /// <see cref="Core.LoginUserInfo.CurrentTenant"/> setter itself all install/replace the
+        /// whole object through a different path and are out of scope here (issue #1045).
+        /// </summary>
+        /// <param name="tenant">
+        /// The caller-proposed tenant code. <c>null</c> requests a return to the caller's home
+        /// tenant (only ever admitted for a host caller — see
+        /// <see cref="IsTenantSwitchPermitted"/>'s L-null branch); this is a documented
+        /// limitation, not an oversight — home-tenant routing itself is unaffected by this
+        /// method and is out of scope (issue #1045).
+        /// </param>
+        /// <returns>
+        /// <c>true</c> if the switch was admitted and <see cref="LoginUserInfo"/> was updated
+        /// (and re-cached via its setter); <c>false</c> if the request was refused. A refusal is
+        /// logged as a warning through <see cref="WtmDiagnosticLogger"/>.
+        /// </returns>
         public bool SetCurrentTenant(string? tenant)
+        {
+            if (ConfigInfo?.UseLegacyTenantSwitchAuthorization == true)
+            {
+                return LegacySetCurrentTenant(tenant);
+            }
+
+            var user = LoginUserInfo;
+            if (user == null)
+            {
+                return false;
+            }
+
+            if (!IsTenantSwitchPermitted(user, tenant))
+            {
+                WtmDiagnosticLogger?.LogWarning(
+                    "SetCurrentTenant refused: user {User} (home {Home}) requested {Requested}",
+                    LogSanitizer.Sanitize(user.ITCode), LogSanitizer.Sanitize(user.TenantCode),
+                    LogSanitizer.Sanitize(tenant));
+                return false;
+            }
+
+            user.CurrentTenant = tenant;
+            LoginUserInfo = user;
+            return true;
+        }
+
+        /// <summary>
+        /// Issue #1007 — decides whether <paramref name="user"/> may switch into
+        /// <paramref name="req"/>. Every branch is a single, independently-deletable statement
+        /// (the test matrix in <c>SetCurrentTenantAdmissionTests1007.cs</c> depends on this
+        /// shape — each branch's removal is proven to flip a specific test).
+        /// <para>
+        /// Order of evaluation, and why it matters: <paramref name="req"/> is first checked
+        /// against the two cases that never touch <see cref="GlobalData.AllTenant"/> at all — a
+        /// <c>null</c> request (L-null) and the caller's own current tenant code (L-home, not
+        /// resolved against the snapshot). Only then is <see cref="GlobalData.AllTenant"/> read,
+        /// exactly once, into a local snapshot; uniqueness (L-ambiguous) and descriptor selection
+        /// both come from that SAME snapshot, so there is no read-to-read inconsistency window
+        /// inside this method (a separate, later read by <c>CreateDC</c> is a different story —
+        /// out of scope here, issue #1045). A resolved-but-unknown code (L-notfound) and an
+        /// ambiguous code (L-ambiguous) both return before <see cref="IWtmTenantSwitchPolicy"/>
+        /// is ever consulted — a registered policy cannot rescue a request this method never
+        /// asks it about.
+        /// </para>
+        /// </summary>
+        private bool IsTenantSwitchPermitted(LoginUserInfo user, string? req)
+        {
+            if (req == null)
+            {
+                return user.TenantCode == null;
+            }
+
+            if (req == user.TenantCode)
+            {
+                return true;
+            }
+
+            var snapshot = GlobaInfo?.AllTenant ?? [];
+            var matches = snapshot.Where(x => x.TCode == req).ToList();
+            if (matches.Count > 1)
+            {
+                return false;
+            }
+
+            var descriptor = matches.FirstOrDefault();
+            if (descriptor == null)
+            {
+                return false;
+            }
+
+            var policy = ServiceProvider?.GetService(typeof(IWtmTenantSwitchPolicy)) as IWtmTenantSwitchPolicy;
+            var decision = policy?.CanSwitchTenant(this, user, descriptor, req);
+            if (decision == WtmAuthorizationDecision.Deny)
+            {
+                return false;
+            }
+
+            if (decision == WtmAuthorizationDecision.Allow)
+            {
+                return true;
+            }
+
+            if (user.TenantCode == null)
+            {
+                return true;
+            }
+
+            if (descriptor.TenantCode == user.TenantCode)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Issue #1007 kill switch (<see cref="Configs.UseLegacyTenantSwitchAuthorization"/>) —
+        /// this is a VERBATIM copy of <c>SetCurrentTenant</c>'s pre-10.23.0 body (10.22.0's
+        /// <c>WTMContext.cs:677-686</c>), preserved so a deployment that depends on the old,
+        /// wider admission rule (e.g. a federation front end whose local <c>AllTenant</c> does
+        /// not know about a main-host-only tenant code) can opt back into it without a code
+        /// change. Deprecated: scheduled for removal in the minor version after next. Do not
+        /// "clean up" this method — its value is being byte-for-byte identical to the code it
+        /// replaces, not idiomatic.
+        /// </summary>
+        private bool LegacySetCurrentTenant(string? tenant)
         {
             if (LoginUserInfo != null)
             {

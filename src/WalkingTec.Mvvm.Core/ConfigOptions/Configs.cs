@@ -157,6 +157,37 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
+        private bool? _useLegacyTenantSwitchAuthorization;
+
+        /// <summary>
+        /// Issue #1007 kill switch. When true, <see cref="WTMContext.SetCurrentTenant(string?)"/>
+        /// reverts, byte-for-byte, to its pre-10.23.0 admission rule: a tenant switch is admitted
+        /// whenever the caller is a host (<c>TenantCode == null</c>), the request equals the
+        /// caller's own current tenant code, OR <c>GlobalData.AllTenant</c> contains ANY row
+        /// (<c>.Any(...)</c>, not a uniqueness-checked single match) whose <c>TCode</c> equals the
+        /// request and whose parent <c>TenantCode</c> equals the caller's own tenant code. That
+        /// legacy rule does not require the requested code to resolve uniquely, does not consult
+        /// <see cref="WalkingTec.Mvvm.Core.Services.IWtmTenantSwitchPolicy"/> at all, and allows a
+        /// host caller to switch into ANY code — including one absent from, or duplicated in,
+        /// <c>AllTenant</c>.
+        /// Default: false (the narrowed #1007 admission rule is enforced). Set to true only as a
+        /// migration escape hatch — e.g. a federation front end whose local <c>AllTenant</c> does
+        /// not know about a main-host-only tenant code, or while cleaning up duplicate/missing
+        /// tenant records the narrowed rule now refuses. Deprecated: scheduled for removal in the
+        /// minor version after next.
+        /// </summary>
+        public bool UseLegacyTenantSwitchAuthorization
+        {
+            get
+            {
+                return _useLegacyTenantSwitchAuthorization ?? false;
+            }
+            set
+            {
+                _useLegacyTenantSwitchAuthorization = value;
+            }
+        }
+
         #endregion
 
         #region DisableRefererTenantResolution

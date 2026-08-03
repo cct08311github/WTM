@@ -1,0 +1,22 @@
+{
+  "id": "1007-ambiguous-collapse-firstmatch",
+  "kind": "security",
+  "description": "Issue #1007: WTMContext.IsTenantSwitchPermitted's L-ambiguous branch (`matches.Count > 1`) refuses a tenant-switch request whenever the requested TCode resolves to more than one FrameworkTenant row (TCode carries no DB uniqueness constraint). Before #1007, admission used `.Any(...)` (today's D3) while routing (CreateDC.cs) uses `.FirstOrDefault()` -- an attacker could be admitted on the strength of a SECOND row (e.g. their own legitimate child tenant) while actually being routed to the FIRST row (someone else's tenant), an admission/routing split #1007 closes by refusing outright on any duplicate, unconditionally. This mutant changes the threshold from `matches.Count > 1` to `matches.Count > int.MaxValue` -- compile-preserving, and since List<T>.Count can never exceed int.MaxValue, this condition is now permanently unreachable/false, so L-ambiguous never fires and a duplicated TCode falls through to `matches.FirstOrDefault()` exactly like today's unprotected `.Any()`/`.FirstOrDefault()` split. red_test (SetCurrentTenantAdmissionTests1007.Row8_Host_DuplicateTCode_ReturnsFalse) seeds two FrameworkTenant rows sharing TCode='dup' (different parents) for a host caller; under the unmutated tree L-ambiguous refuses (false), under the mutant the duplicate collapses to FirstOrDefault()'s first match, policy is unregistered (Inherit), and the host caller's TenantCode==null falls through to L-host's unconditional true -- the test's Assert.IsFalse(result) fails. green_test (Row3_Tenant_DirectChild_ReturnsTrue) seeds exactly ONE FrameworkTenant row (TCode='childA', a genuine direct child) -- matches.Count is 1 either way, so `1 > 1` and `1 > int.MaxValue` are both false: the mutated and unmutated conditions are provably equal (invariant-result decoupling, not short-circuit) for this input, and the test reaches and exercises L-child exactly as before.",
+  "target_file": "src/WalkingTec.Mvvm.Core/WTMContext.cs",
+  "target_symbol": "WTMContext.IsTenantSwitchPermitted(LoginUserInfo, string?) -- the `matches.Count > 1` condition (L-ambiguous), line ~759",
+  "patch": "patches/1007-ambiguous-collapse-firstmatch.patch",
+  "test_project": "test/WalkingTec.Mvvm.Admin.Test/WalkingTec.Mvvm.Admin.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Admin.Test.SetCurrentTenantAdmissionTests1007.Row8_Host_DuplicateTCode_ReturnsFalse",
+  "red_tests": [
+    "WalkingTec.Mvvm.Admin.Test.SetCurrentTenantAdmissionTests1007.Row8_Host_DuplicateTCode_ReturnsFalse"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Admin.Test.SetCurrentTenantAdmissionTests1007.Row8_Host_DuplicateTCode_ReturnsFalse": "#1007 row 8: a duplicated TCode must refuse the switch outright"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against the committed #1007 tree (stale demo.db under bin/ removed first) with the mutant patch applied: 'Assert.IsFalse failed. #1007 row 8: a duplicated TCode must refuse the switch outright, regardless of caller type.'",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Admin.Test.SetCurrentTenantAdmissionTests1007.Row3_Tenant_DirectChild_ReturnsTrue",
+  "green_tests": [
+    "WalkingTec.Mvvm.Admin.Test.SetCurrentTenantAdmissionTests1007.Row3_Tenant_DirectChild_ReturnsTrue"
+  ]
+}

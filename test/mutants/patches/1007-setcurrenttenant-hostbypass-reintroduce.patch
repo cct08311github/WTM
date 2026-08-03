@@ -1,0 +1,17 @@
+diff --git a/src/WalkingTec.Mvvm.Core/WTMContext.cs b/src/WalkingTec.Mvvm.Core/WTMContext.cs
+index a3dc9653d..dae6f5ca3 100644
+--- a/src/WalkingTec.Mvvm.Core/WTMContext.cs
++++ b/src/WalkingTec.Mvvm.Core/WTMContext.cs
+@@ -754,6 +754,12 @@ params string[] groupcode)
+                 return true;
+             }
+ 
++            // MUTANT test/mutants entries/1007-setcurrenttenant-hostbypass-reintroduce: precisely
++            // reintroduces D1 (10.22.0's `LoginUserInfo?.TenantCode == null` disjunct) -- a host
++            // caller is admitted unconditionally, before the requested code is even looked up
++            // against AllTenant. See test/mutants/manifest.json for the mutant record.
++            if (user.TenantCode == null) { return true; }
++
+             var snapshot = GlobaInfo?.AllTenant ?? [];
+             var matches = snapshot.Where(x => x.TCode == req).ToList();
+             if (matches.Count > 1)

@@ -1,0 +1,22 @@
+{
+  "id": "1007-childscope-widen",
+  "kind": "security",
+  "description": "Issue #1007: WTMContext.IsTenantSwitchPermitted's L-child branch (`descriptor.TenantCode == user.TenantCode`) restricts a tenant-scoped caller's default reach to a DIRECT child of their own tenant -- a uniquely-resolved descriptor whose own parent (FrameworkTenant.TenantCode) equals the caller's current tenant code. Grandchild tenants (a descriptor two or more hops away) are refused by default (a legitimate grandchild workflow requires registering IWtmTenantSwitchPolicy to return Allow -- design round 6 §6 migration item 5). This mutant widens the condition from `descriptor.TenantCode == user.TenantCode` to `descriptor != null` -- compile-preserving, and since descriptor is already proven non-null by the preceding L-notfound check (`if (descriptor == null) return false;`), this condition is now unconditionally true whenever control reaches this line, admitting ANY uniquely-resolved tenant regardless of parentage. red_test (SetCurrentTenantAdmissionTests1007.Row4_Tenant_Grandchild_ReturnsFalse) seeds a two-level hierarchy (parentA, parent=home; grandX, parent=parentA) for a tenant-scoped caller (TenantCode='home') requesting the grandchild 'grandX', which resolves uniquely; under the unmutated tree L-child's parent-equality check refuses it (descriptor.TenantCode=='parentA' != 'home'), under the mutant the widened `descriptor != null` is trivially true and the switch is admitted -- the test's Assert.IsFalse(result) fails. green_test (Row1_Host_NonExistentCode_ReturnsFalse) requests a code that resolves to ZERO rows in AllTenant for a host caller; L-notfound's `if (descriptor == null) return false;` returns BEFORE the mutated line is ever reached (short-circuit decoupling, not invariant-result) -- the mutated and unmutated trees are identical up to and including L-notfound's return for this input, and the mutated line executes in neither.",
+  "target_file": "src/WalkingTec.Mvvm.Core/WTMContext.cs",
+  "target_symbol": "WTMContext.IsTenantSwitchPermitted(LoginUserInfo, string?) -- the `descriptor.TenantCode == user.TenantCode` condition (L-child), line ~787",
+  "patch": "patches/1007-childscope-widen.patch",
+  "test_project": "test/WalkingTec.Mvvm.Admin.Test/WalkingTec.Mvvm.Admin.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Admin.Test.SetCurrentTenantAdmissionTests1007.Row4_Tenant_Grandchild_ReturnsFalse",
+  "red_tests": [
+    "WalkingTec.Mvvm.Admin.Test.SetCurrentTenantAdmissionTests1007.Row4_Tenant_Grandchild_ReturnsFalse"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Admin.Test.SetCurrentTenantAdmissionTests1007.Row4_Tenant_Grandchild_ReturnsFalse": "#1007 row 4: a tenant-scoped caller may not switch into a grandchild tenant by default"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against the committed #1007 tree (stale demo.db under bin/ removed first) with the mutant patch applied: 'Assert.IsFalse failed. #1007 row 4: a tenant-scoped caller may not switch into a grandchild tenant by default.'",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Admin.Test.SetCurrentTenantAdmissionTests1007.Row1_Host_NonExistentCode_ReturnsFalse",
+  "green_tests": [
+    "WalkingTec.Mvvm.Admin.Test.SetCurrentTenantAdmissionTests1007.Row1_Host_NonExistentCode_ReturnsFalse"
+  ]
+}

@@ -1968,6 +1968,149 @@ src/WalkingTec.Mvvm.TagHelpers.LayUI/Abstraction/BaseElementTag.cs:399:         
 
 ---
 
+## `WTMContext.SetCurrentTenant` admission 收窄：narrow 一個判斷點，不重建系統不變式（#1007，2026-08-03）
+
+跨廠複審（Codex gpt-5.6-sol，round 6）**APPROVED WITH NAMED CHANGES**；本節與程式碼已套用全部九項 named change（下方逐項標註）。
+
+### 宣稱邊界（先寫，因為它約束其餘一切；NC1 已收窄）
+
+> **`SetCurrentTenant` 不再接受呼叫端提出的、未經本次呼叫單次讀取之 `AllTenant` 快照唯一解析背書的租戶碼**（`null` 請求只有 host 呼叫者會成功——`user.TenantCode == null` 才放行，非 host 呼叫者的 `null` 請求一律明確回 `false`；`req == TenantCode`＝自己的 home 碼，兩分支皆不經 `AllTenant` 解析——明文 documented limitation，home routing 本身不在本項保護範圍）。
+> **本項不使 `CurrentTenant` 不可偽造**——`Wtm.LoginUserInfo.CurrentTenant = "x";` 仍可繞過（`WTMContext.User.cs:146` 的 getter 原樣回傳可變物件）；hydration（快取反序列化整物件安裝 `LoginUserInfo`，`WTMContext.User.cs:285,299`）、`ReloadUserFunc`、federation 的 `CallAPI<LoginUserInfo>`（`WTMContext.cs:275,290`）、公開 setter（`WTMContext.User.cs:148-160`）之重驗與防護，以及 routing sink（`CreateDC`／`GetUserDC`）本身，全部屬 **#1045**，本項未觸碰。
+> **升級前已寫入 user cache 的 override 本輪不重驗**，最長存活至快取過期（**七天 absolute expiration**——`DistributedCacheExtensions.cs:118` 的 `AbsoluteExpirationRelativeToNow = new TimeSpan(7, 0, 0, 0)`，只在 `typeof(T) == typeof(LoginUserInfo)` 且呼叫端未自帶 `options` 時套用，本例正是這個路徑）或重新登入（→ #1045）。
+> **四個 stock `SetTenant` HTTP 入口——`_FrameworkController.cs:1817` 與三份 demo `AccountController.cs:97`——接受本次呼叫 caller-proposed override 的唯一顯式 member-assignment path**（NC1：原設計稿寫「唯一寫入通道」過寬，已收窄為「顯式 member-assignment path」）——stock HTTP middleware 從快取反序列化並**整物件安裝** `LoginUserInfo`（`WTMContext.User.cs:285,299`）是另一條 stock HTTP 狀態進入通道，本項不覆蓋、也不宣稱覆蓋。
+
+**禁用措辭**（前五輪 Red Line 事故清單，程式碼註解比照辦理）：「routing sink 只消費已解析 identity」「租戶身分不變式已建立」「CurrentTenant 不可偽造」「完整封閉」。
+
+### 範圍證明：這一個判斷點在 stock HTTP 面上是否真的獨佔（NC2，完整可重跑指令）
+
+**窄口徑**（member-access assignment；**不涵蓋 object initializer**，這是刻意的口徑限定，不是漏測）：
+
+```bash
+grep -rnE --exclude-dir=bin --exclude-dir=obj --exclude-dir=.git --include='*.cs' '\.CurrentTenant\s*=[^=]' .
+```
+
+`src/` 命中恰 2 處：`WTMContext.cs:721`（`SetCurrentTenant` 本體的 `user.CurrentTenant = tenant;`）與 `WTMContext.cs:811`（`LegacySetCurrentTenant` 內逐字複製的舊本體）；其餘 17 處全在 `test/`。
+
+**寬口徑**（NC2 要求另補跑，涵蓋 object initializer 形態如 `new LoginUserInfo { CurrentTenant = ... }`）：
+
+```bash
+grep -rnE --exclude-dir=bin --exclude-dir=obj --exclude-dir=.git --include='*.cs' 'CurrentTenant\s*=[^=]' .
+```
+
+`src/` 命中同樣恰 2 處（`WTMContext.cs:721,811`），額外一處命中是 `WorkflowInstanceController.cs:87` 的**註解**（`// (CurrentTenant = _currentTenant ?? TenantCode)`，非賦值）；其餘全在 `test/`（含多個 `new LoginUserInfo { CurrentTenant = ... }` 物件初始化式）。兩條指令皆已在本次工作階段實跑，`src/` 結論一致——**宣稱因此嚴格限定為「member-access assignment」這一種賦值形態**，兩條指令的完整輸出已核對逐行。
+
+`SetCurrentTenant(` 呼叫端：
+
+```bash
+grep -rn "SetCurrentTenant(" --include="*.cs" . | grep -v '/bin/\|/obj/'
+```
+
+恰 4 處呼叫（`_FrameworkController.cs:1817` + 三份 demo `AccountController.cs:97`）+ 1 處定義（`WTMContext.cs`）。
+
+**三個誠實邊界**（全數落 #1045，不因為上面兩條指令通過而消失）：(a) 上述 grep 只窮舉屬性賦值，**整物件安裝**（快取反序列化、`CallAPI<LoginUserInfo>`、setter 塞整個物件）是另一類通道，完全不在這兩條指令的偵測範圍內；(b) 升級前存量毒 override 不被追溯淨化；(c) 下游程式碼與反射寫入無法被 grep 證明不存在。
+
+### 決策函式
+
+`WTMContext.SetCurrentTenant(string? tenant)` 先檢查 kill switch（見下），否則呼叫新的 `private bool IsTenantSwitchPermitted(LoginUserInfo user, string? req)`，其分支順序（每支皆可獨立刪除仍編譯，見下方測試矩陣）：
+
+1. **L-null**：`req == null` → `return user.TenantCode == null;`——只有 host 才能用 `null` 回 home。
+2. **L-home**：`req == user.TenantCode` → `return true;`——自己的 home 碼永遠放行，**不經解析**。
+3. 以下才**單次讀取** `GlobaInfo?.AllTenant`（`GlobalData.cs:54` 每次 access 都 invoke provider，此處只呼叫一次存成本地變數）：
+   - **L-ambiguous**：`matches.Count > 1` → `return false;`——解析出多列一律拒，不分 host／tenant。
+   - **L-notfound**：`matches.FirstOrDefault() == null` → `return false;`——**這裡之前，`IWtmTenantSwitchPolicy` 尚未被諮詢**。
+   - 諮詢 `IWtmTenantSwitchPolicy`（若已註冊）：`Deny` → `false`；`Allow` → `true`；`Inherit`（含未註冊）→ 落入下面的結構性預設。
+   - **L-host**：`user.TenantCode == null` → `return true;`——host 深度不設限。
+   - **L-child**：`descriptor.TenantCode == user.TenantCode` → `return true;`——非 host 只能到直接子租戶。
+   - 其餘 `return false;`。
+
+單次讀取意味著唯一性判定（L-ambiguous）與 descriptor 選定出自**同一份**快照；但 admission 與後續 `CreateDC`（`CreateDC.cs:27` 自己再讀一次）之間的跨讀取 TOCTOU **本輪不封**——這也是 §0 宣稱以「admission」而非「CurrentTenant」為主詞的原因。
+
+### `IWtmTenantSwitchPolicy`（`src/WalkingTec.Mvvm.Core/Services/IWtmTenantSwitchPolicy.cs`，新介面，NC3 已補完整 XML docs）
+
+重用既有三值 enum `WtmAuthorizationDecision`（`IWtmFrameworkEndpointAuthorizer.cs:16-21`），未在既有介面加成員。`AddScoped` 註冊（比照 #827）；未註冊＝`GetService` 回 `null`＝恆 `Inherit`。**可覆寫**：entitlement（L-host／L-child 的預設關係判斷，例如放行 sibling／grandchild 工作流）。**不可覆寫**：解析——`NotFound`／`Ambiguous` 在諮詢行之前就 `return`，policy 呼叫次數在這兩種輸入下**結構性為 0**（測試矩陣列 11 用計數 stub 兩種輸入各驗一次）。**`Deny` 結構上碰不到 `req == null` 與 `req == home`**——policy 無法把呼叫者困在別人的租戶裡。**policy 拋例外 → propagate，不 catch**（介面 XML doc 的 `<exception>` 區塊已明文；測試矩陣列 14 pin 死這件事，防未來加 catch-and-deny 讓錯誤塌縮成合法拒絕）。
+
+### 完整行為差異表：非 host 呼叫者的零差異例外（NC4，補回被漏掉的 T6）
+
+「今日」＝10.22.0 的 `D1||D2||D3`（`WTMContext.cs:679`，pre-#1007）；「新」＝上方決策函式（kill switch off、無 policy）。**結構性驗證**：非 host 時 D1 恆假 ⇒ 今日 ≡ D2||D3 ≡ L-home＋L-child（單列），**零差異例外恰為 T2、T6、T8、T9**（NC4 修正：原設計稿 §7 首段與「給複審者的三句話」都只寫了 T2/T8/T9，漏了表內明載為收窄的 T6）：
+
+- **T2**：非 host、`null` 請求、`AllTenant` 內有 `TCode == null` 的畸形列（`TenantCode == home`）——今日經 D3 的 `Any` 誤判為 Allow，新規則 L-null 先擋，Deny。
+- **T6**：非 host 直呼 Core 傳 `""`，`AllTenant` 有兩列 `TCode == ""`（任一 parent==home）——今日經 D3 的 `Any` Allow，新規則 L-ambiguous 先擋，Deny。
+- **T8**：duplicate 子碼，第一列 parent≠home、第二列 parent==home——今日**憑第二列獲准、卻路由到第一列**（admission/routing 分裂，攻擊面），新規則整體拒絕。
+- **T9**：duplicate 子碼，兩列皆 parent==home——今日 Allow（`Any`）＋路由 First，新規則整體拒絕（去重後可恢復，功能損失格但非安全洞）。
+
+Host 呼叫者這一側的核心洞是 H3（不存在碼今日 Allow＋路由蓋 ghost 章到 default）與 H6（duplicate TCode 今日 Allow＋路由 First）——這兩項是本次收窄要堵的主要對象，其餘 host 差異詳見設計文件（本節不重複整份 H1–H9／T1–T10 表）。
+
+### Kill switch 與遷移
+
+`Configs.UseLegacyTenantSwitchAuthorization`（`ConfigOptions/Configs.cs`，`#region Tenant` 內，預設 `false`）開啟時，`SetCurrentTenant` 直接分派到 `LegacySetCurrentTenant`——**逐字複製** 10.22.0 的 `SetCurrentTenant` 本體，包含 null-user 處理都是原文，可用上方兩條 grep 指令自行 diff 驗證「逐字」這個宣稱。未加 `[Obsolete]`（避免框架自讀時的 CS0618 噪音）；XML doc 與本節都明寫 deprecated，預定移除版本為下下個 minor。
+
+遷移路徑（升級後可能需要處理的五種情境，逐項對應到緊急程度）：
+
+1. host 切到「不存在／停用／重複碼」現在得 403（框架端點）或 `false`（demo）：修資料（enable／去重目標租戶——經 provider 快取，最長 1 小時後生效，`FrameworkServiceExtension.cs:1275`，或清 `AllTenant` 快取鍵）。**policy 救不了 NotFound／Ambiguous**——唯一逃生門是 kill switch。
+2. `EnableTenant=false`／console 部署（`AllTenant` 恆空）：host 的任何非 null 切換由 Allow→Deny。
+3. **Federation 前端（`HasMainHost`）**：前端本地 `AllTenant` 通常為空，host「切到只有 mainhost 知道的碼」由 Allow→Deny——此流程是否真實存在無法由本 repo 證明；受影響者開 kill switch 過渡，正解在 #1045。
+4. **存量 override**：升級前寫入 user cache 的 override 本輪不重驗（→ #1045），建議升級時清 user cache 或強制重登入（七天內自然過期）。
+5. sibling／孫租戶等正當營運流程：註冊 `IWtmTenantSwitchPolicy` 回 `Allow`。
+
+### 測試矩陣（16 列＋NC7/NC5 的兩項更正）
+
+`test/WalkingTec.Mvvm.Admin.Test/SetCurrentTenantAdmissionTests1007.cs`（14 列，單元層級，`MockWtmContext` + `WTMContext.SetServiceProvider` 塞 policy stub）與 `FrameworkControllerRbacHooksTest.cs`（列 15/16，見下方 NC7）。Deny 列一律雙斷言（回 `false` 且 `CurrentTenant` 未變）；Allow 列斷言 `true`、`CurrentTenant == req`、且快取已更新（`MockWtmContext` 用真 `MemoryDistributedCache`，讀回同一把 cache key 驗證）。四列誠實標「無可刪行」而非硬湊：4（單行刪除只會更嚴，靠 M3 補分支精確度）、6（兩向都不可證，靠列 7 補 L-null 的證明）、14（斷言 catch 的不存在，是 pinning）。
+
+**NC5 更正（原設計稿判斷過於保守）**：列 13（KS on × tenant × 孫）**是可證的**，不是「無可刪行」——刪掉 `LegacySetCurrentTenant` 本體的整條 guard：
+
+```csharp
+if (LoginUserInfo?.TenantCode == null || LoginUserInfo?.TenantCode == tenant || GlobaInfo?.AllTenant?.Any(x => x.TCode == tenant && x.TenantCode == LoginUserInfo?.TenantCode) == true)
+```
+
+剩下的 `{ ... }` 在 C# 是合法 standalone block、仍可編譯，且會無條件執行——孫租戶請求由 `false` 變 `true`，`Row13_KillSwitchOn_Tenant_Grandchild_ReturnsFalse_PinsLegacyIsNotDisableAllChecks` 這支測試會紅。已在測試檔的 doc comment 裡把這條 guard 行列為列 13 的 deletion proof，不再標 pin。
+
+**NC7 更正（原設計稿誤稱 wire test）**：`FrameworkControllerRbacHooksTest` 裡的列 15（`SetTenant_HostGhostTenant_ReturnsForbidResult`，新增）與列 16（`SetTenant_SwitchToOwnTenant_DoesNotReturnForbid`，強化為斷言精確型別 `WtmActionResult`）是**controller-level** 測試——直接建構 `RbacHookProbeController` 並呼叫其 `SetTenant` action method in-process，不是經 test server 發 HTTP request。本節與測試檔案的 doc comment 都已改稱「controller-level」，不再稱「wire」。真正經 test server／真實 HTTP 的測試在下方 NC9 一節。
+
+### 生產可達性：NC9（named change，最重要的一項；已完整落地，非部分達成）
+
+原設計稿的策略測試只用 `WTMContext.SetServiceProvider` 塞 policy stub——這繞過真正生產路徑 `_serviceProvider ?? _httpContext?.RequestServices`（`WTMContext.cs:35`），而 controller fixture 的 `WTMContext` 與 controller 本身各自持有不同 `HttpContext`（`MockWtmContext.cs:36`、`FrameworkControllerRbacHooksTest.cs:136`），沒有任何一支測試證明「一個真的透過 DI 容器註冊的 policy，在真實、routed 的 HTTP 請求上真的會被諮詢」。
+
+**已新增 `test/WalkingTec.Mvvm.Api.Test/TenantSwitchPolicySeamTests1007.cs`**，比照 #827 的 `FrameworkAuthorizationSeamTests` 同一套機制：
+
+- `DemoWebApplicationFactory` 起一個真正的 in-process ASP.NET Core host。
+- `builder.ConfigureTestServices(services => services.AddScoped<IWtmTenantSwitchPolicy, TestTenantSwitchPolicy>())`——**真正的** `IServiceCollection`／`AddScoped`／`BuildServiceProvider`，不是 Moq。
+- 用真實 `HttpClient` 對 `/_Framework/SetTenant?tenant=...` 發 **真正的、routed 的 GET 請求**（同一份 `_FrameworkController.SetTenant`，即上方提到的框架端點），並透過 `/Login/Login` 完成真實登入取得 cookie。
+- `SetTenant_NoPolicyRegistered_HostSwitchToListedTenant_Succeeds`：baseline，無 policy 註冊，host 切換到一個真實 seed 進 DB、`EnableTenant=true` 後由框架自己的 `SetTenantGetFunc` 讀出的租戶——確認 fixture 本身健全。
+- `SetTenant_DIPolicyDeny_HostSwitchToListedTenant_ReturnsForbid_ConsultedOnRealRoute`：同一個 fixture，DI 註冊一個回 `Deny` 的 policy，斷言回應是 403（cookie auth 下 `Forbid()` 呈現為 302 redirect）**且** `TestTenantSwitchPolicy.Calls > 0`。
+
+兩支測試皆已在本次工作階段實跑並綠燈（`dotnet test test/WalkingTec.Mvvm.Api.Test --filter FullyQualifiedName~TenantSwitchPolicySeamTests1007`，2/2 pass）——**這是本輪對 NC9 的誠實回報：已經是真的經過 request-scoped DI／真實 HTTP route，不是只換了說法的 `SetServiceProvider` stub。**
+
+**仍誠實揭露的邊界**（不宣稱多過此範圍）：這支測試只驗證「一個 policy 場景（Deny 蓋掉 host 預設）在真實路由上可達」，沒有把 16 列矩陣全部搬到真實 HTTP（成本 ~50 倍，對「DI/HTTP 可達性」這一個具體缺口沒有額外訊息量）；沒有涵蓋 federation（`HasMainHost`）拓樸——那本來就是遷移路徑第 3 項承認的未證實流程；也沒有驗證 Allow-覆蓋-sibling（P2）方向在真實 HTTP 上的鏡像（單元測試列 10 已覆蓋該方向的邏輯本身，只是不經真實 DI/HTTP）。
+
+### Mutation gate：M1/M2/M3，三個皆已本機 KILLED（NC6 已更正說明）
+
+**NC6 更正**：原設計稿寫「未強化的 green control 會被 baseline-not-green 擋下」——這是錯的。`run_mutant.py` 的 `evaluate_baseline` 只在**乾淨樹上跑 `red_tests`** 並要求它們已綠；green control（positive control）是**套用 mutant之後**才檢查是否仍 pass，機制上**無法**偵測「green_test 斷言太弱、即使拿掉守衛也照樣綠」這種情況。正確的說法：**強化列 16（`SetTenant_SwitchToOwnTenant_DoesNotReturnForbid` 改斷言精確型別）是語意上的必要前置，但 gate 本身不會自動抓到未強化的假綠**——這一步的價值來自人工判斷（見上方 NC7 段落），不是 gate 機制保證的。
+
+三個 entry 皆 `kind: security`，`test_project` 皆 `test/WalkingTec.Mvvm.Admin.Test/WalkingTec.Mvvm.Admin.Test.csproj`，本次工作階段用 `python3 test/mutants/run_mutant.py --mutant <id>`（先清 `find . -name 'demo.db*' -path '*bin*' -delete`）逐一實跑，`red_expected_assertion_patterns` 皆已用實際捕捉到的失敗訊息回填、`_provisional: false`：
+
+- **`1007-setcurrenttenant-hostbypass-reintroduce`**：在 L-home 之後、快照讀取之前插入 `if (user.TenantCode == null) { return true; }`（精確重引入 D1）。red：列 15（host×ghost）。green：列 16（短路 decoupling——`req=="tenantA"==user.TenantCode` 在字面上位於插入行之前的 L-home 就已 `return true`）。**VERDICT: KILLED / GATE: PASS**。
+- **`1007-ambiguous-collapse-firstmatch`**：`matches.Count > 1` → `matches.Count > int.MaxValue`。red：列 8。green：列 3（invariant-result decoupling——`Count==1` 時兩式皆 false）。**VERDICT: KILLED / GATE: PASS**。
+- **`1007-childscope-widen`**：L-child 條件 `descriptor.TenantCode == user.TenantCode` → `descriptor != null`。red：列 4。green：列 1（短路 decoupling——NotFound 提前 return，此輸入永不到達 L-child）。**VERDICT: KILLED / GATE: PASS**。
+
+### BMS smoke（NC8）
+
+本輪未執行任何下游（BMS）smoke test——**這是明確記錄的未執行相容性風險，不是已排除的疑慮**。`SetCurrentTenant` 是 default-ON 的行為收窄，NuGet 出貨後任何依賴「host 可切換到任意/不存在租戶碼」這個舊行為的下游都會在升級後遇到新的 `false`/403。建議：**下次 release gate 把 BMS smoke（或至少一次針對 SetTenant 端點的手動驗證）列為檢查項**；若該次 release 略過，這裡就是它的明確記錄，不得被讀成「已驗證無影響」。
+
+### #1042 handoff：框架端點 log 尚未 sanitize（NC8）
+
+Core 層的新增 log（`WTMContext.cs` 的 `WtmDiagnosticLogger?.LogWarning`）已對 `user.ITCode`、`user.TenantCode`、`tenant` 三個值套用 `LogSanitizer.Sanitize`。但 `_FrameworkController.cs:1831` 既有的 `SetTenant refused: ...` warning **仍直接記錄 raw `tenant`**（未經 sanitize）——本輪**不修**這一行（不在範圍鐵律內：`_FrameworkController.cs` 一行不動），交給 #1042。**同一次被拒絕的請求會產生兩筆 log：一筆經 sanitize（Core 層新增）、一筆未經 sanitize（`_FrameworkController.cs` 既有）**——不得暗示 endpoint log hygiene 已完成。
+
+### 未能驗證／不確定之處（誠實列出，對應 §10）
+
+- Federation 前端（`HasMainHost`）「host 切到僅 mainhost 知道的碼」流程是否真實存在——不阻擋出貨（kill switch 是逃生門），但遷移路徑第 3 項若缺席會阻擋（缺了＝宣稱過度，本節已列）。
+- 下游（含 BMS）對「host 可任意切換租戶碼」這個舊行為的依賴程度——見上方「BMS smoke」小節，明確記錄為未執行的相容性風險。
+- 升級前存量 override 殘留——不阻擋（屬 #1045），本節與 CHANGELOG 皆已明寫此限制。
+- 反射／IL 寫入的不存在性——上方兩條 grep 只窮舉屬性賦值，不宣稱「已窮盡所有寫入」。
+- 快取寫入失敗語意維持今日（`Cache.Add` 拋則例外外洩、in-memory 已變）——既有瑕疵，本輪不修不修飾，列 follow-up。
+- 本次工作階段禁止呼叫任何 Gitea/GitHub API、禁止開 PR——這個修復尚未在真正的 Gitea Actions CI 上跑過，本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py`。
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。

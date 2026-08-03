@@ -1,0 +1,22 @@
+{
+  "id": "1007-setcurrenttenant-hostbypass-reintroduce",
+  "kind": "security",
+  "description": "Issue #1007: WTMContext.IsTenantSwitchPermitted's admission rule narrows a host caller's (LoginUserInfo.TenantCode == null) previously-unrestricted tenant-switch reach -- pre-#1007, D1 (WTMContext.cs:679's `LoginUserInfo?.TenantCode == null` disjunct) admitted ANY requested tenant code for a host caller unconditionally, including one absent from GlobalData.AllTenant entirely (a 'ghost' tenant) or duplicated across multiple rows. #1007 replaces that with L-host: a host caller is still unrestricted in DEPTH, but only once the requested code has been looked up and found to resolve to EXACTLY ONE FrameworkTenant row. This mutant reintroduces D1 verbatim -- inserted immediately after L-home (`req == user.TenantCode`) and before the AllTenant snapshot is ever read -- so a host caller is once again admitted into any code, including an unresolvable one, without any lookup ever happening. red_test drives a real, routed /_Framework/SetTenant request (FrameworkControllerRbacHooksTest.SetTenant_HostGhostTenant_ReturnsForbidResult, a controller-level test per this file's own class-level doc comment) for a host caller requesting a code that resolves to zero rows in GlobaInfo.AllTenant (default: no TenantGetFunc registered, so AllTenant is empty); under the unmutated tree L-notfound refuses this (ForbidResult), under the mutant D1 admits it unconditionally (the reintroduced line short-circuits before the lookup) and the controller returns its success/reload response instead, so the test's Assert.IsInstanceOfType(result, typeof(ForbidResult)) fails. green_test (FrameworkControllerRbacHooksTest.SetTenant_SwitchToOwnTenant_DoesNotReturnForbid, strengthened for #1007 to assert the precise WtmActionResult success type -- design round 6 §8 row 16) is decoupled by short-circuit, not merely invariant result: its input is a tenant-scoped caller (TenantCode == 'tenantA') requesting their OWN current tenant code ('tenantA'), which L-home's `req == user.TenantCode` returns true for BEFORE the reintroduced line is ever reached (the mutated line sits after L-home in source order) -- both the mutated and unmutated trees return from L-home on this exact input without executing the mutated statement at all.",
+  "target_file": "src/WalkingTec.Mvvm.Core/WTMContext.cs",
+  "target_symbol": "WTMContext.IsTenantSwitchPermitted(LoginUserInfo, string?) -- inserts a `if (user.TenantCode == null) { return true; }` disjunct immediately after the L-home branch and before the AllTenant snapshot read, line ~756",
+  "patch": "patches/1007-setcurrenttenant-hostbypass-reintroduce.patch",
+  "test_project": "test/WalkingTec.Mvvm.Admin.Test/WalkingTec.Mvvm.Admin.Test.csproj",
+  "red_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Admin.Test.FrameworkControllerRbacHooksTest.SetTenant_HostGhostTenant_ReturnsForbidResult",
+  "red_tests": [
+    "WalkingTec.Mvvm.Admin.Test.FrameworkControllerRbacHooksTest.SetTenant_HostGhostTenant_ReturnsForbidResult"
+  ],
+  "red_expected_assertion_patterns": {
+    "WalkingTec.Mvvm.Admin.Test.FrameworkControllerRbacHooksTest.SetTenant_HostGhostTenant_ReturnsForbidResult": "#1007 row 15: a host caller switching into an unresolvable \\('ghost'\\) tenant code must now be refused"
+  },
+  "red_expected_assertion_patterns_provisional": false,
+  "red_expected_assertion_patterns_observed": "Captured against the committed #1007 tree (stale demo.db under bin/ removed first) with the mutant patch applied: \"Assert.IsInstanceOfType failed. #1007 row 15: a host caller switching into an unresolvable ('ghost') tenant code must now be refused (403), not silently admitted as it was pre-#1007. Expected type:<Microsoft.AspNetCore.Mvc.ForbidResult>. Actual type:<WalkingTec.Mvvm.Mvc.WtmActionResult>.\"",
+  "green_test_filter": "FullyQualifiedName=WalkingTec.Mvvm.Admin.Test.FrameworkControllerRbacHooksTest.SetTenant_SwitchToOwnTenant_DoesNotReturnForbid",
+  "green_tests": [
+    "WalkingTec.Mvvm.Admin.Test.FrameworkControllerRbacHooksTest.SetTenant_SwitchToOwnTenant_DoesNotReturnForbid"
+  ]
+}

@@ -478,6 +478,16 @@ namespace WalkingTec.Mvvm.Admin.Test
         /// A caller switching to their own (current) tenant is always accepted by
         /// <c>SetCurrentTenant</c> — this must keep returning the success/reload response,
         /// proving the #796 fix does not regress the legitimate case.
+        /// <para>
+        /// #1007 design round 6 §8 row 16 ("first strengthen this existing test"): before this
+        /// change, the assertion only checked <c>result</c> was NOT a <see cref="ForbidResult"/>
+        /// — a controller bug that returned <c>Unauthorized()</c> (or anything else that isn't
+        /// literally <c>ForbidResult</c>) for this legitimate, allowed switch would have passed
+        /// silently. Asserting the PRECISE success type (<see cref="WtmActionResult"/>, what
+        /// <c>FFResultJson()</c> actually returns — <c>BaseController.cs:461</c>) closes that
+        /// gap and serves as mutant M1's positive/green control
+        /// (<c>test/mutants/entries/1007-setcurrenttenant-hostbypass-reintroduce.json</c>).
+        /// </para>
         /// </summary>
         [TestMethod]
         public void SetTenant_SwitchToOwnTenant_DoesNotReturnForbid()
@@ -493,6 +503,50 @@ namespace WalkingTec.Mvvm.Admin.Test
 
             Assert.IsNotInstanceOfType(result, typeof(ForbidResult),
                 "Switching to the caller's own current tenant must still succeed.");
+            Assert.IsInstanceOfType(result, typeof(WtmActionResult),
+                "#1007 row 16: switching to the caller's own current tenant must return the " +
+                "precise success/reload response FFResultJson().Reload() produces — not merely " +
+                "'anything that isn't Forbid()' (e.g. an Unauthorized() bug would have slipped " +
+                "past the weaker assertion this replaces).");
+        }
+
+        // ══════════════════════ #1007 — controller-level admission narrowing ══════
+
+        /// <summary>
+        /// #1007 design round 6 §8 row 15 ("host x ghost tenant"). This is a
+        /// CONTROLLER-LEVEL test — it constructs <see cref="RbacHookProbeController"/> directly
+        /// and calls its <c>SetTenant</c> action method in-process, the same convention every
+        /// other test in this file uses (see the class-level doc comment); it is NOT a real,
+        /// routed HTTP request through a test server. A genuinely wire-level (real HTTP, real
+        /// request-scoped DI) proof that <see cref="WalkingTec.Mvvm.Core.Services.IWtmTenantSwitchPolicy"/>
+        /// is reachable through <c>WTMContext</c>'s real <c>ServiceProvider</c> fallback lives in
+        /// <c>WalkingTec.Mvvm.Api.Test.TenantSwitchPolicySeamTests1007</c> — see
+        /// production-readiness.md's #1007 section for why both exist.
+        /// <para>
+        /// A host caller (<c>TenantCode == null</c>) requesting a tenant code that does not
+        /// resolve in <c>GlobaInfo.AllTenant</c> at all (a "ghost" tenant) must now be refused —
+        /// before #1007 this was unconditionally admitted for any host caller (design round 6
+        /// §7 table, row H3, "the core hole" this issue closes).
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void SetTenant_HostGhostTenant_ReturnsForbidResult()
+        {
+            var controller = CreateController();
+            controller.Wtm.LoginUserInfo = new LoginUserInfo
+            {
+                ITCode = "hostuser1",
+                TenantCode = null,
+            };
+            // GlobaInfo.AllTenant defaults to [] (no TenantGetFunc registered), so "ghost-co" is
+            // unresolvable — IsTenantSwitchPermitted's L-notfound branch must refuse it even for
+            // a host caller.
+
+            var result = controller.SetTenant("ghost-co");
+
+            Assert.IsInstanceOfType(result, typeof(ForbidResult),
+                "#1007 row 15: a host caller switching into an unresolvable ('ghost') tenant " +
+                "code must now be refused (403), not silently admitted as it was pre-#1007.");
         }
     }
 }

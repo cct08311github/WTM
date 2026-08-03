@@ -1,0 +1,17 @@
+diff --git a/src/WalkingTec.Mvvm.Core/WTMContext.cs b/src/WalkingTec.Mvvm.Core/WTMContext.cs
+index a3dc9653d..1e4255919 100644
+--- a/src/WalkingTec.Mvvm.Core/WTMContext.cs
++++ b/src/WalkingTec.Mvvm.Core/WTMContext.cs
+@@ -784,7 +784,11 @@ params string[] groupcode)
+                 return true;
+             }
+ 
+-            if (descriptor.TenantCode == user.TenantCode)
++            // MUTANT test/mutants entries/1007-childscope-widen: widens L-child from "descriptor
++            // is my direct child" to "descriptor exists" -- a tenant-scoped caller can reach any
++            // uniquely-resolved tenant, not just a direct child. See test/mutants/manifest.json
++            // for the mutant record.
++            if (descriptor != null)
+             {
+                 return true;
+             }
