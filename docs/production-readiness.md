@@ -1215,6 +1215,8 @@ LookupCacheService.cs:25:    public class LookupCacheService : ILookupCacheServi
 
 ### 這個修法沒解決什麼——誠實列出，不能被讀成已關閉
 
+**（2026-08-03 補，v10.22.0 發版前跨廠審查指出）「鎖進那個租戶」這句話還有一個前提沒寫出來：那個 `IDataContext` 得先有租戶過濾器。** scoped 分支做的事只是**不呼叫 `IgnoreQueryFilters()`**（`WtmFileProvider.cs` 的 core 實作），它**不會自己加上 `TenantCode == dc.TenantCode` 這個 predicate`**。對框架自己的 `DataContext` 兩者等價，因為它確實在 `OnModelCreating` 配置了 `ITenant` 的 global query filter（`DataContext.cs:243`）。但 `IDataContext` 是公開介面，契約只要求提供 `DbSet<T>`（`IDataContext.cs`），**沒有**要求那個 filter；框架也會反射載入下游任意的 `DbContext`（`CS.cs`）。所以一個合法但沒有配置 `HasQueryFilter` 的下游 context，用這兩個 overload 得不到任何租戶範圍——查詢不帶 tenant predicate，會照樣回傳別的租戶的列。`BaseImportVM` 的兩個新呼叫點依賴同一個前提。**要把這件事變成無條件保證，得讓 overload 自己加上 predicate（或收窄介面契約並文件化），兩者都不在 #1011 範圍內。**
+
 `GetFileTenantScoped` 只是把讀取範圍鎖進「傳入的 `IDataContext` 已經解析出來的那個租戶」——它不驗證呼叫端身分，也不判斷「這個請求正確的租戶應該是誰」。`Configs.DisableRefererTenantResolution` 預設 `false`（`Configs.cs:162-178`）時，一個知道某租戶網域的匿名呼叫者可以偽造 `Referer` header，讓 `WTMContext.CreateDC`（`WTMContext.CreateDC.cs:42-56`，#116 機制）解析出那個租戶的範圍；scoped API 接著會忠實地把讀取鎖進**那個被偽造出來的租戶**。要擋這條路徑需要 `DisableRefererTenantResolution=true`，或是一個在請求抵達 `WtmFileProvider` 之前就拒絕匿名呼叫者的 authorizer——不是改這個方法本身，它目前的行為就是文件註解寫的那樣。#859 的舊修法同樣不擋得住這條路徑（同一個根因：兩者都嚴格下游於 `CreateDC` 已經決定的租戶）。
 
 ### 對下游的可達性
