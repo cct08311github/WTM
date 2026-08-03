@@ -4,17 +4,33 @@
 
 **Contains one BREAKING change (#985).** `FileAttachmentSaveChangesGuard` now rejects a
 `FileAttachment`-principal foreign key whose principal key is not the canonical
-single-property Guid `ID`. No in-tree model is affected, but `HasPrincipalKey` is a legal
-EF Core API that this framework never marked unsupported — a downstream model using it goes
-from writes succeeding to every `SaveChanges` on that whole context failing. Migration is in
-that entry, and it does **not** offer `FileAttachmentSaveChangesGuard.Enabled = false` as a
-step: that switch is process-wide and re-enables the exact false-allow the check closes.
+single-property Guid `ID` **and which has at least one Guid-typed FK property**. A
+non-canonical principal key with no Guid-typed FK property is left exactly as it was —
+`LogNonGuidAttachmentFk` warns and the FK is excluded from the map, unenforced, which is
+the pre-existing #824 Finding 7 behaviour and is deliberately out of scope here (#1000
+part 2). No in-tree model is affected, but `HasPrincipalKey` is a legal EF Core API that
+this framework never marked unsupported — a downstream model using it *in the rejected
+shape* goes from writes succeeding to every `SaveChanges` on that whole context failing.
+Migration is in that entry, and it does **not** offer
+`FileAttachmentSaveChangesGuard.Enabled = false` as a step: that switch is process-wide and
+re-enables the exact false-allow the check closes.
 
 Everything here landed after `10.21.0-rc.2` (`7e0d99b78`), which is the tree `10.21.0`
 ships. Splitting them keeps the version a downstream verified identical to the version it
 receives — see #1009.
 
-### Security — `FileAttachmentSaveChangesGuard.BuildMap` now rejects a FileAttachment-principal FK whose principal key is not `FileAttachment.ID` (#985, cross-vendor review of #824 Part 2)
+### Security — `FileAttachmentSaveChangesGuard.BuildMap` now rejects a FileAttachment-principal FK whose principal key is not `FileAttachment.ID` **and which has at least one Guid-typed FK property** (#985, cross-vendor review of #824 Part 2)
+
+> **Corrected 2026-08-03 (#1035, found by the v10.22.0 pre-release cross-vendor review).**
+> This heading and the release summary above originally claimed the rejection applied to
+> *any* non-canonical principal key. The code rejects only the shape that also has at least
+> one Guid-typed FK property (`FileAttachmentSaveChangesGuard.cs`'s `IsCanonical... && fk.Properties.Any(IsGuidTypedProperty)`);
+> a non-canonical key with no Guid-typed FK property falls through to the unchanged #824
+> Finding 7 warn-and-exclude path and stays **unenforced**. `docs/production-readiness.md`'s
+> three-branch table documented this correctly throughout — the CHANGELOG was the side that
+> overclaimed, so only the CHANGELOG changed. A cross-tenant non-Guid FK still persists, and
+> `FileAttachmentSaveChangesGuardNonGuidFkTests824.cs` deliberately pins that; tightening it
+> is #1000 part 2.
 
 **Full defect analysis (the concrete false-allow/false-reject reproductions), the EF Core API/
 invariant verification, RED-before-fix messages, and the mutation-gate evidence are in
@@ -205,6 +221,19 @@ Tests: `python3 test/mutants/_selftest/selftest_gate_job_reconciliation.py` (ext
 
 ### Fixed — 9 more LayUI TagHelper sites raw-interpolated a `*Func` callback at JS statement-start, an unwrapped-IIFE SyntaxError that killed the whole enclosing `<script>` block for a function-literal value (#999 part (A))
 
+> **Known regression introduced by this change and by #999 part (B) and #965 — see #1034.**
+> The `({expr})(args)` wrapper ends an optional chain, so a `*Func` value containing `?.`
+> changes behaviour: `handlers?.onChange(data)` short-circuits harmlessly when `handlers` is
+> undefined, while the emitted `(handlers?.onChange)(data)` evaluates `undefined` and then
+> calls it, throwing `TypeError` and aborting the callback. Verified by executing both forms,
+> not by reading them. This affects all 20 wrapped emission sites across parts (A) and (B)
+> and #965. It was **not** caught here because these entries' tests parse the emitted script
+> with a real JS parser and assert on its shape — and `(handlers?.onChange)(data)` is
+> syntactically valid; only executing it exposes the difference. There is no cheap correct
+> fix: `(expr)?.(args)` would turn a mistyped identifier from a loud throw into a silent
+> no-op, and skipping the wrapper when the text contains `?.` is exactly the
+> guess-JS-grammar-from-a-string approach part (B) exists to eliminate. Tracked in #1034.
+
 `DataTableTagHelper.cs`'s `DoneFunc`, `TransferTagHelper.cs`'s `ChangeFunc`, `SliderTagHelper.cs`'s
 `ChangeFunc`, and `DateTimeTagHelper.cs`'s `ReadyFunc`/`ChangeFunc`/`DoneFunc` (both the single-field
 and the two-hidden-input `IsRange` path — 6 of the 9 sites) all interpolated the developer-supplied
@@ -241,6 +270,12 @@ exceed those claims.**
   two deliberately-unwrapped sites already parsed correctly with no change.
 
 ### Fixed — the 10 remaining LayUI `*Func` sites reached through `BaseElementTag.FormatFuncName` truncated a function-literal/arrow-function callback into a bare `function`/`(data)=>` before it ever reached a syntactic position, corrupting the emitted `<script>` block (#999 part (B))
+
+> **Same optional-chain regression as part (A) — see #1034.** `FormatFuncInvocation`'s
+> `({expr})({args})` ends an optional chain, so a `*Func` value containing `?.` goes from a
+> harmless short-circuit to a `TypeError`. The decision to keep the classification path and
+> the execution path textually separate is unaffected and still correct; what is wrong is
+> that the wrapper itself is not chain-transparent. Verified by execution, not by parsing.
 
 **Full site table, the RED-before-fix transcripts, the count reconciliation against part (A)'s
 own estimate, and the mutant non-entry reasoning are in `docs/production-readiness.md`'s new
@@ -394,6 +429,16 @@ Tests: `python3 scripts/check-mutant-entries-parse.py --selftest` (5 embedded ca
 ---
 
 ### Security — `WtmFileProvider.GetFileTenantScoped`/`GetFileNameTenantScoped`; `BaseImportVM`'s two `UploadFileId` reads moved onto the scoped overload, closing a caller-controlled cross-tenant read that survives even when `EnforceTenantFileScope=false` (#1011, BREAKING for that one narrow case)
+
+> **Scope clarification, added 2026-08-03 by the v10.22.0 pre-release cross-vendor review.**
+> "TenantScoped" here means the overload does **not** call `IgnoreQueryFilters()` — it does
+> not add a `TenantCode == dc.TenantCode` predicate of its own. On the framework's own
+> `DataContext`, which configures the `ITenant` global query filter, the two are equivalent
+> and the closure claim holds. `IDataContext` is a public interface whose contract does not
+> require that filter, so a downstream context that maps `FileAttachment` without
+> `HasQueryFilter` gets no tenant scoping from these overloads. The same assumption underlies
+> `BaseImportVM`'s two new call sites. This is a documentation correction only; no behaviour
+> changed.
 
 **Design history.** A first pass on this issue argued for adding nothing: cross-tenant *delete* has no legitimate deployment shape (delete sites should hard-scope), while cross-tenant *read* does — `FileUploadOptions.cs`'s own doc comment on `EnforceTenantFileScope` documents an intentional opt-out for a tenant-agnostic public file store — so a deployment-wide flag looked like the right layer for reads, and the fix should stop there. Cross-vendor review overturned that with an actual call path, not a hypothetical one: `BaseImportVM.cs:322` and `:1571` both resolve `UploadFileId` — model-bound the SAME way `BaseVM.DeletedFileIds` is, per `WtmFileProvider.DeleteFileTenantScoped`'s own doc comment, which already treats `UploadFileId` as untrusted input in that context — via the plain, flag-driven `GetFile`. And `UploadFileId` is not a shared template: `SetTemplateData` (`BaseImportVM.cs:311-315`) returns "please upload template" when it is absent, then hands the resolved file straight to NPOI at `:317` — it is the *caller's own just-uploaded workbook*. So the real distinction was never read-vs-delete; it is that a caller-controlled ID sink must stay immune to the global flag, exactly as `DeleteFileTenantScoped` already established for the delete side (#815).
 
