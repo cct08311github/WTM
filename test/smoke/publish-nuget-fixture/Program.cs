@@ -247,10 +247,10 @@ CheckMember(dashboardType, nameof(EtlDashboardService.BuildSummary), expectVirtu
     ]);
 
 Console.WriteLine();
-Console.WriteLine("═══ The other five packages — type-resolved (compile-time touch only; no known active binary-compat risk today) ═══");
+Console.WriteLine("═══ The other four packages — type-resolved (compile-time touch only; no known active binary-compat risk today) ═══");
 // #925 scoped the "must call/assert members" requirement to Etl specifically -- it is
 // the one package with a known, active binary-compatibility risk (the #883 change
-// above). The other five have no such known risk today, so a type-resolution touch is
+// above). The other four have no such known risk today, so a type-resolution touch is
 // proportionate: stronger evidence than `dotnet add package` alone (which never
 // references a single type in the package), without pretending to be the same kind of
 // API-metadata check the Etl assertions above are.
@@ -258,8 +258,7 @@ _ = typeof(Configs);                                              // WalkingTec.
 _ = typeof(WalkingTec.Mvvm.Mvc.BaseController);                   // WalkingTec.Mvvm.Mvc
 _ = typeof(WalkingTec.Mvvm.TagHelpers.LayUI.DataTableTagHelper);  // WalkingTec.Mvvm.TagHelpers.LayUI
 _ = typeof(WalkingTec.Mvvm.WorkFlow.WorkFlowOptions);             // WalkingTec.Mvvm.WorkFlow
-_ = typeof(WalkingTec.Mvvm.FileHandlers.S3.S3FileHandlerOptions); // WalkingTec.Mvvm.FileHandlers.S3
-Console.WriteLine("  all five type-resolved without a TypeLoadException.");
+Console.WriteLine("  all four type-resolved without a TypeLoadException.");
 
 Console.WriteLine();
 Console.WriteLine($"Reflection checks: {checks - failures.Count}/{checks} passed, {failures.Count} failed.");

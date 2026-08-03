@@ -26,6 +26,18 @@ Cross-vendor design review (Codex gpt-5.6-sol, round 6): **APPROVED WITH NAMED C
 
 **Not verified this session**: real Gitea Actions CI (hard constraint forbids any Gitea/GitHub API call and forbids opening a PR) — local verification used `dotnet build`/`dotnet test`/`run_mutant.py` only.
 
+### Removed
+
+- **Removed the entire opt-in S3/MinIO file handler module — `src/WalkingTec.Mvvm.FileHandlers.S3/` and its test project are deleted; the published package count drops from six to five (#1054, BREAKING; supersedes #1027).** The package has shipped since 10.13.0 (2026-06-20, #425) and reached the public GitHub Packages mirror since 10.13.3 (2026-06-20, #455/#456). Already-published versions remain exactly as they are on both the Gitea and GitHub Packages registries — nothing is unpublished or deleted from either registry — this change only stops any future version from packing or pushing a new one.
+
+  **Not claiming nobody could be using it — two call paths exist and only one of them is actually dead.** `WtmFileProvider`'s reflection-based `SaveFileMode="s3"` dispatch (`WtmFileProvider.Init`, `src/WalkingTec.Mvvm.Core/Support/FileHandlers/WtmFileProvider.cs:76`) only ever registered a handler type that exposes a constructor with the exact signature `(WTMContext)`. `WtmS3FileHandler`'s only constructor took `(IAmazonS3, IOptions<S3FileHandlerOptions>, ILogger<WtmS3FileHandler>?)` — no `(WTMContext)` overload — so `GetConstructor(new Type[] { typeof(WTMContext) })` returned `null` and `Init` silently skipped it (`continue`); `SaveFileMode="s3"` was never reachable through `WtmFileProvider` at all, in any released version (verified by reading both types' source before deletion). **But `AddWtmS3FileHandler(Action<S3FileHandlerOptions>)` (`S3FileHandlerServiceCollectionExtensions.cs`) is a separate, genuinely live registration path** — it calls `services.AddScoped<IWtmFileHandler, WtmS3FileHandler>()` directly, independent of `WtmFileProvider`. Any downstream app that called `AddWtmS3FileHandler(...)` and consumes `IWtmFileHandler` via constructor injection (rather than through `WtmFileProvider.CreateFileHandler(saveMode)`) has a working S3 handler today, and that app's build breaks on upgrading past this version.
+
+### Migration
+
+- **Staying on the S3/MinIO handler**: pin to the last released version that still includes the package (any tag before this one) and do not upgrade past it until migrated off.
+- **Vendoring it**: copy `WtmS3FileHandler.cs` and `S3FileHandlerOptions.cs` into your own project — `IWtmFileHandler` (`WalkingTec.Mvvm.Core`) is a public interface, so the handler keeps working unmodified once vendored; add the `AWSSDK.S3` package reference to your own project instead.
+- **Switching handlers**: move to `WtmLocalFileHandler` (local disk) or the database-backed mode (`WtmDataBaseFileHandler`, the default when `FileUploadOptions.SaveFileMode` is unset). **Do not migrate to `WtmOssFileHandler` (Aliyun OSS) as a landing spot** — it is separately scheduled for removal (#1055, not yet done as of this entry), so treat it as another dead end rather than a target.
+
 ## [10.22.1] - 2026-08-03
 
 ### Fixed — restore optional-chain short-circuit at the 20 `*Func` emission sites #999 part (A)/(B) and #965 wrapped in `(expr)(args)`, via a closed-language classifier (#1034)

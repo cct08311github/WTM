@@ -30,7 +30,7 @@ WTM 設計為「快速 CRUD 開發框架」，**不**是高流量 SaaS 平台或
 
 ### 已驗證
 
-- `dotnet list package --vulnerable --include-transitive`：**0 個 NU1903 漏洞**（27 個專案，含新納入 CI 的 FileHandlers.S3；release gate 全程守住）
+- `dotnet list package --vulnerable --include-transitive`：**0 個 NU1903 漏洞**（27 個專案，含當時新納入 CI 的 S3 file handler 套件與其測試專案（已於 10.23.0 依 #1054 移除）；release gate 全程守住）
 - 單元測試：**~5,780 pass / 0 fail**（Core.Test ~4,313、WorkFlow.Test 564+23 skip、Etl.Test ~683+17 skip、Admin/Api/Mvc.Tests/S3.Test 等）— 較上一版評估的 1,647 增長約 3.5 倍
 - JS 測試：**~1,704 pass**（Jest + jsdom，涵蓋 framework_layui.js 的 island dispatch / kill-switch / sentinel-escape 路徑）
 - E2E 測試：**35 pass / 1 skip / 0 fail**（Playwright + Python，31→36 檢查；新增 JWT/combobox-cascade/selector/upload 流程 + **#627 kill-switch 專屬 CI matrix leg**）
@@ -1192,7 +1192,7 @@ await page.wait_for_function(
 
 `dotnet test test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj -c Release --no-build`（無 filter，量到本次改動前的乾淨基準）：base **5041 passed, 0 failed** → **5042 passed, 0 failed**（1 個新測試，其餘全部沿用既有 golden 斷言後仍然通過）。
 
-`dotnet test core.slnf -m:1 --no-build -c Release --verbosity normal --filter "TestCategory!=Integration"`（`-m:1`／`--filter` 這兩個決定「跑哪些測試」的旗標與 `.github/workflows/ci-build.yml` 的 `build-and-test` job 相同；該 job 另外還有 `--logger`／`--collect`／`--settings`／`--results-directory` 幾個只影響 TRX/coverage 產物、不影響測試是否通過的旗標，這裡略過，不是逐字重現整條指令）：7 個測試專案全部 `Test Run Successful`，0 failed——`WalkingTec.Mvvm.Core.Test` 5035 passed（此指令帶 `TestCategory!=Integration` filter，與上面無 filter 的 5042 不是同一個分母，故數字不同屬預期）、`WalkingTec.Mvvm.Admin.Test` 192 passed、`WalkingTec.Mvvm.Mvc.Tests` 64 passed、`WalkingTec.Mvvm.Etl.Test` 699 passed（含 `EtlJobListVmGridTests.cs` 既有的 `OnClickFunc` 相關測試，無回歸）、`WalkingTec.Mvvm.WorkFlow.Test` 589 passed + 23 skipped（既有；含 `NotifierTests.cs` 的 `ProcessDefinitionListVMTests`，無回歸）、`WalkingTec.Mvvm.Api.Test` 103 passed + 1 skipped（既有的 mutation-gate baseline selftest）、`WalkingTec.Mvvm.FileHandlers.S3.Test` 19 passed。
+`dotnet test core.slnf -m:1 --no-build -c Release --verbosity normal --filter "TestCategory!=Integration"`（`-m:1`／`--filter` 這兩個決定「跑哪些測試」的旗標與 `.github/workflows/ci-build.yml` 的 `build-and-test` job 相同；該 job 另外還有 `--logger`／`--collect`／`--settings`／`--results-directory` 幾個只影響 TRX/coverage 產物、不影響測試是否通過的旗標，這裡略過，不是逐字重現整條指令）：7 個測試專案全部 `Test Run Successful`，0 failed——`WalkingTec.Mvvm.Core.Test` 5035 passed（此指令帶 `TestCategory!=Integration` filter，與上面無 filter 的 5042 不是同一個分母，故數字不同屬預期）、`WalkingTec.Mvvm.Admin.Test` 192 passed、`WalkingTec.Mvvm.Mvc.Tests` 64 passed、`WalkingTec.Mvvm.Etl.Test` 699 passed（含 `EtlJobListVmGridTests.cs` 既有的 `OnClickFunc` 相關測試，無回歸）、`WalkingTec.Mvvm.WorkFlow.Test` 589 passed + 23 skipped（既有；含 `NotifierTests.cs` 的 `ProcessDefinitionListVMTests`，無回歸）、`WalkingTec.Mvvm.Api.Test` 103 passed + 1 skipped（既有的 mutation-gate baseline selftest）、當時 core.slnf 內第 7 個測試專案——S3 file handler 的測試專案（已於 10.23.0 依 #1054 移除）——19 passed。
 
 `python3 -m py_compile test/e2e/wtm_e2e_tests.py`：語法檢查通過。`python3 scripts/check-e2e-test-integrity.py test/e2e/wtm_e2e_tests.py`：clean，無違規。
 
@@ -1491,7 +1491,7 @@ error NU1100: Unable to resolve 'WalkingTec.Mvvm.Core (>= 10.21.0)' for 'net10.0
 
 `~/.nuget/packages` 下 22 個「從未發布卻佔用發行版號」的條目（四個版本 × 涵蓋到的套件）已移到 維護者本機的一個隔離目錄（路徑不記在此，屬營運環境細節）——**move 而非 delete，可逆**。動手前確認全樹沒有任何 `.props` / `.csproj` / `.config` 引用這四個版本。隔離後 live cache 上限與 feed 一致。
 
-> 值得記一筆：那顆污染的 `10.21.0` 只涵蓋 Core / Etl / Mvc / LayUI 四顆，`FileHandlers.S3` 與 `WorkFlow` 沒有——而下游引用的正好是 Core / Mvc / LayUI 三顆，全中。缺的那兩顆會讓 restore 直接 NU1100 失敗（大聲），有的那三顆才會靜默降級。
+> 值得記一筆：那顆污染的 `10.21.0` 只涵蓋 Core / Etl / Mvc / LayUI 四顆，S3 file handler 套件（已於 10.23.0 依 #1054 移除）與 `WorkFlow` 沒有——而下游引用的正好是 Core / Mvc / LayUI 三顆，全中。缺的那兩顆會讓 restore 直接 NU1100 失敗（大聲），有的那三顆才會靜默降級。
 
 ### `10.21.0` 作廢而不補發，理由
 
@@ -2108,6 +2108,46 @@ Core 層的新增 log（`WTMContext.cs` 的 `WtmDiagnosticLogger?.LogWarning`）
 - 反射／IL 寫入的不存在性——上方兩條 grep 只窮舉屬性賦值，不宣稱「已窮盡所有寫入」。
 - 快取寫入失敗語意維持今日（`Cache.Add` 拋則例外外洩、in-memory 已變）——既有瑕疵，本輪不修不修飾，列 follow-up。
 - 本次工作階段禁止呼叫任何 Gitea/GitHub API、禁止開 PR——這個修復尚未在真正的 Gitea Actions CI 上跑過，本機驗證只到 `dotnet build`/`dotnet test`/`run_mutant.py`。
+
+---
+
+## 移除整個 opt-in S3/MinIO 檔案處理模組 `WalkingTec.Mvvm.FileHandlers.S3`（#1054，BREAKING，取代 #1027，2026-08-03）
+
+**這不是漏洞修復，是專案擁有者裁定的移除**——與本文件其他條目性質不同，這裡不主張任何安全缺陷；CHANGELOG `[10.23.0]` 的 `### Removed`/`### Migration` 兩段是本項的權威敘述，本節補充驗證與方法論，不重複、不超過那兩段的宣稱。
+
+### 移除範圍
+
+整目錄刪除 `src/WalkingTec.Mvvm.FileHandlers.S3/`（`WtmS3FileHandler.cs`、`S3FileHandlerOptions.cs`、`S3FileHandlerServiceCollectionExtensions.cs`、`README.md`、`.csproj`）與 `test/WalkingTec.Mvvm.FileHandlers.S3.Test/`。連帶移除引用：`WalkingTec.Mvvm.sln`（兩個 `Project(...)` 區塊 + 對應的 `ProjectConfigurationPlatforms`/`NestedProjects` GlobalSection 行）、`core.slnf`（兩個專案路徑）、`Directory.Packages.props`（`AWSSDK.S3` 那行連同其 `<!-- Issue #425 -->` 註解——這不是 `.claude/rules/dependency-management.md` 列管的安全 override pin，是單純的「這個套件不再需要」）、`.github/workflows/publish-nuget.yml`（pack 步驟、smoke test 安裝清單、Gitea/GitHub 兩份 cohort-check 套件清單、GitHub mirror re-pack 步驟，以及沿路每一處提到「六個套件」的註解——逐一改寫，不是只改程式碼那幾行）、`.github/workflows/ci-build.yml`（`core.slnf spans 7 test projects` → 6，含 #902 那段解釋 MSBuild `-m:1` 理由的兩處引用）、`scripts/publish-to-gitea.sh`（頭部理由註解與執行期錯誤訊息的套件計數）、四份文件（`docs/gitea-packages.md`、`docs/wtm-developer-manual.md`、`docs/ci-operations.md`、本文件）、`test/smoke/publish-nuget-fixture/Program.cs`（移除 S3 的 `dotnet add package`/型別解析行，「其他五個套件」→「其他四個套件」）、`test/WalkingTec.Mvvm.Core.Test/Security/GetFileDataCallSiteInvariantTests859.cs`（`AllowedCallSiteFiles` 允許清單移除 `src/WalkingTec.Mvvm.FileHandlers.S3/WtmS3FileHandler.cs` 這一項；程式碼註解裡也點名了 `WtmS3FileHandler`，同步移除，不然只改清單、留著註解點名一個不存在的型別）。
+
+### 誠實揭露：兩條呼叫路徑，只有一條真的死了
+
+**不宣稱「沒有人可能在用」。** 刪除前實際讀了兩份原始碼確認：
+
+- `WtmFileProvider.Init`（`src/WalkingTec.Mvvm.Core/Support/FileHandlers/WtmFileProvider.cs:76`）只把「有 `(WTMContext)` 這個確切建構子」的 `IWtmFileHandler` 實作註冊進 `_handlers` 字典：`item.GetConstructor(new Type[] { typeof(WTMContext) })`。`WtmS3FileHandler` 唯一的建構子簽章是 `(IAmazonS3, IOptions<S3FileHandlerOptions>, ILogger<WtmS3FileHandler>?)`，沒有 `(WTMContext)` 版本——所以這行 `GetConstructor` 恆回 `null`，`Init` 直接 `continue` 跳過它。也就是說 `FileUploadOptions.SaveFileMode="s3"` 這條路，在任何已發行版本裡都**從未真的可達**過 `WtmS3FileHandler`——`CreateFileHandler("s3")` 找不到 key，退回 `WtmDataBaseFileHandler`（靜默降級，不是丟例外）。
+- 但 `AddWtmS3FileHandler(Action<S3FileHandlerOptions>)`（`S3FileHandlerServiceCollectionExtensions.cs`）是完全獨立的第二條路——它直接 `services.AddScoped<IWtmFileHandler, WtmS3FileHandler>()`，不經過 `WtmFileProvider` 的反射查找。任何下游 app 呼叫過這個擴充方法、並用建構子注入直接消費 `IWtmFileHandler`（而不是透過 `WtmFileProvider.CreateFileHandler(saveMode)`）的話，今天這條路是**真的活著、真的能動**的。這種 app 升級到本版之後 build 會壞（型別找不到）。
+
+### 套件計數一致性核對（實跑，非人工核對）
+
+`publish-nuget.yml` 改完後，三處套件計數各自獨立跑 `grep` 確認皆為 5：pack 步驟（`grep -n "^      - name: Pack WalkingTec"` → 5 行）、smoke test 的 `dotnet add package` 清單（5 行）、GitHub mirror re-pack 的 `dotnet pack "$PACK_DIR/...` 清單（5 行）；Gitea 與 GitHub 兩份 `check-package-cohort.py` 呼叫的套件名稱清單也各自改為 5 個。`NUPKG_COUNT -ne 6` 的兩處人肉判斷式（本地 pack 後、GitHub re-pack 後）都改為 `-ne 5`。
+
+### 遷移建議不指向另一個正在被移除的套件
+
+CHANGELOG `[10.23.0]` 的 Migration 段落列了三條路：釘住舊版、把 `WtmS3FileHandler.cs`／`S3FileHandlerOptions.cs` 複製進自己的專案（`IWtmFileHandler` 是 public 介面）、或改用框架其餘的 `IWtmFileHandler` 實作。**第三條刻意只列 `WtmLocalFileHandler`（本機磁碟）與 `WtmDataBaseFileHandler`（database 模式，`SaveFileMode` 未設定時的預設值）——不列 `WtmOssFileHandler`（Aliyun OSS）**，因為 OSS handler 已被專案擁有者裁定移除、對應票是 #1055（排在本票之後、本次工作階段尚未執行）。把下游從一條已知死路指向另一條即將死路，不是誠實的遷移建議；等 #1055 執行完，`WtmOssFileHandler` 本身也會需要一份和本項同構的 CHANGELOG/production-readiness 說明。
+
+### 版本
+
+`version.props` 維持 `10.23.0`——這個版本本來就還在進行中、尚未發行（含上方 #1007 的安全修復），BREAKING 落在這個版本裡即可，沒有額外 bump。
+
+### 驗證
+
+`find . -name 'demo.db*' -path '*bin*' -delete`（跑測試前必做）→ `dotnet build core.slnf -c Release`：0 error（495 個既有、與本次修改無關的 warning）。`dotnet test core.slnf -c Release --no-build`：exit code 0，六個測試組件（`WalkingTec.Mvvm.Mvc.Tests`/`Admin.Test`/`Api.Test`/`Etl.Test`/`Core.Test`/`WorkFlow.Test`）逐一皆回報 `Failed: 0`（solution-filter 多專案彙總輸出是 VSTest 的逐組件 `Passed!` 摘要，不是單一 csproj 執行時的 `Test Run Successful` 字面字串——這裡明寫實際輸出格式，不套用本文件其他條目慣用的措辭）；被刪除的那個測試專案不在清單內，因為它已隨套件一起刪除，這件事本身就是驗證的一部分（core.slnf 引用已清乾淨，不會出現「找不到專案」的建置錯誤）。全樹 `grep -rn "FileHandlers\.S3\|WtmS3FileHandler\|AWSSDK\.S3" .`（排除 `bin`/`obj`）最終只剩 `CHANGELOG.md` 的歷史條目與本次新增的 `[10.23.0]` 條目，以及本文件（`docs/production-readiness.md`）自己這一節——其餘每一處命中（含程式碼註解、docs 敘述、workflow 註解）都已逐一改寫，不是只改看得到的程式碼行。**本節與 CHANGELOG 用同一組完整套件名/型別名/檔案路徑，不做字串拼接或迂迴指稱來規避這條 grep**——`docs/production-readiness.md` 是本 repo 的基準文件，CHANGELOG 的宣稱不得超過它；基準文件本身寫得比 CHANGELOG 含糊，會讓「CHANGELOG 不得超過 production-readiness」這個比對機制失效（#1049 的教訓）。
+
+### 未能驗證／刻意沒動的部分（誠實列出）
+
+- 本次工作階段禁止呼叫任何 Gitea/GitHub API、禁止開 PR——這個修法尚未在真正的 Gitea Actions CI 上跑過。
+- 下游是否真的有專案呼叫 `AddWtmS3FileHandler()` 並直接注入 `IWtmFileHandler`——這件事本 repo 無法證明存在或不存在；上一節的「兩條路徑」分析只證明「哪條路徑在技術上是活的」，不是「有沒有真實下游在用它」。
+- CHANGELOG 的歷史條目（`[10.13.0]` 引入、`[10.13.3]` 上 GitHub mirror、`[10.15.0]` 的例外處理修復等）一概未改寫，只在本項新增一則指向它們的條目。
+- #1055（`WtmOssFileHandler` 移除）本身完全未觸碰——本次只在遷移建議裡提前註明它也在排定移除之列，不代表 #1055 已經執行或已經驗證。
 
 ---
 

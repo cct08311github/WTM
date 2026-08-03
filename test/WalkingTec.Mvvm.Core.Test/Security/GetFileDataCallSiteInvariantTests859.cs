@@ -39,7 +39,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
     /// two places: <see cref="WalkingTec.Mvvm.Core.Support.FileHandlers.WtmFileProvider"/> itself
     /// (the one caller this safety argument is built on), or one of the
     /// <c>IWtmFileHandler</c> implementations (<c>WtmDataBaseFileHandler</c>,
-    /// <c>WtmLocalFileHandler</c>, <c>WtmOssFileHandler</c>, <c>WtmS3FileHandler</c>,
+    /// <c>WtmLocalFileHandler</c>, <c>WtmOssFileHandler</c>,
     /// <c>WtmFileHandlerBase</c>) — allow-listed in case a future handler legitimately delegates
     /// to another handler or to its own base implementation, which is a within-the-handler-family
     /// call, not a new external entry point.
@@ -85,7 +85,6 @@ namespace WalkingTec.Mvvm.Core.Test.Security
             "src/WalkingTec.Mvvm.Core/Support/FileHandlers/WtmLocalFileHandler.cs",
             "src/WalkingTec.Mvvm.Core/Support/FileHandlers/WtmOssFileHandler.cs",
             "src/WalkingTec.Mvvm.Core/Support/FileHandlers/WtmFileHandlerBase.cs",
-            "src/WalkingTec.Mvvm.FileHandlers.S3/WtmS3FileHandler.cs",
         };
 
         /// <summary>

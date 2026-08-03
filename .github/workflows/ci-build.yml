@@ -112,7 +112,8 @@ jobs:
     - name: Test with coverage
       timeout-minutes: 30
       run: |
-        # #902: core.slnf spans 7 test projects. MSBuild's default -maxcpucount (4) was
+        # #902: core.slnf spans 6 test projects (down from 7 -- #1054 removed the S3
+        # file handler test project). MSBuild's default -maxcpucount (4) was
         # starting 4 testhosts + 4 coverlet collectors in the same second on this runner's
         # 4 CPU / 3.8GiB Docker VM. That co-scheduling both OOM-killed testhosts mid-run
         # ("Test Run Aborted" / "Total tests: Unknown" -- Api.Test, Core.Test and Etl.Test
@@ -130,7 +131,7 @@ jobs:
         # transfer to e2e-test.yml, whose demo app is Microsoft.NET.Sdk.Web and genuinely
         # defaults to server GC.)
         #
-        # #902: all 7 projects previously logged to the same fixed name
+        # #902: all 7 projects (6 after #1054) previously logged to the same fixed name
         # ("trx;LogFileName=test-results.trx"), so only the last assembly's TRX ever
         # survived in ./TestResults -- every earlier one hit "WARNING: Overwriting results
         # file". Dropping the fixed LogFileName lets VSTest auto-name each project's TRX so

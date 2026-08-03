@@ -4,14 +4,14 @@
 # #925 cross-vendor review finding 4: this script's non-dry-run path is DISABLED. It
 # was previously recommended (docs/ci-operations.md, docs/gitea-packages.md) as the
 # fallback "when the Gitea Actions runner is unavailable" -- but it only packs 3 of the
-# 6 published packages (Core, Mvc, TagHelpers.LayUI -- never WorkFlow, Etl,
-# FileHandlers.S3), and performs NONE of publish-nuget.yml's gate: no six-package
+# 5 published packages (Core, Mvc, TagHelpers.LayUI -- never WorkFlow, Etl), and
+# performs NONE of publish-nuget.yml's gate: no five-package
 # reconciliation, no smoke test, no local vulnerability scan, no version-cohort check.
-# A runner outage would have made this the OFFICIALLY DOCUMENTED way to ship 3 of 6
+# A runner outage would have made this the OFFICIALLY DOCUMENTED way to ship 3 of 5
 # packages with every one of those checks skipped.
 #
 # Chosen fix (of the two offered by the finding: disable, or bring this script up to
-# parity with the full gate): DISABLE. Reimplementing the full six-package
+# parity with the full gate): DISABLE. Reimplementing the full five-package
 # smoke+vulnerability+cohort gate here would duplicate real, security-relevant logic in
 # two places that must then be kept in permanent lockstep -- exactly the drift risk
 # .claude/rules/dependency-management.md and this repo's own history (the SIGPIPE
@@ -90,12 +90,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 # #925 cross-vendor review finding 4: refuse any real publish outright -- see the
-# header comment for the full rationale (3-of-6 packages, no gate at all). This check
+# header comment for the full rationale (3-of-5 packages, no gate at all). This check
 # runs before token resolution or any network/dotnet call so it is cheap and safe to
 # hit accidentally.
 if [[ "$DRY_RUN" -ne 1 ]]; then
   echo "ERROR: scripts/publish-to-gitea.sh's real (non-dry-run) publish path is disabled (#925)." >&2
-  echo "  It packs only 3 of the 6 published packages (never WorkFlow/Etl/FileHandlers.S3)" >&2
+  echo "  It packs only 3 of the 5 published packages (never WorkFlow/Etl)" >&2
   echo "  and runs none of publish-nuget.yml's gate (smoke test, vulnerability scan," >&2
   echo "  version-cohort check). Use --dry-run to preview. To actually publish, fix the" >&2
   echo "  Gitea Actions trigger instead -- see docs/gitea-packages.md's tag-object-dedup" >&2

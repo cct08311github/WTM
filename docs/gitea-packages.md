@@ -139,7 +139,7 @@ Release 組態下，最終 package version 直接等於 `VersionPrefix`。
 
 ## 7. 本機手動發佈（已停用 —— 僅供預覽）
 
-**`scripts/publish-to-gitea.sh` 的真實發佈路徑已停用（#925 cross-vendor review finding 4）。** 它只 pack 6 個套件中的 3 個（Core/Mvc/TagHelpers.LayUI，永遠不含 WorkFlow/Etl/FileHandlers.S3），也不跑 `publish-nuget.yml` 的任何 gate（smoke test、本機 vulnerability scan、version-cohort 檢查）——曾經被本文件推薦為「runner 不可用時的 fallback」，等於官方教人在跳過所有這些檢查的情況下發佈不完整的一批套件。
+**`scripts/publish-to-gitea.sh` 的真實發佈路徑已停用（#925 cross-vendor review finding 4）。** 它只 pack 5 個套件中的 3 個（Core/Mvc/TagHelpers.LayUI，永遠不含 WorkFlow/Etl），也不跑 `publish-nuget.yml` 的任何 gate（smoke test、本機 vulnerability scan、version-cohort 檢查）——曾經被本文件推薦為「runner 不可用時的 fallback」，等於官方教人在跳過所有這些檢查的情況下發佈不完整的一批套件。
 
 ```bash
 ./scripts/publish-to-gitea.sh --dry-run                # 預覽穩定版，不執行

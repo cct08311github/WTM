@@ -23,7 +23,7 @@ jobs:
     # tag pushes from a retry) from executing concurrently and interleaving pushes to the
     # same registries. One release publish at a time, queued rather than run in
     # parallel -- never cancelled mid-push (cancel-in-progress: false), since an
-    # in-flight publish may already have pushed some but not all of six packages and
+    # in-flight publish may already have pushed some but not all of five packages and
     # cancelling it would leave that partial state with nothing to finish it.
     concurrency:
       group: publish-nuget-release
@@ -141,14 +141,14 @@ jobs:
       # having been latent rather than exercised. Both properties are set (not just
       # PackageVersion) so `Version`-derived outputs elsewhere stay consistent.
       #
-      # These six pack steps only ever write to the local nupkgs/ directory -- nothing
+      # These five pack steps only ever write to the local nupkgs/ directory -- nothing
       # here is a publish. Every check in this job (smoke, vulnerability scan, cohort
       # check, sanitize/leak-gate/nuspec checks) runs against exactly these files before
       # the first `nuget push` anywhere (see "Push to Gitea Packages" below and #925
       # cross-vendor review finding 3).
       # Core is packed first against whatever NuGet cache the runner started with --
       # normally cold for the first restore of the job's transitive dependency set
-      # (EF Core, etc.), so it gets the largest individual budget; the five packs
+      # (EF Core, etc.), so it gets the largest individual budget; the four packs
       # below reuse the same shared ~/.nuget/packages cache Core just warmed and are
       # sized smaller accordingly.
       - name: Pack WalkingTec.Mvvm.Core
@@ -181,18 +181,12 @@ jobs:
           PKG_VERSION: ${{ steps.version.outputs.version }}
         run: dotnet pack src/WalkingTec.Mvvm.Etl/WalkingTec.Mvvm.Etl.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
 
-      - name: Pack WalkingTec.Mvvm.FileHandlers.S3
-        timeout-minutes: 10
-        env:
-          PKG_VERSION: ${{ steps.version.outputs.version }}
-        run: dotnet pack src/WalkingTec.Mvvm.FileHandlers.S3/WalkingTec.Mvvm.FileHandlers.S3.csproj -c Release -o nupkgs /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
-
       - name: List packages
         timeout-minutes: 2
         run: ls -lh nupkgs/
 
       # #925 cross-vendor review finding 3 (partial support): an auditable record of
-      # exactly which six artifacts (by content hash) are about to be checked and
+      # exactly which five artifacts (by content hash) are about to be checked and
       # published, tied to the commit checked out for this run. Also a hard sanity
       # check -- if a pack step above silently produced the wrong count (e.g. a glob
       # picked up a stale file), fail here rather than downstream.
@@ -201,8 +195,8 @@ jobs:
         run: |
           set -euo pipefail
           NUPKG_COUNT=$(ls nupkgs/*.nupkg 2>/dev/null | wc -l | tr -d ' ')
-          if [ "$NUPKG_COUNT" -ne 6 ]; then
-            echo "::error::Expected exactly 6 .nupkg files in nupkgs/, found ${NUPKG_COUNT}"
+          if [ "$NUPKG_COUNT" -ne 5 ]; then
+            echo "::error::Expected exactly 5 .nupkg files in nupkgs/, found ${NUPKG_COUNT}"
             exit 1
           fi
           echo "Artifact manifest for commit ${GITHUB_SHA} (sha256):"
@@ -216,10 +210,10 @@ jobs:
       #
       # What this proves, and what it does NOT: see the #925 PR description for the full
       # accounting. In short — proven here, on this exact commit, every run: the tag /
-      # version.props / CHANGELOG agreement above, that all six packages install and
+      # version.props / CHANGELOG agreement above, that all five packages install and
       # that Etl's #883 breaking-change surface matches what's documented (below), and
       # that this exact dependency graph has no known FIXABLE vulnerability (further
-      # below). NOT re-verified here: the full .NET test suite (11 projects; ci-build.yml
+      # below). NOT re-verified here: the full .NET test suite (10 projects; ci-build.yml
       # already serializes it with -m:1 specifically because running it concurrently
       # OOM-kills this runner, #902 — re-running it a second time inside every publish
       # would either contend for the same 2-capacity runner or double the release
@@ -238,11 +232,11 @@ jobs:
       # this issue exists to stop, so it is named as a gap instead.
       #
       # #925 fact 3: the smoke test previously ran AFTER both the Gitea and GitHub
-      # publish stages and only installed 4 of the 6 packages, so a break in Etl or
-      # FileHandlers.S3 would have been discovered only once already-immutable versions
-      # were live on both registries. It now runs here, against the packages that were
-      # just packed to the local nupkgs/ directory — before either registry has seen
-      # them — and covers all six.
+      # publish stages and only installed 4 of the then-6 packages, so a break in Etl or
+      # the S3 file handler package (removed, #1054) would have been discovered only
+      # once already-immutable versions were live on both registries. It now runs here,
+      # against the packages that were just packed to the local nupkgs/ directory —
+      # before either registry has seen them — and covers all five.
       #
       # #925 cross-vendor review findings 6 & 9:
       #  - finding 9: the scaffolded project used to be created at `smoke/` in the
@@ -265,13 +259,13 @@ jobs:
       #    $RUNNER_TEMP-scoped directory for these steps so there is nothing to reuse,
       #    and a dedicated NuGet.Config lists ONLY nuget.org (for genuine third-party
       #    transitive dependencies) plus the just-built local nupkgs/ folder — never the
-      #    Gitea or GitHub registries — so the six WTM packages under test can only ever
+      #    Gitea or GitHub registries — so the five WTM packages under test can only ever
       #    resolve from the candidate build.
       # Largest single budget in this job: the step body deliberately empties
       # NUGET_PACKAGES (see the header comment's finding-6 explanation), so unlike
       # the pack steps above every transitive dependency (EF Core, Quartz, ...) is
       # downloaded fresh here with no cache to fall back on.
-      - name: Smoke test package install (all six packages)
+      - name: Smoke test package install (all five packages)
         timeout-minutes: 20
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
@@ -293,7 +287,7 @@ jobs:
 
           # Candidate-feed-only NuGet.Config: nuget.org for genuine third-party
           # transitive dependencies (EF Core, Quartz, ...), plus the local nupkgs/
-          # folder for the six WTM packages under test. Deliberately NOT the Gitea or
+          # folder for the five WTM packages under test. Deliberately NOT the Gitea or
           # GitHub Packages registries -- if the candidate build is missing from
           # nupkgs/, restore must fail loudly, never silently fall back to an
           # already-published version of the same package id+version.
@@ -313,7 +307,6 @@ jobs:
           dotnet add package WalkingTec.Mvvm.TagHelpers.LayUI --version "$PKG_VERSION"
           dotnet add package WalkingTec.Mvvm.WorkFlow --version "$PKG_VERSION"
           dotnet add package WalkingTec.Mvvm.Etl --version "$PKG_VERSION"
-          dotnet add package WalkingTec.Mvvm.FileHandlers.S3 --version "$PKG_VERSION"
           # #925: the scaffolded Program.cs never references a single type from any of
           # these packages, so `dotnet build` below would previously have passed even
           # for a completely broken assembly. Replace it with a fixture that runs (not
@@ -343,7 +336,7 @@ jobs:
       # re-pin the same override in their own project.
       #
       # This step scans the SAME consumer project the smoke-install step above just
-      # restored -- the six packages exactly as `dotnet add package` resolves them
+      # restored -- the five packages exactly as `dotnet add package` resolves them
       # from the nupkgs under test, nuspec pruning and all -- which is what a real
       # consumer's dependency graph actually looks like. It reuses
       # scripts/check-vulnerable-packages.py (fails closed -- exit 2 -- on any output
@@ -371,7 +364,7 @@ jobs:
             exit 1
           fi
           if ! python3 "$GITHUB_WORKSPACE/scripts/check-vulnerable-packages.py" "$VULN_JSON"; then
-            echo "::error::Vulnerable package(s) found in the CONSUMER-INSTALLED dependency graph -- the six packages exactly as a real downstream consumer would restore them from these nupkgs (see output above). A clean solution-level scan does not prove this is clean; this is what actually ships. Aborting before anything is published."
+            echo "::error::Vulnerable package(s) found in the CONSUMER-INSTALLED dependency graph -- the five packages exactly as a real downstream consumer would restore them from these nupkgs (see output above). A clean solution-level scan does not prove this is clean; this is what actually ships. Aborting before anything is published."
             exit 1
           fi
 
@@ -423,7 +416,7 @@ jobs:
 
       # #925 cross-vendor review finding 3 (partial support): before pushing anything,
       # check whether this exact version already exists PARTIALLY on the Gitea
-      # registry -- the exact "package N of 6 failed last time" scenario described in
+      # registry -- the exact "package N of 5 failed last time" scenario described in
       # the "Push to Gitea Packages" step's comment below. `--skip-duplicate` alone
       # cannot distinguish "clean idempotent re-run" from "topping up a broken partial
       # publish with content from a different commit"; this can, and refuses to
@@ -440,7 +433,7 @@ jobs:
           python3 scripts/check-package-cohort.py \
             "$PACKAGE_SOURCE" "$PKG_VERSION" \
             WalkingTec.Mvvm.Core WalkingTec.Mvvm.Mvc WalkingTec.Mvvm.TagHelpers.LayUI \
-            WalkingTec.Mvvm.WorkFlow WalkingTec.Mvvm.Etl WalkingTec.Mvvm.FileHandlers.S3 \
+            WalkingTec.Mvvm.WorkFlow WalkingTec.Mvvm.Etl \
             --token "$PAT"
 
       # ── GitHub mirror sync — checks only, no push yet ────────────────────────────────
@@ -730,8 +723,8 @@ jobs:
       # not one SourceLink derives from `git remote`) — so there is no repo metadata,
       # and therefore no PAT-bearing remote URL, anywhere near the `dotnet pack`
       # process.
-      # Six dotnet pack invocations in one run: block, plus the per-nupkg nuspec
-      # sanity loop -- sized as roughly the six individual Gitea pack steps' combined
+      # Five dotnet pack invocations in one run: block, plus the per-nupkg nuspec
+      # sanity loop -- sized as roughly the five individual Gitea pack steps' combined
       # budget above, though restores here should mostly hit the now-warm shared
       # NuGet cache those steps already populated.
       - name: Re-pack from sanitized source for GitHub Packages
@@ -757,7 +750,6 @@ jobs:
           dotnet pack "$PACK_DIR/src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj"                           -c Release -o nupkgs-github /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
           dotnet pack "$PACK_DIR/src/WalkingTec.Mvvm.WorkFlow/WalkingTec.Mvvm.WorkFlow.csproj"                 -c Release -o nupkgs-github /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
           dotnet pack "$PACK_DIR/src/WalkingTec.Mvvm.Etl/WalkingTec.Mvvm.Etl.csproj"                           -c Release -o nupkgs-github /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
-          dotnet pack "$PACK_DIR/src/WalkingTec.Mvvm.FileHandlers.S3/WalkingTec.Mvvm.FileHandlers.S3.csproj"   -c Release -o nupkgs-github /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
           # Sanity-check: the sanitized placeholder MUST be present in EVERY nuspec.
           # Loop over each .nupkg individually — passing a glob to unzip treats the
           # first file as the archive and the rest as member-name filters, so without
@@ -769,8 +761,8 @@ jobs:
             fi
           done
           NUPKG_COUNT=$(ls nupkgs-github/*.nupkg 2>/dev/null | wc -l | tr -d ' ')
-          if [ "$NUPKG_COUNT" -ne 6 ]; then
-            echo "::error::Expected exactly 6 .nupkg files in nupkgs-github/, found ${NUPKG_COUNT}"
+          if [ "$NUPKG_COUNT" -ne 5 ]; then
+            echo "::error::Expected exactly 5 .nupkg files in nupkgs-github/, found ${NUPKG_COUNT}"
             exit 1
           fi
           echo "Sanitized nupkgs ready (built from SANITIZED_SHA=${SANITIZED_SHA}):"
@@ -793,7 +785,7 @@ jobs:
           python3 scripts/check-package-cohort.py \
             "https://nuget.pkg.github.com/cct08311github/index.json" "$PKG_VERSION" \
             WalkingTec.Mvvm.Core WalkingTec.Mvvm.Mvc WalkingTec.Mvvm.TagHelpers.LayUI \
-            WalkingTec.Mvvm.WorkFlow WalkingTec.Mvvm.Etl WalkingTec.Mvvm.FileHandlers.S3 \
+            WalkingTec.Mvvm.WorkFlow WalkingTec.Mvvm.Etl \
             --token "$GH_PAT"
 
       # ── Everything above this line is a CHECK. Nothing below is reversible. ──────────
@@ -837,7 +829,7 @@ jobs:
       # slots for up to the Gitea instance's 3-hour ENDLESS_TASK_TIMEOUT ceiling,
       # since neither this step nor the job itself carried any real timeout.
       # Deliberately generous, not tight: killing a `dotnet nuget push` mid-batch is
-      # NOT free of consequence (some of the six packages may already be live, others
+      # NOT free of consequence (some of the five packages may already be live, others
       # not), but it is a KNOWN, already-defended-against failure mode in this exact
       # file -- "Verify version cohort not partially published (Gitea)" above exists
       # specifically to detect that partial state on the NEXT run and refuse to
@@ -845,7 +837,7 @@ jobs:
       # such recovery path and a certain cost (denying the runner's other capacity
       # slot to every other workflow in the repo for up to 3 hours); a bounded
       # timeout has a bounded, understood worst case. 20 minutes is generous for a
-      # push of ~12 small files (6 nupkg + 6 snupkg) to a registry on the same
+      # push of ~10 small files (5 nupkg + 5 snupkg) to a registry on the same
       # tailnet-local host as the runner -- normal completion is expected in well
       # under a minute; this is headroom for a genuinely stuck connection, not a
       # realistic estimate of success-path duration.
@@ -1095,8 +1087,8 @@ jobs:
             --skip-duplicate
 
       # #925: the smoke test that used to run here (after both registries had already
-      # received the packages) now runs pre-publish, against all six packages, as the
-      # "Smoke test package install (all six packages)" step above -- see that step's
+      # received the packages) now runs pre-publish, against all five packages, as the
+      # "Smoke test package install (all five packages)" step above -- see that step's
       # comment for the full rationale. Nothing corresponding belongs at the end of the
       # job anymore: by the time execution reaches here, the packages are already
       # published and there would be nothing left to abort.
