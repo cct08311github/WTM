@@ -588,6 +588,18 @@ python3 test/mutants/run_mutant.py --mutant 876-wtmcontrolleractivator-neutraliz
 
 ## LayUI TagHelper：9 個「statement 位置原樣內插 `*Func` callback」的 unwrapped-IIFE 修復（#999 part (A)，2026-08-02）
 
+> **本項引入的已知迴歸——見 #1034。** `({expr})({args})` 的包裹**終結 optional chain 的短路傳播**：
+> `*Func` 值只要含 `?.`，行為就改變。`handlers?.onChange(data)` 在 `handlers` 為 undefined 時安全短路、
+> 什麼都不做；而發射出的 `(handlers?.onChange)(data)` 會先把 `undefined` 求值出來、再把它當函式呼叫，
+> 拋 `TypeError` 並中止整個 callback。短路只在**同一條鏈內**傳播，加上括號就結束了那條鏈。
+> 這是以**執行**兩種形狀驗證的，不是以閱讀驗證。影響 part (A)、part (B) 與 #965 合計 **20 個**包裹發射站點。
+> **本項的測試沒有抓到它**，因為那些測試用真的 JS parser **解析**發射結果並斷言其文字形狀——
+> 而 `(handlers?.onChange)(data)` 在語法上完全合法，只有執行才看得出差異。這是「解析通過 ≠ 行為正確」的實例。
+> 沒有便宜的正確修法：`(expr)?.(args)` 會把「識別字打錯」從大聲拋錯降級為靜默無事；
+> 而「文字含 `?.` 就不包裹」正是 part (B) 存在要消滅的「用字串猜 JS 文法」。修法設計在 #1034 追蹤。
+> 嚴重度 **[med]**：需要開發者在 `*Func` 值裡寫 `?.`，合法但不常見——**但失效模式從「靜默無事」
+> 變成「拋錯中止 callback」，方向是變差的。**
+
 **背景**：#965（PR #998，已合併為 `7c9887d4b`）修了第一個被發現的站點——`DataTableTagHelper.cs` 的 `GridAction.OnClickFunc`，在 statement 起始位置原樣內插一個開發者提供的 callback 字串，若該值是匿名函式字面量（`function(ids,data){...}`）會產生 `function(ids,data){...}(ids,...)`——JS 對「statement 以 `function` 關鍵字起頭」有固定文法：一定被解析成 FunctionDeclaration（要求具名），匿名的在這個位置直接是 SyntaxError，且這個錯誤會讓**整個**外層 `<script>` block 解析失敗，不只是壞掉那一個 handler。#999 一次窮舉了全部 47 個內插站點，依**機制**分成兩類：(a) **RAW 內插**——開發者的值原封不動抵達輸出，`({X})(...)` 是完整修法；(b) **`FormatFuncName` 站點**（`BaseElementTag.cs:225-242`）——在抵達任何語法位置**之前**就先在 `(` 處截斷、補上 `(data)`，`function(v){...}` 變成字串 `function(data)`，對這種站點加括號（`(function(data));`）本身就是 SyntaxError，需要不同修法。本項只處理 (a)；(b) 的 12 個站點在 #999 part (B) 追蹤，待跨廠設計審查，**這裡不宣稱、也不暗示 `*Func` unwrapped-IIFE 這個類別已經修完**。
 
 **本項修復的 9 個站點**（statement 位置，逐一用 JS 文法手動驗證過，非抄 issue 文字）：
@@ -654,6 +666,18 @@ dotnet test test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj -c R
 ---
 
 ## LayUI TagHelper：`FormatFuncName` 截斷造成的 10 個站點修復——新增 `FormatFuncInvocation`（#999 part (B)，2026-08-03）
+
+> **本項引入的已知迴歸——見 #1034。** `({expr})({args})` 的包裹**終結 optional chain 的短路傳播**：
+> `*Func` 值只要含 `?.`，行為就改變。`handlers?.onChange(data)` 在 `handlers` 為 undefined 時安全短路、
+> 什麼都不做；而發射出的 `(handlers?.onChange)(data)` 會先把 `undefined` 求值出來、再把它當函式呼叫，
+> 拋 `TypeError` 並中止整個 callback。短路只在**同一條鏈內**傳播，加上括號就結束了那條鏈。
+> 這是以**執行**兩種形狀驗證的，不是以閱讀驗證。影響 part (A)、part (B) 與 #965 合計 **20 個**包裹發射站點。
+> **本項的測試沒有抓到它**，因為那些測試用真的 JS parser **解析**發射結果並斷言其文字形狀——
+> 而 `(handlers?.onChange)(data)` 在語法上完全合法，只有執行才看得出差異。這是「解析通過 ≠ 行為正確」的實例。
+> 沒有便宜的正確修法：`(expr)?.(args)` 會把「識別字打錯」從大聲拋錯降級為靜默無事；
+> 而「文字含 `?.` 就不包裹」正是 part (B) 存在要消滅的「用字串猜 JS 文法」。修法設計在 #1034 追蹤。
+> 嚴重度 **[med]**：需要開發者在 `*Func` 值裡寫 `?.`，合法但不常見——**但失效模式從「靜默無事」
+> 變成「拋錯中止 callback」，方向是變差的。**
 
 **背景**：part (A)（#1003）修了 9 個「statement 位置原樣內插」的站點——開發者的 `*Func` 值原封不動抵達輸出，`({X})(...)` 加括號是完整修法。它明確排除了另一類站點：所有經過 `BaseElementTag.FormatFuncName`（`src/WalkingTec.Mvvm.TagHelpers.LayUI/Abstraction/BaseElementTag.cs:225-242`）的呼叫。`FormatFuncName` 在**抵達任何語法位置之前**就先在第一個 `(` 處截斷、補上 `(data)`：
 
@@ -832,6 +856,10 @@ part (A) 估計的「12」比實際的「10」多 2——多出的 2 個是 `Bas
 | `FormatFuncName` truncation | 10 | 10 | part (B)（本次，10 個） |
 | **合計** | **20** | **20** | |
 
+> **這張表說的是「unwrapped-IIFE 這個缺陷類別的 20 個站點都套用了修法」，不是「這 20 個站點現在都正確」。**
+> 修法本身引入了 optional-chain 迴歸（見本節開頭的 #1034 揭露），對含 `?.` 的 `*Func` 值，
+> 這 20 個站點的行為比修法前更差。兩件事都成立，不要用這張表推導出「這 20 個站點已無問題」。
+
 **這個「20/20」的完整性宣稱，其驗證邊界要誠實劃清**：raw-interpolation 那一半的「10 個母體、9+1 已修」是 part (A) 自己的重新推導結果，本次工作階段**沒有**重新獨立核對（沒有重跑 part (A) 當時用來窮舉 raw interpolation 站點的方法）；`FormatFuncName`-truncation 那一半的「10 個母體、10/10 已修」則是本次工作階段獨立重新推導、並用上方可重跑的 `grep` 指令驗證過的。換句話說：「`FormatFuncName` 這一半已經 100% 修完」是本次驗證過的宣稱；「#999 整體 20/20 已經 100% 修完」則有一半是信任 part (A) 既有工作，不是本次重新證明。
 
 ### 可重跑的盤點指令
@@ -955,6 +983,18 @@ python3 scripts/check-mutant-entries-parse.py
 ---
 
 ## DataTableTagHelper 未包裹 IIFE：GridAction.OnClickFunc 為函式字面值時整個 `<script>` 區塊解析失敗（#965，2026-08-02）
+
+> **本項引入的已知迴歸——見 #1034。** `({expr})({args})` 的包裹**終結 optional chain 的短路傳播**：
+> `*Func` 值只要含 `?.`，行為就改變。`handlers?.onChange(data)` 在 `handlers` 為 undefined 時安全短路、
+> 什麼都不做；而發射出的 `(handlers?.onChange)(data)` 會先把 `undefined` 求值出來、再把它當函式呼叫，
+> 拋 `TypeError` 並中止整個 callback。短路只在**同一條鏈內**傳播，加上括號就結束了那條鏈。
+> 這是以**執行**兩種形狀驗證的，不是以閱讀驗證。影響 part (A)、part (B) 與 #965 合計 **20 個**包裹發射站點。
+> **本項的測試沒有抓到它**，因為那些測試用真的 JS parser **解析**發射結果並斷言其文字形狀——
+> 而 `(handlers?.onChange)(data)` 在語法上完全合法，只有執行才看得出差異。這是「解析通過 ≠ 行為正確」的實例。
+> 沒有便宜的正確修法：`(expr)?.(args)` 會把「識別字打錯」從大聲拋錯降級為靜默無事；
+> 而「文字含 `?.` 就不包裹」正是 part (B) 存在要消滅的「用字串猜 JS 文法」。修法設計在 #1034 追蹤。
+> 嚴重度 **[med]**：需要開發者在 `*Func` 值裡寫 `?.`，合法但不常見——**但失效模式從「靜默無事」
+> 變成「拋錯中止 callback」，方向是變差的。**
 
 **背景**：這個缺陷本身是 #898/#905（見上方「E2E 測試可靠度修正」條目）改寫 TC-29 時發現、但當時判斷超出「只改 test/e2e」範圍而刻意不修、只記成 KNOWN-GAP 的既有缺陷；#965 是授權修這個缺陷本身的 issue。
 

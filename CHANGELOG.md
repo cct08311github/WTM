@@ -365,6 +365,13 @@ same limitation part (A)'s own entry stated.
 
 ### Fixed — `DataTableTagHelper` emitted an unwrapped IIFE, breaking the whole toolbar/row-action `<script>` block for any `GridAction.OnClickFunc` set to a function literal (#965)
 
+> **Known regression introduced by this change — see #1034.** The `({expr})(args)` wrapper ends an
+> optional chain, so a `GridAction.OnClickFunc` containing `?.` changes behaviour: `h?.onClick(ids)`
+> short-circuits harmlessly when `h` is undefined, while the emitted `(h?.onClick)(ids)` evaluates
+> `undefined` and then calls it, throwing `TypeError` and aborting the callback. Verified by executing
+> both forms, not by reading them. The full statement of this regression, why the JS-parser-based test
+> here could not catch it, and why there is no cheap correct fix are in the #999 part (A) entry above.
+
 **Full re-derivation of the affected surface (exact grep commands and raw output), the JS-validity test's mechanism and why it was chosen over shelling out to `node` or hand-parsing, and the complete RED/GREEN transcript are in `docs/production-readiness.md`'s new "DataTableTagHelper 未包裹 IIFE" section — this entry does not repeat or exceed those claims.**
 
 `DataTableTagHelper.cs`'s `AddSubButton` (`src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.cs:1284`) emitted `actionScript = $"{item.OnClickFunc}(ids,ff.GetSelectionData('{Id}'));"` — a raw, unwrapped invocation of whatever string `GridAction.OnClickFunc` holds. `GridActionExtension.Legacy.cs`'s own XML doc documents the intended shape as a bare identifier naming a page-global function, but nothing enforces that: `EtlJobListVM`'s "執行記錄" toolbar action and `ProcessDefinitionListVM`'s two designer actions instead pass a raw anonymous function literal (`function(ids,data){...}`). This is not merely "an IIFE missing its wrapping parens" — a statement cannot open with the bare `function` keyword at all (it parses as an anonymous `FunctionDeclaration`, which requires a name, so it is a syntax error on its own, independent of what follows). The `SyntaxError` kills parsing of the WHOLE enclosing `<script>` block, not just that one action — `BuildTableOptionsScript` writes the toolbar-event dispatcher and the real `table.render()` call into the SAME `<script>` tag — so `/_EtlJob/Index`'s entire grid never renders via any real navigation route.
