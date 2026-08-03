@@ -1,5 +1,25 @@
 # 更新日志
 
+## [10.22.1] - 2026-08-03
+
+### Fixed — restore optional-chain short-circuit at the 20 `*Func` emission sites #999 part (A)/(B) and #965 wrapped in `(expr)(args)`, via a closed-language classifier (#1034)
+
+`#999`/`#965` wrapped every developer-supplied `*Func` callback expression in a grouping operator, `(expr)(args)`, to fix a different defect (an anonymous function literal at statement position produced an unwrapped-IIFE `SyntaxError`). That wrap is valid JS for every shape those three fixes were designed against, except one it did not consider: it ends an optional chain's short-circuit. `handlers?.onChange(data)` short-circuits harmlessly when `handlers` is nullish; the wrapped `(handlers?.onChange)(data)` forces the chain to produce its value (`undefined`) before the call, so the call throws `TypeError` and aborts the callback instead. This was disclosed on all six affected CHANGELOG/production-readiness entries by #1040 and is fixed here.
+
+**All observable differences are limited to today's short-circuit-triggers-a-TypeError-at-the-outer-call scenario; the direct form additionally does not evaluate the call's arguments.** This second half matters concretely at `DataTableTagHelper.cs:1300` (`GridAction.OnClickFunc`, args `ids,ff.GetSelectionData('{Id}')`) — `ff.GetSelectionData` calls into LayUI's `checkStatus`, a call with side effects. Under today's wrap, a short-circuiting chain still evaluates that argument (JS argument evaluation happens before the callee is invoked) and only then throws; under the direct form, the argument is never evaluated at all. This entry does not claim no downstream consumer depends on today's behaviour — 10.22.0 has been released — only that such a dependency cannot function correctly today (every short-circuit path throws), which is an argument, not telemetry.
+
+**Fix**: `BaseElementTag.FormatFuncInvocation` (`src/WalkingTec.Mvvm.TagHelpers.LayUI/Abstraction/BaseElementTag.cs`) gains a closed-language classifier, `IsNarrowOptionalChain` — the whole callback string must be ASCII identifier atoms joined by `.`/`?.`, contain at least one `?.`, and not start with a JS reserved word. A match emits the call INSIDE the chain, `expr(args)` (short-circuit propagates); anything else falls back to the existing, unchanged, byte-identical wrap, `(expr)(args)`. This is deliberately NOT "skip the wrapper whenever the text contains `?.`" — that naive-substring approach is exactly what the `#999 part (A)` entry above already rejected as guess-JS-grammar-from-a-string (an arrow body like `(v)=>a?.b` contains `?.` but must never be direct-appended); the difference is the failure direction — a naive substring test is fail-open (can corrupt a value it misclassifies), the closed-language classifier is fail-closed (a misclassification can only under-collect, falling back to today's existing wrap, never emitting anything worse than today).
+
+**20 sites, converged onto one helper**: 10 sites already called `FormatFuncInvocation` from `#999`/`#965`; the other 10 were raw `(X)(args)` interpolation, now converted to call the same helper with the site's own args string preserved verbatim (including `Form/TransferTagHelper.cs`'s `"data, index,transferIns"` space and each site's own trailing-`;`-or-not shape). Full 20-row site table, the six cross-vendor-review named changes applied, the 85-test suite (`test/WalkingTec.Mvvm.Core.Test/TagHelpers/OptionalChainInvocation1034Tests.cs`), and the manual two-direction mutation verification (RED transcripts included, not CI-enforced) are in `docs/production-readiness.md`'s new "#1034" section — this entry does not repeat or exceed those claims.
+
+**Not in scope, tracked separately** (each already unwrapped today — no #999/#965/#1034 regression to fix, applying this same classifier there would change today's normal bytes for zero benefit): `Form/SliderTagHelper.cs:471` (OnTipsFunc, #1041), `Form/TextBoxTagHelper.cs:105,109` (oninput/onchange HTML-attribute direct append, also #1041), and the Selector cross-package request-round-trip sink (#1043).
+
+**Mutant: considered, not added — same reasoning as #965, #999 part (A), and #999 part (B).** This is a JS-semantics correctness fix, not a security vulnerability; `run_mutant.py`'s `VALID_KINDS` (`security`/`selftest`) has no honest classification for it. Both classifier directions (always-false, always-true) do have regression protection — the same two decision directions have ordinary CI regression protection, not mutation-gate-equivalent protection: ordinary tests lack the mutation runner's patch-apply/clean-baseline/expected-red-pattern/positive-control reconciliation, and are not a required-check-enforced per-entry execution.
+
+**Corrections to three 10.22.0 entries above**: each of the `#999 part (A)`, `#999 part (B)`, and `#965` entries' `#1034` disclosure blockquotes carries a sentence saying skipping the wrapper when the text contains `?.` is exactly the guess-JS-grammar approach part (B) exists to eliminate — that sentence is still correct about the approach it names (naive substring detection is still rejected), but is superseded as a statement that the whole defect class had no fix. A correction pointer is added under each of the three original blockquotes, pointing here; the original text is left unchanged (only a pointer is added below it, per this file's own `Corrected 2026-08-03 (#1035)` precedent at line 24 for how to correct without silently rewriting).
+
+**Not verified this session**: real Gitea Actions CI (hard constraint forbids any Gitea/GitHub API call and forbids opening a PR) — local verification used `dotnet build`/`dotnet test` only.
+
 ## [10.22.0] - 2026-08-02
 
 **Contains one BREAKING change (#985).** `FileAttachmentSaveChangesGuard` now rejects a
@@ -233,6 +253,16 @@ Tests: `python3 test/mutants/_selftest/selftest_gate_job_reconciliation.py` (ext
 > fix: `(expr)?.(args)` would turn a mistyped identifier from a loud throw into a silent
 > no-op, and skipping the wrapper when the text contains `?.` is exactly the
 > guess-JS-grammar-from-a-string approach part (B) exists to eliminate. Tracked in #1034.
+>
+> **Corrected 2026-08-03 (#1034).** The sentence above is still correct about the APPROACH it
+> names — naive substring detection (`Contains("?.")`) is still rejected, for the same reason:
+> an arrow body like `(v)=>a?.b` contains `?.` and must never be direct-appended. What is
+> superseded is reading that sentence as "this defect class has no fix" — it does now: a
+> closed-language classifier (every accepted string is a provably legal ES2020
+> `OptionalMemberExpression` chain, so emitting the call inside the chain is spec-guaranteed
+> safe for that set, and every rejected string falls back unchanged) ships in `[10.22.1]`
+> above. `docs/production-readiness.md`'s new "#1034" section has the full site table, the
+> six cross-vendor-review named changes applied, and the test evidence.
 
 `DataTableTagHelper.cs`'s `DoneFunc`, `TransferTagHelper.cs`'s `ChangeFunc`, `SliderTagHelper.cs`'s
 `ChangeFunc`, and `DateTimeTagHelper.cs`'s `ReadyFunc`/`ChangeFunc`/`DoneFunc` (both the single-field

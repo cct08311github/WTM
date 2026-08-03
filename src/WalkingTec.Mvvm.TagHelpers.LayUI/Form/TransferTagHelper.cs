@@ -338,7 +338,7 @@ layui.use(['transfer'],function(){{
     {(!Width.HasValue ? string.Empty : $",width:{Width}")}
     {(!Height.HasValue ? string.Empty : $",height:{Height}")}
     ,onchange: function(data,index){{defaultFunc(data,index,transferIns);
-    {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $"({ChangeFunc})(data, index,transferIns);")}
+    {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $"{FormatFuncInvocation(ChangeFunc, "data, index,transferIns")};")}
     }}
   }});
   /* init default value */

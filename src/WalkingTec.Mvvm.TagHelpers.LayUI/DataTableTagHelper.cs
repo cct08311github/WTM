@@ -806,7 +806,7 @@ layui.use(['table'], function(){{
       {(MultiLine == true ? $"tab.find('.layui-table-cell').css('height','auto').css('white-space','normal');" : string.Empty)}
        tab.find('div [lay-event=\'LAYTABLE_COLS\']').attr('title','{THProgram._localizer["Sys.ColumnFilter"]}');
        tab.find('div [lay-event=\'LAYTABLE_PRINT\']').attr('title','{THProgram._localizer["Sys.Print"]}');
-      {(string.IsNullOrEmpty(DoneFunc) ? string.Empty : $"({DoneFunc})(res,curr,count)")}
+      {(string.IsNullOrEmpty(DoneFunc) ? string.Empty : BaseElementTag.FormatFuncInvocation(DoneFunc, "res,curr,count"))}
       {(EnableHeaderFilter ? $"wtmHeaderFilter.refresh('{Id}');" : "")}
       if(typeof wtmColVis !== 'undefined'){{ wtmColVis.init('{Id}'); }}
       {BuildAggregateFooterScript(aggregateFields)}
@@ -1297,7 +1297,7 @@ case '{item.Area + item.ControllerName + item.ActionName + item.QueryString}':{{
                         // shape (bare identifier, dotted member, call expression) — parenthesizing
                         // a Reference does not strip its `this` binding, so `(obj.method)(args)`
                         // still calls with `this === obj`, same as `obj.method(args)`.
-                        actionScript = $"({item.OnClickFunc})(ids,ff.GetSelectionData('{Id}'));";
+                        actionScript = $"{BaseElementTag.FormatFuncInvocation(item.OnClickFunc, $"ids,ff.GetSelectionData('{Id}')")};";
                     }
                     if (string.IsNullOrEmpty(item.PromptMessage) == false)
                     {

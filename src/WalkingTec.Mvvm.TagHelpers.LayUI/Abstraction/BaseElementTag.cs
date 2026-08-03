@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Razor.TagHelpers;
+using System;
+using System.Collections.Generic;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -282,6 +284,92 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         // into one value is the root cause #999 exists to fix, not a detail
         // of it — so the two paths stay textually separate here too.
         //
+        // Issue #1034: the paren-wrap this method has always emitted —
+        // "(expr)(args)" — is valid JS for every shape described above EXCEPT
+        // one: it ends an optional chain's short-circuit. "handlers?.onChange"
+        // wrapped becomes "(handlers?.onChange)(data)" — the grouping
+        // operator forces the ChainExpression to produce its VALUE (undefined,
+        // when `handlers` is nullish) before the call happens, so a call that
+        // used to short-circuit to a harmless no-op now throws TypeError and
+        // aborts the callback. The only way to restore that short-circuit is
+        // to emit the call INSIDE the chain — "handlers?.onChange(data)" — but
+        // that is only safe for the narrow set of values that are PROVABLY a
+        // plain member-access chain; doing it unconditionally (or by a
+        // loose textual test like Contains("?.")) is exactly the
+        // guess-JS-grammar-from-a-string approach part (B) above exists to
+        // eliminate — e.g. an arrow body "(v)=>a?.b" contains "?." but must
+        // never be direct-appended. _narrowOptionalChainRegex is a CLOSED
+        // language classifier: every string it accepts is provably a legal
+        // ES2020 OptionalMemberExpression chain (ASCII identifier atoms
+        // joined by "." or "?.", at least one "?.", non-keyword head), so
+        // direct-appending the call is a spec-guaranteed-safe transform for
+        // every value it matches, and every value it rejects falls back to
+        // this method's existing, unchanged, byte-identical wrap output —
+        // fail-closed, never fail-open.
+        //
+        // The end anchor is `\z`, NOT `$` — same repo-wide reason as
+        // TextBoxTagHelper.cs:43-55's ANCHOR NOTE (also BaseElementTag.cs's
+        // own _changeFuncIdentifierRegex above): .NET's `$` matches at
+        // end-of-string OR immediately before a single trailing '\n', while
+        // JS has no such trailing-newline exception. Using `$` here would let
+        // a value like "a?.b\n" classify as a safe chain server-side while
+        // being emitted with the literal trailing newline still attached —
+        // client-side JS would then see "a?.b\n(data)", parsed as ASI
+        // inserting a statement break, i.e. NOT the call this method thinks
+        // it emitted. `\z` matches only the true end of the .NET string, so
+        // "a?.b\n" is correctly rejected here and falls back to the wrap.
+        //
+        // Deliberately ASCII-only atoms (NOT \w — .NET's \w includes Unicode
+        // letter categories with no corresponding guarantee on the JS engine
+        // parsing the emitted output): a value like "中?.b" is rejected here,
+        // falls back to the existing wrap, and is no worse than today.
+        private static readonly Regex _narrowOptionalChainRegex =
+            new(@"^[A-Za-z_$][A-Za-z0-9_$]*(?:\??\.[A-Za-z_$][A-Za-z0-9_$]*)+\z", RegexOptions.Compiled);
+
+        // Denylist is hygiene, not a correctness requirement: even if
+        // "function?.call" slipped past the regex above, BOTH the direct and
+        // wrapped forms are equally a SyntaxError for a bare `function`
+        // keyword head, so admitting it would not make anything worse. It is
+        // kept anyway so "classifier accepts the value" implies "the emitted
+        // direct form is always valid JS" with no keyword-shaped exception.
+        private static readonly HashSet<string> _jsReservedHeads = new(StringComparer.Ordinal)
+        {
+            "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default",
+            "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for", "function",
+            "if", "implements", "import", "in", "instanceof", "interface", "let", "new", "null",
+            "package", "private", "protected", "public", "return", "static", "super", "switch", "this",
+            "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield",
+        };
+
+        // Issue #1034 T-cls note: this is a 36-entry classification regression
+        // matrix (6 true-hits + 30 false-fallbacks; see
+        // OptionalChainInvocation1034Tests.cs), run only against the .NET
+        // implementation below — it pins THIS regex/denylist's behaviour, it
+        // does not (and cannot, from a .NET-only test) prove equivalence with
+        // any JS-engine regex. The underlying node transcript this classifier
+        // was designed against is recorded in the design doc / PR notes, not
+        // re-executed by this suite.
+        private static bool IsNarrowOptionalChain(string s)
+        {
+            // Fast reject: every value in today's real corpus lacks "?." and
+            // is rejected here in O(n) with no regex engine invocation at
+            // all — this is cheaper than the per-render regex this same
+            // class already runs elsewhere (see _changeFuncIdentifierRegex's
+            // use above), not a new cost center.
+            if (!s.Contains("?."))
+            {
+                return false;
+            }
+
+            if (!_narrowOptionalChainRegex.IsMatch(s))
+            {
+                return false;
+            }
+
+            int cut = s.IndexOfAny(new[] { '.', '?' });
+            return !_jsReservedHeads.Contains(s[..cut]);
+        }
+
         // funcExpression is null/empty-safe, mirroring FormatFuncName's null
         // passthrough: several callers (e.g. EmitAutocompleteWiring below,
         // TreeTagHelper/ComboBoxTagHelper's `on:function(data){...}` handler)
@@ -294,6 +382,20 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             {
                 return null;
             }
+
+            // Issue #1034 T-chain mutant note: this whole `if` block (both the
+            // condition and its body) can be deleted on its own and the file
+            // still compiles — control simply falls through to the
+            // byte-identical wrap `return` below for narrow-chain values too.
+            // OptionalChainInvocation1034Tests.cs's T-chain assertions are
+            // pinned to exactly that deletion: every T-chain test goes red
+            // the moment this block is gone, because the emitted text goes
+            // back to the wrapped "(expr)(args)" shape for every site.
+            if (IsNarrowOptionalChain(funcExpression))
+            {
+                return $"{funcExpression}({args})";
+            }
+
             return $"({funcExpression})({args})";
         }
 

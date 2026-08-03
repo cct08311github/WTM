@@ -599,6 +599,11 @@ python3 test/mutants/run_mutant.py --mutant 876-wtmcontrolleractivator-neutraliz
 > 而「文字含 `?.` 就不包裹」正是 part (B) 存在要消滅的「用字串猜 JS 文法」。修法設計在 #1034 追蹤。
 > 嚴重度 **[med]**：需要開發者在 `*Func` 值裡寫 `?.`，合法但不常見——**但失效模式從「靜默無事」
 > 變成「拋錯中止 callback」，方向是變差的。**
+>
+> **更正 2026-08-03（#1034）**：上面這句話對它指名的「做法」仍然正確——用字串猜 JS 文法（`Contains("?.")`）
+> 依然被否決，理由不變：`(v)=>a?.b` 這類 arrow body 含 `?.` 卻絕不能 direct-append。**被取代的是**
+> 「這個缺陷類別無解」這個讀法——本文件下方新增的「#1034」章節有封閉語言分類器修法（命中集合可證明是合法
+> ES2020 `OptionalMemberExpression` 鏈，未命中一律退回今天的 wrap，byte-identical），已隨 `10.22.1` 出貨。
 
 **背景**：#965（PR #998，已合併為 `7c9887d4b`）修了第一個被發現的站點——`DataTableTagHelper.cs` 的 `GridAction.OnClickFunc`，在 statement 起始位置原樣內插一個開發者提供的 callback 字串，若該值是匿名函式字面量（`function(ids,data){...}`）會產生 `function(ids,data){...}(ids,...)`——JS 對「statement 以 `function` 關鍵字起頭」有固定文法：一定被解析成 FunctionDeclaration（要求具名），匿名的在這個位置直接是 SyntaxError，且這個錯誤會讓**整個**外層 `<script>` block 解析失敗，不只是壞掉那一個 handler。#999 一次窮舉了全部 47 個內插站點，依**機制**分成兩類：(a) **RAW 內插**——開發者的值原封不動抵達輸出，`({X})(...)` 是完整修法；(b) **`FormatFuncName` 站點**（`BaseElementTag.cs:225-242`）——在抵達任何語法位置**之前**就先在 `(` 處截斷、補上 `(data)`，`function(v){...}` 變成字串 `function(data)`，對這種站點加括號（`(function(data));`）本身就是 SyntaxError，需要不同修法。本項只處理 (a)；(b) 的 12 個站點在 #999 part (B) 追蹤，待跨廠設計審查，**這裡不宣稱、也不暗示 `*Func` unwrapped-IIFE 這個類別已經修完**。
 
@@ -678,6 +683,11 @@ dotnet test test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj -c R
 > 而「文字含 `?.` 就不包裹」正是 part (B) 存在要消滅的「用字串猜 JS 文法」。修法設計在 #1034 追蹤。
 > 嚴重度 **[med]**：需要開發者在 `*Func` 值裡寫 `?.`，合法但不常見——**但失效模式從「靜默無事」
 > 變成「拋錯中止 callback」，方向是變差的。**
+>
+> **更正 2026-08-03（#1034）**：上面這句話對它指名的「做法」仍然正確——用字串猜 JS 文法（`Contains("?.")`）
+> 依然被否決，理由不變：`(v)=>a?.b` 這類 arrow body 含 `?.` 卻絕不能 direct-append。**被取代的是**
+> 「這個缺陷類別無解」這個讀法——本文件下方新增的「#1034」章節有封閉語言分類器修法（命中集合可證明是合法
+> ES2020 `OptionalMemberExpression` 鏈，未命中一律退回今天的 wrap，byte-identical），已隨 `10.22.1` 出貨。
 
 **背景**：part (A)（#1003）修了 9 個「statement 位置原樣內插」的站點——開發者的 `*Func` 值原封不動抵達輸出，`({X})(...)` 加括號是完整修法。它明確排除了另一類站點：所有經過 `BaseElementTag.FormatFuncName`（`src/WalkingTec.Mvvm.TagHelpers.LayUI/Abstraction/BaseElementTag.cs:225-242`）的呼叫。`FormatFuncName` 在**抵達任何語法位置之前**就先在第一個 `(` 處截斷、補上 `(data)`：
 
@@ -995,6 +1005,11 @@ python3 scripts/check-mutant-entries-parse.py
 > 而「文字含 `?.` 就不包裹」正是 part (B) 存在要消滅的「用字串猜 JS 文法」。修法設計在 #1034 追蹤。
 > 嚴重度 **[med]**：需要開發者在 `*Func` 值裡寫 `?.`，合法但不常見——**但失效模式從「靜默無事」
 > 變成「拋錯中止 callback」，方向是變差的。**
+>
+> **更正 2026-08-03（#1034）**：上面這句話對它指名的「做法」仍然正確——用字串猜 JS 文法（`Contains("?.")`）
+> 依然被否決，理由不變：`(v)=>a?.b` 這類 arrow body 含 `?.` 卻絕不能 direct-append。**被取代的是**
+> 「這個缺陷類別無解」這個讀法——本文件下方新增的「#1034」章節有封閉語言分類器修法（命中集合可證明是合法
+> ES2020 `OptionalMemberExpression` 鏈，未命中一律退回今天的 wrap，byte-identical），已隨 `10.22.1` 出貨。
 
 **背景**：這個缺陷本身是 #898/#905（見上方「E2E 測試可靠度修正」條目）改寫 TC-29 時發現、但當時判斷超出「只改 test/e2e」範圍而刻意不修、只記成 KNOWN-GAP 的既有缺陷；#965 是授權修這個缺陷本身的 issue。
 
@@ -1763,6 +1778,193 @@ restore 這條路徑本身是通的，不是紙上談兵。另外對 `--memory=2
 azure-sql-edge 容器跑了兩次 `dotnet test ... --filter "TestCategory=Integration"`，
 **兩次都 9/9 通過**（6.5s／7.0s），`docker stats` 全程取樣，峰值 MEM USAGE
 約 663MiB／2560MiB（26%），跑完後 `committed_kb` 約 152MiB。
+
+---
+
+## 20 個 wrapped `*Func` 發射站點恢復 optional-chain 短路傳播：封閉語言分類器，fail-closed（#1034，2026-08-03）
+
+> 本節修復的正是 #999 part (A)/(B) 與 #965 三個條目（見上方對應章節開頭）自己揭露、當時明講「沒有便宜正確修法」的那個迴歸。修法採跨廠複審（Codex `gpt-5.6-sol`：**APPROVED WITH NAMED CHANGES**，六項具名修改已逐一套用，詳見本節「六項具名修改」小節）批准的第二輪設計。
+
+### 缺陷回顧
+
+`#999`/`#965` 把 20 個「開發者提供的 `*Func` callback 字串」發射站點的 `X(args)` 改成 `(X)(args)`，修的是不同缺陷（statement 位置的匿名 function literal 造成 unwrapped-IIFE SyntaxError）。但加上這層括號同時**終結了 optional chain 的短路傳播**：`handlers?.onChange(data)` 在 `handlers` 為 nullish 時安全短路成無事發生；`(handlers?.onChange)(data)` 強迫這條鏈先求值出 `undefined`、再把它當函式呼叫，拋 `TypeError` 並中止整個 callback。這個差異只有**執行** JS 才看得出來——`#999`/`#965` 的測試用真 parser 解析發射結果、斷言其語法合法，而 `(handlers?.onChange)(data)` 語法完全合法，parse-only 測試抓不到這個回歸。
+
+**§2.4 措辭更正（本修法的核心新事實）**：短路情境下的可觀察差異，不只「TypeError vs no-op」。以 `DataTableTagHelper.cs:1300`（`GridAction.OnClickFunc`，args = `ids,ff.GetSelectionData('{Id}')`）為例——`ff.GetSelectionData` 會呼叫 LayUI 的 `checkStatus`，是有副作用的呼叫：
+
+- **wrap 形（10.22.0 現行）**：短路時，`ids,ff.GetSelectionData('{Id}')` 這兩個呼叫參數**仍會先被求值**（JS 呼叫語意：先求值全部引數，再求值 callee、再嘗試呼叫），求值完才發現 callee 是 `undefined` 而拋 `TypeError`。
+- **direct 形（本修法）**：短路時，鏈上的呼叫從未發生，`ids,ff.GetSelectionData('{Id}')` 這兩個引數**完全不會被求值**。
+
+所以本文件與 CHANGELOG 的正確措辭是：**「所有可觀察差異均限於今天會在 outer call 拋 TypeError 的短路情境；direct form 同時不會求值呼叫參數。」** 不可只寫「TypeError vs no-op」（漏了引數求值這一格），也不可寫「不存在任何 downstream 依賴現狀」——10.22.0 已釋出，這是無遙測的絕對宣稱，論證只到「不可能正常依賴現狀」，不到「沒有人這樣做」。
+
+### 修法：封閉語言分類器，fail-closed
+
+`BaseElementTag.FormatFuncInvocation`（`src/WalkingTec.Mvvm.TagHelpers.LayUI/Abstraction/BaseElementTag.cs:293`-`405` 一帶）新增 `IsNarrowOptionalChain` 分類器：
+
+```csharp
+private static readonly Regex _narrowOptionalChainRegex =
+    new(@"^[A-Za-z_$][A-Za-z0-9_$]*(?:\??\.[A-Za-z_$][A-Za-z0-9_$]*)+\z", RegexOptions.Compiled);
+
+private static readonly HashSet<string> _jsReservedHeads = new(StringComparer.Ordinal) { /* 43 個 JS 保留字 */ };
+
+private static bool IsNarrowOptionalChain(string s)
+{
+    if (!s.Contains("?.")) return false;
+    if (!_narrowOptionalChainRegex.IsMatch(s)) return false;
+    int cut = s.IndexOfAny(new[] { '.', '?' });
+    return !_jsReservedHeads.Contains(s[..cut]);
+}
+```
+
+命中（整段字串是「ASCII 識別字原子以 `.`／`?.` 串接、至少一個 `?.`、頭原子非 JS 保留字」）→ `FormatFuncInvocation` 回傳 `$"{funcExpression}({args})"`（呼叫留在鏈內，短路傳播）；未命中 → 回傳現行 `$"({funcExpression})({args})"`（**byte-identical**，10.22.0 現行輸出）。
+
+**為什麼不是「文字含 `?.` 就不包裹」**：那正是 `#999 part (A)` 條目自己否決過的「用字串猜 JS 文法」——一個 arrow body `(v)=>a?.b` 含 `?.` 卻絕不能 direct-append（會把整段 arrow body 錯誤地接上呼叫括號）。封閉語言分類器與 naive `Contains` 偵測的差別是**失敗方向**：naive 偵測誤判是 fail-open（把不安全的值直接拼接進可執行 JS）；本分類器誤判只可能是**漏收**（一個真的是安全鏈的值被放過，退回今天的 wrap，代價＝「跟今天一樣壞」），不可能誤收——分類器命中的集合是可證明的封閉語言，其中每個成員都是合法 ES2020 `OptionalMemberExpression`，把呼叫放進鏈內對這整個語言成立短路傳播是 ECMAScript 對這個 AST 形狀的定義性質，不需要逐案驗證。
+
+**`\z` 不是 `$`**：同檔案家族 `src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/TextBoxTagHelper.cs:43`-`55` 的 ANCHOR NOTE 已經記過這條教訓——.NET 的 `$` 會在字串尾端單一 `\n` 之前比中，JS 沒有這個例外；用 `$` 會讓 `"a?.b\n"` 在伺服器端被誤判為安全鏈，實際輸出仍帶著那個換行字元，client 端解析出完全不同的東西。`IsNarrowOptionalChain` 的新 regex 上方直接留了指向這段 ANCHOR NOTE 的註解，不重複整段論證。
+
+**保留字 denylist 是衛生，不是必要**：即使 `function?.call` 溜過 regex，direct 與 wrap 兩形都同樣是 SyntaxError（`function` 是關鍵字，不是合法的鏈頭），不會更壞——denylist 只是讓「分類器命中 ⇒ 發射一定合法」變成無例外的不變式，避免未來看到「命中卻輸出壞碼」的假象。
+
+### 20 個發射站點——全部收斂到同一個 helper
+
+不同於 `#999 part (A)`/`(B)` 各自零散處理，本修法把全部 20 個站點統一經過 `FormatFuncInvocation`：其中 10 個站點在 `#999`/`#965` 已經呼叫這個 helper（`BaseElementTag.cs` ×3、`TreeTagHelper.cs` ×2、`ComboBoxTagHelper.cs` ×2、`TreeContainerTagHelper.cs`、`ColorPicker.cs`、`SelectorTagHelper.cs`），修好 helper 本身即自動修好這 10 個；另外 10 個站點原本是「原地 `({X})(args)`」的 raw 包裹（未經過 helper），本次逐一改為呼叫 `FormatFuncInvocation(X, "<該站 args>")`，args 逐字照抄（含空格、含 `;` 位置）：
+
+| # | 檔案:行號 | 屬性 | args |
+|---|---|---|---|
+| 1-3 | `BaseElementTag.cs:450,510,531` | ChangeFunc（checkbox/switch/radio 共用 wiring；autocomplete 兩變體） | `data`（既有，經 helper） |
+| 4-5 | `TreeTagHelper.cs:368,377` | ChangeFunc（`if(X!=false)`／statement） | `data`（既有，經 helper） |
+| 6-7 | `Form/ComboBoxTagHelper.cs:458,467` | 同上 | `data`（既有，經 helper） |
+| 8 | `TreeContainerTagHelper.cs:311` | ClickFunc | `data`（既有，經 helper） |
+| 9 | `Form/ColorPicker.cs:291` | ChangeFunc | `data`（既有，經 helper） |
+| 10 | `Form/SelectorTagHelper.cs:478` | BeforeOnpenDialogFunc | `data`（既有，經 helper） |
+| 11 | `DataTableTagHelper.cs:809` | DoneFunc | `res,curr,count`（**本次收斂**） |
+| 12 | `DataTableTagHelper.cs:1300` | GridAction.OnClickFunc（#965） | `ids,ff.GetSelectionData('{Id}')`（**本次收斂**） |
+| 13 | `Form/SliderTagHelper.cs:469` | ChangeFunc | `value,sliderIns`（**本次收斂**） |
+| 14 | `Form/TransferTagHelper.cs:341` | ChangeFunc | `data, index,transferIns`（**本次收斂**，注意 `data,` 後的空格） |
+| 15-17 | `Form/DateTimeTagHelper.cs:477,478,479` | Ready/Change/DoneFunc（單欄位） | `value,dateIns` 等（**本次收斂**） |
+| 18-20 | `Form/DateTimeTagHelper.cs:577,578,582` | 同上（IsRange 雙 hidden-input 路徑） | 同上（**本次收斂**） |
+
+各收斂站點原有的 `string.IsNullOrEmpty(...) ? string.Empty : ...` 三元結構全部保留不動，空值格 byte-identical。
+
+### 六項具名修改（Codex `gpt-5.6-sol` cross-vendor review）逐一落實
+
+1. **補 using**：`BaseElementTag.cs` 原本沒有 `System`/`System.Collections.Generic`，本檔專案未開 `ImplicitUsings`（已核對 `.csproj` 與 `common.props`，均無此設定）——`HashSet<string>`/`StringComparer.Ordinal` 需要它們，已補上 `using System;`／`using System.Collections.Generic;`，`dotnet build` 通過。
+2. **§2.4 措辭修正**：見上方「缺陷回顧」小節——已改為「所有可觀察差異均限於今天會在 outer call 拋 TypeError 的短路情境；direct form 同時不會求值呼叫參數」，並移除「不存在任何 downstream 依賴現狀」的絕對宣稱。
+3. **T-cls 是 36 筆不是 37，且不宣稱「.NET/node 等價自證」**：`test/WalkingTec.Mvvm.Core.Test/TagHelpers/OptionalChainInvocation1034Tests.cs` 的 `TCls_TrueSet_*`／`TCls_FalseSet_*` 合計 6 + 30 = **36** 筆（第一輪設計文件的「37」是列舉時的計數誤植——`CLS-F` 那組實際只有 30 筆，不是 31，逐項數過）。T-cls 只在 .NET 上執行，測試檔案自己的文件註解與本節都明講：這是「這個 regex/denylist 的 36 筆分類 regression matrix」，**不是**「.NET 與 node 兩個引擎的正則等價證明」——原始 node 交叉驗證的記錄在設計文件／PR 說明，本次工作階段沒有重跑 node。
+4. **每列刪哪一行會變紅，必須是可編譯刪除**：
+   - **T-chain**：narrow 分支寫成 `FormatFuncInvocation` 內一個獨立、可整段刪除仍可編譯的 `if` block（刪除後控制流自然落到下方的 wrap `return`），測試檔案自己的註解點名這個刪除動作。
+   - **T-byte**：對應的是 compile-preserving mutation（`IsNarrowOptionalChain` 整個方法體改成 `return true;`），不是刪行——測試檔案註解據實這樣寫，也是下方「手動 mutation 驗證」小節實跑驗證的 mutant B。
+   - **反空洞正控**：答案是刪 `helper.Process(...)`／`ProcessAsync(...)` 呼叫（仍可編譯，`output` 物件本身還在，只是內容維持空），不是刪 extractor 呼叫（那會編譯失敗）——`AssertNotVacuous` 輔助方法的文件註解明講這個區別。
+   - **T-cond**（Tree／ComboBox 的 `if(X != false)` 站點）：兩個站點分別是 `TreeTagHelper.cs:368` 與 `ComboBoxTagHelper.cs:458` 各自的 `FormatFuncInvocation(ChangeFunc)` 呼叫，已折入對應的 T-chain 測試（`TChain_Site04_*`／`TChain_Site06_*`），測試方法註解點名各自的刪除點。
+   - **T-ast**：指定的 compile-preserving mutation 是把 narrow 分支的 `return $"{funcExpression}({args})";` 換成已否決的 `return $"{funcExpression}?.({args})";`——T-ast 測試直接斷言 `CallExpression.Optional == false`，這個 mutation 會讓斷言翻成 `true`，變紅。
+5. **補 island-ON fallback 測試**：`IslandFallback_Tree_OptionalChainChangeFunc_FlagOn_StaysOnLegacyPath_DirectForm`／`IslandFallback_ComboBox_*` 兩支測試直接測 `TreeTagHelper.cs:236` 與 `ComboBoxTagHelper.cs:321` 的 `useSelectIsland`／`changeIsIdentifier` 決策本身（把 `UseSelectIslandRender` 開 ON，斷言含 `?.` 的 ChangeFunc 仍落在 legacy `xmSelect.render(` 路徑、不觸發 `"type":"renderSelect"` island，且 legacy 路徑內的呼叫仍是本修法的 direct 形）——不是只靠 flag-OFF golden 間接推論。
+6. **不加 mutation entry，措辭精確**：見下方「Mutation gate」小節——不寫「等價於 mutant 保護」，寫「相同的兩個 decision direction 有一般 CI regression protection」。
+
+### 測試
+
+`test/WalkingTec.Mvvm.Core.Test/TagHelpers/OptionalChainInvocation1034Tests.cs`，harness 沿用 `FormatFuncInvocation999BTests.cs`（render 真 TagHelper、抽取實際發射的 `<script>` block、test-only Acornima 解析）——**零新出貨相依，零新測試相依**（不引 Jint／`node`）。
+
+- **T-chain ×20**：每個發射站點一支，`*Func` = `window.handlers?.onChange`，斷言逐字含 `window.handlers?.onChange(<該站 args>)` 且 `Assert.IsFalse(script.Contains("(window.handlers?.onChange)"))`。
+- **T-byte**：20 個站點各一支 plain-identifier byte-identity（`myHandler1034`），加兩個 exemplar 站點（CheckBox 家族、DataTable DoneFunc 家族）各補 dotted-member／factory-call 兩形，共 24 支——function-literal 的 byte/parse 覆蓋刻意不重複，已存在於未動過的 `FormatFuncInvocation999BTests`／`RawFuncInterpolationParens999Tests`／`DataTableTagHelperUnwrappedIife965Tests`，且那些既有 fixture 同樣會被本節「always true」mutant 抓到（見下方手動驗證）。
+- **T-cls**：36 筆分類 regression matrix（`[DataTestMethod]`/`[DataRow]`，6 個 `TCls_TrueSet_*` + 30 個 `TCls_FalseSet_*`），透過 PUBLIC 的 `FormatFuncInvocation` 觀察分類結果，不需要對私有分類器開反射或改成 internal。
+- **T-cond ×2**：折入 T-chain 的 `TChain_Site04_*`／`TChain_Site06_*`。
+- **T-ast ×3**：`TAst_Site01_*`（statement 位置）／`TAst_Site04_*`（expression 位置 `if(X!=false)`）用 Acornima 走 AST，斷言根是 `ChainExpression`、內含的 `CallExpression.Optional == false`；`TAst_WrapForm_PositiveControl_*` 斷言 wrap 形的根不是 `ChainExpression`。
+- **Island-fallback ×2**：見上方具名修改 #5。
+- **反空洞正控**：`AssertNotVacuous` 在每支測試前先斷言 emitted script 非空，配合各測試自己既有的 marker `StringAssert.Contains`。
+
+**實測結果**：本檔案 85 個測試方法（`[DataRow]` 展開後）**85/85 全綠**；`test/WalkingTec.Mvvm.Core.Test` 整個套件（含本次新增）**5188 passed, 0 failed**（`dotnet test -c Debug -m:1`，依 `.claude/rules`/`#902` 序列化 testhost 避免 OOM）。
+
+### 手動 mutation 驗證（不註冊 gate entry，見下方理由）——實跑輸出
+
+`IsNarrowOptionalChain` 手動改成兩個 compile-preserving mutant，各自對本檔 85 支測試跑一次，再還原：
+
+**Mutant A（整個方法體改成 `return false;`，narrow 分支永遠不命中）**：
+
+```
+Failed:    30, Passed:    55, Skipped:     0, Total:    85
+```
+
+紅的 30 支＝T-chain ×20 + T-cls TrueSet ×6 + T-ast（chain 相關）×2 + Island-fallback ×2，逐支比對過測試名稱清單，與預期完全吻合；`git status --porcelain -- src/WalkingTec.Mvvm.TagHelpers.LayUI/Abstraction/BaseElementTag.cs` 在還原後空輸出，確認乾淨還原。
+
+**Mutant B（整個方法體改成 `return true;`，任何值都誤判為 narrow）**：
+
+```
+Failed:    54, Passed:    31, Skipped:     0, Total:    85
+```
+
+紅的 54 支＝T-byte ×24 + T-cls FalseSet ×30，同樣逐支比對吻合；`git status --porcelain` 同上確認乾淨還原。兩個方向合計覆蓋了 T-chain/T-byte/T-cls/T-ast/Island-fallback 五組測試裡對分類器有依賴的全部子集。
+
+**這不是正式的 mutation-gate RED-before-fix 工作流**（沒有拆成「先加測試再加碼」兩個 commit）——上面兩段是這次工作階段手動跑出來的、可重現的證據，供 PR 描述引用，不是 CI 強制的 `run_mutant.py` 產物。
+
+### Mutation gate：不加 entry
+
+依 repo 既有先例（`CHANGELOG.md` 的 #965、#999 part (A)、#999 part (B) 三個條目皆為「Mutant: considered, not added」）：這是 JS 語意正確性修復，不是傳統意義的安全漏洞（無未授權存取、injection、跨租戶、憑證外洩維度）；`test/mutants/run_mutant.py` 的 `VALID_KINDS`（`security`/`selftest`）沒有適合這類缺陷的 kind，硬塞 `security` 會重複 #970/#968 已吸收過的 kind 分類漂移。
+
+**準確措辭（不可寫成「等價於 mutant 保護」）**：`IsNarrowOptionalChain` 恆 false／恆 true 這兩個方向都不是無保護——上方「手動 mutation 驗證」證明兩個方向都有測試會變紅——但這是**一般 CI regression protection**（本檔案 85 支測試在每次 `dotnet test` 都會跑），不是 `run_mutant.py` 那套 mutation gate 機制本身：一般測試沒有 mutation runner 的 patch apply／clean baseline／expected-red-pattern／positive-control 對帳，也不是 required check 強制的 per-entry 執行。兩者是不同層級的保護，不能互相替代宣稱。
+
+### 站點窮舉——可重跑指令與實際輸出（整棵樹，非只 `src/`）
+
+```bash
+grep -rn "FormatFuncInvocation(" --include="*.cs" --include="*.cshtml" . | grep -v "/bin/\|/obj/\|/test/" | grep -v "public static string FormatFuncInvocation"
+grep -rnE '\(\{[A-Za-z_][A-Za-z0-9_.]*\}\)\(' --include="*.cs" --include="*.cshtml" . | grep -v "/bin/\|/obj/\|/test/"
+```
+
+**第一條實際輸出（22 行）**：
+
+```
+test/WalkingTec.Mvvm.Core.Test/TagHelpers/OptionalChainInvocation1034Tests.cs:1036:        var result = BaseElementTag.FormatFuncInvocation(value, "data");
+test/WalkingTec.Mvvm.Core.Test/TagHelpers/OptionalChainInvocation1034Tests.cs:1074:        var result = BaseElementTag.FormatFuncInvocation(value, "data");
+src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.cs:809:      {(string.IsNullOrEmpty(DoneFunc) ? string.Empty : BaseElementTag.FormatFuncInvocation(DoneFunc, "res,curr,count"))}
+src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.cs:1300:                        actionScript = $"{BaseElementTag.FormatFuncInvocation(item.OnClickFunc, $"ids,ff.GetSelectionData('{Id}')")};";
+src/WalkingTec.Mvvm.TagHelpers.LayUI/TreeContainerTagHelper.cs:311:                        cusmtomclick = $"{FormatFuncInvocation(ClickFunc)};";
+src/WalkingTec.Mvvm.TagHelpers.LayUI/TreeTagHelper.cs:368:            if ({(string.IsNullOrEmpty(ChangeFunc) ? "true" : FormatFuncInvocation(ChangeFunc))} != false) {{
+src/WalkingTec.Mvvm.TagHelpers.LayUI/TreeTagHelper.cs:377:        }}" : FormatFuncInvocation(ChangeFunc))}
+src/WalkingTec.Mvvm.TagHelpers.LayUI/Abstraction/BaseElementTag.cs:450:    {FormatFuncInvocation(changeFunc)};
+src/WalkingTec.Mvvm.TagHelpers.LayUI/Abstraction/BaseElementTag.cs:510:     {FormatFuncInvocation(changeFunc)};
+src/WalkingTec.Mvvm.TagHelpers.LayUI/Abstraction/BaseElementTag.cs:531:     {FormatFuncInvocation(changeFunc)};
+src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/SelectorTagHelper.cs:478:  {(string.IsNullOrEmpty(BeforeOnpenDialogFunc) == true ? "" : "var data={};" + FormatFuncInvocation(BeforeOnpenDialogFunc) + ";")}
+src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/ComboBoxTagHelper.cs:458:            if ({(string.IsNullOrEmpty(ChangeFunc)?"true":FormatFuncInvocation(ChangeFunc))} != false) {{
+src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/ComboBoxTagHelper.cs:467:        }}" : FormatFuncInvocation(ChangeFunc))}
+src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/DateTimeTagHelper.cs:477:    {(string.IsNullOrEmpty(ReadyFunc) ? string.Empty : $",ready: function(value){{{FormatFuncInvocation(ReadyFunc, "value,dateIns")}}}")}
+src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/DateTimeTagHelper.cs:478:    {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $",change: function(value,date,endDate){{{FormatFuncInvocation(ChangeFunc, "value,date,endDate,dateIns")}}}")}
+src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/DateTimeTagHelper.cs:479:    {(string.IsNullOrEmpty(DoneFunc) ? string.Empty : $",done: function(value,date,endDate){{{FormatFuncInvocation(DoneFunc, "value,date,endDate,dateIns")}}}")}
+src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/DateTimeTagHelper.cs:577:        {(string.IsNullOrEmpty(ReadyFunc) ? string.Empty : $",ready: function(value){{{FormatFuncInvocation(ReadyFunc, "value,dateIns")}}}")}
+src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/DateTimeTagHelper.cs:578:        {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $",change: function(value,date,endDate){{{FormatFuncInvocation(ChangeFunc, "value,date,endDate,dateIns")}}}")}
+src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/DateTimeTagHelper.cs:582:            {(string.IsNullOrEmpty(DoneFunc) ? string.Empty : $"{FormatFuncInvocation(DoneFunc, "value,date,endDate,dateIns")};")}
+src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/SliderTagHelper.cs:469:    {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : FormatFuncInvocation(ChangeFunc, "value,sliderIns"))}
+src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/ColorPicker.cs:291:        {FormatFuncInvocation(ChangeFunc)};
+src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/TransferTagHelper.cs:341:    {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $"{FormatFuncInvocation(ChangeFunc, "data, index,transferIns")};")}
+```
+
+**第二條實際輸出（2 行）**：
+
+```
+test/WalkingTec.Mvvm.Core.Test/TagHelpers/OptionalChainInvocation1034Tests.cs:1075:        Assert.AreEqual($"({value})(data)", result,
+src/WalkingTec.Mvvm.TagHelpers.LayUI/Abstraction/BaseElementTag.cs:399:            return $"({funcExpression})({args})";
+```
+
+第一條：**20 個 `src/` 呼叫站點**（與上表逐一對應）+ 2 個命中在 `test/WalkingTec.Mvvm.Core.Test/TagHelpers/OptionalChainInvocation1034Tests.cs` 本身（T-cls 直接呼叫 `BaseElementTag.FormatFuncInvocation(value, "data")` 兩處，是測試程式碼呼叫 helper 做分類觀察，不是第 21/22 個發射站點）——**誠實揭露**：這兩條指令沿用任務簡報給定的原樣寫法，`grep -v "/test/"` 因為路徑是相對路徑（`test/...` 沒有前導 `/`）而沒有濾掉 `test/` 目錄，不是漏濾；已逐行核對每個命中的實際內容，20 個 `src/` 命中與上表 20 個站點一一對應，無遺漏、無多餘。
+
+第二條：**只剩 2 個命中**——`src/WalkingTec.Mvvm.TagHelpers.LayUI/Abstraction/BaseElementTag.cs:399`（`FormatFuncInvocation` 自己的 fallback `return` 陳述式本身，不是呼叫站點）與同一個測試檔案裡 T-cls 的斷言字面值 `$"({value})(data)"`（比對用的期望字串，不是發射站點）。**沒有任何一個原本的 raw 包裹發射站點殘留**——10 個此次收斂的站點全部確認已改為呼叫 `FormatFuncInvocation`。
+
+**驗證邊界誠實揭露**：上述兩條指令是樣式比對（`{...}`/`FormatFuncInvocation(` 字面），一個假想的用 `string.Concat`/`StringBuilder` 組裝呼叫的站點會漏掉此掃描——這個邊界沿用 `#999 part (A)` 條目已記錄的相同限制，本次未做 Roslyn taint 分析，也不宣稱窮盡了這種假想站點。
+
+### 範圍外，另案追蹤（不在本修範圍）
+
+以下站點今天已是「未包裹」形態（沒有 #999/#965/#1034 的迴歸——`?.` 鏈本來就已短路），各自的缺陷屬於不同類別，不套用本修法（套用會把今天正常運作的 bytes 改掉，零收益）：
+
+- **`Form/SliderTagHelper.cs:471`（OnTipsFunc，expression 位置）**——追蹤於 #1041。
+- **`Form/TextBoxTagHelper.cs:105,109`（oninput/onchange，HTML 屬性 direct append）**——一併記於 #1041。
+- **Selector 跨套件 sink（`SelectorTagHelper.cs` → `_FrameworkController.cs` → `Selector.cshtml` 的 request round-trip）**——追蹤於 #1043。
+
+### CHANGELOG 舊條目更正指標
+
+10.22.0 CHANGELOG 的三個 `#1034` 揭露區塊（`#999 part (A)`／`#999 part (B)`／`#965` 條目開頭的 blockquote）各有一句「skipping the wrapper when the text contains `?.` is exactly the guess-JS-grammar approach…」——本修落地後，這句話描述的「被否決的做法」（naive substring 偵測）依然被否決，但整句話容易被誤讀成「optional chain 這個缺陷類別無解」。依本 repo 慣例（`CHANGELOG.md:24` 的「Corrected 2026-08-03 (#1035)」形式），在三處原文下方各加一則更正指標，指向本 10.22.1 條目，說明「被否決的是 naive substring 偵測；10.22.1 的封閉語言分類器 fail-closed，不做字串猜文法」——**不刪改原文**（`two-docs-overclaiming` 教訓：更正要指出差異，不是把舊文字改成看起來一直都對）。
+
+### 未能驗證／不確定之處（誠實列出）
+
+- 本次工作階段禁止呼叫任何 Gitea/GitHub API、禁止開 PR——這個修復尚未在真正的 Gitea Actions CI 上跑過，本機驗證只到 `dotnet build`/`dotnet test`。
+- T-cls 的 36 筆矩陣只在 .NET 執行；與 node 引擎的交叉驗證記錄在設計文件（非本次工作階段重跑），本節第 3 項具名修改已明講這個邊界。
+- 手動 mutation 驗證是本次工作階段人工跑出來的、非 CI 強制——沒有註冊 `test/mutants/entries/*.json`，理由見上方「Mutation gate」小節。
+- 10.22.0 已釋出一段時間：理論上存在「已升級且依賴短路格會 TypeError 中止」的下游使用者；本節與 CHANGELOG 均未宣稱「不存在這樣的依賴」，只論證這類依賴不可能正常運作（見「缺陷回顧」小節）。
 
 ---
 

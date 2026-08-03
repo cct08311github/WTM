@@ -474,9 +474,9 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     {(!Calendar.HasValue ? string.Empty : $",calendar: {Calendar.Value.ToString().ToLower()}")}
     {(!Lang.HasValue ? string.Empty : $",lang: '{Lang.Value.ToString().ToLower()}'")}
     {(Mark == null || Mark.Count == 0 ? string.Empty : $",mark: {LayuiIslandJson.Serialize(Mark)}")}
-    {(string.IsNullOrEmpty(ReadyFunc) ? string.Empty : $",ready: function(value){{({ReadyFunc})(value,dateIns)}}")}
-    {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $",change: function(value,date,endDate){{({ChangeFunc})(value,date,endDate,dateIns)}}")}
-    {(string.IsNullOrEmpty(DoneFunc) ? string.Empty : $",done: function(value,date,endDate){{({DoneFunc})(value,date,endDate,dateIns)}}")}
+    {(string.IsNullOrEmpty(ReadyFunc) ? string.Empty : $",ready: function(value){{{FormatFuncInvocation(ReadyFunc, "value,dateIns")}}}")}
+    {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $",change: function(value,date,endDate){{{FormatFuncInvocation(ChangeFunc, "value,date,endDate,dateIns")}}}")}
+    {(string.IsNullOrEmpty(DoneFunc) ? string.Empty : $",done: function(value,date,endDate){{{FormatFuncInvocation(DoneFunc, "value,date,endDate,dateIns")}}}")}
   }});
 }})
 </script>
@@ -574,12 +574,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         {(!Calendar.HasValue ? string.Empty : $",calendar: {Calendar.Value.ToString().ToLower()}")}
         {(!Lang.HasValue ? string.Empty : $",lang: '{Lang.Value.ToString().ToLower()}'")}
         {(Mark == null || Mark.Count == 0 ? string.Empty : $",mark: {LayuiIslandJson.Serialize(Mark)}")}
-        {(string.IsNullOrEmpty(ReadyFunc) ? string.Empty : $",ready: function(value){{({ReadyFunc})(value,dateIns)}}")}
-        {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $",change: function(value,date,endDate){{({ChangeFunc})(value,date,endDate,dateIns)}}")}
+        {(string.IsNullOrEmpty(ReadyFunc) ? string.Empty : $",ready: function(value){{{FormatFuncInvocation(ReadyFunc, "value,dateIns")}}}")}
+        {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $",change: function(value,date,endDate){{{FormatFuncInvocation(ChangeFunc, "value,date,endDate,dateIns")}}}")}
         ,done: function(value, date, endDate) {{
             document.getElementById('{RangeStartName}').value = value.split(' - ')[0] || '';
             document.getElementById('{RangeEndName}').value = value.split(' - ')[1] || '';
-            {(string.IsNullOrEmpty(DoneFunc) ? string.Empty : $"({DoneFunc})(value,date,endDate,dateIns);")}
+            {(string.IsNullOrEmpty(DoneFunc) ? string.Empty : $"{FormatFuncInvocation(DoneFunc, "value,date,endDate,dateIns")};")}
         }}
     }});
 }});
