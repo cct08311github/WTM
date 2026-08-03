@@ -195,6 +195,36 @@ Gitea 對 `pull_request` 事件 checkout 的是 **PR 分支自己的快照**（`
 
 下游在同一份回報裡寫下的鐵律正好適用：**任何用來證明「沒有」的指令，先確認它在已知有的情況下真的會輸出東西。「查無」與「查壞了」的輸出長得一模一樣。**
 
+### 5c. `workflow_dispatch` 發布跳過整個 mirror sync，因此也跳過 leak-gate —— 債務累積到下一次 tag push 才一次爆出（#1038，2026-08-03）
+
+`publish-nuget.yml` 的每一個 mirror sync 步驟，以及最後那道 `Sync manifest — leak-gate scan`，條件都是：
+
+```yaml
+if: startsWith(github.ref, 'refs/tags/')
+```
+
+而 `workflow_dispatch` 是本 repo 排除發布卡住時的**首選**手段（見 §「publish 觸發階梯」與 `CLAUDE.md`：`workflow_dispatch` publishes to Gitea only and **never touches GitHub at all**）。兩件事合起來的後果是：
+
+> **每一次用 dispatch 發布，都完全不執行 sanitize、excludes 與 leak-gate。** 這些檢查只在**真正的 tag push** 上跑。
+
+**實際代價（v10.22.0 當場遇到）**：`v10.18.0` 是上一次 tag push 發布；其後的 `10.21.0-rc.1`／`rc.2` 都走 dispatch。等到 `v10.22.0` 用 tag push 發布時，leak-gate 一次對「v10.18.0 之後累積的全部內容」開火並中止發布。當時觸發的 5 個檔案裡**只有 1 處是那一版新增的**，其餘在 `rc.2` 就存在——而 rc.2 發布成功過。
+
+**判讀要點**：leak-gate 失敗**不代表「這一版引入了洩漏」**。先跑下面的本機重現，再用 `git show <上一個 tag-push 發布的 SHA>:<檔案>` 比對，才知道哪些是新的、哪些是累積的。
+
+**本機重現這道 gate 的正確方式**（兩個會讓重現靜默失真的陷阱）：
+
+```bash
+# 順序必須是 replace → exclude → sanitize → gate，且——
+cp .sync/github-sanitize.sed /tmp/rules.sed   # ← 必做：excludes 會刪掉整個 .sync/
+#   （workflow 自己在「create temp branch」步驟裡就先 cp 出來，漏了這步的話
+#     後續 sanitize 會因為找不到規則檔而「成功地什麼都沒做」）
+```
+
+1. **順序陷阱**：先套 excludes 再套 sanitize → `.sync/` 已被刪 → sed 找不到 `-f` 規則檔 → 整步 no-op，而重現會報出一堆假陽性。
+2. **BSD sed 陷阱**：macOS 的 sed **不支援 `\b`**，所以 `s|\bGITEA_TOKEN\b|...|` 這類規則在本機是 no-op，CI（GNU sed）卻正常。實測方式：`printf 'x GITEA_TOKEN y\n' | sed -e 's|\bGITEA_TOKEN\b|R|'`，沒被改就是不支援。**不要憑記憶假設本機與 CI 的 sed 行為一致。**
+
+**這是同一個根因的第四則**（§5 checkout 的是 head、§5b 守衛跟著 ref 走、以及 `integration-test.yml` 的 path filter 不含 workflow 檔自身）：**哪些檢查會跑、以及會不會跑，取決於與變更本身不同的東西。** 前三則都是「該跑的沒跑」，這一則是「不跑的那些累積成一次大爆炸」。
+
 ### 6. `job.timeout-minutes` 被此 runner 忽略；真正生效的是 `step.timeout-minutes`（issue #926，2026-07-31 查證）
 
 **事實**：這個 Gitea 實例的 act_runner 執行的是 `gitea.com/gitea/act`（`nektos/act` 的 fork）。查證方式是直接讀原始碼，不是猜測：
