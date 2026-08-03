@@ -1215,6 +1215,8 @@ LookupCacheService.cs:25:    public class LookupCacheService : ILookupCacheServi
 
 ### 這個修法沒解決什麼——誠實列出，不能被讀成已關閉
 
+**（2026-08-03 補，v10.22.0 發版前跨廠審查指出）「鎖進那個租戶」這句話還有一個前提沒寫出來：那個 `IDataContext` 得先有租戶過濾器。** scoped 分支做的事只是**不呼叫 `IgnoreQueryFilters()`**（`WtmFileProvider.cs` 的 core 實作），它**不會自己加上 `TenantCode == dc.TenantCode` 這個 predicate`**。對框架自己的 `DataContext` 兩者等價，因為它確實在 `OnModelCreating` 配置了 `ITenant` 的 global query filter（`DataContext.cs:243`）。但 `IDataContext` 是公開介面，契約只要求提供 `DbSet<T>`（`IDataContext.cs`），**沒有**要求那個 filter；框架也會反射載入下游任意的 `DbContext`（`CS.cs`）。所以一個合法但沒有配置 `HasQueryFilter` 的下游 context，用這兩個 overload 得不到任何租戶範圍——查詢不帶 tenant predicate，會照樣回傳別的租戶的列。`BaseImportVM` 的兩個新呼叫點依賴同一個前提。**要把這件事變成無條件保證，得讓 overload 自己加上 predicate（或收窄介面契約並文件化），兩者都不在 #1011 範圍內。**
+
 `GetFileTenantScoped` 只是把讀取範圍鎖進「傳入的 `IDataContext` 已經解析出來的那個租戶」——它不驗證呼叫端身分，也不判斷「這個請求正確的租戶應該是誰」。`Configs.DisableRefererTenantResolution` 預設 `false`（`Configs.cs:162-178`）時，一個知道某租戶網域的匿名呼叫者可以偽造 `Referer` header，讓 `WTMContext.CreateDC`（`WTMContext.CreateDC.cs:42-56`，#116 機制）解析出那個租戶的範圍；scoped API 接著會忠實地把讀取鎖進**那個被偽造出來的租戶**。要擋這條路徑需要 `DisableRefererTenantResolution=true`，或是一個在請求抵達 `WtmFileProvider` 之前就拒絕匿名呼叫者的 authorizer——不是改這個方法本身，它目前的行為就是文件註解寫的那樣。#859 的舊修法同樣不擋得住這條路徑（同一個根因：兩者都嚴格下游於 `CreateDC` 已經決定的租戶）。
 
 ### 對下游的可達性
@@ -1432,7 +1434,7 @@ error NU1100: Unable to resolve 'WalkingTec.Mvvm.Core (>= 10.21.0)' for 'net10.0
 
 ### 已處理
 
-`~/.nuget/packages` 下 22 個「從未發布卻佔用發行版號」的條目（四個版本 × 涵蓋到的套件）已移到 `/Volumes/T7/openclaw/backups/nuget-quarantine-2026-08-03/`——**move 而非 delete，可逆**。動手前確認全樹沒有任何 `.props` / `.csproj` / `.config` 引用這四個版本。隔離後 live cache 上限與 feed 一致。
+`~/.nuget/packages` 下 22 個「從未發布卻佔用發行版號」的條目（四個版本 × 涵蓋到的套件）已移到 維護者本機的一個隔離目錄（路徑不記在此，屬營運環境細節）——**move 而非 delete，可逆**。動手前確認全樹沒有任何 `.props` / `.csproj` / `.config` 引用這四個版本。隔離後 live cache 上限與 feed 一致。
 
 > 值得記一筆：那顆污染的 `10.21.0` 只涵蓋 Core / Etl / Mvc / LayUI 四顆，`FileHandlers.S3` 與 `WorkFlow` 沒有——而下游引用的正好是 Core / Mvc / LayUI 三顆，全中。缺的那兩顆會讓 restore 直接 NU1100 失敗（大聲），有的那三顆才會靜默降級。
 
@@ -1450,36 +1452,14 @@ error NU1100: Unable to resolve 'WalkingTec.Mvvm.Core (>= 10.21.0)' for 'net10.0
 
 ## 下游 production 版本記載錯誤，且錯的值決定了兩件下游工作的範圍（#938，2026-07-31）
 
-`docs/release-adoption-ledger.md` 把 BMS 的 production 記為「WTM 8.x（很可能是 8.6.1）」。**維護者 2026-07-31 直接確認實際是 6.3.27**，錯在樂觀方向——production 比記錄的還要落後一個大版本世代。
+`docs/release-adoption-ledger.md` 對某個下游 production 版本的記載是錯的，錯在樂觀方向。**具體版本號、三份互相矛盾的來源、以及可重跑的鑑別方法，全部記在該帳本內，本文件刻意不重複**——理由與本文件開頭那條規則相同：下游的部署具體資訊屬於該帳本，且該帳本不進公開 mirror（`.sync/github-excludes.txt`）。
 
-### 為什麼這值得寫進 readiness 文件
+**這裡只記與框架自身流程有關、且可公開的那一半：**
 
-因為那一欄**從第一天起就標著「沒有任何自動化或即時方式可以確認」**，而它仍然被當成範圍依據使用：#928 的升級指南照著「8.6.1 → 10.x」界定範圍（實際應為 6.3.27 → 10.x，跨越本 fork 從未見過的上游變更），8.x EOS 的分析基準也建立在同一個數字上。**hedge 讓錯誤可更正而非靜默，這部分有效；它沒有、也無法阻止一個被正確標記為不可靠的值靜靜決定其他工作的形狀。**
-
-由此新增一條 SOP（寫在帳本 §8 第 7 條）：不可驗證的事實不得被當作其他工作的範圍依據——要求可重跑的查證方式，且**引用端**要自己標明前提未驗證，不能只依賴來源文件的 hedge（讀者往往只讀結論那一欄）。
-
-### 未解決的證據衝突，明講而不抹平
-
-BMS repo 內三份互相獨立的文件都記載 8.6.1/8.x：一則 commit message、一份範圍聲明寫著「prod（WTM 8.6.1）→ master（WTM 10.13.7）」的部署前稽核報告、一則 migration-log phase 註記。兩個故事都自洽：6→8 升級在 repo 完成但**從未部署**（三份文件同向錯誤，因為作者把 repo 狀態當部署狀態），或維護者記憶有誤。
-
-帳本採 6.3.27，理由是維護者對自己的部署具權威性、而三份文件都不是部署記錄。**但這是採信，不是解決**，且三份證據並未被刪除——抹掉它們等於銷毀了「若這次採信本身有誤，我們據以察覺的東西」。
-
-**方法論教訓（比版本號本身重要）**：三條證據「互相獨立且一致」原本被當成強度來源。它們同時錯，因為作者共用同一個資訊環境與同一個可能的誤解。判斷一致性有沒有價值，要問「這些來源會不會一起錯」，不是「有幾個來源」。
-
-### 尚未執行的鑑別方法
-
-6.x 與 8.x 的 framework 資料表形狀不同，所以對 production 資料庫跑一次唯讀的 `Framework*` 資料表清單查詢，與兩個版本的 schema 比對即可分辨——**不需要部署層存取，只要一條唯讀連線**。`BMS/doc/MIGRATION_LOG.md` 自己提供了一個鑑別點（宣稱 prod DB「8.x 建立」、無 `FrameworkRefreshTokens` 表）。
-
-**這個查詢尚未執行。** 在它被執行之前，本節的結論與帳本的 production 欄同樣是採信而非已驗證，任何以它為前提的工作都應自行標註前提未驗證。
-
-### 本次一併更正與明確未動的部分
-
-- `CHANGELOG.md` `[10.14.2]` 的 #567 Phase-4a 條目原寫「production is still on WTM 8.x」，已就地更正並附日期註記，原句保留在註記內。該條目描述的決策不受影響——它建立在「production 遠落後」之上，更正後的數字讓這個前提更成立。
-- **帳本 §3 的可達性分類未重做，且這是刻意的。** 該節的分類鍵是 **BMS repo checkout 的狀態**（證據欄每一列都是對 BMS 原始碼的 `grep`/`find` 或 `appsettings.json` 值，整張表對 production 的引用是零筆），不是 production 版本。它回答的是「BMS 把 repo pin 升上來時這一項會不會自動生效」，與 production 現在跑什麼無關。把它改成「因為看不到 6.3.27 所以無法判定」會是錯的——該表從未宣稱過 6.3.27 或 8.6.1 有什麼。唯一受影響的是一句帶著「production 目前仍是 8.x」括號前提的澄清，已就地更正。
-- 6.3.27 的內容**無法從本 repo 檢視**：本 fork 的 tag 歷史從 `v8.3.0`（2026-03-09）起，沒有任何 6.x tag。任何以「6.3.27 有／沒有某個修復」為前提的分析都需要另尋上游 WalkingTec 來源，這是 #928 重新界定範圍時的硬限制。
-
----
-
+- 那一欄**從寫下第一天起就標著「沒有任何自動化或即時方式可以確認」**，而它仍然被當成範圍依據使用——升級指南的範圍與一份 EOS 分析的基準都建立在它上面。**hedge 讓錯誤可更正而非靜默，這部分有效；它沒有、也無法阻止一個被正確標記為不可靠的值靜靜決定其他工作的形狀。**
+- 由此新增一條 SOP（寫在該帳本的維護章節）：不可驗證的事實不得作為其他工作的範圍依據——要求可重跑的查證方式，且**引用端**要自己標明前提未驗證，不能只依賴來源文件的 hedge（讀者往往只讀結論那一欄）。
+- **方法論教訓（比版本號本身重要）**：三條「互相獨立且一致」的證據同時錯，因為作者共用同一個資訊環境與同一個可能的誤解。判斷一致性有沒有價值，要問「這些來源會不會一起錯」，不是「有幾個來源」。找的應該是**機制上不同**的來源（資料庫 schema 不受任何人的信念影響）。
+- 一併更正了 `CHANGELOG.md` 一則舊條目裡同一個錯誤數字，原句保留在日期註記內。該條目描述的決策不受影響——它建立在「該下游遠落後」之上，更正後的數字讓這個前提更成立。
 ## `FileAttachmentSaveChangesGuard` 的同一 unit-of-work 信任集不檢查租戶：裁決為已揭露限制，附具名前置條件（#987，2026-08-03）
 
 `IsTrustedSameUnitOfWork` 只比對兩件事：candidate 的 id 是否出現在本次 `SaveChanges` 的 `Added` `FileAttachment` 集合，以及該 entry 的 runtime type 是否可指派給 FK 宣告的 principal 型別。**`TenantCode` 不在判定內**，#985／#1000／#1011 都沒有收窄它。缺陷描述屬實。
