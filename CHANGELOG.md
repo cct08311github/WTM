@@ -588,6 +588,52 @@ Checked all 7 other workflow files (`ci-build.yml`, `mutation-gate.yml`, `regres
 `yaml.safe_load`: none of them start any service container, so there is nothing else with this
 shape to fix.
 
+### Added — regression tests + a registered mutant pin the #1024 precondition-(a) mechanism on the Add path; `docs/production-readiness.md` corrected (#1024 Phase 1, 2026-08-03)
+
+**This is a test + docs change, not a fix.** #1024 (`FileAttachment.Path` is a forgeable storage
+locator; the tenant filter protects the metadata row, not the blob it points at) remains open and
+is **not** claimed fixed or mitigated here. The prior adjudication established that the attack
+needs a writer able to set `FileAttachment` persisted fields — precondition (a) — and that (a)
+does not hold in the current tree, but that "why" had zero test coverage: it rested entirely on
+`BaseCRUDVM.DoAddPrepareCore`'s de-duplication loop (own comment: "将所有TopBasePoco的属性赋空值，
+防止添加关联的重复内容" — null every `TopBasePoco` property to prevent duplicate related content on
+add), a mechanism with no confidentiality intent in its own name, that any unrelated refactor
+could delete without a single test going red. Converting an accidental property into a tested
+invariant is a test change; it does not make the underlying #1024 attack surface smaller.
+
+`test/WalkingTec.Mvvm.Core.Test/VM/FileAttachmentNavPropertyPersistedFieldInvariantTests1024.cs`
+(4 tests) posts a caller-supplied nested `FileAttachment` object (attacker-chosen `Path`,
+`FileName`, brand-new id) as the value of a scalar `FileAttachment`-typed navigation property on
+an unrelated model, through `DoAdd`/`DoAddAsync`/`DoEdit`/`DoEditAsync`, and asserts the outcome —
+no row bearing that id or `Path` ever appears in the `FileAttachments` table — never the mechanism
+directly. The Add-path pair is proven by mutation: deleting `DoAddPrepareCore`'s
+`pro.SetValue(Entity, null);` (~line 563) turns both tests red with a real `INSERT` of the forged
+row (EF Core's `DbSet.Add()` does a full recursive graph walk that a nested, never-nulled
+`FileAttachment` navigation property survives into) and is now enforced in CI via mutant
+`basecrudvm1024-doadd-fileattachment-nav-nulling-neutralize` (`kind: security`,
+`VERDICT: KILLED`, `GATE: PASS`).
+
+**The Edit-path pair is an honest regression pin, not a second proof of the same mechanism.**
+Empirically — verified with a `ChangeTracker.Entries()` diagnostic, not assumed — deleting the
+equivalent line in `DoEditPreparePart1` (~line 902) does **not** turn the Edit tests red: WTM's
+`EmptyContext.UpdateEntity`/`AddEntity` are `this.Entry(entity).State = <state>;`, which (unlike
+`DbSet.Add()`/`Attach()`/`Update()`) never cascade-tracks a previously-untracked navigation target
+at all. The nested `Photo` object stays inert whether or not it was nulled first, so no mutant is
+registered for that line — registering one would have produced a `SURVIVED` verdict, i.e. a false
+claim of coverage. The Edit tests remain valuable as a guard against a future reimplementation of
+those primitives that DOES cascade.
+
+`docs/production-readiness.md`'s `#987` section is corrected in two places: (1) the precondition
+paragraph now names this actual mechanism instead of only listing tenant-stamping reasons that
+don't explain why an attacker-chosen `Path` can't be set at all (a within-tenant question, not a
+cross-tenant one); (2) a new paragraph (tracked separately as **#1032**, not fixed here) corrects
+the implicit reading that this needs a deployment configured for `local`/`oss` storage to be
+exposed — `sm` is a public parameter on `_FrameworkController.Upload` and the scaffolded
+`FileApiController.Upload`, both controllers carry `[AllRights]` (which `PrivilegeFilter` skips
+the page-privilege check for), and `WtmFileProvider.CreateFileHandler` uses `_handlers[sm]`
+whenever `sm` is non-empty — `WtmLocalFileHandler`/`WtmOssFileHandler` ship in the core assembly
+and are always registered, regardless of the deployment's configured `SaveFileMode` default.
+
 ## [10.21.0] - 2026-07-31
 
 > **This section was published only as `10.21.0-rc.2`. The `10.21.0` version number is
