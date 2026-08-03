@@ -1502,13 +1502,15 @@ error NU1100: Unable to resolve 'WalkingTec.Mvvm.Core (>= 10.21.0)' for 'net10.0
 
 > **Host 存在一條可讓請求控制 `FileAttachment` 之 persisted fields、但不能控制 context tenant、也不能使用 bulk 或 raw SQL 的自訂寫入路徑。**
 
-**in-tree 沒有證明這個前置條件成立**：inline 編輯明確 block `TenantCode`；`BaseCRUDVM` 的 Add 路徑強制覆寫成當前租戶；`BaseImportVM` 主列與子列同樣 stamp；CodeGen 產生的 MVC／API controller 都走 `BaseCRUDVM.DoAdd`/`DoEdit`。
+**in-tree 沒有證明這個前置條件成立**：inline 編輯明確 block `TenantCode`；`BaseCRUDVM` 的 Add 路徑強制覆寫成當前租戶；`BaseImportVM` 主列與子列同樣 stamp；CodeGen 產生的 MVC／API controller 都走 `BaseCRUDVM.DoAdd`/`DoEdit`——但「走 `BaseCRUDVM`」本身不是理由，真正的機制是 `DoAddPrepareCore` 那段刪重迴圈（自己的註解寫著「将所有TopBasePoco的属性赋空值，防止添加关联的重复内容」）：在 `DC.Set<TModel>().Add(Entity)` 呼叫前，把 `Entity` 上任何 `TopBasePoco` 型別（含 `FileAttachment`）的巢狀導覽屬性設為 `null`，讓呼叫端貼上去的巢狀 `FileAttachment` 物件（連同其 `Path`）從未進入 EF 的 graph tracking，因此連 INSERT 都不會發生——不是靠租戶戳記擋下來的。這條路徑現在有測試釘住並附一個註冊 mutant（`test/WalkingTec.Mvvm.Core.Test/VM/FileAttachmentNavPropertyPersistedFieldInvariantTests1024.cs`；mutant `basecrudvm1024-doadd-fileattachment-nav-nulling-neutralize`，2026-08-03，#1024 Phase 1）。**這個機制目前只對 Add 路徑證實**：同一段迴圈也出現在 `DoEditPreparePart1`，但實測刪掉該行並不會讓對應的 Edit 測試變紅——`DC.UpdateEntity`/`AddEntity` 底層是 `Entry(entity).State = ...`，不像 `DbSet.Add()` 會做遞迴 graph walk，本來就不會把一個從未被追蹤過的巢狀物件掛進 tracking，所以 Edit 路徑此刻不是靠這行擋下攻擊，而是框架的寫入原語本身沒有 cascade 行為（診斷過程與完整推理見同一測試檔案的檔頭註解）。
 
 **但不可升格為「下游不可達」**：`FileAttachment.TenantCode` **沒有 `[CanNotEdit]`**（只有 `[Display]` 與 `[StringLength]`），而 `BaseCRUDVM.DoEdit` 會更新任何出現在 FC、且非 ID／NotMapped／CanNotEdit 的 scalar property。下游只要手寫或生成一個 `FileAttachment` 的 CRUD VM 就可能暴露它。
 
 ### 同一前置條件下有一條更嚴重的路徑：#1024
 
 `FileAttachment.Path` 是可偽造的 storage locator。租戶過濾器保護的是 metadata 那一列，**不是它指向的 blob**；`ResolveUnderUploadRoot` 只保證路徑落在某個 upload root 之下（目錄穿越防護），沒有租戶維度。同一個能控制 attachment 欄位的寫入端，只要建一筆**自己租戶**的合法 attachment 並把 `Path` 指向受害者的實體檔，就能經正常 `GetFile` 讀出檔案內容——步驟更少、不需要動 `TenantCode`、guard 架構上碰不到。**投入 #987 之前應先處理 #1024。**
+
+**部署設定不是這裡的邊界，另開 #1032（2026-08-03）**：上面的推導聚焦在 `ResolveUnderUploadRoot`（local 儲存的目錄穿越防護），容易被誤讀成「只有部署方把 `SaveFileMode` 設成 local/oss，`Path` 這個欄位才有意義」。這站不住腳：`sm` 是 `_FrameworkController.Upload`（`src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs`）與 CodeGen 生成的 `FileApiController.Upload`（如 `demo/WalkingTec.Mvvm.Demo/Areas/_Admin/ApiControllers/FileApiController.cs`）的公開參數，兩個 controller 都掛 `[AllRights]`——`PrivilegeFilter.cs` 對有 `[AllRights]` 標記的 action 直接跳過頁面權限判斷（`isAllRights == false` 才會呼叫 `IsAccessable`）。`WtmFileProvider.CreateFileHandler` 只要 `sm` 是非空字串就直接查 `_handlers[sm]`，完全不看部署設定的 `FileUploadOptions.SaveFileMode` 預設值；`WtmLocalFileHandler`／`WtmOssFileHandler`／`WtmDataBaseFileHandler` 三個 handler 類別都定義在 `WalkingTec.Mvvm.Core`（框架本體，任何部署都會載入），`WtmFileProvider.Init` 把掃描到的每個 `IWtmFileHandler` 實作都登記進 `_handlers`，不受 `SaveFileMode` 篩選。也就是說，即使一個部署把 `SaveFileMode` 設成 `database`，呼叫端仍能在同一次 Upload 請求上帶 `sm=local`（或 `sm=oss`）選用會賦予 `Path` 真實檔案系統／物件儲存意義的 handler——**不需要部署方特地把儲存後端設成 local/oss**。已另開 #1032 追蹤這條「`sm` 繞過 `SaveFileMode`」的獨立問題；本節與本次 #1024 Phase 1 都不修。
 
 ### 明確沒有做的事
 
