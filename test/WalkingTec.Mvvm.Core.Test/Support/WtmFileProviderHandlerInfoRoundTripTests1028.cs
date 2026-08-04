@@ -13,13 +13,15 @@ namespace WalkingTec.Mvvm.Core.Test.Support
     /// Issue #1028 — <see cref="WtmFileProvider"/>'s <c>GetFileCore</c>/<c>DeleteFileCore</c>
     /// each rebuilt a <see cref="FileAttachment"/> via a hand-maintained <c>Select</c>
     /// projection that omitted <see cref="FileAttachment.HandlerInfo"/>. Any handler that
-    /// branches on it (<c>WtmOssFileHandler</c> uses <c>HandlerInfo</c> to pick the OSS
-    /// group/bucket, falling back to the first configured group when null — see
-    /// <c>WtmOssFileHandler.GetFileData</c>/<c>DeleteFile</c>) therefore always saw null
-    /// regardless of what was persisted: in a multi-group OSS deployment this makes reads look
-    /// in the wrong bucket, and deletes issue against the wrong bucket (a delete against a
+    /// branches on it therefore always saw null regardless of what was persisted. The in-tree
+    /// example was an object-storage handler (removed by #1055 — see CHANGELOG.md/
+    /// docs/production-readiness.md) that used <c>HandlerInfo</c> to pick a group/bucket, falling
+    /// back to the first configured group when null: in a multi-group deployment this made reads
+    /// look in the wrong bucket, and deletes issue against the wrong bucket (a delete against a
     /// non-existent object typically "succeeds", so the object that should have been removed
-    /// silently survives).
+    /// silently survives). The projection contract this test pins is generic — it protects any
+    /// current or future <see cref="IWtmFileHandler"/> implementation that branches on
+    /// <c>HandlerInfo</c>, not specifically the removed handler.
     ///
     /// <para>
     /// <strong>Scope:</strong> this proves only that <c>HandlerInfo</c> now survives the
@@ -93,9 +95,9 @@ namespace WalkingTec.Mvvm.Core.Test.Support
             Assert.AreEqual(handlerInfo, result!.HandlerInfo,
                 "#1028: HandlerInfo must survive GetFileCore's Select projection. Before the fix, " +
                 "the hand-maintained projection never copied this column, so HandlerInfo was " +
-                "always null regardless of what was persisted — the exact defect that made " +
-                "WtmOssFileHandler fall back to the first configured OSS group/bucket instead of " +
-                "the one the file actually belongs to.");
+                "always null regardless of what was persisted — the exact defect that made the " +
+                "object-storage handler removed by #1055 fall back to the first configured " +
+                "group/bucket instead of the one the file actually belongs to.");
         }
 
         [TestMethod]

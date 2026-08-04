@@ -15,9 +15,10 @@ namespace WalkingTec.Mvvm.Core.Test.Security
     /// <c>WtmFileProvider.GetFile</c> (<c>WtmFileProvider.cs:180</c>, inside
     /// <c>if (rv != null &amp;&amp; withData == true)</c>), only ever reaches it AFTER its own
     /// query has already resolved — and, per <c>FileUploadOptions.EnforceTenantFileScope</c>,
-    /// already tenant-scoped — the row being read. <c>WtmLocalFileHandler</c>/<c>WtmOssFileHandler</c>
-    /// apply no second filter of their own, so <c>WtmDataBaseFileHandler</c> trusting the same way
-    /// makes all three handlers consistent, not less safe.
+    /// already tenant-scoped — the row being read. <c>WtmLocalFileHandler</c> (and, before #1055
+    /// removed it, the object-storage handler that shipped alongside it) applies no second
+    /// filter of its own, so <c>WtmDataBaseFileHandler</c> trusting the same way makes the
+    /// handlers consistent, not less safe.
     ///
     /// <para>
     /// That safety argument rests entirely on a property nothing in the type system enforces:
@@ -39,7 +40,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
     /// two places: <see cref="WalkingTec.Mvvm.Core.Support.FileHandlers.WtmFileProvider"/> itself
     /// (the one caller this safety argument is built on), or one of the
     /// <c>IWtmFileHandler</c> implementations (<c>WtmDataBaseFileHandler</c>,
-    /// <c>WtmLocalFileHandler</c>, <c>WtmOssFileHandler</c>,
+    /// <c>WtmLocalFileHandler</c>,
     /// <c>WtmFileHandlerBase</c>) — allow-listed in case a future handler legitimately delegates
     /// to another handler or to its own base implementation, which is a within-the-handler-family
     /// call, not a new external entry point.
@@ -83,7 +84,6 @@ namespace WalkingTec.Mvvm.Core.Test.Security
             "src/WalkingTec.Mvvm.Core/Support/FileHandlers/WtmFileProvider.cs",
             "src/WalkingTec.Mvvm.Core/Support/FileHandlers/WtmDataBaseFileHandler.cs",
             "src/WalkingTec.Mvvm.Core/Support/FileHandlers/WtmLocalFileHandler.cs",
-            "src/WalkingTec.Mvvm.Core/Support/FileHandlers/WtmOssFileHandler.cs",
             "src/WalkingTec.Mvvm.Core/Support/FileHandlers/WtmFileHandlerBase.cs",
         };
 

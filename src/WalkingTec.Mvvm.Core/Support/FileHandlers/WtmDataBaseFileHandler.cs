@@ -34,10 +34,10 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             // this query would then find nothing, return null, and the controller would crash
             // with a NullReferenceException on the resulting null DataStream instead of serving
             // the file the outer query had already authorized — a "database" SaveMode-only
-            // inconsistency with WtmLocalFileHandler/WtmOssFileHandler, which apply no such
-            // second filter and correctly honour the opt-out. IgnoreQueryFilters() here trusts
-            // the caller's already-completed authorization decision, matching those other
-            // handlers, so the explicit opt-out genuinely works for every SaveMode.
+            // inconsistency with WtmLocalFileHandler (and, before #1055 removed it, an
+            // object-storage handler), which apply no such second filter and correctly honour
+            // the opt-out. IgnoreQueryFilters() here trusts the caller's already-completed
+            // authorization decision, matching that other handler, so the opt-out works for every SaveMode.
             var rv = wtm.DC.Set<FileAttachment>().IgnoreQueryFilters().CheckID(file.GetID()).FirstOrDefault();
             if (rv != null)
             {

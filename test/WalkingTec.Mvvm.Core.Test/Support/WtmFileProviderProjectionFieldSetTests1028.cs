@@ -120,8 +120,9 @@ namespace WalkingTec.Mvvm.Core.Test.Support
 
             Assert.IsTrue(hasHandlerInfo,
                 "#1028: the shared projection must assign HandlerInfo — its absence is the exact " +
-                "defect that made WtmOssFileHandler always fall back to the first configured " +
-                "OSS group/bucket instead of the one a file actually belongs to.");
+                "defect that made the object-storage handler removed by #1055 always fall back " +
+                "to the first configured group/bucket instead of the one a file actually " +
+                "belongs to.");
         }
 
         [TestMethod]

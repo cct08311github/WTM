@@ -27,10 +27,10 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
         /// #1028: the single source of truth for the lightweight <see cref="FileAttachment"/>
         /// projection used by both <see cref="GetFileCore"/> and <see cref="DeleteFileCore"/>.
         /// Before this fix, each method hand-maintained its own field list; both had already
-        /// omitted <see cref="FileAttachment.HandlerInfo"/>, so every handler (e.g.
-        /// <c>WtmOssFileHandler</c>, which uses <c>HandlerInfo</c> to pick the OSS group/bucket)
-        /// always saw it as null and silently fell back to the first configured group — in a
-        /// multi-group deployment this makes reads look in the wrong bucket and deletes issue
+        /// omitted <see cref="FileAttachment.HandlerInfo"/>, so any handler that branches on
+        /// it (the in-tree example was an object-storage handler, removed by #1055) always saw
+        /// it as null and silently fell back to the first configured group — in a multi-group
+        /// deployment this makes reads look in the wrong bucket and deletes issue
         /// against the wrong bucket. Centralizing the field list here means a future column added
         /// to <see cref="FileAttachment"/> forces a deliberate decision about whether it belongs
         /// in this projection (see the pinning test in

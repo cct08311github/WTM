@@ -82,7 +82,6 @@ namespace WalkingTec.Mvvm.Core
                         "Oracle.",
                         "MySql.",
                         "SQLitePCLRaw.",
-                        "Aliyun.OSS",
                         "BouncyCastle.",
                         "FreeSql.",
                         "Google.Protobuf.dll",

@@ -2151,6 +2151,65 @@ CHANGELOG `[10.23.0]` 的 Migration 段落列了三條路：釘住舊版、把 `
 
 ---
 
+## 移除 Core 對 Aliyun OSS 的檔案處理器 `WtmOssFileHandler`（#1055，BREAKING，2026-08-04）
+
+**這不是漏洞修復，是專案擁有者裁定的移除**——與 #1054 同一批決策，這裡同樣不主張任何安全缺陷；CHANGELOG `[10.23.0]` 這一輪新增的 `### Removed`/`### Migration` 段落是本項的權威敘述，本節補充驗證與方法論，不重複、不超過那兩段的宣稱。
+
+### 移除範圍
+
+整檔刪除 `src/WalkingTec.Mvvm.Core/Support/FileHandlers/WtmOssFileHandler.cs`；連帶移除引用：`src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj`（`<PackageReference Include="Aliyun.OSS.SDK.NetCore" />` 這一行——非 `.claude/rules/dependency-management.md` 列管的安全 override pin，沒有 `<!-- Issue #N -->` 註解，`git log --oneline -- Directory.Packages.props` 也未見任何 `fix(security)`/`pin` commit 觸碰過這個套件，純粹是「不再需要」）、`Directory.Packages.props`（同一套件的 `<PackageVersion>` 行）、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/WtmFileProvider.cs`（#1028 那段 `_fileMetadataProjection` 摘要註解裡點名該型別的地方，改寫成不具名描述並附 #1055 指標）、`WtmDataBaseFileHandler.cs`（`GetFileData` 的 #859 說明註解同款處理）、`Utils.cs`（`GetAllAssembly()` 組譯掃描的第三方/系統 DLL 排除清單移除 `"Aliyun.OSS"` 這一項——套件刪除後這個排除項目本身變成死重，一併清掉）；三支既有測試（見下一節）；四份 demo `appsettings.json`（Demo/Vue3Demo/BlazorDemo/ConsoleDemo 各自 `FileUploadOptions.Settings.oss` 陣列，連同前一個陣列元素多餘的尾逗號）。
+
+`.github/workflows/*.yml`、`scripts/publish-to-gitea.sh`、`docs/gitea-packages.md`、`docs/wtm-developer-manual.md`、`docs/ci-operations.md`、`WalkingTec.Mvvm.sln`、`core.slnf`：逐一 grep 確認皆無 `Aliyun`/`WtmOssFileHandler`/`OssOption` 命中，未改動。這點與 #1054 的 S3 模組不同：`Aliyun.OSS.SDK.NetCore` 從來不是獨立可發佈的 project/package，只是 `WalkingTec.Mvvm.Core` 內部的一個 `<PackageReference>`，沒有自己的 pack 步驟、smoke test 清單或套件計數邏輯需要同步修改——已發佈套件數不變。
+
+### 與 #1054（S3）的關鍵差異：這次移除的是真的在動的功能
+
+**#1054 的核心論點是「`SaveFileMode="s3"` 從未真的可達」——這一票沒有這個安全網。** `WtmOssFileHandler` 刪除前的唯一建構子是 `WtmOssFileHandler(WTMContext wtm) : base(wtm)`，正好是 `WtmFileProvider.Init`（`WtmFileProvider.cs:76`）要求的 `(WTMContext)` 簽章——所以它會被成功 `GetConstructor` 到、被塞進 `_handlers` 字典（`WtmFileProvider.cs:94`），`FileUploadOptions.SaveFileMode="oss"` 在任何已發行版本裡都是**真的可達、真的會執行**的一條路：上傳、讀取、刪除都會對設定檔裡填的 Aliyun OSS bucket 發出真實的 API 呼叫（刪除前讀過原始碼：`OssClient.PutObject`/`GetObject`/`DeleteObject`）。移除的是一個能動的功能，不是死路。
+
+**`WtmOssFileHandler` 是已發佈的 `WalkingTec.Mvvm.Core` NuGet 套件裡的 `public class`**——任何直接引用該型別（建構子注入、`typeof(WtmOssFileHandler)` 等）的下游專案，不論有沒有把 `SaveFileMode` 設成 `"oss"`，升級後 build 都會壞。本 repo 找不到 OSS 版的 `AddWtmS3FileHandler` 類似擴充方法（刪除前已 grep 確認 `src/`/`demo/` 沒有 `AddWtmOssFileHandler`/`IWtmFileHandler, WtmOssFileHandler` 這類註冊呼叫）——只有 `WtmFileProvider` 的反射註冊這一條路，不像 S3 有兩條獨立路徑。
+
+### 既有 OSS 檔案與升級後行為（讀原始碼驗證，不是推測）
+
+**`CreateFileHandler("oss")` 找不到 key 之後的實際行為**——`WtmFileProvider.CreateFileHandler`（`WtmFileProvider.cs:103`）：`saveMode` 非空時查 `_handlers` 字典（`WtmFileProvider.cs:119`：`ci = _handlers[saveMode];`），`WtmOssFileHandler` 已刪除、`Init` 從未把 `"oss"` 這個 key 塞進字典，所以這行永遠不命中、`ci` 維持 `null`；`if (ci == null)`（`WtmFileProvider.cs:122`）分支直接 `return new WtmDataBaseFileHandler(_wtm);`（`WtmFileProvider.cs:124`）——**沒有例外、服務不會啟動失敗**，這是既有的「找不到 handler 就退回資料庫模式」設計本身就有的行為，不是本次改動新增的分支。
+
+驗證過三個具體後果：
+
+1. **讀取既有 `oss` 模式檔案：不會讓請求崩潰，但檔案讀不到。** `GetFileCore`（`WtmFileProvider.cs:244-255`）對每個解析出的 `FileAttachment` 呼叫 `CreateFileHandler(rv.SaveMode, dc)`，`rv.SaveMode` 是持久化在資料庫裡的字串 `"oss"`——落回上一段的路徑，回傳 `WtmDataBaseFileHandler`。但 `WtmDataBaseFileHandler.GetFileData`（`WtmDataBaseFileHandler.cs:44`）直接 `new MemoryStream(((FileAttachment)rv).FileData!)`——OSS 模式的上傳從來不寫 `FileData` 欄位（只寫 `Path`/`HandlerInfo`），這個欄位對這些既有列一律是 `null`，`MemoryStream(byte[])` 建構子對 `null` buffer 拋 `ArgumentNullException`；`GetFileCore` 自己的 `try`/`catch`（`WtmFileProvider.cs:251-255`）接住例外、記一條 `LogWarning`、把 `rv` 設回 `null`——呼叫端看到的是「檔案不存在」，不是 500。
+
+2. **刪除既有 `oss` 模式檔案：資料庫列會被刪掉，但 OSS 上的物件永遠留著。** `DeleteFileCore`（`WtmFileProvider.cs:316-329`）的執行順序是先 `dc.Set<FileAttachment>().Remove(file); dc.SaveChanges();`（`WtmFileProvider.cs:320-321`）——資料庫列已經真的刪除、已經 commit——才呼叫 `fh.DeleteFile(file)`（`WtmFileProvider.cs:323`）。落回 `WtmDataBaseFileHandler`、它沒有覆寫 `DeleteFile`，執行的是 `WtmFileHandlerBase` 的預設空實作（`WtmFileHandlerBase.cs:22-24`，方法本體是空的 `{ }`）——沒有任何東西真的呼叫 Aliyun 去刪物件。這不是例外被吞掉，是**根本沒有東西可以拋例外**：資料庫記錄消失，物件孤兒化地留在 OSS bucket 裡，這是一個靜默的儲存空間洩漏，不是本節其他兩點那種「有 try/catch 接住」的降級。
+
+3. **新上傳明確指定 `saveMode="oss"`：不會失敗，會被靜默改存進資料庫。** `WtmFileProvider.Upload`（`WtmFileProvider.cs:132-184`）同樣解析到 `WtmDataBaseFileHandler`，因為結果 `is WtmDataBaseFileHandler`（`WtmFileProvider.cs:150`），直接呼叫 `UploadToDB`；`UploadToDB` 把 `file.SaveMode` 寫死成 `_modeName`（字面值 `"database"`，`WtmDataBaseFileHandler.cs:56`），完全不理會呼叫端要求的 `saveMode` 參數——所以這個呼叫本身不會壞，只是位元組最終存進資料庫，而且持久化的 `SaveMode` 是 `"database"`，不是呼叫端以為的 `"oss"`。
+
+**行號穩定性（本次改動特有的核對項目）**：本節與 CHANGELOG 引用的每一個 `WtmFileProvider.cs`/`WtmDataBaseFileHandler.cs` 行號，都是移除 `WtmOssFileHandler.cs`、且對這兩個檔案完成全部編輯之後的最終行號——這兩份程式碼裡原本點名 `WtmOssFileHandler` 的說明性註解，改寫成不具名描述時刻意維持原本的行數（各自 4 行換 4 行），目的是不讓這兩個檔案裡「跟本次改動無關、只是恰好在附近」的既有歷史行號引用（例如 CHANGELOG 較早條目與本文件其他章節引用的 `WtmFileProvider.cs:135`/`:222`、`WtmDataBaseFileHandler.cs:41`/`:58`）被本次改動悄悄弄錯——已逐一用實際檔案內容核對過，不是假設；`git diff --stat` 確認兩個檔案的總行數與修改前完全一致。
+
+### 三支既有測試：判斷各自的斷言在移除 OSS 後還成不成立
+
+- **`GetFileDataCallSiteInvariantTests859`**：斷言「除了 `WtmFileProvider` 與 `IWtmFileHandler` 實作，沒有其他檔案呼叫 `.GetFileData(`」——這個安全不變量本身與 OSS 無關，`WtmOssFileHandler` 只是允許清單（`AllowedCallSiteFiles`）裡的一個條目。移除該檔案後，允許清單裡的對應路徑不會再被任何真實檔案命中，是死條目而非錯誤條目——但為了不讓允許清單指向一個不存在的檔案，仍把該項移除（**縮小矩陣，不是刪測試**，做法與 #1054 對這支測試的處理完全同構）。
+- **`WtmFileProviderHandlerInfoRoundTripTests1028`**：兩個測試方法都用 `SaveMode="database"` 播種資料、透過 `WtmFileProvider.GetFile` 驗證 `HandlerInfo` 欄位存活過 `_fileMetadataProjection`——從未實際建立或呼叫過 `WtmOssFileHandler`，OSS 只出現在類別/方法層級的 doc comment 與斷言失敗訊息裡，作為「為什麼這個欄位重要」的歷史範例。測試邏輯與斷言完全不變，只把 doc comment 與失敗訊息裡對已刪除型別的具名引用改成不具名描述（「an object-storage handler removed by #1055」）——**不是縮小矩陣，是修正過時的說明文字**，因為這支測試從頭到尾就只有一個情境（database SaveMode），沒有 OSS 專屬分支可縮。
+- **`WtmFileProviderProjectionFieldSetTests1028`**：純反射測試，對 `_fileMetadataProjection` 的欄位集合、`FileAttachment` 的欄位全集、`GetFileCore`/`DeleteFileCore` 是否共用同一個投影物件做結構性斷言，同樣從未實際建立過任何 handler。唯一改動是一則斷言失敗訊息裡的具名引用，處理方式與上一支相同——**修正說明文字，邏輯與斷言不變**。
+
+三支測試背後的共同判斷依據：`HandlerInfo` 欄位與 `_fileMetadataProjection` 這個投影本身不因 OSS 移除而失去意義——它們是 `IWtmFileHandler` 這個 public 介面的通用基礎設施，CHANGELOG 遷移建議裡「把 `WtmOssFileHandler.cs` 複製進自己專案」這條路徑若被下游採用，vendored 版本的 handler 一樣會依賴這個投影正確帶出 `HandlerInfo`；三支測試保護的是這個通用契約，不是 `WtmOssFileHandler` 這個型別本身，所以移除該型別後沒有一支測試因為「被保護的對象消失」而需要刪除。
+
+### 遷移建議：只指向框架既有、不在移除排程上的 handler
+
+CHANGELOG `[10.23.0]` 這一輪的 `### Migration` 段落只列 `WtmLocalFileHandler`（本機磁碟）與資料庫模式（`WtmDataBaseFileHandler`，`FileUploadOptions.SaveFileMode` 未設定時的預設值）——與 #1054 的遷移建議完全同構、同一組目標，不指向任何其他正在排隊移除的東西。既有 OSS 檔案的處置給了三條路（釘住舊版／匯出後改用其他 handler 重新上傳／把 `WtmOssFileHandler.cs` 複製進自己專案並自行加 `Aliyun.OSS.SDK.NetCore` 相依，因為 `IWtmFileHandler` 是 public 介面），完整文字見 CHANGELOG，本節不重複。
+
+### 版本
+
+`version.props` 維持 `10.23.0`——這個版本本來就還在進行中、尚未發行（含上方 #1007/#1054 的內容），BREAKING 落在這個版本裡即可，沒有額外 bump。
+
+### 驗證
+
+`find . -name 'demo.db*' -path '*bin*' -delete`（跑測試前必做）→ `dotnet build core.slnf -c Release`：0 error。`dotnet test core.slnf -c Release --no-build`：exit code 0，六個測試組件（`WalkingTec.Mvvm.Mvc.Tests`/`Admin.Test`/`Api.Test`/`Etl.Test`/`Core.Test`/`WorkFlow.Test`）逐一皆回報 `Failed: 0`。全樹 `grep -rn "Aliyun\|WtmOssFileHandler\|OssOption" .`（排除 `bin`/`obj`）：命中僅剩 `CHANGELOG.md` 與本文件（`docs/production-readiness.md`）自己這一節，以及三處與本次移除完全無關的既有內容——`docs/archive/plans/2026-03-04-8.1.14-stabilize.md`、`docs/archive/superpowers/plans/2026-03-20-dotnet10-package-upgrade.md`（2026-03 的歷史套件盤點文件，依本 repo 慣例不改寫已封存文件）、以及 `src/WalkingTec.Mvvm.Core/Notifications/{ISmsSender.cs,NullSmsSender.cs,SmsServiceCollectionExtensions.cs}`（doc comment 裡的範例類別名 `MyAliyunSmsSender`，示範下游可以掛自己的簡訊供應商，跟本次移除的檔案儲存子系統無關，是關鍵字 `Aliyun` 的誤命中，不是遺漏）。**本節與 CHANGELOG 用同一組完整套件名/型別名/檔案路徑，不做字串拼接或迂迴指稱來規避這條 grep**——延續 #1054 對這一點的承諾。
+
+### 未能驗證／刻意沒動的部分（誠實列出）
+
+- 本次工作階段禁止呼叫任何 Gitea/GitHub API、禁止開 PR——這個修法尚未在真正的 Gitea Actions CI 上跑過。
+- 下游是否真的有專案直接引用 `WtmOssFileHandler` 型別（建構子注入、`typeof()`）——這件事本 repo 無法證明存在或不存在。
+- 「既有 OSS 檔案與升級後行為」一節的三個後果是讀原始碼＋單獨執行對應既有測試組件驗證的，沒有新增一支端到端整合測試去實際跑一次「設定 `SaveFileMode="oss"`、升級、讀取既有 `oss` 列」這個完整流程並斷言其結果——這是本次工作範圍內刻意的取捨（issue 只列了三支既有測試要處理，沒有要求新增回歸測試覆蓋這個新出現的降級行為），不是遺漏或疏忽；若這個降級行為未來需要被鎖定為受保護的契約，需要另開 issue。
+- CHANGELOG 的歷史條目（`[10.13.0]` 之前的所有既有內容、#1054 段落裡「#1055 尚未執行」那句提前註記）一概未改寫，只在本項新增一則指向它的條目。
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。
