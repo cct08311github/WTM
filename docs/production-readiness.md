@@ -1976,7 +1976,7 @@ src/WalkingTec.Mvvm.TagHelpers.LayUI/Abstraction/BaseElementTag.cs:399:         
 
 > **`SetCurrentTenant` 不再接受呼叫端提出的、未經本次呼叫單次讀取之 `AllTenant` 快照唯一解析背書的租戶碼**（`null` 請求只有 host 呼叫者會成功——`user.TenantCode == null` 才放行，非 host 呼叫者的 `null` 請求一律明確回 `false`；`req == TenantCode`＝自己的 home 碼，兩分支皆不經 `AllTenant` 解析——明文 documented limitation，home routing 本身不在本項保護範圍）。
 > **本項不使 `CurrentTenant` 不可偽造**——`Wtm.LoginUserInfo.CurrentTenant = "x";` 仍可繞過（`WTMContext.User.cs:146` 的 getter 原樣回傳可變物件）；hydration（快取反序列化整物件安裝 `LoginUserInfo`，`WTMContext.User.cs:285,299`）、`ReloadUserFunc`、federation 的 `CallAPI<LoginUserInfo>`（`WTMContext.cs:275,290`）、公開 setter（`WTMContext.User.cs:148-160`）之重驗與防護，以及 routing sink（`CreateDC`／`GetUserDC`）本身，全部屬 **#1045**，本項未觸碰。
-> **升級前已寫入 user cache 的 override 本輪不重驗**，最長存活至快取過期（**七天 absolute expiration**——`DistributedCacheExtensions.cs:118` 的 `AbsoluteExpirationRelativeToNow = new TimeSpan(7, 0, 0, 0)`，只在 `typeof(T) == typeof(LoginUserInfo)` 且呼叫端未自帶 `options` 時套用，本例正是這個路徑）或重新登入（→ #1045）。
+> **升級前已寫入 user cache 的 override 本輪不重驗**，存活至該快取項目**最後一次寫入後七天**，或重新登入（→ #1045）。**「最長七天」是假的上限，不得如此描述（#1049）**：`DistributedCacheExtensions.cs:118` 的 `AbsoluteExpirationRelativeToNow = new TimeSpan(7, 0, 0, 0)` 是相對於**寫入當下**的七天（只在 `typeof(T) == typeof(LoginUserInfo)` 且呼叫端未自帶 `options` 時套用，本例正是這個路徑），而重新寫入不需要重新登入——**一次成功的租戶切換就會重寫**：新 admission `WTMContext.cs:721-722`、legacy `WTMContext.cs:811`，兩者都觸發 setter 的 `Cache?.Add`（`WTMContext.User.cs:157-159`）。因此持有 stale override 的使用者只要每七天內做一次合法切換即可無限續租；正確的上限是「無上限，直到某次寫入沒有發生」。另注意 `AddAsync<T>` **沒有**這個型別特例（`DistributedCacheExtensions.cs:130-141`），走 async 寫入的項目連七天都沒有。
 > **四個 stock `SetTenant` HTTP 入口——`_FrameworkController.cs:1817` 與三份 demo `AccountController.cs:97`——接受本次呼叫 caller-proposed override 的唯一顯式 member-assignment path**（NC1：原設計稿寫「唯一寫入通道」過寬，已收窄為「顯式 member-assignment path」）——stock HTTP middleware 從快取反序列化並**整物件安裝** `LoginUserInfo`（`WTMContext.User.cs:285,299`）是另一條 stock HTTP 狀態進入通道，本項不覆蓋、也不宣稱覆蓋。
 
 **禁用措辭**（前五輪 Red Line 事故清單，程式碼註解比照辦理）：「routing sink 只消費已解析 identity」「租戶身分不變式已建立」「CurrentTenant 不可偽造」「完整封閉」。
@@ -2049,7 +2049,7 @@ Host 呼叫者這一側的核心洞是 H3（不存在碼今日 Allow＋路由蓋
 1. host 切到「不存在／停用／重複碼」現在得 403（框架端點）或 `false`（demo）：修資料（enable／去重目標租戶——經 provider 快取，最長 1 小時後生效，`FrameworkServiceExtension.cs:1275`，或清 `AllTenant` 快取鍵）。**policy 救不了 NotFound／Ambiguous**——唯一逃生門是 kill switch。
 2. `EnableTenant=false`／console 部署（`AllTenant` 恆空）：host 的任何非 null 切換由 Allow→Deny。
 3. **Federation 前端（`HasMainHost`）**：前端本地 `AllTenant` 通常為空，host「切到只有 mainhost 知道的碼」由 Allow→Deny——此流程是否真實存在無法由本 repo 證明；受影響者開 kill switch 過渡，正解在 #1045。
-4. **存量 override**：升級前寫入 user cache 的 override 本輪不重驗（→ #1045），建議升級時清 user cache 或強制重登入（七天內自然過期）。
+4. **存量 override**：升級前寫入 user cache 的 override 本輪不重驗（→ #1045），**必須在升級時清 user cache 或強制重登入**。**不得依賴「等它自然過期」**（#1049）：TTL 是相對於最後一次寫入的七天，而一次成功的租戶切換就會重寫並把到期日往後推，所以活躍使用者的 stale override 沒有自然過期的上限。
 5. sibling／孫租戶等正當營運流程：註冊 `IWtmTenantSwitchPolicy` 回 `Allow`。
 
 ### 測試矩陣（16 列＋NC7/NC5 的兩項更正）
