@@ -54,7 +54,9 @@ Cross-vendor design review (Codex gpt-5.6-sol, round 6): **APPROVED WITH NAMED C
   - **Deleting an existing `oss`-mode file removes the database row but leaves the object in the OSS bucket forever.** `WtmFileProvider.DeleteFileCore` removes the `FileAttachment` row and calls `SaveChanges()` (`WtmFileProvider.cs:320-321`) BEFORE calling the resolved handler's `DeleteFile` (`WtmFileProvider.cs:323`); the fallback `WtmDataBaseFileHandler` does not override `DeleteFile`, so `WtmFileHandlerBase`'s no-op default (`WtmFileHandlerBase.cs:22-24`) runs. The database row is gone; nothing is ever sent to Aliyun to remove the object — a silent storage leak, not caught by any exception handler because nothing throws.
   - **A new upload that explicitly requests `saveMode="oss"` does not fail — it is silently rerouted into `database` mode.** `WtmFileProvider.Upload` resolves the same fallback `WtmDataBaseFileHandler` and, because the result `is WtmDataBaseFileHandler` (`WtmFileProvider.cs:150`), calls `UploadToDB` directly; `UploadToDB` hardcodes `file.SaveMode = _modeName` (`"database"`, `WtmDataBaseFileHandler.cs:56`), ignoring the caller's requested `saveMode` — so this specific call keeps working, just with the bytes landing in the database under `SaveMode="database"` instead of ever reaching OSS.
 
-## [10.22.1] - 2026-08-03
+## [10.22.1] - 2026-08-03 — 未曾單獨發布，隨 10.23.0 出貨
+
+> **這個版號沒有 tag，也沒有上架任何 registry。** `#1034` 的修復（`#1044`，commit `49bb4715b`）當時是按獨立 patch 版準備的，`version.props` 也一度是 `10.22.1`；之後 `#1007`／PR `#1046` 才把 `VersionPrefix` 推到 `10.23.0`，本節的內容因此隨 `10.23.0` 一併出貨。**不要嘗試 pin `10.22.1`** —— 它不存在（`#1075`）。
 
 ### Fixed — restore optional-chain short-circuit at the 20 `*Func` emission sites #999 part (A)/(B) and #965 wrapped in `(expr)(args)`, via a closed-language classifier (#1034)
 
