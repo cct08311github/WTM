@@ -17,6 +17,16 @@ When priorities conflict: **Compatibility → Security → Quality → Performan
 
 **Never match a hardcoded `PASS: N`.** N legitimately differs between the `e2e-test.yml` matrix's `baseline` and `killswitch` legs (#681) and changes whenever `TC_REGISTRY` in `test/e2e/wtm_e2e_tests.py` grows. Workaround SOP → `docs/ci-operations.md`.
 
+## Infrastructure is not this session's to fix
+
+Infrastructure is **shared mutable state across concurrent Claude sessions** — one runner, one Docker VM, one Gitea server. Two sessions repairing it at once restart a runner the other is mid-job on, or clear the evidence the other is diagnosing. So the ops session (the `claude-session` workspace) owns it, and this session **reports instead of repairing** (#1066).
+
+In scope: Gitea Actions and its runners (including the Azure overflow runner), Colima/Docker, the Gitea server itself, backups and their launchd jobs, disk pressure, Tailnet, runner labels, and workflow infrastructure wiring. Application-layer work in this repo — feature, bugfix, test, PR — stays here.
+
+**Read the log before reporting anything.** The four jobs above report `conclusion: failure` on a fully passing run, and a known-false red belongs to this session, not to ops. Report a CI problem only once the log shows a real one; when the log can't settle it, report it and say so rather than guessing.
+
+A report carries four things: symptom, time, the log or error text, and what this session was doing. Then **stop the work that touches that same infrastructure** and wait — parallel repair attempts are the failure mode this rule exists to prevent. Unrelated application work continues, unless ops says the repair will disrupt it (a Gitea or runner restart also stops push, PR, and anything that triggers CI). A direct instruction from the user overrides this split; tell ops the scope and the result rather than acting silently.
+
 ## Red lines
 
 - Never bypass the VM layer to reach `DataContext` from a controller
