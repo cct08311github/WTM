@@ -2210,6 +2210,83 @@ CHANGELOG `[10.23.0]` 這一輪的 `### Migration` 段落只列 `WtmLocalFileHan
 
 ---
 
+## `integration-test.yml` 的自動觸發已停用：SQL Server 相關整合行為目前沒有任何自動驗證（#1070，2026-08-09）
+
+**這是一個覆蓋率空窗的誠實記載，不是一次修復。** 本節與 `docs/ci-operations.md` 的
+「整合測試自動觸發暫停」小節記載同一件事——這裡只寫讀者判斷 production-readiness 需要
+的結論，完整技術脈絡（runner 拓撲、#1020 的記憶體實測數字）見該文件。
+
+### 現況
+
+`.github/workflows/integration-test.yml` 的 `on:` 區塊原本是 `workflow_dispatch:` +
+`push:`（`branches: [dotnet10]`，`paths:` 限 `src/**` 與
+`test/WalkingTec.Mvvm.Integration.Test/**`）。本次改動把 `push` 整段移除，只留
+`workflow_dispatch:`。**理由是資源，不是這個測試套件本身出了問題**：依 Jun 2026-08-09
+裁示「本機不啟動 SQL Server，本機資源不足」——這個 workflow 的 `mssql` service container
+在 mac-mini `local-runner` 背後那顆硬 4 CPU / 3.813GiB 的 Docker VM 上，會跟同一個 job
+容器同時進行的 build/test 搶記憶體；`#1020`（見上方對應條目）已經用實測數字記載過
+run 6509 因此死於 `Error 945`（insufficient system memory）。
+
+### 這次改動實際做了什麼
+
+- 移除 `.github/workflows/integration-test.yml` 的 `push` 觸發（含其 `branches:`／
+  `paths:`），`on:` 只剩 `workflow_dispatch:`。
+- 在 `on:` 區塊上方加註解，記載理由、`#1020` 的既有事實，以及「`workflow_dispatch` 保留
+  但在 #1068 完成前不建議手動觸發」的判斷。
+- `services.mssql` 與其下全部測試 step（`Wait for MSSQL ready`／
+  `Report MSSQL effective memory`／`Run integration tests`／`Upload test results`）
+  **原封不動保留，沒有刪減或改寫任何一行**——這不是代碼變更，只是斷開觸發路徑。
+- `docs/ci-operations.md` 新增對應小節；本節同步更新。
+
+### 這次改動**沒有**做、也不宣稱的事——覆蓋率空窗，誠實列出
+
+- **不宣稱修好 #1020 或任何其他整合測試相關缺陷。** 這次改動完全沒有碰測試邏輯或
+  runner 資源配置本身，只是不再自動執行它。
+- **不宣稱過渡期有任何形式的自動覆蓋替代方案。** `push`／`pull_request` 都不會觸發這個
+  workflow；`workflow_dispatch` 技術上存在，但本節與 `docs/ci-operations.md` 都明確
+  記載「在 #1068 完成前不建議手動觸發」——手動觸發一樣會在本機起 SQL Server、一樣踩
+  同一個資源限制，不是可靠的替代覆蓋手段，不能算作「有覆蓋、只是要手動按」。
+- **因此，自本次改動的 commit 起，直到 #1068（整合測試遷移到 bms-verify-vm 執行）落地
+  為止：`WalkingTec.Mvvm.Integration.Test` 涵蓋的 SQL Server 相關整合行為（EF Core 對
+  MSSQL/azure-sql-edge 的實際讀寫路徑）沒有任何自動化測試在跑。** 這段期間往
+  `dotnet10` push 的變更，即使觸及 `src/**` 或該測試專案本身，也不會被這個 workflow
+  攔到任何回歸。單元測試（`ci-build.yml` 的 `build-and-test`，`TestCategory!=Integration`）
+  與 e2e（`e2e-test.yml`，走 SQLite/瀏覽器路徑）不受影響、繼續照常自動執行——本次空窗
+  **僅限**這個 workflow 覆蓋的 SQL Server 整合路徑，不是整體測試自動化停擺。
+- **不宣稱這個決定經過量化的風險評估、或有替代的本機/CI-adjacent 驗證頻率承諾。** 裁示
+  本身是資源限制下的直接判斷（本機不啟動 SQL Server），本節沒有另外提出「至少每週手動
+  跑一次」之類的緩解頻率——目前就是沒有，不假裝有一個非正式的節奏在補這個洞。
+- **不宣稱本次工作階段驗證過真正的 Gitea Actions CI 行為。** 驗證方式見下方「驗證」小節，
+  全部是本機 YAML 解析與 diff 檢查，沒有實際 dispatch 或 push 觸發這個 workflow。
+
+### 長期方案
+
+見 [#1068](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/issues/1068)：整合測試遷移到
+`bms-verify-vm` 執行，脫離本機 `local-runner` 的 4 CPU / 3.813GiB 資源限制。`#1068` 完成
+前，本節記載的空窗持續存在；完成後應回頭：(1) 視情況恢復某種形式的自動觸發（不一定是原本
+的 `push` + path filter，需視 bms-verify-vm 的排程機制重新設計）、(2) 更新本節與
+`docs/ci-operations.md` 對應小節、(3) 若空窗期間 `dotnet10` 上有任何後續變更觸及
+`src/**` 或整合測試本身，應在 `#1068` 落地後補跑一次完整驗證，不能假設空窗期間的變更
+自動安全。
+
+### 驗證
+
+`python3 -c "import yaml; yaml.safe_load(open('.github/workflows/integration-test.yml'))"`：
+解析成功。`python3 -c "import yaml; d=yaml.safe_load(open(...)); print(list(d[True].keys()))"`
+（PyYAML 1.1 把裸 `on:` key 解析成布林 `True`，這是 PyYAML 本身的已知行為、與本次改動
+無關——`d['on']` 會拋 `KeyError`，要用 `d[True]`）：`['workflow_dispatch']`，確認 `push`
+已完全移除、只剩 `workflow_dispatch`。`grep -n "^    services:"` 與逐一列出
+`job['steps']` 的 step 名稱：`services.mssql` 與全部 6 個 step
+（`checkout`／`setup-dotnet`／`Wait for MSSQL ready`／`Report MSSQL effective memory`／
+`Run integration tests`／`Upload test results`）均存在、順序未變。**本次改動沒有跑過
+`dotnet test`，也沒有實際 dispatch 這個 workflow 到 Gitea Actions**——這正是本節要誠實
+揭露的覆蓋率空窗本身，不是驗證疏漏；被停用的正是這個 repo 裡唯一會執行
+`WalkingTec.Mvvm.Integration.Test` 的自動化路徑，本次改動之後沒有第二條路徑可以拿來
+驗證這次改動「沒有破壞測試本身」，因為測試本身完全沒被改動——改動範圍僅止於觸發器與
+文件。
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。

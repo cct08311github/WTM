@@ -1,7 +1,7 @@
 # CI Operations
 
 > **適用版本**：10.5.1+
-> **最後更新**：2026-07-31
+> **最後更新**：2026-08-09
 > **CI 平台**：Gitea Actions（self-hosted at `mac-mini.tailde842d.ts.net`）。**至少三個已註冊 runner**（見下方「Runner 拓撲」，2026-07-29／#885 更正——原記錄的兩個之外還有一個先前沒記到的 `azure-overflow-runner`）：WTM 的 `ubuntu-latest` jobs 主要跑在本機 Docker `act_runner`（`local-runner`），但也可能被 Gitea 排到 `azure-overflow-runner`；另有一個 Homebrew runner 服務其他專案。
 
 本文件涵蓋 WTM CI 工作流總覽、Gitea Actions 與 GitHub Actions 的七大已知不相容點，以及排錯 SOP。完整修復脈絡見 [Issue #11](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/issues/11) / [PR #12](https://mac-mini.tailde842d.ts.net/chiu0831/WTM/pulls/12)。
@@ -14,7 +14,7 @@
 |------|------|-----------|
 | `.github/workflows/ci-build.yml` | push + PR | `build-and-test`、`js-test`、`release-tooling-test`、`security-scan` |
 | `.github/workflows/e2e-test.yml` | push + PR（path filter：`src/**`、`demo/**`、`test/e2e/**`） | `e2e`（Python + Playwright） |
-| `.github/workflows/integration-test.yml` | push + PR（含 SQL Server container） | `integration-test` |
+| `.github/workflows/integration-test.yml` | **僅 `workflow_dispatch`**（push 觸發已於 #1070 移除，含 SQL Server container；見下方「整合測試自動觸發暫停」小節，過渡期不應手動 dispatch） | `integration-test` |
 | `.github/workflows/publish-nuget.yml` | `push` tag `v*` + `workflow_dispatch` | NuGet pack→Gitea registry **＋ GitHub mirror sync（清洗 + go-forward push）＋ 建立 GitHub Release＋推 GitHub Packages**（見「Runner 拓撲與發版」） |
 
 Gitea Actions 直接讀 `.github/workflows/*.yml` — 語法與 GitHub Actions 相容、不必搬到 `.gitea/`。但有些 action 版本（特別是 v4+ artifact action）不支援 Gitea 的 GHES API，見下方七大不相容點。
@@ -488,6 +488,44 @@ Actions job（`mutation-gate.yml` 的 `mutants` job）在跑，CPU 用到 ~260%�
 `publish-nuget.yml`／`timeout-selftest.yml`／`vue3demo-build.yml` 的每個 job，
 **沒有其他檔案有 `services:` 區塊**——`integration-test.yml` 是這個 repo唯一起資料庫
 service container 的 workflow，不需要另外開票。
+
+---
+
+## 整合測試自動觸發暫停：`push` 觸發已移除，本機不再自動起 SQL Server（#1070，2026-08-09）
+
+**現況**：`integration-test.yml` 的 `on:` 區塊原本是 `workflow_dispatch:` + `push:`（`branches:
+[dotnet10]`，`paths:` 限 `src/**` 與 `test/WalkingTec.Mvvm.Integration.Test/**`）。本次改動把
+`push` 整段移除，`on:` 只剩 `workflow_dispatch:`。**這是自動化把關的暫停，不是修復**——
+往 `dotnet10` push 符合 path filter 的變更，之後不會再自動觸發整合測試。
+
+**為什麼**：依 Jun 2026-08-09 裁示「本機不啟動 SQL Server，本機資源不足」。這個判斷不是憑空
+下的——上方「#1020」小節已經用實測數字記載：這個 workflow 的 `mssql` service container 在
+mac-mini `local-runner` 背後那顆硬 **4 CPU / 3.813GiB** 的 Docker VM 上，會跟同一個 job 容器
+同時進行的 `dotnet build`/`dotnet test` 搶記憶體，run 6509 曾因此死於 `Error 945`
+（insufficient system memory）。`runs-on: ubuntu-latest` 在這個 repo 的排程結果是本機
+`local-runner`（也可能是 `azure-overflow-runner`，規格未知，見「Runner 拓撲」小節）——沒有
+一個是「不會佔用本機資源」的執行環境，所以現階段的結論是**不再自動起**，不是重新調參數。
+
+**`workflow_dispatch` 保留但不建議手動觸發**：手動 dispatch 跑的是同一份
+`services.mssql`，會在被排到的那個 runner 上一樣起 SQL Server、一樣吃同一顆 4
+CPU/3.813GiB 的 Docker VM——跟 push 觸發沒有本質差異，只是少了自動性。在 #1068（整合測試
+遷移到 bms-verify-vm 執行）完成前，手動觸發沒有解決本節說的資源問題，不建議使用。
+
+**`services:` 與測試 step 沒有被刪**：workflow 檔案裡的 `services.mssql`、`Wait for MSSQL
+ready`、`Report MSSQL effective memory`、`Run integration tests` 等 step 原封不動保留——
+#1068 規劃把它們搬到 bms-verify-vm 執行，屆時直接複用這份定義；本次只斷觸發，沒有重寫或
+刪減任何測試內容。
+
+**過渡期的覆蓋率影響**：自本次改動的 commit 起，直到 #1068 的 bms-verify-vm 路徑上線為止，
+`WalkingTec.Mvvm.Integration.Test`（SQL Server 相關的整合行為）沒有任何自動化驗證——
+`workflow_dispatch` 存在但不建議使用，`push`/`pull_request` 都不會觸發。這段空窗的完整
+記載與其對 production-readiness 的意義，見
+[`docs/production-readiness.md`](./production-readiness.md) 對應條目（#1070）。**本文件與
+`docs/production-readiness.md` 的記載範圍必須一致**——不得在任一處誇大已完成的驗證。
+
+**下一步**：#1068 落地、整合測試改到 bms-verify-vm 執行後，回頭評估是否恢復
+`integration-test.yml` 的 `push` 自動觸發（可能改成 dispatch 到 bms-verify-vm 而非本機
+`runs-on: ubuntu-latest`），並更新本節與上方工作流總覽表格。
 
 ---
 
