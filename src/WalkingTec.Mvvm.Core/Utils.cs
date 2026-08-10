@@ -781,45 +781,106 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>解密後的明文，或空字串（若輸入為空或解密失敗）</returns>
         public static string DecryptString(string stringToDecrypt, string encryptKey)
         {
+            DecryptRoute route = ClassifyDecryptRoute(stringToDecrypt, out byte[]? fullCipher);
+
+            switch (route)
+            {
+                case DecryptRoute.Empty:
+                case DecryptRoute.NotBase64:
+                    return "";
+
+                case DecryptRoute.LegacyDesShort:
+                    // AES-256-CBC requires at least 16 bytes for IV + at least 16 bytes for one
+                    // cipher block. Below that threshold this cannot possibly be AES-256-CBC
+                    // ciphertext produced by EncryptString, so this remains a deterministic (not
+                    // heuristic) fallback to legacy DES — unlike the AES-attempt branch below,
+                    // there is no ambiguity to resolve here.
+#pragma warning disable CS0618
+                    return DecryptStringLegacy(stringToDecrypt, encryptKey);
+#pragma warning restore CS0618
+
+                case DecryptRoute.AesAttempted:
+                default:
+                    // Try AES-256-CBC first. A successful decrypt (no CryptographicException) is
+                    // not by itself proof that encryptKey was the right key: see the class
+                    // remarks above and LooksLikePlaintext's remarks for why the result is
+                    // additionally screened before being trusted. Anything that fails either
+                    // check falls back to legacy DES, exactly as a hard AES failure always has.
+                    if (TryAesDecrypt(fullCipher!, encryptKey, out byte[] candidate) && LooksLikePlaintext(candidate))
+                    {
+                        return Encoding.UTF8.GetString(candidate);
+                    }
+
+#pragma warning disable CS0618
+                    return DecryptStringLegacy(stringToDecrypt, encryptKey);
+#pragma warning restore CS0618
+            }
+        }
+
+        /// <summary>
+        /// 回報 <see cref="DecryptString(string, string)"/> 對 <paramref name="cipherText"/>
+        /// 這段輸入實際會走哪一條解密路徑（見 <see cref="DecryptRoute"/>）。
+        /// <para>
+        /// <b>這個方法回答的是「<c>DecryptString</c> 會怎麼處理這段輸入」，不是「這段密文是用什麼
+        /// 演算法加密的」——後者無法單從密文本身判斷，這正是 issue #1085 這個 API 存在的原因。</b>
+        /// 判準與 <c>DecryptString</c> 內部實際使用的是同一份邏輯（共用私有的
+        /// <c>ClassifyDecryptRoute</c>），不是另外複製一份平行判斷，所以兩者不會漂移。
+        /// </para>
+        /// <para>
+        /// <b>典型用法</b>：下游應用程式想在啟動時，對設定檔中每一條已加密的連線字串做健檢，
+        /// 對「會走機率性 AES 嘗試路徑、而其中很可能其實是舊版 DES 密文」的項目提出警告
+        /// ——只有 <see cref="DecryptRoute.AesAttempted"/> 需要被這樣看待，因為那是唯一非確定性的
+        /// 分類；<see cref="DecryptRoute.LegacyDesShort"/> 雖然名字裡有 "LegacyDes"，
+        /// 但它的路徑是確定性的，不需要警告：
+        /// <code>
+        /// foreach (var (name, cipherText) in connectionStrings)
+        /// {
+        ///     if (Utils.GetDecryptRoute(cipherText) == DecryptRoute.AesAttempted)
+        ///     {
+        ///         // 這條會先嘗試 AES；如果它其實是（長度剛好 &gt;= 32 bytes 的）legacy DES
+        ///         // 密文，DecryptString 多半仍會正確退回 DES，但不保證——值得記錄以便追蹤。
+        ///         logger.LogWarning("{Name}: cipher text takes the probabilistic AES-attempt route", name);
+        ///     }
+        /// }
+        /// </code>
+        /// </para>
+        /// </summary>
+        /// <param name="cipherText">要分類的密文字串（與 <see cref="DecryptString(string, string)"/>
+        /// 的 <c>stringToDecrypt</c> 參數相同來源）</param>
+        /// <returns>DecryptString 會採用的解密路徑</returns>
+        public static DecryptRoute GetDecryptRoute(string? cipherText)
+        {
+            return ClassifyDecryptRoute(cipherText, out _);
+        }
+
+        /// <summary>
+        /// <see cref="DecryptString(string, string)"/> 與 <see cref="GetDecryptRoute(string?)"/>
+        /// 共用的單一判準來源：兩者都呼叫這個方法決定路徑，避免各自維護一份可能漂移的平行邏輯。
+        /// </summary>
+        /// <param name="stringToDecrypt">要分類的字串</param>
+        /// <param name="fullCipher">當回傳 <see cref="DecryptRoute.LegacyDesShort"/> 或
+        /// <see cref="DecryptRoute.AesAttempted"/> 時，Base64 解碼後的位元組；其餘情況為
+        /// <c>null</c>（呼叫端不需要、也不應該在其他分類下使用這個值）</param>
+        /// <returns>分類結果</returns>
+        private static DecryptRoute ClassifyDecryptRoute(string? stringToDecrypt, out byte[]? fullCipher)
+        {
             if (string.IsNullOrEmpty(stringToDecrypt))
             {
-                return "";
+                fullCipher = null;
+                return DecryptRoute.Empty;
             }
 
-            byte[] fullCipher;
             try
             {
                 fullCipher = Convert.FromBase64String(stringToDecrypt.Replace(" ", "+"));
             }
             catch (FormatException)
             {
-                return "";
+                fullCipher = null;
+                return DecryptRoute.NotBase64;
             }
 
-            // AES-256-CBC requires at least 16 bytes for IV + at least 16 bytes for one cipher
-            // block. Below that threshold this cannot possibly be AES-256-CBC ciphertext produced
-            // by EncryptString, so this remains a deterministic (not heuristic) fallback to legacy
-            // DES — unlike the AES-attempt branch below, there is no ambiguity to resolve here.
-            if (fullCipher.Length < 32)
-            {
-#pragma warning disable CS0618
-                return DecryptStringLegacy(stringToDecrypt, encryptKey);
-#pragma warning restore CS0618
-            }
-
-            // Try AES-256-CBC first. A successful decrypt (no CryptographicException) is not by
-            // itself proof that encryptKey was the right key: see the class remarks above and
-            // LooksLikePlaintext's remarks for why the result is additionally screened before
-            // being trusted. Anything that fails either check falls back to legacy DES, exactly as
-            // a hard AES failure always has.
-            if (TryAesDecrypt(fullCipher, encryptKey, out byte[] candidate) && LooksLikePlaintext(candidate))
-            {
-                return Encoding.UTF8.GetString(candidate);
-            }
-
-#pragma warning disable CS0618
-            return DecryptStringLegacy(stringToDecrypt, encryptKey);
-#pragma warning restore CS0618
+            return fullCipher.Length < 32 ? DecryptRoute.LegacyDesShort : DecryptRoute.AesAttempted;
         }
 
         /// <summary>

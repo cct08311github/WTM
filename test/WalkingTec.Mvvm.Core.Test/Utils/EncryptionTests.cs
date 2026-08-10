@@ -491,6 +491,79 @@ namespace WalkingTec.Mvvm.Core.Test.Utils
             WalkingTec.Mvvm.Core.Utils.LooksLikePlaintext(withNul).Should().BeFalse();
         }
 
+        // ─── GetDecryptRoute (issue #1085(b)) ─────────────────────────────────
+        //
+        // GetDecryptRoute exposes the same routing decision DecryptString makes
+        // internally (both call the private ClassifyDecryptRoute), so a downstream
+        // no longer has to reimplement its own — and possibly backwards — guess at
+        // "will this cipher text hit the probabilistic AES-attempt branch".
+
+        [TestMethod]
+        public void GetDecryptRoute_NullInput_ReturnsEmpty()
+        {
+            WalkingTec.Mvvm.Core.Utils.GetDecryptRoute(null).Should().Be(DecryptRoute.Empty);
+        }
+
+        [TestMethod]
+        public void GetDecryptRoute_EmptyStringInput_ReturnsEmpty()
+        {
+            WalkingTec.Mvvm.Core.Utils.GetDecryptRoute("").Should().Be(DecryptRoute.Empty);
+        }
+
+        [TestMethod]
+        public void GetDecryptRoute_NotValidBase64_ReturnsNotBase64()
+        {
+            // Space is normalized to '+' by DecryptString before decoding, so this needs a
+            // character that is invalid in Base64 even after that substitution.
+            WalkingTec.Mvvm.Core.Utils.GetDecryptRoute("this is not base64 at all !!!")
+                .Should().Be(DecryptRoute.NotBase64);
+        }
+
+        [TestMethod]
+        public void GetDecryptRoute_ShortLegacyDesCiphertext_ReturnsLegacyDesShort()
+        {
+            // "hi" DES-encrypts to a single 8-byte block, whose Base64 form decodes to well
+            // under 32 bytes — the deterministic (non-AES-attempt) branch.
+            string desEncrypted = EncryptWithLegacyDes("hi", "testkey1");
+
+            Convert.FromBase64String(desEncrypted).Length.Should().BeLessThan(32, "fixture sanity check");
+            WalkingTec.Mvvm.Core.Utils.GetDecryptRoute(desEncrypted).Should().Be(DecryptRoute.LegacyDesShort);
+        }
+
+        [TestMethod]
+        public void GetDecryptRoute_AesCiphertext_ReturnsAesAttempted()
+        {
+            var encrypted = WalkingTec.Mvvm.Core.Utils.EncryptString("x", "some-key");
+
+            Convert.FromBase64String(encrypted).Length.Should().BeGreaterThanOrEqualTo(32, "fixture sanity check");
+            WalkingTec.Mvvm.Core.Utils.GetDecryptRoute(encrypted).Should().Be(DecryptRoute.AesAttempted);
+        }
+
+        [TestMethod]
+        public void GetDecryptRoute_KnownEightPointXDesWireFormatVector_ReturnsAesAttempted()
+        {
+            // ─── This test's very existence is the documentation that GetDecryptRoute does
+            // NOT identify which algorithm a cipher text was encrypted with ───────────────
+            //
+            // This is the exact same hardcoded 8.x-era DES ciphertext pinned in
+            // EncryptString_LegacyDesAlgorithm_MatchesKnownEightPointXWireFormat above: a
+            // genuine DES ciphertext (produced by a real 6.3.27-equivalent DES encryption,
+            // not AES) that happens to decode to 72 bytes — >= the 32-byte threshold. So
+            // DecryptRoute.AesAttempted is the correct answer here even though the input is
+            // unambiguously DES, not AES: AesAttempted means "DecryptString will try AES
+            // first on this input", never "this cipher text is AES-encrypted". A caller that
+            // reads AesAttempted as "confirmed AES" has the API backwards.
+            const string knownEightPointXDesCiphertext =
+                "9zeL1CgUzLOwsWubQKgUvRVgUwX+854Q58nCGSzegsWbWBS1NFmxzHxL2Ta9jsH7vAs52mffmriLn6Bx5UzEsRuNZ3FBiWad";
+
+            Convert.FromBase64String(knownEightPointXDesCiphertext).Length.Should().BeGreaterThanOrEqualTo(32, "fixture sanity check");
+            WalkingTec.Mvvm.Core.Utils.GetDecryptRoute(knownEightPointXDesCiphertext)
+                .Should().Be(DecryptRoute.AesAttempted,
+                    "a >= 32-byte DES ciphertext still routes through the probabilistic AES-attempt " +
+                    "branch — GetDecryptRoute reports the route DecryptString takes, not the algorithm " +
+                    "the cipher text was actually produced with");
+        }
+
         // ─── Helper: encrypt with legacy DES (mirrors old EncryptString) ─────
 
         private static string EncryptWithLegacyDes(string plaintext, string key)
