@@ -766,7 +766,15 @@ namespace WalkingTec.Mvvm.Core
         }
 
         /// <summary>
-        /// 使用 AES-256-CBC 解密字串。若 AES 解密失敗，自動嘗試舊版 DES 解密（向後相容）。
+        /// 使用 AES-256-CBC 解密字串。若 AES 解密拋出例外，或解密結果未通過
+        /// <see cref="LooksLikePlaintext(byte[])"/> 的明文合理性檢查，自動嘗試舊版 DES 解密（向後相容）。
+        /// <para>
+        /// 背景：僅以「AES 是否拋出例外」判斷是否該退回 DES 並不足夠——PKCS7 unpadding 在用錯誤金鑰／IV
+        /// 解密時，仍有機率（約每 256 次一次；若再排除長度不是 16 倍數的密文，實際約每 512 次一次）
+        /// 「碰巧」通過 padding 檢查而不拋例外，此時會回傳一段呼叫端無法與正確解密結果區分的亂碼。
+        /// 因此本方法額外要求 AES 解密結果通過 <see cref="LooksLikePlaintext(byte[])"/> 的啟發式檢查才會被採用；
+        /// 這個檢查同樣不是密碼學保證，只是把上述機率再降低，殘餘機率並未歸零，詳見該方法的說明。
+        /// </para>
         /// </summary>
         /// <param name="stringToDecrypt">要解密的字串（Base64 編碼）</param>
         /// <param name="encryptKey">解密金鑰</param>
@@ -778,24 +786,60 @@ namespace WalkingTec.Mvvm.Core
                 return "";
             }
 
-            // Try AES-256-CBC first
+            byte[] fullCipher;
             try
             {
-                byte[] fullCipher = Convert.FromBase64String(stringToDecrypt.Replace(" ", "+"));
+                fullCipher = Convert.FromBase64String(stringToDecrypt.Replace(" ", "+"));
+            }
+            catch (FormatException)
+            {
+                return "";
+            }
 
-                // AES-256-CBC requires at least 16 bytes for IV + at least 16 bytes for one cipher block
-                if (fullCipher.Length < 32)
-                {
+            // AES-256-CBC requires at least 16 bytes for IV + at least 16 bytes for one cipher
+            // block. Below that threshold this cannot possibly be AES-256-CBC ciphertext produced
+            // by EncryptString, so this remains a deterministic (not heuristic) fallback to legacy
+            // DES — unlike the AES-attempt branch below, there is no ambiguity to resolve here.
+            if (fullCipher.Length < 32)
+            {
 #pragma warning disable CS0618
-                    return DecryptStringLegacy(stringToDecrypt, encryptKey);
+                return DecryptStringLegacy(stringToDecrypt, encryptKey);
 #pragma warning restore CS0618
-                }
+            }
 
-                byte[] iv = new byte[16];
-                byte[] cipherBytes = new byte[fullCipher.Length - 16];
-                Buffer.BlockCopy(fullCipher, 0, iv, 0, 16);
-                Buffer.BlockCopy(fullCipher, 16, cipherBytes, 0, cipherBytes.Length);
+            // Try AES-256-CBC first. A successful decrypt (no CryptographicException) is not by
+            // itself proof that encryptKey was the right key: see the class remarks above and
+            // LooksLikePlaintext's remarks for why the result is additionally screened before
+            // being trusted. Anything that fails either check falls back to legacy DES, exactly as
+            // a hard AES failure always has.
+            if (TryAesDecrypt(fullCipher, encryptKey, out byte[] candidate) && LooksLikePlaintext(candidate))
+            {
+                return Encoding.UTF8.GetString(candidate);
+            }
 
+#pragma warning disable CS0618
+            return DecryptStringLegacy(stringToDecrypt, encryptKey);
+#pragma warning restore CS0618
+        }
+
+        /// <summary>
+        /// 嘗試以 AES-256-CBC 解密 <paramref name="fullCipher"/>（前 16 bytes 為 IV，其餘為密文）。
+        /// 呼叫端須保證 <c>fullCipher.Length &gt;= 32</c>。
+        /// </summary>
+        /// <param name="fullCipher">IV（16 bytes）+ 密文</param>
+        /// <param name="encryptKey">解密金鑰</param>
+        /// <param name="candidate">解密並完成 PKCS7 unpadding 後的位元組；解密失敗時為空陣列</param>
+        /// <returns>是否在沒有拋出 <see cref="CryptographicException"/> 的情況下完成解密——
+        /// 不代表 <paramref name="candidate"/> 就是正確的原始明文，僅代表 AES 本身沒有偵測到錯誤。</returns>
+        private static bool TryAesDecrypt(byte[] fullCipher, string encryptKey, out byte[] candidate)
+        {
+            byte[] iv = new byte[16];
+            byte[] cipherBytes = new byte[fullCipher.Length - 16];
+            Buffer.BlockCopy(fullCipher, 0, iv, 0, 16);
+            Buffer.BlockCopy(fullCipher, 16, cipherBytes, 0, cipherBytes.Length);
+
+            try
+            {
                 using var aes = CreateAes(encryptKey);
                 aes.IV = iv;
 
@@ -806,7 +850,8 @@ namespace WalkingTec.Mvvm.Core
                 {
                     cryptoStream.Write(cipherBytes, 0, cipherBytes.Length);
                     cryptoStream.FlushFinalBlock();
-                    return UTF8Encoding.UTF8.GetString(decryptStream.ToArray());
+                    candidate = decryptStream.ToArray();
+                    return true;
                 }
                 finally
                 {
@@ -816,15 +861,52 @@ namespace WalkingTec.Mvvm.Core
             }
             catch (CryptographicException)
             {
-                // AES failed — fall back to legacy DES decryption for migration period
-#pragma warning disable CS0618
-                return DecryptStringLegacy(stringToDecrypt, encryptKey);
-#pragma warning restore CS0618
+                candidate = [];
+                return false;
             }
-            catch (FormatException)
+        }
+
+        /// <summary>
+        /// 啟發式檢查一段位元組是否「像」合法的解密明文。
+        /// <para>
+        /// <b>這仍然是啟發式判斷，不是密碼學保證，殘餘的誤判機率並未歸零。</b>
+        /// 目前的判準是：(1) 整段位元組必須是合法的 UTF-8 編碼；(2) 解碼後的字元中，除了
+        /// <c>\t</c>／<c>\r</c>／<c>\n</c> 之外不得含有其他控制字元。用錯誤金鑰／IV 解密任意密文，
+        /// 剛好解出一段通過以上兩項檢查的位元組序列，機率遠低於「單純沒有拋出例外」，但不是零——
+        /// 呼叫端（<see cref="DecryptString"/>）把這個方法的「通過」當成比完全不檢查更可信的信號使用，
+        /// 不能當成已排除誤判的證明。
+        /// </para>
+        /// </summary>
+        /// <param name="candidate">要檢查的位元組（AES 解密並完成 unpadding 後、尚未轉字串前）</param>
+        /// <returns>是否通過啟發式明文檢查</returns>
+        internal static bool LooksLikePlaintext(byte[] candidate)
+        {
+            if (candidate.Length == 0)
             {
-                return "";
+                // Decrypting to an empty string is a legitimate outcome (EncryptString("") returns
+                // "" before ever reaching the cipher, but a *non-empty* AES ciphertext can still
+                // legitimately decrypt to an empty payload), so this does not count against it.
+                return true;
             }
+
+            if (!System.Text.Unicode.Utf8.IsValid(candidate))
+            {
+                return false;
+            }
+
+            // candidate is now known to be well-formed UTF-8, so this GetString cannot lossily
+            // substitute U+FFFD replacement characters the way a non-strict decode of invalid
+            // input would.
+            string text = Encoding.UTF8.GetString(candidate);
+            foreach (char c in text)
+            {
+                if (char.IsControl(c) && c != '\t' && c != '\r' && c != '\n')
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         /// <summary>

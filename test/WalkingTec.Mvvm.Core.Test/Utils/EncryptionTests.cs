@@ -343,6 +343,154 @@ namespace WalkingTec.Mvvm.Core.Test.Utils
             WalkingTec.Mvvm.Core.Utils.DecryptString(expectedCiphertext, key).Should().Be(plaintext);
         }
 
+        // ─── Issue #1085(a): AES "succeeds without throwing but is not really the
+        // plaintext" must still fall back to legacy DES, not return garbage ──────
+        //
+        // Before this fix, DecryptString's only fallback trigger was a thrown
+        // CryptographicException. PKCS7 unpadding validation only re-checks the
+        // padding-count byte against itself when that count is 1 (there is nothing
+        // else to compare), so any ciphertext block whose *decrypted* last byte
+        // happens to be 0x01 unpads "successfully" no matter what the other 15
+        // bytes are. That lets a wrong-key AES decrypt complete without exception
+        // while returning bytes that are not the real plaintext at all.
+
+        [TestMethod]
+        public void DecryptString_AesUnpadsWithoutExceptionButOutputIsNotPlaintext_FallsBackToLegacyDes()
+        {
+            // Deterministic construction (not a statistical 1/512 one) of "AES-256-CBC
+            // decrypts without throwing, but the output is not plaintext": pick an IV and a
+            // desired decrypted block (15 bytes of 0xFF — never a valid UTF-8 lead byte —
+            // followed by a 0x01 PKCS7 padding marker, which is always accepted on its own).
+            // Then derive the one ciphertext block that decrypts to that value under the
+            // known AES key DecryptString will use, via a raw single-block ECB encrypt
+            // (CBC-decrypt(C) = ECB-decrypt(C) XOR previous-block-or-IV, so
+            // C = ECB-encrypt(desiredPlaintext XOR IV) is the block whose CBC decryption is
+            // exactly desiredPlaintext).
+            var key = "positive-evidence-key";
+            byte[] aesKey = SHA256.HashData(Encoding.UTF8.GetBytes(key));
+
+            byte[] iv = new byte[16]; // arbitrary, fully test-controlled — no secret involved
+            byte[] desiredPlaintextBlock = new byte[16];
+            for (int i = 0; i < 15; i++)
+            {
+                desiredPlaintextBlock[i] = 0xFF; // 0xFF is never a valid UTF-8 byte at all
+            }
+            desiredPlaintextBlock[15] = 0x01; // PKCS7 "remove last 1 byte" — self-certifying
+
+            byte[] xored = new byte[16];
+            for (int i = 0; i < 16; i++)
+            {
+                xored[i] = (byte)(desiredPlaintextBlock[i] ^ iv[i]);
+            }
+
+            byte[] cipherBlock;
+            using (var ecb = Aes.Create())
+            {
+                ecb.Mode = CipherMode.ECB;
+                ecb.Padding = PaddingMode.None;
+                ecb.Key = aesKey;
+                using var encryptor = ecb.CreateEncryptor();
+                cipherBlock = encryptor.TransformFinalBlock(xored, 0, xored.Length);
+            }
+
+            byte[] fullCipher = new byte[32];
+            Buffer.BlockCopy(iv, 0, fullCipher, 0, 16);
+            Buffer.BlockCopy(cipherBlock, 0, fullCipher, 16, 16);
+            var craftedCiphertext = Convert.ToBase64String(fullCipher);
+
+            // Sanity-check the fixture's premise directly: the raw candidate this
+            // construction produces (15x 0xFF after PKCS7 unpadding removes the trailing
+            // 0x01) is not valid UTF-8, so LooksLikePlaintext must reject it.
+            byte[] rawCandidate = new byte[15];
+            for (int i = 0; i < 15; i++)
+            {
+                rawCandidate[i] = 0xFF;
+            }
+            WalkingTec.Mvvm.Core.Utils.LooksLikePlaintext(rawCandidate).Should().BeFalse(
+                "15 bytes of 0xFF is never valid UTF-8");
+
+            // DecryptString must fall back to legacy DES exactly as it would for
+            // ciphertext AES could never decode — not return the AES garbage — so it must
+            // match calling DecryptStringLegacy on the same input independently.
+#pragma warning disable CS0618
+            var expectedLegacyResult = WalkingTec.Mvvm.Core.Utils.DecryptStringLegacy(craftedCiphertext, key);
+#pragma warning restore CS0618
+            var actual = WalkingTec.Mvvm.Core.Utils.DecryptString(craftedCiphertext, key);
+
+            actual.Should().Be(expectedLegacyResult,
+                "AES unpadded without throwing but produced non-plaintext bytes, so DecryptString " +
+                "must fall back to legacy DES exactly as DecryptStringLegacy would resolve it directly, " +
+                "instead of returning the garbage AES bytes");
+        }
+
+        // ─── LooksLikePlaintext, exercised directly (internal, via InternalsVisibleTo) ──
+        //
+        // Complements the deterministic end-to-end test above by pinning the heuristic's
+        // actual decision boundary: valid UTF-8 without disallowed control bytes passes;
+        // invalid UTF-8 and disallowed control bytes are rejected; tab/CR/LF are allowed;
+        // an empty candidate passes (a legitimate AES decrypt of a non-empty ciphertext can
+        // still yield an empty plaintext).
+
+        [TestMethod]
+        public void LooksLikePlaintext_EmptyArray_ReturnsTrue()
+        {
+            WalkingTec.Mvvm.Core.Utils.LooksLikePlaintext(Array.Empty<byte>()).Should().BeTrue();
+        }
+
+        [TestMethod]
+        public void LooksLikePlaintext_ValidUtf8Ascii_ReturnsTrue()
+        {
+            WalkingTec.Mvvm.Core.Utils.LooksLikePlaintext(Encoding.UTF8.GetBytes("connection string looking text"))
+                .Should().BeTrue();
+        }
+
+        [TestMethod]
+        public void LooksLikePlaintext_ValidUtf8MultiByte_ReturnsTrue()
+        {
+            // Chinese text + an emoji (4-byte UTF-8 sequence)
+            WalkingTec.Mvvm.Core.Utils.LooksLikePlaintext(Encoding.UTF8.GetBytes("中文測試🔐"))
+                .Should().BeTrue();
+        }
+
+        [TestMethod]
+        public void LooksLikePlaintext_TabCrLf_AreAllowed()
+        {
+            WalkingTec.Mvvm.Core.Utils.LooksLikePlaintext(Encoding.UTF8.GetBytes("line1\tcol\r\nline2"))
+                .Should().BeTrue();
+        }
+
+        [TestMethod]
+        public void LooksLikePlaintext_InvalidUtf8Bytes_ReturnsFalse()
+        {
+            // 0xFF is not a valid UTF-8 byte anywhere in a sequence.
+            byte[] invalid = [0xFF, 0xFE, 0xFD, 0xFC];
+            WalkingTec.Mvvm.Core.Utils.LooksLikePlaintext(invalid).Should().BeFalse();
+        }
+
+        [TestMethod]
+        public void LooksLikePlaintext_LoneContinuationByte_ReturnsFalse()
+        {
+            // 0x80 is a UTF-8 continuation byte and is never valid as a standalone byte.
+            byte[] invalid = [0x80, 0x41, 0x42];
+            WalkingTec.Mvvm.Core.Utils.LooksLikePlaintext(invalid).Should().BeFalse();
+        }
+
+        [TestMethod]
+        public void LooksLikePlaintext_TruncatedMultiByteSequence_ReturnsFalse()
+        {
+            // 0xE4 0xB8 starts a valid 3-byte sequence but is missing its final byte.
+            byte[] invalid = [0xE4, 0xB8];
+            WalkingTec.Mvvm.Core.Utils.LooksLikePlaintext(invalid).Should().BeFalse();
+        }
+
+        [TestMethod]
+        public void LooksLikePlaintext_NonTabCrLfControlChar_ReturnsFalse()
+        {
+            // NUL byte: valid single-byte UTF-8, but a disallowed control character.
+            byte[] withNul = [(byte)'a', 0x00, (byte)'b'];
+            WalkingTec.Mvvm.Core.Utils.LooksLikePlaintext(withNul).Should().BeFalse();
+        }
+
         // ─── Helper: encrypt with legacy DES (mirrors old EncryptString) ─────
 
         private static string EncryptWithLegacyDes(string plaintext, string key)
