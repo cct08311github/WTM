@@ -396,10 +396,25 @@ namespace WalkingTec.Mvvm.Mvc
         /// dotted paths using only a getter to traverse each hop — a <c>get</c>-only property is
         /// not protection, since the write lands on the live object the getter returns. Unless
         /// <see cref="Configs.EnforceRequestBindingScope"/> is explicitly set to <c>false</c>,
-        /// each key is checked against <see cref="RequestBindingPolicy.IsPathAllowed(object, string, string)"/>
-        /// before being written; a rejected key is skipped (not written) and logged at Warning
-        /// level with the key sanitized via <see cref="LogSanitizer"/>. See the CHANGELOG's #867
-        /// entry for the exploit chain this closes.
+        /// each key is checked against <see cref="RequestBindingPolicy.Classify(object, string, string)"/>
+        /// before being written; a rejected key is skipped (not written). See the CHANGELOG's
+        /// #867 entry for the exploit chain this closes.
+        /// <para>
+        /// <b>Issue #1080: logging is split by rejection reason.</b> Every rejection reason
+        /// except <see cref="BindingRejectionReason.NoWritableTarget"/> is logged at Warning,
+        /// naming the reason, with the key sanitized via <see cref="LogSanitizer"/> — unchanged
+        /// in spirit from #867, just now explicit about WHY. <see cref="BindingRejectionReason.NoWritableTarget"/>
+        /// is logged at Debug instead: it is the one rejection class
+        /// <see cref="RequestBindingPolicy.Classify(Type, string, string)"/>'s own doc comment
+        /// proves can never write anything (<c>PropertyHelper.cs:554-557</c> returns without
+        /// writing regardless of which candidate type the real traversal froze at). An ordinary
+        /// LayUI grid paging request rejects several framework transport keys this way on every
+        /// normal request (<c>_DONOT_USE_CS</c>, <c>_DONOT_USE_VMNAME</c>,
+        /// <c>__RequestVerificationToken</c>, <c>page</c>, <c>limit</c>, …), and logging all of
+        /// those at Warning trained operators to ignore a security-relevant logger, burying the
+        /// rejections that actually matter. The SET of rejected keys is unchanged by this; only
+        /// the log level for this one provably-safe reason is.
+        /// </para>
         /// </remarks>
         /// <param name="vm">ViewModel</param>
         /// <param name="prefix">prefix</param>
@@ -411,14 +426,33 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 BaseVM bvm = vm as BaseVM;
                 bool enforceScope = ConfigInfo?.EnforceRequestBindingScope != false;
+                ILogger logger = null;
                 foreach (var item in bvm.FC.Keys)
                 {
-                    if (enforceScope && !RequestBindingPolicy.IsPathAllowed(vm, item, prefix))
+                    if (enforceScope)
                     {
-                        Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseController")
-                            ?.LogWarning("RedoUpdateModel rejected out-of-scope binding key '{Key}' for VM type {VmType} (Configs.EnforceRequestBindingScope)",
-                                LogSanitizer.Sanitize(item), vm.GetType().Name);
-                        continue;
+                        var reason = RequestBindingPolicy.Classify(vm, item, prefix);
+                        if (reason != BindingRejectionReason.None)
+                        {
+                            // Resolved lazily on first need and reused for the rest of the loop —
+                            // the DI lookup used to run once PER rejected key, and a single normal
+                            // LayUI grid request rejects several (#1080).
+                            logger ??= Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("BaseController");
+                            if (reason == BindingRejectionReason.NoWritableTarget)
+                            {
+                                if (logger != null && logger.IsEnabled(LogLevel.Debug))
+                                {
+                                    logger.LogDebug("RedoUpdateModel skipped binding key '{Key}' for VM type {VmType}: {Reason} (Configs.EnforceRequestBindingScope; provably no write could land)",
+                                        LogSanitizer.Sanitize(item), vm.GetType().Name, reason);
+                                }
+                            }
+                            else
+                            {
+                                logger?.LogWarning("RedoUpdateModel rejected out-of-scope binding key '{Key}' for VM type {VmType}: {Reason} (Configs.EnforceRequestBindingScope)",
+                                    LogSanitizer.Sanitize(item), vm.GetType().Name, reason);
+                            }
+                            continue;
+                        }
                     }
                     PropertyHelper.SetPropertyValue(vm, item, bvm.FC[item], prefix, true);
                 }

@@ -1,10 +1,10 @@
 diff --git a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
-index 03a63e932..39a0c6304 100644
+index 8b5813a5f..77c0b2b14 100644
 --- a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
 +++ b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
-@@ -235,7 +235,11 @@ namespace WalkingTec.Mvvm.Core
-                     // (which would also have to be kept in lockstep with PropertyHelper forever).
-                     return false;
+@@ -372,7 +372,11 @@ namespace WalkingTec.Mvvm.Core
+                     }
+                     return BindingRejectionReason.NoWritableTarget;
                  }
 -                if (members.Length > 1)
 +                // MUTANT test/mutants wtmsec867-ambiguous-resolution-guard-neutralize: condition

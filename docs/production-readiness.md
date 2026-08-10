@@ -2287,6 +2287,103 @@ run 6509 因此死於 `Error 945`（insufficient system memory）。
 
 ---
 
+## `RedoUpdateModel` 綁定拒絕改依原因分流日誌等級，一個安全 logger 不再對正常請求持續產生 Warning（#1080，2026-08-10）
+
+### 問題
+
+`Configs.EnforceRequestBindingScope` 自 v10.22.0（#867）起預設為 `true`，
+`BaseController.RedoUpdateModel`／`BaseApiController.RedoUpdateModel` 對每一個被
+`RequestBindingPolicy.IsPathAllowed` 拒絕的 key 都記一筆 `LogWarning`。但一般 LayUI 表格
+分頁請求本身就帶有多個框架傳輸用的 key（`_DONOT_USE_CS`、`_DONOT_USE_VMNAME`、
+`__RequestVerificationToken`、`page`、`limit` 等），這些從來不是任何 VM 屬性——於是每一次
+「正常」的分頁請求都會產生數筆 Warning。這是一支安全性質的 logger：長期在正常流量下噴出
+Warning 會訓練維運人員忽略它，真正的越界綁定嘗試反而被埋沒。
+
+### 修法：按拒絕原因分流，不是名單、也不是關掉控制
+
+`RequestBindingPolicy.cs` 既有的類別註解已經解釋過為什麼這裡不能用「已知傳輸 key 名單」——
+那本質上是一份戴著允許清單外皮的拒絕清單，會隨框架/下游 VM 演進而漂移。這次修法沒有走那條
+路，也沒有改動 `Configs.EnforceRequestBindingScope` 的預設值，沒有加任何新的 opt-out 設定。
+
+新增公開列舉 `WalkingTec.Mvvm.Core.BindingRejectionReason`
+（`src/WalkingTec.Mvvm.Core/Support/BindingRejectionReason.cs`）：`None`、`PathTooDeep`、
+`NoWritableTarget`、`UnresolvedIntermediateSegment`、`AmbiguousMember`、`StaticMember`、
+`GatewayType`。`RequestBindingPolicy` 新增 `Classify(object?, string?, string?)`／
+`Classify(Type?, string?, string?)`，是唯一實作走訪邏輯的地方；既有的兩個 `IsPathAllowed`
+overload 改成純委派——`Classify(...) == BindingRejectionReason.None`——不再有第二份平行
+實作（本檔自己的類別註解記載過重複準則會漂移的先例，這裡刻意避開同一個失敗模式）。
+
+**拒絕集合完全沒變。** `RequestBindingPolicyTests867.cs` 原本的 31 條測試零修改、全數維持
+通過——`git diff --stat` 對這個測試檔只顯示 175 insertions / 0 deletions，沒有刪掉或改寫
+任何一行既有測試，這是拒絕集合沒有移動的證據。
+
+### `NoWritableTarget`：唯一可證明「不可能寫入」的那一類
+
+只有一個原因會被降級成 `LogDebug`（並用 `logger.IsEnabled(LogLevel.Debug)` 守衛，Debug
+關閉時不付出成本）：`NoWritableTarget`。判準是——最後一段路徑，對
+`PropertyHelper.SetPropertyValue` 自己的走訪迴圈（`PropertyHelper.cs:523-551`）**可能凍結
+走訪型別的每一個候選型別**（來源型別本身，加上每一個完全通過檢查、成功前進的中繼段落型別）
+都解析不到任何成員。因為不論真實（依賴執行期物件圖的）走訪實際凍結在哪一個候選型別，
+`tempType.GetMember(level.Last())` 在那裡也一樣是空集合，`PropertyHelper.cs:554-557`
+（`if (!memberInfos.Any()) { return; }`）保證直接回傳、不寫入任何東西。
+
+其餘所有原因（含 `UnresolvedIntermediateSegment`——中繼段落沒解析到任何成員，或最後一段
+只在鏈上較淺的型別上有同名成員）維持 `LogWarning`，訊息中帶出原因字串。
+
+### 用測試釘住「不能被靜默」的形狀，不只是釘住「應該被靜默」的形狀
+
+- `Classify_LayUiTransportKeys_ReturnNoWritableTarget`：對真實 VM 型別驗證
+  `_DONOT_USE_CS`／`_DONOT_USE_VMNAME`／`__RequestVerificationToken`／`page`／`limit`
+  這五個 key 都分類成 `NoWritableTarget`。
+- **關鍵測試**
+  `Classify_MissingIntermediateSegmentThenStaticFinal_ReturnsUnresolvedIntermediateSegment_NotNoWritableTarget`：
+  `"Missing.StaticSecret"` 這個 key——本檔既有測試
+  `MissingIntermediateSegment_ActuallyWritesFinalSegmentOnVm_WhenPolicyIsIgnored` 已經證明過，
+  繞過本政策時真的會把 `StaticSecret` 寫到 VM 上——必須分類成 `UnresolvedIntermediateSegment`，
+  不能是 `NoWritableTarget`。若這條測試哪天綠在 `NoWritableTarget` 上，代表這次修法把一個
+  已證實的真事件靜音了。
+- `Classify_LastSegmentUnresolvedAgainstDeepestType_ButResolvesAgainstShallowerType_ReturnsUnresolvedIntermediateSegment`：
+  建構「最後一段對最深型別解析不到成員，但對鏈上較淺型別（來源型別本身）解析得到」的形狀，
+  驗證仍分類成 `UnresolvedIntermediateSegment`——規格要求的第三條測試，可以照規格建構出來，
+  不需要另外聲明構造不出的情況。
+- `Classify_FourSegmentPath_ReturnsPathTooDeep`／
+  `Classify_FieldHiddenByPropertyOfSameName_ReturnsAmbiguousMember`／
+  `Classify_PublicStaticField_ReturnsStaticMember`／`Classify_BareWtm_ReturnsGatewayType`：
+  重用既有測試已經信任過的輸入，把每個既有拒絕原因錨定到 `Classify` 對應的列舉值。
+- `Classify_And_IsPathAllowed_NeverDisagree_AcrossAllReasonMappingInputs`：對上面全部輸入
+  （含幾個既有的允許案例）逐一斷言 `IsPathAllowed(x) == (Classify(x) == BindingRejectionReason.None)`，
+  證明委派沒有讓兩者產生分歧。
+
+### 兩個 controller 都改了
+
+`BaseController.RedoUpdateModel` 與 `BaseApiController.RedoUpdateModel`（各自獨立，兩者不
+共用基底類別）都套用同一套分流邏輯，並把
+`Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger(...)` 這個 DI 查找從
+「每個被拒絕的 key 都查一次」改成「迴圈內第一次需要時才查、之後重複使用同一個 logger
+實例」——logger 類別字串（`"BaseController"`／`"BaseApiController"`）沒有變。`enforceScope`
+的短路語意維持不變：`enforceScope` 為 `false` 時完全不會呼叫 `Classify`。
+
+### 驗證
+
+`dotnet build`（Core + Mvc）0 error；`dotnet test test/WalkingTec.Mvvm.Core.Test` 過濾
+`RequestBindingPolicy` 全數 39 條通過（31 條既有零修改 + 8 條新增）；
+`test/WalkingTec.Mvvm.Core.Test` 全專案不加過濾跑過 5220 條全數通過；
+`test/WalkingTec.Mvvm.Api.Test` 過濾 `RequestBindingScopeHttpTests867`（既有端到端 HTTP 層
+測試，驗證真實 exploit 仍被擋下）5 條全數通過，確認兩個 controller 的改動沒有破壞既有的
+越界綁定防護。
+
+### 這次沒有做、也不宣稱的事
+
+- 不宣稱拒絕集合有任何變化——只有記錄嚴重度變了，而且只變了 `NoWritableTarget` 這一類。
+- 不宣稱新增了任何設定選項或關閉了任何既有控制；`Configs.EnforceRequestBindingScope` 的
+  預設值與短路語意都沒有動。
+- 不是一個 BREAKING 變更：`IsPathAllowed` 的公開簽章沒有變化，行為完全相同，只是內部實作
+  改成委派給新的 `Classify`。
+- 不宣稱本次工作階段驗證過真正的 Gitea Actions CI 行為——驗證方式全部是本機
+  `dotnet build`／`dotnet test`。
+
+---
+
 ## 安全姿態（2026-07 重評）
 
 整體方向是**縱深強化**。本批次曾**誠實揭露一個真實缺口**（#876：ETL controller 從未接到全域 filter），寫驗收測試當下就地立案並在同一輪修復——過程本身正是為什麼「測試 pass + 漏洞掃 0」不是 production-ready 的全部證據：這個缺口不是掃描器或既有測試找到的，是寫一個新測試、實測觀察真實 HTTP 行為才浮現。

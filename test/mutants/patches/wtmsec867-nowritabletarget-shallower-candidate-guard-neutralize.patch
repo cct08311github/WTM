@@ -1,0 +1,22 @@
+diff --git a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
+index 8b5813a5f..b2da70c21 100644
+--- a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
++++ b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
+@@ -361,9 +361,16 @@ namespace WalkingTec.Mvvm.Core
+                     // PropertyHelper.cs:554-557 (`if (!memberInfos.Any()) { return; }`) returns
+                     // without writing anything — the only rejection this method can prove is a
+                     // true no-op. See BindingRejectionReason.NoWritableTarget's own doc comment.
++                    // MUTANT test/mutants wtmsec867-nowritabletarget-shallower-candidate-guard-neutralize:
++                    // condition neutralized (compile-preserving `&& false`) so the last segment is
++                    // never checked against any SHALLOWER candidate type in traversalTypes -- only
++                    // the already-failed deepest-type lookup above counts, so this returns
++                    // NoWritableTarget whenever the last segment fails to resolve against the
++                    // deepest type alone, even when it resolves against a shallower one. See
++                    // test/mutants/entries/wtmsec867-nowritabletarget-shallower-candidate-guard-neutralize.json.
+                     foreach (var candidate in traversalTypes)
+                     {
+-                        if (candidate.GetMember(segment).Length > 0)
++                        if (candidate.GetMember(segment).Length > 0 && false)
+                         {
+                             // Resolves against a SHALLOWER type in the chain — a frozen-type write
+                             // there is possible, so this must stay just as loud as case (1) above.

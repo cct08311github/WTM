@@ -576,5 +576,180 @@ namespace WalkingTec.Mvvm.Core.Test.Helper
             Assert.IsTrue(RequestBindingPolicy.IsPathAllowed(vm, "Remark"));
             Assert.IsTrue(RequestBindingPolicy.IsPathAllowed(vm, "ActionName"));
         }
+
+        // ── Issue #1080: Classify's reason split (RequestBindingPolicy.Classify) ─────────
+        //
+        // #1080's whole point: Configs.EnforceRequestBindingScope defaulting to true means an
+        // ordinary LayUI grid paging POST rejects several framework transport keys that are not
+        // VM properties at all, and RedoUpdateModel used to log a Warning for every one of them,
+        // on every normal request. These tests pin the ONE rejection reason
+        // (BindingRejectionReason.NoWritableTarget) that is safe to log at Debug instead, and —
+        // just as importantly — pin several shapes that must NOT collapse into it. None of these
+        // change the REJECTED SET: every existing IsPathAllowed test above is unmodified and must
+        // stay green exactly as written; that is the evidence the set did not move.
+
+        [TestMethod]
+        public void Classify_LayUiTransportKeys_ReturnNoWritableTarget()
+        {
+            // Each of these is a real key WTMContext.CreateVM/RedoUpdateModel sees on an ordinary
+            // LayUI grid paging request but which is not a FixtureVM property at all. Each is a
+            // single segment that resolves to zero members on FixtureVM — with no intermediate
+            // hop, the traversal-type candidate list is just { typeof(FixtureVM) } itself, so
+            // "does the last segment resolve against any candidate" is answered by the very same
+            // zero-member lookup that put us in this branch. PropertyHelper.cs:554-557 provably
+            // returns without writing — this is the ONE reason RedoUpdateModel may log at Debug
+            // instead of Warning.
+            var vm = new FixtureVM();
+            foreach (var key in new[] { "_DONOT_USE_CS", "_DONOT_USE_VMNAME", "__RequestVerificationToken", "page", "limit" })
+            {
+                Assert.AreEqual(BindingRejectionReason.NoWritableTarget, RequestBindingPolicy.Classify(vm, key),
+                    $"Transport key '{key}' must classify as NoWritableTarget so RedoUpdateModel can " +
+                    "log it at Debug instead of Warning — PropertyHelper.SetPropertyValue provably " +
+                    "cannot write anything for a single unresolved segment.");
+            }
+        }
+
+        [TestMethod]
+        public void Classify_MissingIntermediateSegmentThenStaticFinal_ReturnsUnresolvedIntermediateSegment_NotNoWritableTarget()
+        {
+            // THE CRITICAL TEST. "Missing.StaticSecret" is the EXACT key
+            // MissingIntermediateSegment_ActuallyWritesFinalSegmentOnVm_WhenPolicyIsIgnored (above
+            // in this file) proves really DOES write StaticSecret onto the VM when this policy is
+            // ignored — a proven write, not a hypothetical one. If this assertion ever starts
+            // seeing NoWritableTarget instead, the #1080 fix has silenced a REAL event: it would
+            // downgrade BaseController/BaseApiController's RedoUpdateModel logging for this exact
+            // bypass from Warning to Debug, which is precisely the outcome this fix must never
+            // produce.
+            var vm = new FixtureVM();
+            Assert.AreEqual(BindingRejectionReason.UnresolvedIntermediateSegment,
+                RequestBindingPolicy.Classify(vm, "Missing.StaticSecret"),
+                "Must stay UnresolvedIntermediateSegment (logged loud, at Warning) — never " +
+                "NoWritableTarget — because MissingIntermediateSegment_ActuallyWritesFinalSegmentOnVm_" +
+                "WhenPolicyIsIgnored already proves this exact key writes through to StaticSecret.");
+        }
+
+        // Fixture for the "last segment resolves against a SHALLOWER type in the chain, not the
+        // deepest one" shape: "Hop" resolves cleanly (unique, non-static, non-gateway), so
+        // DeepHopTarget joins the traversal-type candidate list alongside the source type
+        // itself. "Shared" then fails to resolve against DeepHopTarget (the deepest/current
+        // type) but DOES resolve against ShallowChainSharedNameVM (the source type, shallower in
+        // the chain).
+        private class DeepHopTarget
+        {
+            // Deliberately has no member named "Shared" — this is what makes "Hop.Shared" fail to
+            // resolve against the DEEPEST traversal type.
+            public string? OtherProp { get; set; }
+        }
+
+        private class ShallowChainSharedNameVM : BaseVM
+        {
+            // Exists directly on the SOURCE type (depth 0) — NOT on DeepHopTarget (depth 1).
+            public string? Shared = "vm-level-shared";
+            public DeepHopTarget Hop { get; set; } = new();
+        }
+
+        [TestMethod]
+        public void Classify_LastSegmentUnresolvedAgainstDeepestType_ButResolvesAgainstShallowerType_ReturnsUnresolvedIntermediateSegment()
+        {
+            // Per PropertyHelper.SetPropertyValue's own intermediate loop (PropertyHelper.cs:
+            // 523-551), if "Hop"'s runtime VALUE were null and DeepHopTarget had no accessible
+            // parameterless constructor the loop could actually invoke, the loop would break with
+            // tempType still frozen at ShallowChainSharedNameVM (the type entering that iteration)
+            // instead of advancing to DeepHopTarget — and the final segment would then resolve and
+            // WRITE "Shared" against that frozen, shallower type. Classify cannot see, from a
+            // Type/name pair alone, whether that null-value/no-ctor condition holds at runtime —
+            // it can only see that "Shared" resolves against SOME type in the traversal chain
+            // (ShallowChainSharedNameVM), so it cannot rule out a real write and must not collapse
+            // this into NoWritableTarget.
+            var vm = new ShallowChainSharedNameVM();
+            Assert.AreEqual(BindingRejectionReason.UnresolvedIntermediateSegment,
+                RequestBindingPolicy.Classify(vm, "Hop.Shared"),
+                "'Shared' resolves against the SOURCE type ShallowChainSharedNameVM (a shallower " +
+                "type already in the traversal chain) even though it does not resolve against the " +
+                "deepest type DeepHopTarget — a frozen-type write is therefore possible and this " +
+                "must stay loud, not be reclassified as NoWritableTarget.");
+        }
+
+        [TestMethod]
+        public void Classify_FourSegmentPath_ReturnsPathTooDeep()
+        {
+            // Same input as IsPathAllowed_FourSegmentPath_ReturnsFalse_EvenWhenEverySegmentIsHarmless
+            // above — anchors the PathTooDeep mapping to an already-trusted rejected case.
+            var vm = new FixtureVM();
+            Assert.AreEqual(BindingRejectionReason.PathTooDeep,
+                RequestBindingPolicy.Classify(vm, "Searcher.SortInfo.Property.Length"));
+        }
+
+        [TestMethod]
+        public void Classify_FieldHiddenByPropertyOfSameName_ReturnsAmbiguousMember()
+        {
+            // Same input (and fixture) as IsPathAllowed_FieldHiddenByPropertyOfSameName_ReturnsFalse
+            // above — anchors the AmbiguousMember mapping to an already-trusted rejected case.
+            var vm = new AmbiguousShadowVM();
+            Assert.AreEqual(BindingRejectionReason.AmbiguousMember,
+                RequestBindingPolicy.Classify(vm, "Label"));
+        }
+
+        [TestMethod]
+        public void Classify_PublicStaticField_ReturnsStaticMember()
+        {
+            // Same input as IsPathAllowed_PublicStaticField_ReturnsFalse above — anchors the
+            // StaticMember mapping to an already-trusted rejected case.
+            var vm = new FixtureVM();
+            Assert.AreEqual(BindingRejectionReason.StaticMember,
+                RequestBindingPolicy.Classify(vm, "StaticSecret"));
+        }
+
+        [TestMethod]
+        public void Classify_BareWtm_ReturnsGatewayType()
+        {
+            // Same input as IsPathAllowed_BareWtm_ReturnsFalse above — anchors the GatewayType
+            // mapping to an already-trusted rejected case.
+            var vm = new FixtureVM();
+            Assert.AreEqual(BindingRejectionReason.GatewayType,
+                RequestBindingPolicy.Classify(vm, "Wtm"));
+        }
+
+        [TestMethod]
+        public void Classify_And_IsPathAllowed_NeverDisagree_AcrossAllReasonMappingInputs()
+        {
+            // No-drift proof: IsPathAllowed is now a pure delegation to Classify
+            // (Classify(...) == BindingRejectionReason.None), so for every input used to pin a
+            // SPECIFIC reason above — plus a few positive controls already trusted elsewhere in
+            // this file — the two must never disagree. This is the evidence that #1080 changed
+            // only the reason granularity, never the rejected SET.
+            var fixtureVm = new FixtureVM();
+            var ambiguousVm = new AmbiguousShadowVM();
+            var shallowChainVm = new ShallowChainSharedNameVM();
+
+            (object Vm, string Key)[] cases =
+            [
+                (fixtureVm, "_DONOT_USE_CS"),
+                (fixtureVm, "_DONOT_USE_VMNAME"),
+                (fixtureVm, "__RequestVerificationToken"),
+                (fixtureVm, "page"),
+                (fixtureVm, "limit"),
+                (fixtureVm, "Missing.StaticSecret"),
+                (shallowChainVm, "Hop.Shared"),
+                (fixtureVm, "Searcher.SortInfo.Property.Length"),
+                (ambiguousVm, "Label"),
+                (fixtureVm, "StaticSecret"),
+                (fixtureVm, "Wtm"),
+                // Positive controls — the equivalence must hold on the ALLOWED side too.
+                (fixtureVm, "Searcher.ZipCode"),
+                (fixtureVm, "Searcher.SortInfo.Property"),
+                (fixtureVm, "Remark"),
+            ];
+
+            foreach (var (vm, key) in cases)
+            {
+                var reason = RequestBindingPolicy.Classify(vm, key);
+                var allowed = RequestBindingPolicy.IsPathAllowed(vm, key);
+                Assert.AreEqual(allowed, reason == BindingRejectionReason.None,
+                    $"Key '{key}' against {vm.GetType().Name}: IsPathAllowed returned {allowed} but " +
+                    $"Classify returned {reason} — IsPathAllowed must be a pure delegation to " +
+                    "Classify, so these can never disagree.");
+            }
+        }
     }
 }

@@ -145,6 +145,28 @@ namespace WalkingTec.Mvvm.Core
     /// this narrower fix could ship first). See the CHANGELOG's #867 entry and Issue #889
     /// (widened in round 3 to cover both failure modes) for the same disclosure.
     /// </para>
+    ///
+    /// <para>
+    /// <b>Issue #1080: rejections now carry a reason, not just true/false.</b> With
+    /// <c>Configs.EnforceRequestBindingScope</c> defaulting to <see langword="true"/> since
+    /// v10.22.0, every ordinary LayUI grid paging request rejects several framework transport
+    /// keys that are not VM properties (<c>_DONOT_USE_CS</c>, <c>_DONOT_USE_VMNAME</c>,
+    /// <c>__RequestVerificationToken</c>, <c>page</c>, <c>limit</c>, …) — and the two controller
+    /// <c>RedoUpdateModel</c> methods used to log a Warning for every one of them, on every
+    /// normal request. A security-relevant logger that fires on ordinary traffic trains people to
+    /// ignore it. <see cref="Classify(object, string, string)"/>/
+    /// <see cref="Classify(Type, string, string)"/> classify WHY a key is rejected into a
+    /// <see cref="BindingRejectionReason"/>; <see cref="IsPathAllowed(object, string, string)"/>/
+    /// <see cref="IsPathAllowed(Type, string, string)"/> are now pure boolean delegations to
+    /// them, so the allow/deny decision and the reason it is computed from share exactly one
+    /// walk — not two copies that can drift the way the declaring-type/name check above already
+    /// did once. The two controllers log <c>Debug</c> instead of <c>Warning</c> for exactly one
+    /// reason, <see cref="BindingRejectionReason.NoWritableTarget"/>, which is the only one
+    /// mechanically provable (from <c>PropertyHelper.cs:554-557</c>) to never write anything;
+    /// every other reason — including a segment name that merely LOOKS like a harmless typo —
+    /// stays exactly as loud as before. The set of rejected keys does not change: this is a
+    /// logging-severity change, not a policy change.
+    /// </para>
     /// </summary>
     public static partial class RequestBindingPolicy
     {
@@ -213,27 +235,56 @@ namespace WalkingTec.Mvvm.Core
         /// resolving it against <paramref name="source"/>'s actual type would traverse through a
         /// segment whose resolved type is one of <see cref="BannedGatewayTypes"/>, a
         /// <c>static</c> member, an ambiguously-resolved member name, a segment that fails to
-        /// resolve at all, or a path exceeding <see cref="MaxDepth"/> segments. The normalization
-        /// (indexer strip, dot-split, prefix insert) and the per-hop TYPE progression on a
-        /// successfully-resolved segment match
-        /// <see cref="PropertyHelper.SetPropertyValue(object, string, object, string, bool)"/>'s
-        /// own exactly. They deliberately do NOT match on a resolution FAILURE: SetPropertyValue
-        /// leaves its traversal type frozen and falls through to evaluate the final segment
-        /// against it (see the zero-resolution branch below for why replicating that exactly
-        /// would be both harder to keep correct and less safe than simply rejecting outright).
+        /// resolve at all, or a path exceeding <see cref="MaxDepth"/> segments.
+        /// <para>
+        /// <b>Issue #1080: pure delegation.</b> This is a thin boolean wrapper around
+        /// <see cref="Classify(object, string, string)"/> — literally
+        /// <c>Classify(...) == BindingRejectionReason.None</c> — kept as one shared classifier
+        /// rather than two parallel implementations, since a duplicated criterion is exactly the
+        /// failure mode the declaring-type/name check earlier in this file's history already hit
+        /// once (see the class doc comment). Most call sites only need this allow/deny decision;
+        /// a caller that also needs to know WHY — <c>RedoUpdateModel</c>'s per-key logging is the
+        /// reason this distinction exists at all — should call
+        /// <see cref="Classify(object, string, string)"/> directly. See
+        /// <see cref="Classify(Type, string, string)"/>'s own doc comment for the full per-hop
+        /// algorithm.
+        /// </para>
         /// </summary>
         public static bool IsPathAllowed(object? source, string? property, string? prefix = null)
-        {
-            // A null source has nothing to traverse — SetPropertyValue itself no-ops on null
-            // (source == null || property == null) return; — so there is nothing dangerous to
-            // reject here either.
-            return source == null || IsPathAllowed(source.GetType(), property, prefix);
-        }
+            => Classify(source, property, prefix) == BindingRejectionReason.None;
 
         /// <inheritdoc cref="IsPathAllowed(object, string, string)"/>
         public static bool IsPathAllowed(Type? sourceType, string? property, string? prefix = null)
+            => Classify(sourceType, property, prefix) == BindingRejectionReason.None;
+
+        /// <summary>
+        /// <see cref="Classify(Type, string, string)"/> overload that accepts an instance instead
+        /// of its <see cref="Type"/>. A <see langword="null"/> <paramref name="source"/> has
+        /// nothing to traverse — <c>PropertyHelper.SetPropertyValue</c> itself no-ops when
+        /// <c>source == null || property == null</c> — so there is nothing to reject either;
+        /// returns <see cref="BindingRejectionReason.None"/>, not a rejection.
+        /// </summary>
+        public static BindingRejectionReason Classify(object? source, string? property, string? prefix = null)
         {
-            if (sourceType == null || string.IsNullOrEmpty(property)) return true;
+            return source == null ? BindingRejectionReason.None : Classify(source.GetType(), property, prefix);
+        }
+
+        /// <summary>
+        /// Classifies why <paramref name="property"/> (a caller-supplied <c>RedoUpdateModel</c>
+        /// form/query key, optionally dotted) would be rejected when resolved against
+        /// <paramref name="sourceType"/>, or returns <see cref="BindingRejectionReason.None"/>
+        /// when it is allowed. This is the ONLY place the walk is implemented —
+        /// <see cref="IsPathAllowed(Type, string, string)"/> is a pure delegation to it. The
+        /// normalization (indexer strip, dot-split, prefix insert) and the per-hop TYPE
+        /// progression on a successfully-resolved segment match
+        /// <see cref="PropertyHelper.SetPropertyValue(object, string, object, string, bool)"/>'s
+        /// own exactly; the REJECTED set is unchanged from before this method existed — see the
+        /// class doc comment's "Issue #1080" paragraph for what changed (the reason granularity,
+        /// not the set).
+        /// </summary>
+        public static BindingRejectionReason Classify(Type? sourceType, string? property, string? prefix = null)
+        {
+            if (sourceType == null || string.IsNullOrEmpty(property)) return BindingRejectionReason.None;
 
             // Mirror PropertyHelper.SetPropertyValue's own normalization exactly (indexer strip,
             // then dot-split, then optional prefix) so the segments inspected here are the same
@@ -253,7 +304,18 @@ namespace WalkingTec.Mvvm.Core
                 level.Insert(0, prefix);
             }
 
-            if (level.Count > MaxDepth) return false;
+            if (level.Count > MaxDepth) return BindingRejectionReason.PathTooDeep;
+
+            // Every type PropertyHelper.SetPropertyValue's OWN intermediate loop
+            // (PropertyHelper.cs:523-551) could possibly have its traversal type frozen at when it
+            // goes on to resolve the FINAL segment: sourceType itself, plus the resolved type of
+            // every intermediate hop that fully clears every guard below (unique member,
+            // non-static, non-gateway). That loop can `break` early for a reason this
+            // Type/name-only classification cannot observe — a resolved intermediate member whose
+            // current VALUE is null and whose type has no public parameterless constructor —
+            // leaving tempType at whichever earlier candidate the loop had reached. This list is
+            // every such candidate, not a guess at which one the real traversal would pick.
+            List<Type> traversalTypes = [sourceType];
 
             // Starts as the caller's own type; advanced to member.GetMemberType() (the resolved
             // TYPE, not the declaring type) after each hop that resolves cleanly below — same
@@ -262,9 +324,12 @@ namespace WalkingTec.Mvvm.Core
             // branch below for where this walk deliberately diverges (more conservatively) from
             // what SetPropertyValue itself does when a segment fails to resolve.
             Type? tempType = sourceType;
-            foreach (var segment in level)
+            for (var i = 0; i < level.Count; i++)
             {
                 if (tempType == null) break;
+
+                var isLastSegment = i == level.Count - 1;
+                var segment = level[i];
 
                 // Same resolution PropertyHelper.SetPropertyValue uses (default BindingFlags —
                 // Public | Instance | Static — which is exactly why the static check below is
@@ -272,21 +337,40 @@ namespace WalkingTec.Mvvm.Core
                 var members = tempType.GetMember(segment);
                 if (members.Length == 0)
                 {
-                    // PR #884 review, round 2: this used to `break` and fall through to `return
-                    // true` — WRONG. PropertyHelper.SetPropertyValue's intermediate loop
-                    // (PropertyHelper.cs:523-551) also `break`s when a middle segment fails to
-                    // resolve, but it does NOT stop the write there: tempType/temp are simply
-                    // left at whatever they were before this failed hop (the ORIGINAL source, if
-                    // it is the very first segment that fails), and execution falls through to
-                    // resolve and WRITE the FINAL segment against that frozen type
-                    // (PropertyHelper.cs:553-559). A key like "Missing.StaticSecret" therefore
-                    // still writes StaticSecret onto the VM itself even though "Missing" never
-                    // resolved to anything — verified empirically, see
-                    // RequestBindingPolicyTests867.MissingIntermediateSegment_ActuallyWritesFinalSegmentOnVm_WhenPolicyIsIgnored.
-                    // This policy cannot safely allow a key it failed to fully resolve, so it
-                    // fails closed here instead of trying to replicate that frozen-type fallback
-                    // (which would also have to be kept in lockstep with PropertyHelper forever).
-                    return false;
+                    if (!isLastSegment)
+                    {
+                        // PR #884 review, round 2: an unresolved INTERMEDIATE segment must stay
+                        // loud, never a silent no-op. PropertyHelper.SetPropertyValue's
+                        // intermediate loop does NOT stop the write here: tempType/temp are simply
+                        // left at whatever they were before this failed hop (the ORIGINAL source,
+                        // if it is the very first segment that fails), and execution falls through
+                        // to resolve and WRITE the FINAL segment against that frozen type
+                        // (PropertyHelper.cs:553-559). A key like "Missing.StaticSecret" therefore
+                        // still writes StaticSecret onto the VM itself even though "Missing" never
+                        // resolved to anything — verified empirically, see
+                        // RequestBindingPolicyTests867.MissingIntermediateSegment_ActuallyWritesFinalSegmentOnVm_WhenPolicyIsIgnored.
+                        return BindingRejectionReason.UnresolvedIntermediateSegment;
+                    }
+
+                    // Last segment resolves to zero members against the DEEPEST traversal type.
+                    // A real write can land only if some type the real traversal could have
+                    // frozen at — i.e. some entry already collected in traversalTypes — resolves
+                    // this exact segment name too. If NONE of them do, then no matter which of
+                    // those types the real (value-dependent) traversal actually froze at,
+                    // tempType.GetMember(level.Last()) also finds nothing there, and
+                    // PropertyHelper.cs:554-557 (`if (!memberInfos.Any()) { return; }`) returns
+                    // without writing anything — the only rejection this method can prove is a
+                    // true no-op. See BindingRejectionReason.NoWritableTarget's own doc comment.
+                    foreach (var candidate in traversalTypes)
+                    {
+                        if (candidate.GetMember(segment).Length > 0)
+                        {
+                            // Resolves against a SHALLOWER type in the chain — a frozen-type write
+                            // there is possible, so this must stay just as loud as case (1) above.
+                            return BindingRejectionReason.UnresolvedIntermediateSegment;
+                        }
+                    }
+                    return BindingRejectionReason.NoWritableTarget;
                 }
                 if (members.Length > 1)
                 {
@@ -294,19 +378,23 @@ namespace WalkingTec.Mvvm.Core
                     // differently-kinded property of the same name — see the class doc comment
                     // for why plain same-kind new-hiding does NOT trigger this) — fail closed
                     // rather than trust members[0] to be the safe one.
-                    return false;
+                    return BindingRejectionReason.AmbiguousMember;
                 }
                 var member = members[0];
 
-                if (IsStaticMember(member)) return false;
+                if (IsStaticMember(member)) return BindingRejectionReason.StaticMember;
 
                 var memberType = member.GetMemberType();
-                if (IsBannedGatewayType(memberType)) return false;
+                if (IsBannedGatewayType(memberType)) return BindingRejectionReason.GatewayType;
 
                 tempType = memberType;
+                if (!isLastSegment && tempType != null)
+                {
+                    traversalTypes.Add(tempType);
+                }
             }
 
-            return true;
+            return BindingRejectionReason.None;
         }
 
         /// <summary>

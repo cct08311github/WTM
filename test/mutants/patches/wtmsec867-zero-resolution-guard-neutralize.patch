@@ -1,15 +1,55 @@
 diff --git a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
-index 03a63e932..d89989402 100644
+index 8b5813a5f..fbd688cad 100644
 --- a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
 +++ b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
-@@ -233,7 +233,11 @@ namespace WalkingTec.Mvvm.Core
-                     // This policy cannot safely allow a key it failed to fully resolve, so it
-                     // fails closed here instead of trying to replicate that frozen-type fallback
-                     // (which would also have to be kept in lockstep with PropertyHelper forever).
--                    return false;
-+                    // MUTANT test/mutants wtmsec867-zero-resolution-guard-neutralize: reverted to
-+                    // the pre-fix `break` (falls through to `return true` below) instead of
-+                    // `return false`. See test/mutants/entries/
+@@ -337,40 +337,18 @@ namespace WalkingTec.Mvvm.Core
+                 var members = tempType.GetMember(segment);
+                 if (members.Length == 0)
+                 {
+-                    if (!isLastSegment)
+-                    {
+-                        // PR #884 review, round 2: an unresolved INTERMEDIATE segment must stay
+-                        // loud, never a silent no-op. PropertyHelper.SetPropertyValue's
+-                        // intermediate loop does NOT stop the write here: tempType/temp are simply
+-                        // left at whatever they were before this failed hop (the ORIGINAL source,
+-                        // if it is the very first segment that fails), and execution falls through
+-                        // to resolve and WRITE the FINAL segment against that frozen type
+-                        // (PropertyHelper.cs:553-559). A key like "Missing.StaticSecret" therefore
+-                        // still writes StaticSecret onto the VM itself even though "Missing" never
+-                        // resolved to anything — verified empirically, see
+-                        // RequestBindingPolicyTests867.MissingIntermediateSegment_ActuallyWritesFinalSegmentOnVm_WhenPolicyIsIgnored.
+-                        return BindingRejectionReason.UnresolvedIntermediateSegment;
+-                    }
+-
+-                    // Last segment resolves to zero members against the DEEPEST traversal type.
+-                    // A real write can land only if some type the real traversal could have
+-                    // frozen at — i.e. some entry already collected in traversalTypes — resolves
+-                    // this exact segment name too. If NONE of them do, then no matter which of
+-                    // those types the real (value-dependent) traversal actually froze at,
+-                    // tempType.GetMember(level.Last()) also finds nothing there, and
+-                    // PropertyHelper.cs:554-557 (`if (!memberInfos.Any()) { return; }`) returns
+-                    // without writing anything — the only rejection this method can prove is a
+-                    // true no-op. See BindingRejectionReason.NoWritableTarget's own doc comment.
+-                    foreach (var candidate in traversalTypes)
+-                    {
+-                        if (candidate.GetMember(segment).Length > 0)
+-                        {
+-                            // Resolves against a SHALLOWER type in the chain — a frozen-type write
+-                            // there is possible, so this must stay just as loud as case (1) above.
+-                            return BindingRejectionReason.UnresolvedIntermediateSegment;
+-                        }
+-                    }
+-                    return BindingRejectionReason.NoWritableTarget;
++                    // MUTANT test/mutants wtmsec867-zero-resolution-guard-neutralize: this ENTIRE
++                    // block's three BindingRejectionReason exits (UnresolvedIntermediateSegment
++                    // for an unresolved intermediate segment; UnresolvedIntermediateSegment again
++                    // for a last segment resolving against a shallower traversal-chain type;
++                    // NoWritableTarget for a last segment resolving against nothing at all)
++                    // replaced with a single reverted-to-pre-fix `break;` -- reproducing the
++                    // exact PR #884 round 2 bug: `break` exits this `for` loop and falls through
++                    // to the trailing `return BindingRejectionReason.None;` below (the Issue
++                    // #1080 equivalent of the pre-refactor `return true;`), silently allowing the
++                    // whole key. See test/mutants/entries/
 +                    // wtmsec867-zero-resolution-guard-neutralize.json for the mutant record.
 +                    break;
                  }
