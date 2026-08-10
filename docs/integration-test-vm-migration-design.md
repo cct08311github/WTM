@@ -28,6 +28,50 @@ Jun 2026-08-09 裁示三條，都已生效：
 | 目前狀態 | `VM deallocated` |
 | Tailscale | 離線約 5 天（IP 曾為 `100.106.29.50`，**回來後是否照舊未複驗**） |
 
+### 2.4 P1a 探測結果（2026-08-10 18:40，已執行）
+
+腳本 `claude-session/scripts/probe-bms-verify-vm.ps1`（純唯讀），由 BMS session 在其租約窗口內代跑。8 項全數完成，**PASS=2 FAIL=4 INFO=2**。
+
+| # | 項目 | 判定 | 發現 |
+|---|---|---|---|
+| 1 | .NET SDK | **FAIL** | `dotnet --list-sdks` 空，**未安裝任何 SDK** |
+| 2 | WTM clone / NuGet 快取 | INFO | 無 clone；**NuGet 快取已在**（1263 MB / 5844 檔） |
+| 3 | 磁碟餘量 | **PASS** | C: 81.66/126.45 GB、D: 29.54/32 GB |
+| 4 | git | **FAIL** | 未安裝或不在 PATH |
+| 5 | SQL Server | **FAIL** | 無 `MSSQLSERVER`/`MSSQL$*` 服務、1433 未監聽、**只有 LocalDB** |
+| 6 | Oracle | **PASS** | 21c XE，listener + 1521 正常，**XEPDB1 status READY** |
+| 7 | NuGet sources | **FAIL** | 只有 nuget.org，**缺 Gitea source** |
+| 8 | SqlClient 加密 | INFO | 未實測；Windows 原生 driver 預設 `Encrypt=True` 且驗憑證 |
+
+**結果翻轉了兩個假設：**
+
+**（a）Oracle 從「未複驗宣稱」升級為「已證實」。** Oracle 21c XE、`OracleServiceXE` 與 `OracleOraDB21Home1TNSListener` 皆 Running、`:::1521` 監聽、`lsnrctl status` 回 21.0.0.0.0、services 含 `XEPDB1` 且 **status READY**。`ORACLE_HOME=C:\app\azureuser\product\21c\dbhomeXE`。§7.2 的未複驗註記可以撤銷。
+
+**（b）這台沒有可用的 SQL Server —— 只有 LocalDB。** BMS session 於同一輪的 D3 驗證中獨立證實：app pool 身分 `.\azureuser`，`BMS_Connections__0__Value` = `Server=(localdb)\MSSQLLocalDB;Database=BMS_Demo`。**LocalDB 不接受遠端連線，也不是 Windows 服務**，因此不能作為 act_runner host 模式的 DB backing。
+
+> ### ⚠️ 一個倒置，影響排序
+>
+> **Oracle 的環境已就緒但沒有測試**（#1069：零 harness）；**SQL Server 的測試已存在**（9 個 `[TestMethod]`）**但環境不存在**。
+>
+> 兩邊各缺一半，而且缺的是不同的一半：
+> - 走 SQL Server 路線 = **裝環境**（SQL Server instance + SDK + git + NuGet source），測試現成
+> - 走 Oracle 路線 = **環境現成**，但要從零寫 harness
+>
+> 這台 VM 原本是為「SQL Server 驗證」指定的，實際上它現成可用的是 Oracle。排序時不要假設「先做 SQL Server 比較快」。
+
+### 2.5 執行身分：`az vm run-command` 看不到 per-user 的 LocalDB
+
+BMS session 在同一輪租約中發現（2026-08-10）：這台的 BMS app 跑在 **`azureuser` 的 LocalDB**，IIS app pool 身分是 `SpecificUser` = `.\azureuser`。
+
+**`az vm run-command invoke` 以 SYSTEM 身分執行，看不到 `azureuser` 的 LocalDB 實例。** reseed 必須 SSH 進去用 `azureuser` 身分跑。
+
+這對 P2 provisioning 有兩個直接影響，**在動工前就要決定，不能等裝完才發現**：
+
+1. **自動化管道的身分問題。** 既有 overflow runner 的 provisioning 走 cloud-init（開機時 root），這台若要走 `az vm run-command` 自動化，**所有動作都是 SYSTEM**。安裝 SQL Server instance 本身沒問題（服務層級），但任何「以某個使用者身分驗證/連線」的步驟都會與現況的 per-user 模型衝突。
+2. **act_runner 的服務身分需要對應的 DB login。** 即使裝了真正的 1433 instance，act_runner 以服務執行時的身分（SYSTEM 或專用服務帳號）**必須在 SQL Server 上有 login 且具 `CREATE`/`DROP DATABASE` 權限** —— `WalkingTec.Mvvm.Integration.Test` 對每個測試類別 `EnsureDeleted()`/`EnsureCreated()` 自己的資料庫（§7.1）。這不會自動成立，是 P2 要明確配置的一項。
+
+> **換句話說：「裝一個 SQL Server」不等於「act_runner 連得上那個 SQL Server」。** 現況的 per-user LocalDB 模型正好示範了身分不匹配會長什麼樣 —— 一個能用的資料庫，配上一個看不到它的執行身分。
+
 ### 2.2 既有的 overflow runner（可複用的先例）
 
 `vm-gitea-ci-runner` 已經在做「CI 按需喚醒 Azure VM」這件事：
@@ -134,7 +178,7 @@ Jun 2026-08-09 23:38 裁示：**「WTM 必須完整支援 Oracle，BMS 有在使
 
 1. **runner label 必須帶 provider 維度，且要一次設計對。** `DBTypeEnum` 是 `{ SqlServer, MySql, PgSql, Memory, SQLite, Oracle, DaMeng }`；目前有實際下游需求的是 SqlServer 與 Oracle，但**設計時應假設集合會成長**，不要假設它是 `{SqlServer}` 或 `{SqlServer, Oracle}`。
 2. **Oracle 在 WTM 目前是零 harness，不是「有測試但缺機器」。** `test/` 下搜 Oracle 只命中建置產物與一處附帶提及（#1069）。所以 **Oracle 那條 label 落地時還沒有測試專案可以綁** —— label 設計不能假設每個 provider 都對應一個既存的 test project。
-3. VM 上已有 Oracle 環境，但**版本／edition／service name／listener 狀態／1521 是否可從 tailnet 連都未查** —— 列入 P1a。
+3. ~~VM 上已有 Oracle 環境，但版本／edition／service name／listener 狀態／1521 是否可從 tailnet 連都未查~~ —— **P1a 已查證，見 §2.4**：Oracle 21c XE，listener 與 1521 正常，`XEPDB1` status READY。owner 的宣稱成立。
 
 ## 7.3 Windows 可執行性：已知的與仍未知的
 
@@ -153,13 +197,19 @@ WTM session 靜態掃過 `test/WalkingTec.Mvvm.Integration.Test`（2026-08-10 00
 | 期別 | 內容 | 前置 |
 |---|---|---|
 | **P1a** | 開機一次，驗 tailscale 重連／IP／`az vm start` 到可連的等待時間；**環境探測**：`dotnet --list-sdks`（有無 .NET 10）、有無既存 WTM clone／NuGet 快取、磁碟餘量、`git` 是否存在、除 LocalDB 外有無監聽 1433 且接受遠端連線的 SQL Server instance、Oracle 的版本／edition／service name／`lsnrctl status`／1521 是否可從 tailnet 連（#1069 的 discovery 第一步） | 無（併入 BMS 下一次租約，成本接近零） |
-| **P1b** | 真的跑一次 `dotnet test`，驗收採 §7.1 的「9 Passed 且 0 Inconclusive/Skipped」 | P1a 顯示 SDK 已在且 clone 成本低；**若需先裝 .NET 10 SDK 則另排租約**，不塞進他人的 e2e 租約 |
-| P2 | 決定 provider 集合（#1069）與 label 命名 | P1、#1069 裁決 |
-| P3 | VM 上原生安裝 SQL Server 並自動化；註冊 Windows act_runner | P2 |
-| P4 | controller 擴充為同時管理兩台 VM，並接上租約鎖 | P3 |
-| P5 | `integration-test.yml` 改 `runs-on` 與觸發策略；恢復自動覆蓋並更新 `production-readiness.md` | P4 |
+| **P1a** ✅ | **已完成 2026-08-10**，結果見 §2.4 | — |
+| **P2（新增，已成為第一順位）** | **VM provisioning**：裝 `git`、.NET 10 SDK、SQL Server instance（Developer edition）、設定 Gitea NuGet source。**這在 P1a 之前只是設計文件裡的一句話，現在是確定要做的工項** | P1a（已完成） |
+| **P1b** | 真的跑一次 `dotnet test`，驗收採 §7.1 的「9 Passed 且 0 Inconclusive/Skipped」；**同時確認 `TrustServerCertificate` 設定**（見下方警告） | **P2** —— P1a 證實 SDK 與 git 皆缺，所以 P1b 不再可能「順手」搭任何租約 |
+| P3 | 決定 provider 集合與 label 命名 | #1069；P1a 已證實 Oracle 環境就緒，決策依據比原本充分 |
+| P4 | 註冊 Windows act_runner | P2、P3 |
+| P5 | controller 擴充為同時管理兩台 VM，並接上租約鎖 | P4 |
+| P6 | `integration-test.yml` 改 `runs-on` 與觸發策略；恢復自動覆蓋並更新 `production-readiness.md` | P5 |
 
-**P1a 成本接近零，且它的六項探測就足以判定方案 A 成不成立** —— 這才是「一次解掉兩個未決問題」的正確粒度。P1b 的成本是獨立的一輪工作，不可併進他人租約當順手事項。
+> ⚠️ **P1b 的一條新前置，來自 P1a 探測 8：** Windows 原生 `Microsoft.Data.SqlClient` 預設 `Encrypt=True` 且驗證憑證，與 Linux 容器不同。若連的是自簽憑證的本機 instance，**連線會失敗**。
+>
+> 而連線失敗**正是觸發 `Assert.Inconclusive` 假綠燈的那條路徑**（§7.1）—— `dotnet test` 會 exit 0 並印 `Test Run Successful`，9 個測試全部 Inconclusive。**所以憑證設定錯誤在 P1b 會偽裝成成功。** 這是 §7.1 的驗收標準「9 Passed 且 0 Inconclusive/Skipped」必須逐字遵守、不可用退出碼替代的具體理由。
+
+**排序變更說明**：原本 P1a 之後直接接 P1b（跑測試），前提是「SDK 可能已在、clone 成本可能低」。P1a 證實**SDK 完全沒裝、git 也沒裝**，所以 provisioning 從「P3 的一部分」提前成獨立的 P2，且 P1b 必須排在它之後。**P1a 的價值正在於此：它把一個原本排在後面、被假設為小工項的東西，證實為第一順位的阻塞點。**
 
 ## 9. 相關
 
