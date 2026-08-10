@@ -704,12 +704,42 @@ namespace WalkingTec.Mvvm.Core
 
         /// <summary>
         /// 使用 AES-256-CBC 加密字串。每次加密產生隨機 IV，並將 IV 前置於密文中。
+        /// 等同於呼叫 <see cref="EncryptString(string, string, CipherAlgorithm)"/> 並傳入
+        /// <see cref="CipherAlgorithm.Aes256Cbc"/>。
         /// </summary>
         /// <param name="stringToEncrypt">要加密的字串</param>
         /// <param name="encryptKey">加密金鑰（任意長度，內部以 SHA-256 衍生 32 位元組金鑰）</param>
         /// <returns>Base64 編碼的 (IV + 密文)，或空字串（若輸入為空）</returns>
         public static string EncryptString(string stringToEncrypt, string encryptKey)
         {
+            return EncryptString(stringToEncrypt, encryptKey, CipherAlgorithm.Aes256Cbc);
+        }
+
+        /// <summary>
+        /// 依指定演算法加密字串。
+        /// <para>
+        /// <see cref="CipherAlgorithm.Aes256Cbc"/>（預設、建議）：AES-256-CBC，PKCS7 填充，每次加密產生
+        /// 隨機 IV 並前置於密文中。
+        /// </para>
+        /// <para>
+        /// <see cref="CipherAlgorithm.LegacyDes"/>：產生 8.x 世代的舊版 DES 密文（委派給
+        /// <see cref="EncryptStringLegacy(string, string)"/>）。僅供需要保留回滾到 8.x 世代能力的下游
+        /// 部署明示 opt-in 使用；DES 已被視為不安全的加密演算法，不得用於加密新資料。
+        /// </para>
+        /// </summary>
+        /// <param name="stringToEncrypt">要加密的字串</param>
+        /// <param name="encryptKey">加密金鑰</param>
+        /// <param name="algorithm">要使用的加密演算法</param>
+        /// <returns>Base64 編碼的密文，或空字串（若輸入為空）</returns>
+        public static string EncryptString(string stringToEncrypt, string encryptKey, CipherAlgorithm algorithm)
+        {
+            if (algorithm == CipherAlgorithm.LegacyDes)
+            {
+#pragma warning disable CS0618
+                return EncryptStringLegacy(stringToEncrypt, encryptKey);
+#pragma warning restore CS0618
+            }
+
             if (string.IsNullOrEmpty(stringToEncrypt))
             {
                 return "";
@@ -839,6 +869,43 @@ namespace WalkingTec.Mvvm.Core
             {
                 return "";
             }
+        }
+
+        /// <summary>
+        /// 使用舊版 DES 加密字串（8.x 世代格式）。
+        /// <para>
+        /// 唯一目的是讓需要回滾到 8.x 世代的部署明示 opt-in 產生舊格式密文；DES 已被視為不安全的加密演算法
+        /// （56 位元有效金鑰、已知可被暴力破解），絕不得用於加密新資料。一般情境請改用
+        /// <see cref="EncryptString(string, string)"/>（AES-256）。
+        /// </para>
+        /// <para>
+        /// 與 <see cref="DecryptStringLegacy(string, string)"/> 共用同一個 <c>CreateLegacyDes</c> provider
+        /// 與金鑰／IV 衍生邏輯，確保產出的密文可被舊版本或本版 <see cref="DecryptString(string, string)"/>
+        /// 的 DES fallback 正確解回。
+        /// </para>
+        /// </summary>
+        /// <param name="stringToEncrypt">要加密的字串</param>
+        /// <param name="encryptKey">加密金鑰</param>
+        /// <returns>Base64 編碼的密文，或空字串（若輸入為空）</returns>
+        [Obsolete("Legacy DES encryption retained only to let deployments that need to roll back to the 8.x generation opt in to producing the old ciphertext format. DES is cryptographically broken and must never be used for new data. Use EncryptString(string, string) (AES-256) instead.")]
+        public static string EncryptStringLegacy(string stringToEncrypt, string encryptKey)
+        {
+            if (string.IsNullOrEmpty(stringToEncrypt))
+            {
+                return "";
+            }
+
+            byte[] plainBytes = UTF8Encoding.UTF8.GetBytes(stringToEncrypt);
+
+            using var des = CreateLegacyDes(encryptKey);
+            using var encryptStream = new MemoryStream();
+            using (var cryptoStream = new CryptoStream(encryptStream, des.CreateEncryptor(), CryptoStreamMode.Write))
+            {
+                cryptoStream.Write(plainBytes, 0, plainBytes.Length);
+                cryptoStream.FlushFinalBlock();
+            }
+
+            return Convert.ToBase64String(encryptStream.ToArray());
         }
 
         /// <summary>
