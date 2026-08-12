@@ -77,21 +77,43 @@ BEGIN
 END
 
 -- P0-2: Create refresh token table
-CREATE TABLE [FrameworkRefreshTokens] (
-    [ID]              UNIQUEIDENTIFIER NOT NULL PRIMARY KEY DEFAULT NEWID(),
-    [Token]           NVARCHAR(256)    NOT NULL,
-    [ITCode]          NVARCHAR(50)     NOT NULL,
-    [TenantCode]      NVARCHAR(50)     NULL,
-    [ExpiresUtc]      DATETIME2        NOT NULL,
-    [CreatedUtc]      DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
-    [CreatedByIp]     NVARCHAR(50)     NULL,
-    [RevokedUtc]      DATETIME2        NULL,
-    [RevokedByIp]     NVARCHAR(50)     NULL,
-    [ReplacedByToken] NVARCHAR(256)    NULL,
-    [RevokeReason]    NVARCHAR(100)    NULL
-);
-CREATE INDEX IX_RefreshToken_Token  ON [FrameworkRefreshTokens]([Token]);
-CREATE INDEX IX_RefreshToken_ITCode ON [FrameworkRefreshTokens]([ITCode]);
+-- Idempotent: guarded the same way as the P0-1 ALTER above -- sys.tables /
+-- sys.indexes lookups by name, so re-running this file after the table (or
+-- either index) already exists is a no-op instead of erroring out.
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'FrameworkRefreshTokens')
+BEGIN
+    CREATE TABLE [FrameworkRefreshTokens] (
+        [ID]              UNIQUEIDENTIFIER NOT NULL PRIMARY KEY DEFAULT NEWID(),
+        [Token]           NVARCHAR(256)    NOT NULL,
+        [ITCode]          NVARCHAR(50)     NOT NULL,
+        [TenantCode]      NVARCHAR(50)     NULL,
+        [ExpiresUtc]      DATETIME2        NOT NULL,
+        [CreatedUtc]      DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+        [CreatedByIp]     NVARCHAR(50)     NULL,
+        [RevokedUtc]      DATETIME2        NULL,
+        [RevokedByIp]     NVARCHAR(50)     NULL,
+        [ReplacedByToken] NVARCHAR(256)    NULL,
+        [RevokeReason]    NVARCHAR(100)    NULL
+    );
+END
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE name = 'IX_RefreshToken_Token'
+      AND object_id = OBJECT_ID('FrameworkRefreshTokens')
+)
+BEGIN
+    CREATE INDEX IX_RefreshToken_Token ON [FrameworkRefreshTokens]([Token]);
+END
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE name = 'IX_RefreshToken_ITCode'
+      AND object_id = OBJECT_ID('FrameworkRefreshTokens')
+)
+BEGIN
+    CREATE INDEX IX_RefreshToken_ITCode ON [FrameworkRefreshTokens]([ITCode]);
+END
 
 -- ============================================================
 -- MySQL / MariaDB
@@ -129,8 +151,40 @@ CREATE TABLE IF NOT EXISTS `FrameworkRefreshTokens` (
     `ReplacedByToken` VARCHAR(256) NULL,
     `RevokeReason`    VARCHAR(100) NULL
 );
-CREATE INDEX IX_RefreshToken_Token  ON `FrameworkRefreshTokens`(`Token`);
-CREATE INDEX IX_RefreshToken_ITCode ON `FrameworkRefreshTokens`(`ITCode`);
+
+-- Idempotent index creation: MySQL has no CREATE INDEX IF NOT EXISTS, so
+-- probe information_schema.statistics the same way the P0-1 ALTER above
+-- probes information_schema.columns, and only PREPARE/EXECUTE the CREATE
+-- INDEX when it is not already there; otherwise run a harmless no-op SELECT.
+SET @wtm_1099_ddl_1 = (
+    SELECT IF(
+        (SELECT COUNT(*)
+           FROM information_schema.statistics
+          WHERE table_schema = DATABASE()
+            AND table_name = 'FrameworkRefreshTokens'
+            AND index_name = 'IX_RefreshToken_Token') = 0,
+        'CREATE INDEX IX_RefreshToken_Token ON `FrameworkRefreshTokens`(`Token`);',
+        'SELECT 1;'
+    )
+);
+PREPARE wtm_1099_stmt_1 FROM @wtm_1099_ddl_1;
+EXECUTE wtm_1099_stmt_1;
+DEALLOCATE PREPARE wtm_1099_stmt_1;
+
+SET @wtm_1099_ddl_2 = (
+    SELECT IF(
+        (SELECT COUNT(*)
+           FROM information_schema.statistics
+          WHERE table_schema = DATABASE()
+            AND table_name = 'FrameworkRefreshTokens'
+            AND index_name = 'IX_RefreshToken_ITCode') = 0,
+        'CREATE INDEX IX_RefreshToken_ITCode ON `FrameworkRefreshTokens`(`ITCode`);',
+        'SELECT 1;'
+    )
+);
+PREPARE wtm_1099_stmt_2 FROM @wtm_1099_ddl_2;
+EXECUTE wtm_1099_stmt_2;
+DEALLOCATE PREPARE wtm_1099_stmt_2;
 
 -- ============================================================
 -- PostgreSQL
@@ -210,6 +264,13 @@ CREATE INDEX IF NOT EXISTS IX_RefreshToken_ITCode ON "FrameworkRefreshTokens"("I
 ALTER TABLE "FrameworkUsers" MODIFY "Password" NVARCHAR2(256) NOT NULL;
 
 -- P0-2: Create refresh token table
+-- NOT guarded, matching the P0-1 decision above (issue #1082): this repo
+-- deliberately does not add a conditional existence check for Oracle here.
+-- Unlike the P0-1 ALTER (documented above as an expected no-op on rerun),
+-- rerunning this CREATE TABLE / CREATE INDEX block against a database where
+-- FrameworkRefreshTokens or either index already exists WILL raise an error
+-- and abort the script. Confirm manually (the pre-flight check at the top
+-- of this file, plus a USER_TABLES / USER_INDEXES lookup) before rerunning.
 CREATE TABLE "FrameworkRefreshTokens" (
     "ID"              RAW(16)        DEFAULT SYS_GUID() NOT NULL PRIMARY KEY,
     "Token"           NVARCHAR2(256) NOT NULL,

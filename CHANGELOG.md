@@ -64,6 +64,20 @@ Cross-vendor design review (Codex gpt-5.6-sol, round 6): **APPROVED WITH NAMED C
 
 **Both controllers changed** (`BaseController.RedoUpdateModel`, `BaseApiController.RedoUpdateModel`); the `ILoggerFactory` DI lookup is now resolved lazily on first need per request and reused for the rest of the loop, instead of running once per rejected key. `Configs.EnforceRequestBindingScope`'s default and its enforcement short-circuit (the policy is not evaluated at all when the option is `false`) are both unchanged — this is a logging-severity change only; no config option added, no control weakened. Verified: `dotnet test test/WalkingTec.Mvvm.Core.Test` filtered to `RequestBindingPolicy` (39/39 pass), the full Core test project (5220/5220 pass), and `test/WalkingTec.Mvvm.Api.Test`'s existing end-to-end HTTP exploit test `RequestBindingScopeHttpTests867` (5/5 pass).
 
+### Fixed — `db-migration-8.1.13.sql` P0-2 (`FrameworkRefreshTokens` table + its two indexes) had no idempotency guard for SQL Server, and MySQL's two indexes had none either (#1099)
+
+#1082 added idempotency guards to P0-1 (the `Password` column widen) for every provider except Oracle (a deliberate, documented decision). P0-2 (`CREATE TABLE FrameworkRefreshTokens` + its two indexes) was left out of that pass: the SQL Server `CREATE TABLE` and both `CREATE INDEX` statements had no guard at all, and MySQL's `CREATE TABLE IF NOT EXISTS` covered the table but not its two `CREATE INDEX` statements (MySQL has no `CREATE INDEX IF NOT EXISTS` syntax). Rerunning the unguarded statements against a database where the table or an index already exists aborts the script with an error — a real risk during a production cutover window, since an operator re-running this file mid-migration has no reliable way to know in advance whether a partial prior run already created it.
+
+**SQL Server**: `CREATE TABLE [FrameworkRefreshTokens]` and both `CREATE INDEX` statements are now each wrapped in `IF NOT EXISTS (...) BEGIN ... END`, checking `sys.tables`/`sys.indexes` by name — the same style the P0-1 SQL Server guard already uses a few lines above.
+
+**MySQL**: `CREATE TABLE IF NOT EXISTS` is unchanged; the two `CREATE INDEX` statements are now each guarded by a `PREPARE`/`EXECUTE`/`DEALLOCATE` block that probes `information_schema.statistics` for the index name first, mirroring the pattern the P0-1 MySQL guard already uses against `information_schema.columns`.
+
+**PostgreSQL and SQLite were already fully guarded** (`IF NOT EXISTS` throughout) — untouched by this fix.
+
+**Oracle is deliberately left unguarded**, matching the #1082 decision for Oracle P0-1 (a name-based existence check risks the same case-sensitive quoted-identifier failure mode that issue documents). A comment was added directly above the Oracle P0-2 `CREATE TABLE` making this explicit and instructing operators to confirm manually — via the pre-flight check at the top of the file plus a `USER_TABLES`/`USER_INDEXES` lookup — before rerunning.
+
+**Not verified against a real database** — no SQL Server or MySQL instance is available in this environment. The new guards are written to match the style and catalog-lookup approach of the already-existing, similarly-unverified P0-1 guards from #1082; see `docs/production-readiness.md` for the same caveat, applied to this entry.
+
 ## [10.22.1] - 2026-08-03 — 未曾單獨發布，隨 10.23.0 出貨
 
 > **這個版號沒有 tag，也沒有上架任何 registry。** `#1034` 的修復（`#1044`，commit `49bb4715b`）當時是按獨立 patch 版準備的，`version.props` 也一度是 `10.22.1`；之後 `#1007`／PR `#1046` 才把 `VersionPrefix` 推到 `10.23.0`，本節的內容因此隨 `10.23.0` 一併出貨。**不要嘗試 pin `10.22.1`** —— 它不存在（`#1075`）。
