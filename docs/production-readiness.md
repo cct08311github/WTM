@@ -2298,7 +2298,13 @@ run 6509 因此死於 `Error 945`（insufficient system memory）。
 
 新增公開 enum `WalkingTec.Mvvm.Core.CipherAlgorithm`
 （`src/WalkingTec.Mvvm.Core/Support/CipherAlgorithm.cs`）：`Aes256Cbc = 0`（預設、建議）、
-`LegacyDes = 1`（`[Obsolete]`，僅供回滾情境使用）。新增
+`LegacyDes = 1`（僅供回滾情境使用；**enum 成員本身刻意未標 `[Obsolete]`**，只有後端方法
+`Utils.EncryptStringLegacy` 有標 —— 標在成員上會讓每一個合法選用 DES 的呼叫點產生 `CS0618`，
+而讀取既有 8.x 密文是長期支援的用途；不安全的警告寫在該成員的 XML 註解裡。
+**2026-08-12 更正（#1106）**：本節與 `CHANGELOG.md` 的 10.23.0 條目原本都寫該成員帶
+`[Obsolete]`，那是假的 —— `grep 'Obsolete' src/WalkingTec.Mvvm.Core/Support/CipherAlgorithm.cs`
+零命中，對照組 `Utils.cs` 3 命中。程式碼是對的、兩份文件同向寫錯，所以「CHANGELOG 不得超過本檔」
+這條**相對**判準沒有攔住它）。新增
 `Utils.EncryptString(string, string, CipherAlgorithm)` 多載；既有的兩參數
 `EncryptString(string, string)` 改為委派給新多載並傳入 `CipherAlgorithm.Aes256Cbc`，方法本體
 （AES-256-CBC 的實際加密邏輯）逐行原樣搬到新多載內，沒有任何邏輯修改——`git diff` 對
