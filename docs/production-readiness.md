@@ -2287,6 +2287,237 @@ run 6509 因此死於 `Error 945`（insufficient system memory）。
 
 ---
 
+## `Utils.EncryptString` 新增 `CipherAlgorithm` 多載，預設維持 AES-256-CBC（#1086，2026-08-10）
+
+### 背景
+
+下游若需要保留「回滾到 8.x 世代部署」的能力，必須能產生 8.x 格式的 DES 密文——但寫入側
+（`EncryptString`）早已只剩 AES-256-CBC 一條路徑，沒有任何方式產生舊格式密文。
+
+### 修法：新多載，不是加預設參數
+
+新增公開 enum `WalkingTec.Mvvm.Core.CipherAlgorithm`
+（`src/WalkingTec.Mvvm.Core/Support/CipherAlgorithm.cs`）：`Aes256Cbc = 0`（預設、建議）、
+`LegacyDes = 1`（`[Obsolete]`，僅供回滾情境使用）。新增
+`Utils.EncryptString(string, string, CipherAlgorithm)` 多載；既有的兩參數
+`EncryptString(string, string)` 改為委派給新多載並傳入 `CipherAlgorithm.Aes256Cbc`，方法本體
+（AES-256-CBC 的實際加密邏輯）逐行原樣搬到新多載內，沒有任何邏輯修改——`git diff` 對
+`Utils.cs` 這次 commit 只有 67 insertions / 0 deletions，AES 路徑因此是結構性保證未變，不是靠
+肉眼比對。
+
+**刻意選擇新多載，而非對既有方法加預設參數**：對一個已發布的 `public static` 方法加帶預設值
+的第三參數，會改變該方法在 metadata 上的簽章（arity 從 2 變 3）；已針對舊簽章編譯好、只換新版
+DLL 而未重新編譯的呼叫端組件，在執行期會找不到 `(string, string)` 這個方法而拋
+`MissingMethodException`——這是 binary compatibility 問題，`dotnet build` 測不出來，只有換掉
+DLL 但不重新編譯呼叫端才會顯性。新多載完全不觸碰既有方法的簽章，避免這個風險。
+
+新增 `Utils.EncryptStringLegacy(string, string)`（`[Obsolete]`）：8.x 世代的 DES 加密實作，與
+既有 `DecryptStringLegacy` 共用同一個 private `CreateLegacyDes` provider 與金鑰／IV 衍生邏輯，
+確保產出的密文可被本版 `DecryptString` 的 DES fallback 或舊版本正確解回。
+`EncryptString(..., CipherAlgorithm.LegacyDes)` 委派給它。
+
+### 上游預設不變；沒有組態開關
+
+**`EncryptString(string, string)` 的行為與簽章完全沒有變化**——只有想要 DES 輸出的呼叫端才需要
+改用三參數多載並明確傳入 `CipherAlgorithm.LegacyDes`。`Utils` 是 static helper，刻意不讀取任何
+組態來源（`IConfiguration`／`IOptions`／DI），所以框架沒有、也不會提供任何 appsettings 層級的
+開關讓 `EncryptString(string, string)` 改變預設行為——這是設計選擇，不是遺漏：一旦讓 static
+helper 讀組態，就要解決它在什麼 DI scope 下被呼叫、組態尚未載入時的初始值等一整組新問題，超出
+這次修法的範圍。
+
+### 8.x wire-format 相容性——測試中記載的推論，不是已驗證的事實
+
+`EncryptionTests.cs` 新增一支
+`EncryptString_LegacyDesAlgorithm_MatchesKnownEightPointXWireFormat`，對固定明文／金鑰硬編
+一組期望的 Base64 密文。測試自己的註解記載了這條硬編值的推論依據：手動比對 HEAD 的
+`CreateLegacyDes` 與 6.3.27（commit `c1985f5f6`）的 `GenerateDESCryptoServiceProvider`，除了
+`while (key.Length > 8)` 改寫成 `if (key.Length > 8)`（`Substring(0, 8)` 恆回長度 8 的字串，
+兩者等價）之外完全相同，因此推論兩版對同一組輸入會衍生出相同的 DES Key／IV，產出
+byte-identical 的密文。**這是讀原始碼比對出的推論，不是實際對 6.3.27 執行過並比對輸出**——
+這個環境沒有可執行 6.3.27 版本程式碼的 fixture，也沒有真的跑過。若這條測試未來變紅，代表 DES
+key/IV 衍生邏輯或密文格式改變了，需要先確認是否為刻意的格式變更，而不是直接更新期望值。
+
+### 驗證
+
+`dotnet build`（Core）0 error。新增測試 10 條（`EncryptionTests.cs`，194 insertions），涵蓋：
+兩參數多載與明確傳 `Aes256Cbc` 的三參數多載輸出長度一致且都能被 `DecryptString` 正確解回；
+用同一個 private `CreateAes` factory 搭配固定 IV 建構已知答案向量（非讀回隨機輸出）驗證
+SHA-256 金鑰衍生／AES-256／CBC／PKCS7／IV-前置格式；`EncryptStringLegacy`/`DecryptStringLegacy`
+round-trip；`EncryptString(..., LegacyDes)` 產出的密文能被 `DecryptStringLegacy` 與
+`DecryptString`（短密文與長密文兩種分支）正確解回；上述 8.x wire-format 硬編向量測試。
+
+### 這次沒有做、也不宣稱的事
+
+- 不宣稱 `DecryptString` 有任何變化——這次 commit 對 `DecryptString` 一行未動（它的變更是
+  #1085，見下一節）。
+- 不宣稱 8.x wire-format byte-identical 是已對 6.3.27 實測驗證的事實——見上方，是讀碼推論。
+- 不提供任何組態層級的演算法切換開關，也不宣稱這是遺漏——是刻意的設計選擇。
+- 不宣稱本次工作階段驗證過真正的 Gitea Actions CI 行為——本機 `dotnet build`／`dotnet test`。
+
+---
+
+## `DecryptString` 的 legacy-DES 退回判準改用 AES 輸出的明文合理性檢查，不再只靠例外（#1085，2026-08-10）
+
+### 問題
+
+`DecryptString` 原本的退回（fallback 到 legacy DES）只有兩個觸發條件：Base64 解碼後長度
+< 32 bytes（確定性、正確——這個長度不可能是 `EncryptString` 產生的 AES-256-CBC 密文），與
+AES 解密拋出 `CryptographicException`（機率性）。對 >= 32 bytes 的密文，.NET 的 PKCS7 unpad
+只在 padding-count byte 為 1 時才會重新驗證它自己——也就是說，即使金鑰整個是錯的，只要解出來
+的最後一個 byte 剛好是 `0x01`，unpad 就會「成功」而不拋例外。此時 `DecryptString` 會直接把這段
+對呼叫端而言毫無意義的位元組當成明文回傳，呼叫端沒有任何方式與真正成功的解密結果區分——若這段
+亂碼被當連線字串使用，觀察到的症狀會是「連不上資料庫」，而非任何看得出來是「解密失敗」的訊號。
+
+### 修法
+
+新增 private `TryAesDecrypt`（把「AES 解密＋PKCS7 unpad」抽出，回傳是否沒有拋出例外，
+`out` 解密出的位元組）與 internal `LooksLikePlaintext`（見下方判準）。`DecryptString` 現在
+要求 `TryAesDecrypt` 成功**且** `LooksLikePlaintext` 通過，AES 結果才會被採用；任一項失敗，
+一律退回 legacy DES（與過去「AES 硬失敗永遠退回」的行為一致，只是多了一種會觸發退回的情況）。
+長度 < 32 bytes 的確定性退回路徑完全未動。
+
+**`LooksLikePlaintext` 判準**：位元組必須是合法 UTF-8（`System.Text.Unicode.Utf8.IsValid`），
+且解碼後的字元中，除了 `\t`／`\r`／`\n` 之外不得含有其他 Unicode 控制字元
+（`char.IsControl`）。空位元組陣列視為通過（非空 AES 密文合法解出空明文是可能的情境，不算
+不通過）。XML 註解與 log 字串都明寫這仍是啟發式判斷，不是密碼學保證。
+
+只有 `DecryptString` 這一個方法變了；`EncryptString`／`DecryptStringLegacy` 一行未動。這次
+修法沒有新增任何 public API——把這個判準本身 expose 給呼叫端是另一個 issue（#1085b，見下一節）
+的範圍。
+
+### 這是一個啟發式的縮小，不是缺陷的消除——兩個方向都要看
+
+**方向一：假接受的機率被降低，但不是零。** AES-CBC 本身沒有認證（no MAC）：多區塊密文的
+PKCS7 padding 合法性只取決於**最後一個**區塊，與 IV 無關；因此翻轉 IV 裡的位元不會影響
+padding 是否通過，卻會改變**第一個**明文區塊的可見位元組（`P0 = D(C0) XOR IV`）。也就是說，
+一段密文即使 padding 驗證通過，其第一個區塊的內容仍可能被竄改而不被偵測到，只要竄改後的位元組
+剛好仍是合法 UTF-8 且不含被禁的控制字元，`LooksLikePlaintext` 就會接受它。用錯誤金鑰解密、
+「碰巧」通過檢查的機率也還是存在，只是比「單純沒有拋出例外」低。新增的
+`DecryptString_AesUnpadsWithoutExceptionButOutputIsNotPlaintext_FallsBackToLegacyDes` 測試用
+確定性構造（不是統計性地重跑很多次）示範了這整個機制：手算一個 IV 與一個目標明文區塊
+（15 個 `0xFF` + 1 個 `0x01`），透過與 `DecryptString` 內部相同的 AES key、原始 ECB 加密反推出
+會解出該明文區塊的密文區塊——`TryAesDecrypt` 對這段構造出的密文確實不拋例外，但
+`LooksLikePlaintext` 因為 `0xFF` 不是合法 UTF-8 而拒絕它，`DecryptString` 因此正確退回 DES。
+**這支測試證明的是「機制按判準運作」，不是「判準永遠正確」**——如果能構造出解密後全部落在合法
+UTF-8、且不含禁用控制字元範圍內的位元組，這個判準會接受它，測試沒有、也不能排除這種輸入存在。
+
+**方向二：這個檢查本身可能拒絕合法的 AES 明文，造成新的迴歸。** 一段真正用正確金鑰
+`EncryptString` 加密、AES 解密完全正確的明文，只要內容含有 NUL（`\0`）、ESC、DEL 等
+`\t`/`\r`/`\n` 以外的控制字元，`LooksLikePlaintext` 就會判定不通過，`DecryptString` 會退回
+legacy DES 路徑，**不會回傳原始明文**。升級前把這類內容餵給 `EncryptString`／`DecryptString`
+的下游，升級後可能觀察到 `DecryptString` 不再忠實還原原文。這是本次修法引入的、先前不存在的
+行為變化，不是既有缺陷的殘留。
+
+### 測試釘住判準本身的邊界，不只是端到端行為
+
+`LooksLikePlaintext_*` 系列（`EmptyArray`→true、合法 ASCII／多位元組 UTF-8（含中文與 emoji）
+→true、tab/CR/LF→true、非法 UTF-8 位元組／單獨的 continuation byte／截斷的多位元組序列→false、
+非 tab/CR/LF 的控制字元（NUL）→false）直接呼叫 internal 方法（透過 `InternalsVisibleTo`），
+逐一釘住判準的決策邊界，不只依賴端到端組裝出的案例。
+
+### 遷移
+
+**如何判斷自己是否受影響**：檢查是否曾經把含有 tab／CR／LF 以外控制字元（例如 NUL、ESC、
+DEL）的內容，透過 `EncryptString` 加密過。只要有過這種加密，就受影響——升級到這個版本後，
+`DecryptString` 對那個值不再忠實還原原文。
+
+**升級前的補救**：在目前運行的版本上，把受影響的值解密出來，轉換成不含這類控制字元的表示形式
+（最簡單的做法是先對原始位元組做 Base64 編碼）再重新用 `EncryptString` 加密並落地儲存；讀取路徑
+同步加上對應的反向轉換。
+
+**來不及補救時的暫時迴避**：釘住 `10.22.0` 或更早版本，直到一個讓呼叫端能明確指定演算法、
+確定性解密的多載出貨為止。目前**沒有任何在既有版本內繞過的辦法**：`LooksLikePlaintext` 是
+internal、`TryAesDecrypt` 是 private、`DecryptString` 只有上方使用的兩參數多載——下游沒有任何
+API 層級的逃生口。
+
+**fix-forward 追蹤票**：**#1103**（`DecryptString` 的 `CipherAlgorithm` 多載——是本版
+`EncryptString(string, string, CipherAlgorithm)` 新增多載在解密側的對應項）。
+
+**這個失敗是靜默的，不是例外——必須明寫**：受影響的呼叫既不拋例外，也不會在呼叫端可觀察到的
+任何地方留下錯誤訊號。`LooksLikePlaintext` 判定合法的 AES 明文為「不像明文」而拒絕它，
+`DecryptString` 因此退回 `DecryptStringLegacy`；DES 對著 AES 密文的位元組解密會拋出
+`CryptographicException`，這個例外在 `DecryptStringLegacy` 內部被接住
+（`catch (CryptographicException) { return ""; }`）——呼叫端最終拿到的是空字串，與任何其他
+合法的空字串結果無法區分，沒有例外，也沒有任何錯誤訊號。
+
+### 驗證
+
+`dotnet build`（Core）0 error。這次 commit 新增測試（`EncryptionTests.cs`，148 insertions）；
+commit 訊息自報「31 測試綠，含 8.x 線格式硬編向量」，本節未重新逐條計數複驗這個總數。
+
+### 這次沒有做、也不宣稱的事
+
+- **不宣稱這個啟發式檢查是密碼學保證，也不宣稱假接受的機率是零**——見上方方向一。
+- **不宣稱這個修法沒有引入新的行為變化**——見上方方向二，含控制字元的合法明文的行為確實變了。
+- 不新增任何 public API——`GetDecryptRoute` 是獨立的下一個 commit（#1085b）。
+- 不宣稱本次工作階段驗證過真正的 Gitea Actions CI 行為——本機 `dotnet build`／`dotnet test`。
+- 不宣稱升級前補救或釘版之外還有其他繞過方式——見上方「遷移」段落，下游目前沒有 API 層級的
+  逃生口，fix-forward（#1103）出貨前只有這三條路。
+
+---
+
+## 新增 `Utils.GetDecryptRoute`，把「`DecryptString` 會走哪條路」變成公開契約（#1085b，2026-08-10）
+
+### 背景
+
+#1085 修好了退回判準本身，但判準仍是 private、隱含的——任何想在啟動期對已加密設定值做健檢
+（例如標出「會落入機率性 AES 嘗試路徑」的連線字串）的下游，都得自己重新猜一次
+`DecryptString` 的內部分支邏輯。真實案例中，某下游猜錯了方向：它主動警告的恰好是會**確定性**
+退回的那一類（短密文），對真正會走**機率性** AES 嘗試路徑（因而風險較高）的那一類反而沉默。
+
+### 修法
+
+新增公開 enum `WalkingTec.Mvvm.Core.DecryptRoute`
+（`src/WalkingTec.Mvvm.Core/Support/DecryptRoute.cs`）：`Empty`（輸入為 null/空字串）、
+`NotBase64`（不是合法 Base64）、`LegacyDesShort`（解碼後 < 32 bytes，確定性退回 DES）、
+`AesAttempted`（解碼後 >= 32 bytes，`DecryptString` 會先嘗試 AES）。新增公開方法
+`Utils.GetDecryptRoute(string?)`，回傳這個分類。
+
+**判準與 `DecryptString` 共用同一份邏輯，不是平行複製。** `DecryptString` 本身也被重構為呼叫
+新的 private `ClassifyDecryptRoute(string?, out byte[]? fullCipher)`，`GetDecryptRoute` 呼叫
+同一個方法（丟棄 `fullCipher` 這個內部細節）。兩者共用同一個判斷來源，避免「文件記載的判準」
+與「程式實際的判準」各自維護、隨時間漂移成兩個不同答案——那樣會讓這個 API 本身變成它想解決的
+問題的第二個實例。
+
+### `AesAttempted` 的命名邊界——這是這個 API 存在的核心限制
+
+**`AesAttempted` 回答的是「`DecryptString` 接下來會不會先嘗試 AES」，不是「這段密文事實上是
+AES 加密的」——後者從密文本身無法判斷。** 一段用 legacy DES 加密、恰好長度 >= 32 bytes 的
+密文，同樣會被分類成 `AesAttempted`（新增的
+`GetDecryptRoute_KnownEightPointXDesWireFormatVector_ReturnsAesAttempted` 測試用 #1086 節同一條
+硬編 8.x DES 密文向量直接證明這一點——它是真正的 DES 密文，卻回傳 `AesAttempted`）。
+enum／方法命名刻意不用 `CipherFormat`／`AesCandidate` 這類字眼，因為那些名字會暗示「對密文本身
+演算法的斷言」，而這正是這個 API 要避免造成的誤讀方向；`DecryptRoute`／`AesAttempted` 描述的是
+`DecryptString` 接下來會做的**動作**，讀不出對密文本質的任何斷言。下游若把 `AesAttempted` 讀成
+「已確認是 AES」，方向就反了。
+
+`LegacyDesShort` 雖然名字裡有 "LegacyDes"，路徑本身仍是**確定性**的（不涉及 AES 嘗試），不需要
+下游對它提高警覺；真正值得下游關注、記錄或提出警告的只有 `AesAttempted`（機率性路徑，最終走
+哪一條取決於金鑰是否正確與 `LooksLikePlaintext` 的啟發式判斷，見上一節）。
+
+### 行為不變的證據
+
+就本節而言：`EncryptionTests.cs` 既有 31 條測試（#1086／#1085 兩節新增的那些）零修改全綠，
+測試檔本身 diff 為 73 insertions / 0 deletions——`DecryptString` 對外行為完全沒變，只是內部
+實作改成委派給共用的 `ClassifyDecryptRoute`。新增 6 條測試：`null`／空字串→`Empty`；非法
+Base64→`NotBase64`；短 DES 密文→`LegacyDesShort`（含 fixture 自我檢查密文確實 < 32 bytes）；
+`EncryptString` 產生的 AES 密文→`AesAttempted`（含 fixture 自我檢查 >= 32 bytes）；上述 8.x
+DES 硬編向量→`AesAttempted`（見上方，其存在本身就是在替這個 API「不判斷演算法」這件事文件化）。
+
+### 驗證
+
+`dotnet build`（Core）0 error。`EncryptionTests.cs` 相關測試全綠（既有 31 + 新增 6）。
+
+### 這次沒有做、也不宣稱的事
+
+- **不宣稱這個 API 能判斷一段密文實際是用哪種演算法加密的**——見上方「命名邊界」一節，這是這個
+  API 刻意不做、也做不到的事。
+- 不宣稱 `DecryptString` 的判準或行為有任何變化——這次修法只是把既有判準（#1085 已修好的那個）
+  透過共用的 private 方法 expose 出來，沒有改動判準本身。
+- 不宣稱本次工作階段驗證過真正的 Gitea Actions CI 行為——本機 `dotnet build`／`dotnet test`。
+
+---
+
 ## `RedoUpdateModel` 綁定拒絕改依原因分流日誌等級，一個安全 logger 不再對正常請求持續產生 Warning（#1080，2026-08-10）
 
 ### 問題
@@ -2381,6 +2612,36 @@ overload 改成純委派——`Classify(...) == BindingRejectionReason.None`—�
   改成委派給新的 `Classify`。
 - 不宣稱本次工作階段驗證過真正的 Gitea Actions CI 行為——驗證方式全部是本機
   `dotnet build`／`dotnet test`。
+
+### 2026-08-12 更正（#1100）：`NoWritableTarget`「不可能寫入」的宣稱在多段 key 下不成立
+
+上面「`NoWritableTarget`：唯一可證明『不可能寫入』的那一類」一節，與本次修法當時的 runtime
+log 字串、XML 註解，都寫成「保證不寫入任何東西」──這句話只對**單段** key 成立。
+`PropertyHelper.SetPropertyValue` 的中繼走訪迴圈（`PropertyHelper.cs:523` 起，
+`for i < level.Count - 1`）在抵達 `:554-557` 的最終段檢查**之前**，會在中繼屬性為 `null` 且該
+型別有 public 無參數建構子時（`:538-541`）自己執行 `vm.A = new TA()` 這樣的寫入。所以對多段
+key（例如 `"A.B"`，`A` 原本是 `null`），一次被分類成 `NoWritableTarget` 的拒絕，實際上仍抑制了
+一次真實的狀態變更（把 `vm.A` 從 `null` 寫成一個新的預設實例）──「保證不寫入任何東西」在這個
+案例下是假的。
+
+**不是安全漏洞**：這次被抑制的寫入，目標型別由 VM 定義本身決定（呼叫者無法控制寫成哪個型別的
+實例），寫入的是非 gateway 的 VM-local 屬性，值是預設建構的實例，不是任何可利用的寫入。真正的
+問題是「保證不寫入任何東西」這句話印在 production log 與 XML 文件裡，會讓維運人員誤信這一類
+拒絕永遠沒有副作用。
+
+**修法（#1100，僅字串與註解，零行為變更）**：把 log 字串與 XML 註解的措辭從「provably no write
+could land」改為「final path segment resolves to no member」──只描述『最後一段查不到成員』
+這個確實可證明的事實，不再宣稱『因此不會有任何寫入』。新增 `RequestBindingPolicyTests867.cs`
+的一支測試，直接證明多段 key 的這個副作用真實存在：斷言呼叫前 `vm.A` 為 `null`，呼叫
+`SetPropertyValue(vm, "A.B", ...)`（`A.B` 分類為 `NoWritableTarget`）之後 `vm.A` 變成非
+`null`。#1092 當時新增的 8 條測試全用單段 key，這個缺口先前沒有任何測試把關。上方原文保留不動
+（只加這個更正段落），體例同本檔既有的「Corrected 2026-08-03（#1035）」先例。
+
+**受影響範圍**：只有 `NoWritableTarget` 這個分類的說明文字變了（`Classify`／`IsPathAllowed` 的
+回傳值本身沒有變）；`RequestBindingPolicyTests867.cs` 既有 39 條測試、
+`Configs.EnforceRequestBindingScope` 的預設值與短路語意皆未變動。commit 訊息自報全專案
+5222 passed / 0 failed，本節未重新逐條計數複驗。**未驗證本次工作階段的真正 Gitea Actions
+CI 行為**——本機 `dotnet build`／`dotnet test` 而已。
 
 ---
 
@@ -2629,6 +2890,7 @@ NPOI 2.7.6（也包含最新 2.8.0）transitive 拉 vulnerable `System.Security.
 | #829 —— 四個 VM-name 端點在授權**之前**仍會建構呼叫者指定的 VM（改用 `TryResolveVmType`） | `GetExportExcel`/`GetExportExcelStream`/`GetExcelTemplate`/`GetDeletePreview` 原本都用 `Wtm.CreateVM(name, null, null, true)` 探測呼叫者指定的 VM 型別後才呼叫對應 hook；`passInit: true` 只擋 `DoInit()`/`InitVM()`/`searcher.DoInit()`，**從未擋過建構式本身**、`WTMContext.CreateVM` 對 `IBasePagedListVM` 無條件呼叫的 `lvm.DoInitListVM()`，或對 `IBaseImport<BaseTemplateVM>` 同樣無條件呼叫的 `tvm.Template.DoInit()`（`GetExcelTemplate` 自己原本的註解就承認「there is no passInit-only way to avoid that from this call site」）。即使 enforcement flag 已開啟、最終回傳拒絕，已認證使用者仍可指定任意 VM 型別觸發其自訂初始化與資料庫查詢。修法：改用 `WTMContext.TryResolveVmType`（只解析 `Type`，不建構任何實例）——與 `DoImport` 為 #818 已採用的解法相同——四個端點在授權通過之前完全不建構任何東西。`GetDeletePreview` 對「無法解析名稱」這個子集的回應**恢復**為 `BadRequest()`——與 `CanPreviewDelete` 拒絕的 `Forbid()` 分開兩個 return，避免兩種情況合流。**但這只恢復了 base tree 原本 `try { Wtm.CreateVM(name, null, null, true) } catch (ArgumentException)` 捕捉到的其中一個子集，不是全部**：base 的 `try` 包住整個探測式建構呼叫，包含 `WTMContext.CreateVM` 對 `IBasePagedListVM` 無條件呼叫的 `lvm.DoInitListVM()`（`WTMContext.CreateVM.cs:143`）與對 `IBaseImport<BaseTemplateVM>` 無條件呼叫的 `tvm.Template.DoInit()`（`:150`）——所以一個名稱本身可以解析、但該 VM 初始化時丟出 `ArgumentException` 的情況，在 base tree 上也會落到同一個 `BadRequest()`。#829 的修法刻意把整個探測呼叫移除；名稱可解析之後的建構（以及它可能丟出的例外）現在只發生在授權通過後的逐列迴圈裡，這個方法本身沒有包 try/catch。也就是說，這一批更寬的 `ArgumentException`（名稱可解析、但 VM 初始化失敗）不再回傳 `BadRequest`——這是 #829 把建構移到授權判定之後的直接後果，不是本次修正引入或遺留未修的迴歸，也是刻意接受的取捨：要重新攔下它就等於重建 #829 本來要移除的那個授權前探測呼叫。**PR #881 review 抓到的過程性錯誤**：中間一版把兩種情況合併成同一個 `Forbid()`（無法解析名稱從 400 變成 302），且同段註解還聲稱「unchanged」——review 用 `git show origin/dotnet10:...` 對照 base tree 抓到這個矛盾；已拆開修正，並補上 `GetDeletePreview_UnknownVmName_ReturnsBadRequestNotForbid` regression test。驗收：`test/WalkingTec.Mvvm.Admin.Test/FrameworkControllerVmConstructionOrderingTest.cs` 用計數器 fixture（建構式、`InitListVM()`、`GetSearchQuery()`、匯入樣板的 `InitVM()`——即 `BaseVM.DoInit()` 的實作本身）逐一證明拒絕路徑上全部為零次呼叫，每條負向斷言在同一支測試檔中配一個允許路徑的正控組。Mutant `mvc829-getexportexcel-reintroduce-preauthz-construction`（`VERDICT: KILLED`）在授權判定前重新插入一次（結果被丟棄的）探測式建構呼叫，證明驗收測試真的依賴這個修法而非巧合。 |
 | #947 —— `Selector` 的 `Ids` 分支繞過列級 `DataPrivilege`（`SearcherMode.Batch` + `ReplaceWhere` 刪光所有 `Where`，含授權過濾）；`GetBatchQuery()` 改走「空白 Searcher + AND」，連帶關掉更多同機制的兄弟站點（PR #953 adversarial review 後修正版） | `_FrameworkController.Selector`（`_FrameworkController.cs:413`，`[AllRights]`，任何已認證帳號可觸發——但見下方「#953 F9」對「任何」的窄化）在 `Ids?.Count > 0`（widget 顯示「已選取」的 chip 列表）時原本設 `SearcherMode = Batch` 並把 `listVM.ReplaceWhere` 設成 `Ids.GetContainIdExpression(...)`。`DoSearch()`／`DoSearchAsync()` 對任何 `SearcherMode` 都會在 `ReplaceWhere != null` 時跑 `WhereReplaceModifier`（`ExpressionVisitors.cs:298-403`，自己的中文註解就寫「先調用一次 Visit，刪除所有的 where 表達式」）——這是逐 Where 節點刪除，不分辨哪個是 UI 搜尋條件、哪個是 `DPWhere`（`DCExtension.Query.cs:27-227`）加的列級授權過濾，兩者在 expression tree 上都只是普通 `Queryable.Where` 呼叫，結構上無法區分。淨效果：任何已認證呼叫者指定任意 VM 名稱＋任意 `Ids`＋任意 `_DONOT_USE_VFIELD`，即可取得列級授權原本會擋下的資料列。**#867 修的是同一個機制的另一個呼叫點（`GetPagingData` 漏了在 `RedoUpdateModel` 後釘回 `SearcherMode`），該修法的文件明確記錄「`Selector` 有做（釘回 `SearcherMode`）」——但 `Selector` 用 `Batch` 本身是刻意設計（selector 要顯示「已選取」的列，不管目前搜尋框打了什麼），從未檢查過這個刻意設計底下的 `ReplaceWhere` 到底刪了什麼；#867 的文件本身沒有宣稱涵蓋這個分支，本項不是對前次文件的更正。**範圍先講清楚**：`ITenant` 的 EF global query filter 是 `HasQueryFilter`（`DataContext.cs:257`）掛的 EF-internal 查詢重寫機制，不是 expression tree 上的 `.Where()` 節點，不在 `WhereReplaceModifier` 刪除的範圍內——目前證據指向**同租戶、列級 `DataPrivilege`** 繞過，**未證實**跨租戶讀取；本項修法與測試都只涵蓋前者。<br><br>**選定的修法（兩個候選之一，經 cross-vendor review 提出後評估選定，非直接照抄）**：不修 `WhereReplaceModifier` 本身（該類別被 `Export`／`MasterDetail`／任何 host app 自己設的 `ReplaceWhere` 共用，改它的刪除邏輯風險面遠大於本項範圍——見下方「#953 F8」，這個決定的代價是 `ReplaceWhere` 本身仍是一條活的繞過路徑）；改在 `BasePagedListVM` 新增 `GetAuthorizedIdsQuery`（private）：暫時把 `Searcher` 換成一個全新、未綁定的 `TSearcher` 實例（`CopyContext` 只帶 `Wtm`／`FC`／`ViewDivId`，不帶任何篩選欄位值）再呼叫 `GetSearchQuery()`，把 `Ids` 限制用一個普通 `.Where()` AND 上去。全程沒有刪除任何既有 `Where` 節點——這正是與 `WhereReplaceModifier`「先刪光再重建」相反的形狀。`GetBatchQuery()` 自己在 `ReplaceWhere == null` 時的預設分支改呼叫這個方法；`Selector` 本身**不再呼叫任何新方法**——`SearcherMode`已經是 `Batch`、`ReplaceWhere` 單純不設，`GetDataJson()` → `DoSearch()` → `GetBatchQuery()` 走到同一個已修分支即可，見下方「#953 F2」。<br><br>**#953 F2（adversarial review 修正，已採用）——原版多寫了一個不需要的公開 API，且繞過了 `DoSearch()` 本身**：初版讓 `Selector` 呼叫新方法 `PopulateSelectedEntities(Ids, peid)`，直接把 `EntityList`／`IsSearched=true` 填好、跳過 `GetDataJson()` 自己的 `DoSearch()` 分派——這個捷徑有兩個代價：(a) `DoSearch()` 開頭的 `GetSearchCommand()`（原生 SQL／預存程序來源的 ListVM 走這條，demo 樹的 `ActionLogListVM` 即為一例，`CustomView` 不是 mapped entity）被整個跳過，這類 ListVM 改成查 `DC.Set<TModel>()` 或直接丟例外；`Searcher.SortInfo` 的 `OrderReplaceModifier` 同樣被跳過。(b) 為了讓 `Selector` 能呼叫它，`PopulateSelectedEntities` 被加進 `IBasePagedListVM<out T, out S>` 介面——對外部實作者是 source／binary breaking change。Review 證明兩個代價都不必要：`GetBatchQuery()` 的預設分支已經修好之後，`Selector` 什麼都不用額外呼叫，把 `ReplaceWhere` 賦值那行直接刪掉、`SearcherMode = Batch`（本來就有）保留，`GetDataJson()` 自然流到 `DoSearch()` → `GetBatchQuery()` → 修好的預設分支——`GetSearchCommand()`／`SortInfo` 全部照舊生效，也不需要任何新公開 API。已採用：`PopulateSelectedEntities` 已從 `BasePagedListVM`／`IBasePagedListVM` 移除；`_FrameworkController.Selector` 現在只多一行 `listVM.SelectorValueField = _DONOT_USE_VFIELD;`（`GetBatchQuery()` 讀這個屬性決定 `Ids` 比對哪個欄位，取代原本手動組 `Expression.Property` 的寫法）。<br><br>**#953 F1（adversarial review 找到、已用可執行的重現程式驗證，非僅推論）——空白 Searcher 假設對第三類 `Where` 形狀不成立**：原版文件宣稱「換成空白 Searcher 就代表目前 UI 搜尋條件被忽略」，這句話只對「透過 `CheckContain`/`CheckEqual`/`CheckWhere` 等 guard-then-add helper 加的 `Where`」成立（helper 本身檢查 Searcher 欄位值為 null/空才跳過 `.Where()`，換成空白 Searcher 讓這個檢查失敗、`Where` 從一開始就不會被加入）。真正的不變式分三類：(1) guard-then-add helper 加的 `Where`——確實被壓下；(2) 完全不讀 Searcher 的 `Where`（`DPWhere` 加的授權 `Where`、寫死的業務規則 `Where`）——不管 Searcher 是不是空白都不受影響，這是本項修法依賴的性質；(3) **不經 guard helper、直接在 LINQ lambda 裡讀 Searcher 的 `Where`——不可靠地被壓下，取決於 Searcher 何時被讀取**，本 repo demo 樹本身就有兩種對應形狀，皆已用可執行的重現程式驗證（見驗收段落）：`demo/.../MajorDetailListVM.GetSearchQuery()`：`.Where(x=>Searcher.SchoolId==x.SchoolId)` —— `Searcher` 是對 VM 實例（`this`）的成員存取，包在 lambda closure 裡，在**查詢執行（enumerate）當下**才被讀取；`GetAuthorizedIdsQuery` 的 `finally` 在呼叫端真正列舉查詢**之前**就已經把 `Searcher` 還原回真實、request-bound 的值，所以這個 `Where` 讀到的是還原後的真實值，等於完全沒被壓下——即使該列的 id 明確寫在 `Ids` 裡，只要不符合目前搜尋框內容，照樣消失。`demo/.../CityChildrenDetailListVM.GetSearchQuery()`：`var id = (Guid?)Searcher.ParentId...; if (id == null) return new List<City>().AsQueryable()...;` —— 這段是 `GetSearchQuery()` 內的一般 C# 陳述式，在**空白 Searcher 生效期間同步執行**，`id` 永遠是 `null`，永遠走空清單分支，`Ids` 限制疊加在一個空的 `EnumerableQuery` 上——不管真實 `ParentId` 或請求的 `Ids` 是什麼，永遠回傳零筆、不查資料庫。**兩者皆為 fail-closed（缺資料或無資料，不會多洩漏），不是安全回歸，但都是先前未被記錄的相容性改變**——原本這些列會顯示（`WhereReplaceModifier` 舊行為會把整段 `Where` 砍掉），修法之後可能悄悄消失。已更正 `BasePagedListVM.cs` 的 `GetAuthorizedIdsQuery`／`GetBatchQuery()` XML 文件與行內註解為上述精確的三分類不變式；`test/WalkingTec.Mvvm.Core.Test/VM/BlankSearcherShapeTests953.cs` 用兩個對映上述形狀的 fixture ListVM 各釘住一支 regression test（斷言目前這個「不可靠」行為，若未來要讓它變成 2 筆／1 筆，必須走下方提到的 marker-tag 重新設計，不能悄悄改 `GetAuthorizedIdsQuery`）。結構性關掉這個殘留（在 `DPWhere` 掛的 `Where` 節點上加標記，讓 `WhereReplaceModifier` 能選擇性跳過而不是換空白 Searcher）是設計層級變更，留給另一輪處理，不折進本次修法。<br><br>**窮舉（本輪重新對整棵樹跑，不只 `src/`——`grep -rn "SearcherMode = \|\.ReplaceWhere =" src demo test --include="*.cs" --include="*.txt" \| grep -v "/obj/\|/bin/" \| grep -E "Batch\|CheckExport\|ReplaceWhere"`，`src/` 部分另以 `grep -rn "CheckExport" src --include="*.cs" --include="*.txt"` 補抓多行 ternary）**：`src/` 共 **13** 個獨立站點（原文件的窮舉只涵蓋 `src/` 且遺漏 3 個，已更正，見下表）；`demo/` 額外命中 **37** 行，`test/` 額外命中 **14** 行，兩者皆非獨立 sink——全部核對過，`demo/` 的 37 行清一色是 `vm.SearcherMode = ... ? CheckExport : Export` 這個模式（generated controller 呼叫框架既有機制），`test/` 的 14 行是既有測試直接操作 VM 屬性做隔離測試。**`src/` 13 個站點**：`_FrameworkController.cs:413`（`Selector`，本項直接修）／`:864`＋`:945`（`GetExportExcel`／`GetExportExcelStream`，`Ids.Count>0` 時設 `CheckExport`，未設 `ReplaceWhere`）／`Helper/FileExtension.cs:21`（`GetExportData<T>()`，公開 extension method，同款邏輯，demo 樹裡 52 個檔案、92 處呼叫，全部經 `GenerateExcel()`→`GetCheckedExportQuery()`→`GetBatchQuery()`）／`GeneratorFiles/Spa/Controller.txt:133`＋`GeneratorFiles/Spa/Blazor/Controller.txt:133`（**code generator 樣板，隨 NuGet 套件出貨**——每個用這個框架 scaffold 出來的下游 controller 都內建這個 `ExportExcelByIds(string[] ids)` action，直接收呼叫者傳入的 `ids`）／`BaseApiController.cs:143`＋`BaseController.cs:169`（皆為註解、非活動程式碼）／`Filters/FrameworkFilter.cs:148`（全域 `ActionFilter`，任何 action 參數是 `IBaseBatchVM<BaseVM>` 就觸發，`Ids` 可由呼叫者透過該筆業務端點自己的表單控制，但 VM 型別由該端點自己的參數型別決定、不是像 `Selector` 那樣呼叫者可自由指定字串）／`WTMContext.CreateVM.cs:101`與`Services/WtmVmFactory.cs:201`（`Wtm.CreateVM<T>(ids:...)`／`IWtmVmFactory.CreateVM(...)`，後者註冊進 DI 但全庫沒有任何建構子注入或呼叫，框架自己的 request path 用不到，只有 host app 自己注入才碰得到）／`TagHelpers.LayUI/Form/SelectorTagHelper.cs:199`（Razor 端渲染既有選取值，`Ids` 來自實體已存的欄位值、不是原始 HTTP 參數；`:203` 的 `ReplaceWhere` 賦值本身已註解掉）。這 13 個站點裡，除 `Selector` 自己（直接修）與 `GetPagingData`（`:486`，#867 已修，`SearcherMode` 釘回 `Search`，`Batch` 從未進入）外，其餘全部落入 `GetBatchQuery()` 自己的預設分支，修 `GetBatchQuery()` 一次就連帶關掉全部（含 `demo/` 那 37 個消費端與樣板產生的每一個下游 controller），不需要逐一修改呼叫端，也不需另立 issue。**這一點是雙面刃（#953 review 提醒）**：能一次關掉的範圍比原文件宣稱的 7 個框架呼叫點大得多，但「改動預設分支」造成的靜默行為變更（見上方「#953 F1」）波及的範圍也同樣是每一個下游 scaffold 出來的 controller，不是本 repo 內的 7 個站點。<br><br>**測試**：`test/WalkingTec.Mvvm.Api.Test/SelectorDataPrivilegeTests947.cs` 現有兩支測試。(1) `Selector_...`：`DemoWebApplicationFactory` 的隔離 `WithWebHostBuilder` 實例（改註冊 `List<IDataPrivilege>` 加入 `DataPrivilegeInfo<School>`——demo app 自己的 `Startup.DataPrivilegeSettings()` 對 `School`/`Major`/`City` 全部註解掉，不改這個隔離實例的話 `DPWhere` 會直接跳過檢查），seed 兩間學校各一個 `Major`、把 admin 的 `DataPrivilege` 只授權其中一間，一次 request 把兩個 `Major` 的 id 都塞進 `Ids`、同時附上一個兩邊 `Remark` 都不match 的 `Searcher.Remark`，斷言未授權的 `Major` 不在回傳的 `SelectData` 裡、已授權的 `Major` 有回傳（positive control，同時因為 `Searcher.Remark` 刻意不 match，也證明目前搜尋條件被正確忽略）。`Selector` 回傳的是渲染過的 Razor partial（`Selector.cshtml` 把 `ViewBag.SelectData` 原樣塞進 `<script>` 內的 `var var_XXXX = [...]`），測試用 regex 抓出這段 JSON 再解析，不是斷言 HTTP 狀態碼。**#953 F4（adversarial review 找到、已補）——`GetExportExcel`／`GetExportExcelStream` 這條額外關掉的路徑原本零測試覆蓋**：把 `GetBatchQuery()` 的預設分支還原成舊的 `WhereReplaceModifier` 重建，整個測試套件（含上面那支 `Selector` 測試，因為 F2 之後它也走 `GetBatchQuery()`）當時仍全綠，等於「額外關掉的那一半」完全沒被驗收證明過。新增 (2) `GetExportExcel_...`：獨立 seed 一組學校／`Major`／DataPrivilege 授權（不與 (1) 共用，證明不依賴測試執行順序），POST `/_Framework/GetExportExcel` 帶兩個 `Major` 的 `Ids`，用 NPOI `XSSFWorkbook` 解析回傳的 xlsx bytes，斷言未授權 `Major` 的 `MajorName` 不出現在任何 sheet／row／cell 裡、已授權的有出現（positive control）。<br><br>**Mutant（兩個，皆 `VERDICT: KILLED` / `GATE: PASS`）**：`947-selector-populateselectedentities-replacewhere-reintroduce`（`test/mutants/entries/`）把 `_FrameworkController.cs` 的 `listVM.SelectorValueField = _DONOT_USE_VFIELD;` 還原成修復前的 `listVM.ReplaceWhere = listVM.Ids.GetContainIdExpression(...)` 賦值（`SearcherMode = Batch` 本身兩行前就有、修復前後皆同，未動）——手動驗證：mutant 套用後兩個 `Major` 的 id 都出現在 `SelectData`，未修復前的繞過原樣重現；`red_test_filter` 為上面的 `Selector_...` 測試。`953-getbatchquery-wherereplacemodifier-reintroduce`（`test/mutants/entries/`）把 `BasePagedListVM.cs` 的 `GetBatchQuery()` 預設分支還原成舊的 `WhereReplaceModifier` 重建——`red_test_filter` 為上面的 `GetExportExcel_...` 測試，獨立證明「額外關掉的那一半」確實依賴這次修法、不是巧合綠燈。<br><br>**#953 F8（揭露，非本項修法範圍）——`ReplaceWhere` 本身仍是活的繞過路徑**：本項刻意不修 `WhereReplaceModifier`（見上方「選定的修法」），所以任何 host app 自己對某個 ListVM 設定 `IBasePagedListVM.ReplaceWhere`（一個文件記載的公開屬性）仍然會刪光包含 `DataPrivilege` 在內的所有 `Where`——`grep -rn "\.ReplaceWhere =" src` 確認框架自己的 request path 已經沒有任何一處還會這樣設（唯一殘留賦值在 `SelectorTagHelper.cs:203`，已註解），所以框架本身不可觸發，但這是 host app 若自己使用這個公開 API 就會落入的既有陷阱，不是本項修法製造的新洞。<br><br>**#953 F9（揭露，措辭窄化）——「任何已認證呼叫者」不含 `AllowUnauthenticatedSelector=true` 時的匿名呼叫者**：`_FrameworkController.cs:376-379`，`ConfigInfo.AllowUnauthenticatedSelector`（非預設）開啟時 `Selector` 連認證都不需要——安全公告草稿本身已正確記錄這點，本文件先前的「任何已認證呼叫者」措辭在該旗標開啟時其實是低估（under-claim）攻擊面而非高估，仍一併更正措辭以求精確一致。 |
 | #994 —— 下游可見文件的四處錯述（純文件修正，無程式碼變更） | 由下游（BMS）驗證 10.21.0-rc.1 時照我們自己的文件行動而暴露，見 #989。**(1) 遷移指引會叫人建一個已經存在的索引。** `CHANGELOG.md` `[10.18.0]` 的 Migration 段與 `docs/wtm-developer-manual.md` 都只寫「既有 DB 需手動 `CREATE INDEX`」，未提及本 repo 自己的 `db-migration-8.1.13.sql:93` 早已在同一欄位上建過索引。**已驗證的事實**：`RefreshTokenEntity.cs:38` 宣告 `[Index(nameof(Token), Name = "IX_FrameworkRefreshTokens_Token")]`；`db-migration-8.1.13.sql:93`（MSSQL）／`:132`（MySQL）／`:166`／`:187`／`:226` 建立 `IX_RefreshToken_Token` on `(Token)`——同欄位、不同名，兩者皆由讀取原始碼確認。`grep -cE "CREATE INDEX.*ExpiresUtc\|CREATE INDEX.*RevokedUtc" db-migration-8.1.13.sql` 回 **0**，故「腳本建的 DB 只缺 `ExpiresUtc` 與 `(RevokedUtc, ExpiresUtc)` 兩個索引」這句話有實據。**未驗證、明確標示為推論的部分**：「名稱不衝突所以 `CREATE INDEX` 會成功並靜默留下兩個重複索引」是依各 provider 以索引**名稱**（而非欄位集合）作為唯一識別的標準行為推導，**沒有實際在任何一個 provider 上執行過**；新增的四組查詢 SQL 與兩組冪等 DDL 同樣**未對任何真實資料庫執行過**，是照各 provider 的 catalog／DDL 語法撰寫。CI 不會執行它們，本 repo 也沒有可執行它們的多 provider fixture——這是本條目已知且刻意接受的證明力上限。一併補記反向分歧：`db-migration-8.1.13.sql:94` 建 `IX_RefreshToken_ITCode`，而 `RefreshTokenEntity.cs` 未宣告對應 `[Index]`，故腳本建的 DB 有此索引、EF 建的新 DB 沒有——由同兩份檔案的原始碼確認。**刻意不做的事**：不改 `db-migration-8.1.13.sql` 的索引命名以與 entity 對齊——改名會讓已照它建表的下游對不上，相容性優先於一致性（本 repo Red Line 的優先序）。**(2) 對全新選項寫「default flipped」。** `CHANGELOG.md` 原文為「`Configs.EnforceRequestBindingScope` default flipped to `true` (#867, P0, BREAKING)」。`git show 076cfbea7 -- src/WalkingTec.Mvvm.Core/ConfigOptions/Configs.cs` 的 diff 對該符號**只有 `+` 行、沒有 `-` 行**（`+ public bool EnforceRequestBindingScope { get; set; } = true;`），故該選項是被建立而非被翻轉，升級前狀態為「無此政策」。已改為「新增，預設 `true`」並補一段說明升級語意與回退方式的差別。下游據原措辭推論出一個從未存在的升級前值。`docs/release-adoption-ledger.md:162` 對此描述正確（「不存在（版本更早）」）。**(3) 版本歸屬錯誤。** `docs/wtm-developer-manual.md` 原文標「索引（10.17.0，#761）」；`git tag --contains 8117f9213` 只回 **`v10.18.0`**，故已更正為 10.18.0。同段上一行的 #757 標 10.17.0 經同法確認正確、未動。`CHANGELOG.md` 內的兩處 #761 索引敘述位於 `[10.18.0]` 段內，歸屬本就正確。**(4) 正確版本被 mirror 排除——已評估，結論為維持排除。** `docs/release-adoption-ledger.md` 在 `.sync/github-excludes.txt:35`，不進公開 mirror；它對 (2) 的描述正確而 CHANGELOG 錯誤，形成「錯的下游看得到、對的下游看不到」。**評估結果：排除本身正確且維持不變**——該檔記載下游（BMS）的部署版本、模組引用與可達性分類，屬於下游特定資訊，本就不該進公開 mirror。真正的缺陷是 CHANGELOG 寫錯，而非 ledger 被排除；(2) 修好之後下游已無看不到的事實，此項自行消解。**未做、且明確不主張已做**：沒有建立任何自動化機制來偵測「ledger 與 CHANGELOG 對同一版本存在性事實的陳述不一致」——本輪是人工比對發現的，下一次同類分歧不會被自動攔下。**整體範圍**：本項只改 `CHANGELOG.md`、`docs/wtm-developer-manual.md` 與本檔，無任何 `src/` 變更、無測試、無 mutant——沒有可 mutate 的行為，這個事實本身就是本條目的證明力邊界。 |
+| #1082 —— `db-migration-8.1.13.sql` 的 P0-1（`Password` 欄位加寬）四個 provider 段皆把表名寫成單數 `FrameworkUser`，P0-1 從未能真的執行成功 | 實際表名是 `FrameworkUsers`（`src/WalkingTec.Mvvm.Core/Models/FrameworkUser.cs` 上 `FrameworkUserBase` 的 `[Table("FrameworkUsers")]`）。修復前四段 P0-1（SQL Server／MySQL／PostgreSQL／Oracle）的 `ALTER TABLE`／`MODIFY COLUMN` 全部對著 `FrameworkUser`（單數，不存在的表）下手——在 SQL Server 上照原樣執行會直接報 `Invalid object name 'FrameworkUser'`，即 P0-1 自這支腳本問世以來從未能真的成功執行過。**它半對半錯正是它沒被發現的原因**：同檔的 P0-2（`CREATE TABLE FrameworkRefreshTokens`）表名一路是對的（複數），只跑過這段的人不會碰到任何錯誤，唯一下游因此付了兩次代價。**已驗證的事實（讀原始碼確認）**：修復前 `db-migration-8.1.13.sql` 四個 provider 段落各命中一次 `FrameworkUser`（單數），`FrameworkUserBase` 的 `[Table]` attribute 值為複數 `FrameworkUsers`，兩者由讀原始碼直接確認，非推論。**修法**：四段全部改為 `FrameworkUsers`；並為 SQL Server／MySQL／PostgreSQL 的 P0-1 各加上冪等保護（`IF EXISTS`／`information_schema` 查詢＋`PREPARE`/`EXECUTE`／`DO` block，依 provider 而異，查目前欄位寬度是否仍窄於 256 才真的執行 `ALTER`）；**Oracle 段刻意不加保護**——條件式保護需要用雙引號 mixed-case identifier 精確比對表名，而這正是本缺陷的同一種失效模式（查錯名字 → 查到 0 筆 → 誤讀成「不用做」），與其新增一個可能重蹈覆轍的查詢，選擇不加保護並在該段落上方加註解，要求操作者用檔案開頭新增的 pre-flight check 手動確認（這也是 #1099 條目對 P0-2 Oracle 段沿用的同一個決定）。**新增的 pre-flight check**：檔案開頭新增一段對五種 provider（含 SQLite dev/test）各自查詢 `FrameworkUsers`／`FrameworkUser` 兩個名字是否存在的 SQL，並明文規定「查不到任何一列」不能讀成「不用處理」，只能讀成「你的查詢語法對這個 provider/連線是錯的」——兩個名字都查不到、或兩個名字都查到，也都要求操作者停下來確認而非逕行往下跑。**未驗證、明確標示為推論的部分**：新增的三個 provider 冪等保護與五段 pre-flight 查詢**未對任何真實資料庫執行過**——本 repo 沒有可執行它們的多 provider fixture，CI 也不會執行它們，語法完全依各 provider 官方 catalog／DDL 文件手寫，與下方 #1099 條目記載的同一證明力上限相同。**範圍**：只改 `db-migration-8.1.13.sql`；同一個 commit 另外修正了 #994 條目因本次插入造成的六處行號位移（純行號更正，非新增事實），無任何 `src/` 變更、無測試、無 mutant——沒有可 mutate 的行為，這個事實本身就是本條目的證明力邊界。**若你的部署已經對這個檔案跑過這支腳本**：不要假設 P0-1 已經生效——請直接查詢你資料庫裡 `FrameworkUsers.Password` 欄位目前的實際寬度，不要以「腳本沒報錯」作為欄位已加寬的證據（SQL Server 上原本就會報錯而非靜默跳過，但依你實際執行方式與 provider，不排除其他靜默失敗路徑）。 |
 | #1099 —— `db-migration-8.1.13.sql` 的 P0-2（建 `FrameworkRefreshTokens` 表與其兩個索引）補上條件式保護（SQL Server／MySQL 索引） | #1082 只把 P0-1（`Password` 欄位加寬）在各 provider 加上冪等保護（Oracle 除外，刻意決定，理由是 quoted mixed-case identifier 查詢會重現同一個失效模式），P0-2 完全沒跟上。**已驗證的事實（本輪重新讀原始碼確認，未採信 issue 描述的行號）**：修復前 SQL Server 段的 `CREATE TABLE`／兩個 `CREATE INDEX` 全無保護；MySQL 段 `CREATE TABLE IF NOT EXISTS` 已有保護，但兩個 `CREATE INDEX`（MySQL 沒有 `CREATE INDEX IF NOT EXISTS` 語法）沒有；PostgreSQL／SQLite 兩者皆已完整保護（`IF NOT EXISTS` 涵蓋建表與建索引）；Oracle 段建表與兩個索引皆無保護——與 issue #1099 提供的表格逐格核對，五個 provider、兩個項目（CREATE TABLE／CREATE INDEX）共十格，**全部相符，沒有發現任何一格與實際不符**。**修法**：SQL Server 段比照同檔 P0-1 SQL Server 段既有風格，把 `CREATE TABLE` 與兩個 `CREATE INDEX` 分別包進 `IF NOT EXISTS (SELECT 1 FROM sys.tables` / `sys.indexes WHERE ...) BEGIN ... END`；MySQL 段的 `CREATE TABLE IF NOT EXISTS` 不動，兩個 `CREATE INDEX` 比照同檔 P0-1 MySQL 段既有的 `PREPARE`/`EXECUTE`/`DEALLOCATE` 模式，先查 `information_schema.statistics` 有沒有同名索引，沒有才組字串執行、有的話跑無害的 `SELECT 1;`。**Oracle 段本次維持 #1082 的既有決定，刻意不冪等化**——只在 P0-2 `CREATE TABLE` 前補一段註解，明講這段不冪等、重跑前需人工用檔案開頭的 pre-flight check 加 `USER_TABLES`／`USER_INDEXES` 查詢確認；未動任何 Oracle DDL 本身。PostgreSQL／SQLite 段完全未觸碰。**未驗證、明確標示為推論的部分**：本機沒有 SQL Server 或 MySQL 可用，新增的 SQL Server `IF NOT EXISTS` 保護與 MySQL prepared-statement 保護**未對任何真實資料庫執行過**——語法是照同檔 P0-1 既有、同樣未經真實資料庫驗證的保護寫法（見上方 #994 條目記載的同一證明力上限）延伸撰寫，未做任何新的假設或簡化。CI 不會執行它們，本 repo 也沒有可執行它們的多 provider fixture。**範圍**：只改 `db-migration-8.1.13.sql`；無任何 `src/` 變更、無測試、無 mutant——沒有可 mutate 的行為，這個事實本身就是本條目的證明力邊界，與上方 #994 條目相同。 |
 
 ---
