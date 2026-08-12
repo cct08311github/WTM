@@ -1,8 +1,0 @@
-# File replacements applied during Gitea -> GitHub sync.
-# Format: <source-on-gitea>\t<destination-overwritten>
-# The sync step copies <source> over <destination>, then deletes <source>.
-# Both paths must already exist on Gitea (the source is the github variant,
-# the destination is the canonical filename which carries gitea-flavored
-# content on Gitea).
-README.github.md	README.md
-nuget-README.github.md	nuget-README.md

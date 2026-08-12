@@ -1,7 +1,7 @@
 // Tests for Issue #470 Slice O1 — opt-in (WtmUIOptions.UseSelectIslandRender,
 // default OFF — the SAME flag #470 Slices J/K/L/M/N1 use) eval-free
 // 'renderGrid' JSON island for <wt:grid>/DataTableTagHelper. Design
-// authority: Gitea issue #470 comment 18118.
+// authority: internal infrastructure issue #470 comment 18118.
 //
 // This file drives the REAL ff.DispatchAction / ff._renderGridAction /
 // ff.gridTemplets / ff._islandModulesFor end-to-end against a FRESH vm

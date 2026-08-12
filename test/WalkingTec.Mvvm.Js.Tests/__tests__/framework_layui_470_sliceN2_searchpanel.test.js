@@ -11,7 +11,7 @@
 //   - a 'searchPanelInit' DispatchAction case (ff._renderSearchPanelInitAction)
 //     for the collapse-handlers/reset-button/IsExpanded-hidden-input pieces
 //
-// Design authority: Gitea issue #470 comment 18118 §5 ("SearchPanel N2
+// Design authority: internal infrastructure issue #470 comment 18118 §5 ("SearchPanel N2
 // co-design").
 //
 // This file drives the REAL ff.DispatchAction / ff._renderSearchPanelInitAction /

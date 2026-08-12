@@ -2,7 +2,7 @@
 // default OFF — the SAME flag #470 Slices J-O1 use) eval-free grid toolbar/
 // row-button descriptor dispatch + ff.gridTemplets.actionCol row-action
 // registry, completing the toolbar/row-button islandification O1 deferred
-// (invariant 7). Design authority: Gitea issue #470 comment 18118 ("Slice O
+// (invariant 7). Design authority: internal infrastructure issue #470 comment 18118 ("Slice O
 // design brief", §2 O2).
 //
 // This file drives the REAL ff._gridToolDispatch / ff._buildGridActionRegistry

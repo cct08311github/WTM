@@ -144,7 +144,7 @@ namespace WalkingTec.Mvvm.Core.ConfigOptions
         /// per-slice coverage table, and the honestly-documented residual
         /// blockers (checkbox/radio defaultvalues, selector-hosted grids/panels,
         /// EnableAnalysis grids, non-identifier developer callbacks, and a few
-        /// TagHelpers this flag does not yet cover — tracked in Gitea issue
+        /// TagHelpers this flag does not yet cover — tracked in internal infrastructure issue
         /// #784).
         /// </para>
         /// </remarks>

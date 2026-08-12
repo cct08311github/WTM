@@ -9,7 +9,7 @@ Jun 2026-08-09 裁示三條，都已生效：
 
 1. **本機不啟動 SQL Server，本機資源不足。需要 SQL Server 都去 `bms-verify-vm`。**
 2. `bms-verify-vm` **按需開啟**，不常態開啟。
-3. `vm-gitea-ci-runner` 由 Gitea CI 控制是否開啟，**不常態開啟**。
+3. `vm-gitea-ci-runner` 由 internal infrastructure CI 控制是否開啟，**不常態開啟**。
 
 過渡處置已完成（#1070 / PR #1071，已 merge）：`integration-test.yml` 的 `push` 觸發已移除，`services:` 與全部測試 step **刻意保留未刪**，供本專案直接複用。目前 SQL Server 相關整合行為**沒有任何自動驗證**，該空窗已記載於 `docs/production-readiness.md`。
 
@@ -40,7 +40,7 @@ Jun 2026-08-09 裁示三條，都已生效：
 | 4 | git | **FAIL** | 未安裝或不在 PATH |
 | 5 | SQL Server | **FAIL** | 無 `MSSQLSERVER`/`MSSQL$*` 服務、1433 未監聽、**只有 LocalDB** |
 | 6 | Oracle | **PASS** | 21c XE，listener + 1521 正常，**XEPDB1 status READY** |
-| 7 | NuGet sources | **FAIL** | 只有 nuget.org，**缺 Gitea source** |
+| 7 | NuGet sources | **FAIL** | 只有 nuget.org，**缺 internal infrastructure source** |
 | 8 | SqlClient 加密 | INFO | 未實測；Windows 原生 driver 預設 `Encrypt=True` 且驗憑證 |
 
 **結果翻轉了兩個假設：**
@@ -78,7 +78,7 @@ BMS session 在同一輪租約中發現（2026-08-10）：這台的 BMS app 跑�
 
 - **Linux** VM，`Standard_E2s_v5`，`RG-GITEA-CI-RUNNER`，eastasia
 - 喚醒者是 mac mini 上的 **autoscale controller**：`~/.config/ci-runner-controller/controller.py`，launchd label `com.openclaw.ci-runner-controller`
-- 邏輯：輪詢 Gitea，若**本機 runner busy 且有 waiting jobs 且 Azure VM 為 deallocated** → `az vm start`（含 Spot 容量退避重試）；連續 N 個獨立週期偵測到 idle → `az vm deallocate --no-wait`
+- 邏輯：輪詢 internal infrastructure，若**本機 runner busy 且有 waiting jobs 且 Azure VM 為 deallocated** → `az vm start`（含 Spot 容量退避重試）；連續 N 個獨立週期偵測到 idle → `az vm deallocate --no-wait`
 - 雙重收尾：Azure 側 auto-shutdown 排程（`shutdown-computevm-vm-gitea-ci-runner`，每日 **1800 UTC**，狀態 Enabled）＋本機 launchd 每 2 小時補一次
 - **實測驗證**：本日 23:45:24 CST，PR #1071 merge 觸發 post-merge CI、本機 act_runner 有 2 個 in-flight task 時，該 VM 自動由 deallocated 轉為 running。機制確實在運作
 
@@ -92,7 +92,7 @@ BMS session 在同一輪租約中發現（2026-08-10）：這台的 BMS app 跑�
 
 **這是本專案真正的難點，四個前置條件裡最難的一項，而它不在原本列出的四項裡。**
 
-現行 `integration-test.yml` 用 Gitea Actions 的 `services:` 起 `mcr.microsoft.com/azure-sql-edge:latest`。`azure-sql-edge` 是 **Linux 容器**。而 `bms-verify-vm` 是 **Windows Server 2022**。
+現行 `integration-test.yml` 用 internal CI 的 `services:` 起 `mcr.microsoft.com/azure-sql-edge:latest`。`azure-sql-edge` 是 **Linux 容器**。而 `bms-verify-vm` 是 **Windows Server 2022**。
 
 在 Windows 上跑 Linux 容器需要 Docker Desktop / WSL2 後端。這帶來三個問題：
 
@@ -189,7 +189,7 @@ WTM session 靜態掃過 `test/WalkingTec.Mvvm.Integration.Test`（2026-08-10 00
 
 兩個已知會咬人的具體點，列入 P1a 以免多花一輪：
 
-- **restore 需要兩個 package source**（nuget.org + Gitea）。未做 source mapping 會出 `NU1507`；Windows 上 `NuGet.Config` 若缺 Gitea source，restore 會以一個**看起來與 Gitea 無關的 NuGet 錯誤**失敗（此誤導性症狀 `CLAUDE.md` 已載明）。
+- **restore 需要兩個 package source**（nuget.org + internal infrastructure）。未做 source mapping 會出 `NU1507`；Windows 上 `NuGet.Config` 若缺 internal infrastructure source，restore 會以一個**看起來與 internal infrastructure 無關的 NuGet 錯誤**失敗（此誤導性症狀 `CLAUDE.md` 已載明）。
 - **`Microsoft.Data.SqlClient` 在 Windows 的預設加密行為與 Linux 不同**。若連本機非 LocalDB instance 而憑證為自簽，可能需要 `TrustServerCertificate=True`。CI 現行連線字串已帶該參數，但那是連容器，不能直接沿用結論。
 
 ## 8. 分期建議
@@ -198,7 +198,7 @@ WTM session 靜態掃過 `test/WalkingTec.Mvvm.Integration.Test`（2026-08-10 00
 |---|---|---|
 | **P1a** | 開機一次，驗 tailscale 重連／IP／`az vm start` 到可連的等待時間；**環境探測**：`dotnet --list-sdks`（有無 .NET 10）、有無既存 WTM clone／NuGet 快取、磁碟餘量、`git` 是否存在、除 LocalDB 外有無監聽 1433 且接受遠端連線的 SQL Server instance、Oracle 的版本／edition／service name／`lsnrctl status`／1521 是否可從 tailnet 連（#1069 的 discovery 第一步） | 無（併入 BMS 下一次租約，成本接近零） |
 | **P1a** ✅ | **已完成 2026-08-10**，結果見 §2.4 | — |
-| **P2（新增，已成為第一順位）** | **VM provisioning**：裝 `git`、.NET 10 SDK、SQL Server instance（Developer edition）、設定 Gitea NuGet source。**這在 P1a 之前只是設計文件裡的一句話，現在是確定要做的工項** | P1a（已完成） |
+| **P2（新增，已成為第一順位）** | **VM provisioning**：裝 `git`、.NET 10 SDK、SQL Server instance（Developer edition）、設定 internal NuGet source。**這在 P1a 之前只是設計文件裡的一句話，現在是確定要做的工項** | P1a（已完成） |
 | **P1b** | 真的跑一次 `dotnet test`，驗收採 §7.1 的「9 Passed 且 0 Inconclusive/Skipped」；**同時確認 `TrustServerCertificate` 設定**（見下方警告） | **P2** —— P1a 證實 SDK 與 git 皆缺，所以 P1b 不再可能「順手」搭任何租約 |
 | P3 | 決定 provider 集合與 label 命名 | #1069；P1a 已證實 Oracle 環境就緒，決策依據比原本充分 |
 | P4 | 註冊 Windows act_runner | P2、P3 |

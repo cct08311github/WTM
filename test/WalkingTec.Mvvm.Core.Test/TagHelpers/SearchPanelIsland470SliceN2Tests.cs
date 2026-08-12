@@ -20,7 +20,7 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers;
 /// Issue #470 Slice N2 — opt-in (WtmUIOptions.UseSelectIslandRender, default
 /// OFF — the SAME flag Slices J-O1 use) eval-free delegated click/myclick
 /// wiring for &lt;wt:searchpanel&gt;/SearchPanelTagHelper. Design authority:
-/// Gitea issue #470 comment 18118 §5 ("SearchPanel N2 co-design").
+/// internal infrastructure issue #470 comment 18118 §5 ("SearchPanel N2 co-design").
 ///
 /// Pattern: <c>IOptionsMonitor&lt;Configs&gt;</c> mock per
 /// DateTimeTagHelperTests.cs; localizer mock + [TestCleanup]

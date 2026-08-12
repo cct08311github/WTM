@@ -10,7 +10,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# 本 workflow 目前無可用執行環境。runs-on: ubuntu-latest 在這個 repo 會被 Gitea 排到本機
+# 本 workflow 目前無可用執行環境。runs-on: ubuntu-latest 在這個 repo 會被 internal infrastructure 排到本機
 # 4-CPU act_runner（見 docs/ci-operations.md「Runner 拓撲」），依 Jun 2026-08-09 裁示
 # 「本機不啟動 SQL Server，本機資源不足」，因此 push 觸發已整段移除（含 branches/paths）。
 # #1020 記載這個 workflow 的 mssql service container 在這台 runner 硬 4 CPU / 3.813GiB 的
@@ -50,7 +50,7 @@ jobs:
     # accounting of what step-level timeout-minutes does and does not cover repo-wide.
     services:
       # Issue #767: mcr.microsoft.com/mssql/server has no linux/arm64 build, so on the
-      # self-hosted ARM64 (Apple Silicon) mac-mini runner it ran under QEMU x64 emulation.
+      # self-hosted ARM64 (Apple Silicon) internal-host runner it ran under QEMU x64 emulation.
       # That emulation doesn't just make startup slow — on this host it crashes the
       # engine outright on every launch (jemalloc/QEMU VA-space mapping failure: "Invalid
       # mapping of address ... in reserved address space below 0x400000000000"), so the
@@ -63,9 +63,9 @@ jobs:
       # suite (test/WalkingTec.Mvvm.Integration.Test) only does plain EF Core CRUD via
       # DBTypeEnum.SqlServer — no full-text search, CLR, temporal tables, or other
       # features azure-sql-edge lacks — so the swap is compatible.
-      # Issue #1020: this service had no memory bound at all -- the mac-mini runner's
+      # Issue #1020: this service had no memory bound at all -- the internal-host runner's
       # Docker VM is a hard 4 CPU / 3.813GiB total (`docker info`, confirmed live
-      # against this exact repo's Gitea Actions daemon while investigating this
+      # against this exact repo's internal CI daemon while investigating this
       # issue), shared with the job container that's simultaneously restoring,
       # building, and running `dotnet test` in the very same job. Run 6509 died in
       # EnsureCreated() with "Error 945: insufficient system memory in resource pool
@@ -79,7 +79,7 @@ jobs:
       #
       # MSSQL_MEMORY_LIMIT_MB is Microsoft's documented Linux/container memory knob
       # and is set below on that basis, but it is EMPIRICALLY INERT on this host:
-      # local testing directly against this repo's own Gitea Actions Docker daemon
+      # local testing directly against this repo's own internal CI Docker daemon
       # (same image, same arch, same 4 CPU / 3.813GiB VM) at 1536, 768, and 400 MB
       # produced `sys.dm_os_sys_info.committed_target_kb` values of 1480256, 1546520,
       # and 1561152 respectively -- moving the WRONG way as the requested limit
@@ -113,7 +113,7 @@ jobs:
       # A joint-contention measurement (run the real test suite against mssql while
       # a sibling container does a full `dotnet build` of this solution, to see
       # whether mssql gets squeezed) would settle this more directly than the
-      # isolated numbers above -- it was NOT run: a real, unrelated Gitea Actions job
+      # isolated numbers above -- it was NOT run: a real, unrelated internal CI job
       # was actively using up to ~260% CPU / ~800MiB on this exact shared daemon
       # while this issue was being investigated, and this repo's own
       # `mutation-gate.yml` budgets that job up to ~125 minutes, so deliberately

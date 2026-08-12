@@ -18,7 +18,7 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers;
 /// <summary>
 /// Issue #470 Slice O1 stage 2: opt-in (WtmUIOptions.UseSelectIslandRender,
 /// default OFF — the SAME flag Slices J/K/L/M/N1 use) eval-free 'renderGrid'
-/// JSON island for &lt;wt:grid&gt;/DataTableTagHelper. Design authority: Gitea
+/// JSON island for &lt;wt:grid&gt;/DataTableTagHelper. Design authority: internal infrastructure
 /// issue #470 comment 18118 ("Slice O design brief").
 ///
 /// Reuses the SAME <c>CreateHelper</c>/<c>MakeContext</c>/<c>MakeOutput</c>/
