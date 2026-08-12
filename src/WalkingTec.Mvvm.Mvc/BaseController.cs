@@ -406,14 +406,21 @@ namespace WalkingTec.Mvvm.Mvc
         /// in spirit from #867, just now explicit about WHY. <see cref="BindingRejectionReason.NoWritableTarget"/>
         /// is logged at Debug instead: it is the one rejection class
         /// <see cref="RequestBindingPolicy.Classify(Type, string, string)"/>'s own doc comment
-        /// proves can never write anything (<c>PropertyHelper.cs:554-557</c> returns without
-        /// writing regardless of which candidate type the real traversal froze at). An ordinary
-        /// LayUI grid paging request rejects several framework transport keys this way on every
-        /// normal request (<c>_DONOT_USE_CS</c>, <c>_DONOT_USE_VMNAME</c>,
-        /// <c>__RequestVerificationToken</c>, <c>page</c>, <c>limit</c>, …), and logging all of
-        /// those at Warning trained operators to ignore a security-relevant logger, burying the
-        /// rejections that actually matter. The SET of rejected keys is unchanged by this; only
-        /// the log level for this one provably-safe reason is.
+        /// proves the FINAL path segment resolves to no member against every candidate type the
+        /// real traversal could have frozen at (<c>PropertyHelper.cs:554-557</c> returns without
+        /// writing the caller-supplied value). <b>Issue #1098: that is not the same as "nothing is
+        /// written."</b> For a multi-segment key, <c>PropertyHelper.SetPropertyValue</c>'s own
+        /// intermediate loop (<c>PropertyHelper.cs:523-551</c>) can still instantiate a new
+        /// intermediate object and attach it to the VM before the final segment is ever checked —
+        /// see <see cref="BindingRejectionReason.NoWritableTarget"/>'s own doc comment for that
+        /// caveat and <c>RequestBindingPolicyTests867</c> for the proof. An ordinary LayUI grid
+        /// paging request rejects several framework transport keys this way on every normal
+        /// request (<c>_DONOT_USE_CS</c>, <c>_DONOT_USE_VMNAME</c>,
+        /// <c>__RequestVerificationToken</c>, <c>page</c>, <c>limit</c>, …) — each a
+        /// single-segment key, where this really is a true no-op — and logging all of those at
+        /// Warning trained operators to ignore a security-relevant logger, burying the rejections
+        /// that actually matter. The SET of rejected keys is unchanged by this; only the log
+        /// level for this one reason is.
         /// </para>
         /// </remarks>
         /// <param name="vm">ViewModel</param>
@@ -442,7 +449,7 @@ namespace WalkingTec.Mvvm.Mvc
                             {
                                 if (logger != null && logger.IsEnabled(LogLevel.Debug))
                                 {
-                                    logger.LogDebug("RedoUpdateModel skipped binding key '{Key}' for VM type {VmType}: {Reason} (Configs.EnforceRequestBindingScope; provably no write could land)",
+                                    logger.LogDebug("RedoUpdateModel skipped binding key '{Key}' for VM type {VmType}: {Reason} (Configs.EnforceRequestBindingScope; final path segment resolves to no member)",
                                         LogSanitizer.Sanitize(item), vm.GetType().Name, reason);
                                 }
                             }

@@ -751,5 +751,88 @@ namespace WalkingTec.Mvvm.Core.Test.Helper
                     "Classify, so these can never disagree.");
             }
         }
+
+        // ── Issue #1098: NoWritableTarget's "provably suppressed nothing" claim is false for a
+        // multi-segment key ──────────────────────────────────────────────────
+        //
+        // PR #1092 shipped a runtime log message ("provably no write could land") and an XML doc
+        // comment on BindingRejectionReason.NoWritableTarget ("The rejection provably suppressed
+        // nothing.") that only hold for a SINGLE-segment key. For a multi-segment key,
+        // PropertyHelper.SetPropertyValue's intermediate loop (PropertyHelper.cs:523-551) can
+        // instantiate and attach a new intermediate object to the traversed VM BEFORE it ever
+        // reaches the final-segment check (PropertyHelper.cs:554-557) that the classification's
+        // proof is actually about. The two tests below (a) show NoWritableTarget is reachable via
+        // a multi-segment key at all, and (b) prove — by calling PropertyHelper.SetPropertyValue
+        // directly — that doing so DOES mutate the object graph.
+
+        // "A" resolves cleanly to a type with a public parameterless constructor; "B" resolves to
+        // zero members against every candidate type in the traversal chain (the source VM and
+        // NoWritableTargetIntermediateType1098 itself) — this is what makes "A.B" classify as
+        // NoWritableTarget rather than UnresolvedIntermediateSegment.
+        private class NoWritableTargetIntermediateType1098
+        {
+            // Deliberately has no member named "B".
+            public string? OtherProp { get; set; }
+        }
+
+        private class NoWritableTargetIntermediateVM1098 : BaseVM
+        {
+            public NoWritableTargetIntermediateType1098? A { get; set; }
+        }
+
+        [TestMethod]
+        public void Classify_MultiSegmentKeyWithNoWritableFinalSegment_ReturnsNoWritableTarget()
+        {
+            // #1098 (a): "A" resolves cleanly (unique, non-static, non-gateway member of the
+            // public-parameterless-constructible NoWritableTargetIntermediateType1098), so it
+            // joins the traversal-type candidate list. "B" then resolves to zero members against
+            // BOTH candidates (the source VM and NoWritableTargetIntermediateType1098). This
+            // proves NoWritableTarget is reachable via a MULTI-segment key, not only the
+            // single-segment LayUI transport keys pinned in
+            // Classify_LayUiTransportKeys_ReturnNoWritableTarget above.
+            var vm = new NoWritableTargetIntermediateVM1098();
+            Assert.AreEqual(BindingRejectionReason.NoWritableTarget,
+                RequestBindingPolicy.Classify(vm, "A.B"),
+                "'A' resolves cleanly and 'B' resolves to zero members against every candidate " +
+                "type in the traversal chain — must classify as NoWritableTarget even though the " +
+                "key has more than one segment.");
+        }
+
+        [TestMethod]
+        public void NoWritableTargetMultiSegmentKey_ActuallyWritesIntermediateProperty_WhenPolicyIsIgnored()
+        {
+            // #1098 (b): THE CRITICAL TEST — this is the evidence that
+            // BindingRejectionReason.NoWritableTarget's former doc comment (and the runtime log
+            // message it justified, "provably no write could land") was false for a multi-segment
+            // key. PropertyHelper.SetPropertyValue's own intermediate loop
+            // (PropertyHelper.cs:523-551) instantiates and attaches a new
+            // NoWritableTargetIntermediateType1098 to vm.A BEFORE it ever reaches the
+            // final-segment check that decides "B" is unwritable (PropertyHelper.cs:554-557) —
+            // so calling SetPropertyValue directly for the exact key that classifies as
+            // NoWritableTarget DOES mutate the object graph, even though the value the caller
+            // supplied for "B" never lands anywhere. Confirmed here BEFORE asserting the
+            // classification, so this test cannot pass by coincidence — same shape as
+            // MissingIntermediateSegment_ActuallyWritesFinalSegmentOnVm_WhenPolicyIsIgnored above.
+            var vm = new NoWritableTargetIntermediateVM1098();
+            Assert.IsNull(vm.A,
+                "Sanity check: vm.A must start null for the instantiation below to be observable.");
+
+            PropertyHelper.SetPropertyValue(vm, "A.B", "irrelevant-value", null, true);
+
+            Assert.IsNotNull(vm.A,
+                "PropertyHelper.SetPropertyValue's intermediate loop instantiated and attached a " +
+                "new NoWritableTargetIntermediateType1098 to vm.A as a side effect of traversing " +
+                "toward the (unwritable) final segment 'B' — this is the write that " +
+                "BindingRejectionReason.NoWritableTarget's former 'provably suppressed nothing' " +
+                "claim missed: the classification only proves the FINAL segment's VALUE never " +
+                "lands, not that the traversal has no side effects.");
+
+            Assert.AreEqual(BindingRejectionReason.NoWritableTarget,
+                RequestBindingPolicy.Classify(vm, "A.B"),
+                "Sanity check: the exact key just proven to write an intermediate property must " +
+                "still classify as NoWritableTarget — that classification is what causes " +
+                "RedoUpdateModel to log this rejection at Debug instead of Warning, which is " +
+                "exactly why this key's ability to mutate the object graph matters.");
+        }
     }
 }

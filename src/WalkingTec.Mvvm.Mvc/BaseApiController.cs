@@ -294,11 +294,15 @@ namespace WalkingTec.Mvvm.Mvc
         /// naming the reason, with the key sanitized via <see cref="LogSanitizer"/>.
         /// <see cref="BindingRejectionReason.NoWritableTarget"/> is logged at Debug instead: it is
         /// the one rejection class <see cref="RequestBindingPolicy.Classify(Type, string, string)"/>'s
-        /// own doc comment proves can never write anything (<c>PropertyHelper.cs:554-557</c>
-        /// returns without writing regardless of which candidate type the real traversal froze
-        /// at) — see <see cref="BaseController.RedoUpdateModel(object, string)"/>'s remarks for
+        /// own doc comment proves the FINAL path segment resolves to no member against every
+        /// candidate type the real traversal could have frozen at (<c>PropertyHelper.cs:554-557</c>
+        /// returns without writing the caller-supplied value). <b>Issue #1098: that is not a proof
+        /// that nothing is written</b> for a multi-segment key — <c>PropertyHelper.SetPropertyValue</c>'s
+        /// intermediate loop can still instantiate a new intermediate object first; see
+        /// <see cref="BindingRejectionReason.NoWritableTarget"/>'s own doc comment for that
+        /// caveat and <see cref="BaseController.RedoUpdateModel(object, string)"/>'s remarks for
         /// the full rationale (the LayUI transport-key noise this closes). The SET of rejected
-        /// keys is unchanged by this; only the log level for this one provably-safe reason is.
+        /// keys is unchanged by this; only the log level for this one reason is.
         /// </para>
         /// </remarks>
         /// <param name="vm">ViewModel</param>
@@ -327,7 +331,7 @@ namespace WalkingTec.Mvvm.Mvc
                             {
                                 if (logger != null && logger.IsEnabled(LogLevel.Debug))
                                 {
-                                    logger.LogDebug("RedoUpdateModel skipped binding key '{Key}' for VM type {VmType}: {Reason} (Configs.EnforceRequestBindingScope; provably no write could land)",
+                                    logger.LogDebug("RedoUpdateModel skipped binding key '{Key}' for VM type {VmType}: {Reason} (Configs.EnforceRequestBindingScope; final path segment resolves to no member)",
                                         LogSanitizer.Sanitize(item), vm.GetType().Name, reason);
                                 }
                             }

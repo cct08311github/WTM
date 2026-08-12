@@ -1,8 +1,8 @@
 diff --git a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
-index 8b5813a5f..fbd688cad 100644
+index a29321255..00e77a89f 100644
 --- a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
 +++ b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
-@@ -337,40 +337,18 @@ namespace WalkingTec.Mvvm.Core
+@@ -341,44 +341,18 @@ namespace WalkingTec.Mvvm.Core
                  var members = tempType.GetMember(segment);
                  if (members.Length == 0)
                  {
@@ -22,14 +22,18 @@ index 8b5813a5f..fbd688cad 100644
 -                    }
 -
 -                    // Last segment resolves to zero members against the DEEPEST traversal type.
--                    // A real write can land only if some type the real traversal could have
--                    // frozen at — i.e. some entry already collected in traversalTypes — resolves
--                    // this exact segment name too. If NONE of them do, then no matter which of
--                    // those types the real (value-dependent) traversal actually froze at,
--                    // tempType.GetMember(level.Last()) also finds nothing there, and
--                    // PropertyHelper.cs:554-557 (`if (!memberInfos.Any()) { return; }`) returns
--                    // without writing anything — the only rejection this method can prove is a
--                    // true no-op. See BindingRejectionReason.NoWritableTarget's own doc comment.
+-                    // A real write of the FINAL segment's VALUE can land only if some type the
+-                    // real traversal could have frozen at — i.e. some entry already collected in
+-                    // traversalTypes — resolves this exact segment name too. If NONE of them do,
+-                    // then no matter which of those types the real (value-dependent) traversal
+-                    // actually froze at, tempType.GetMember(level.Last()) also finds nothing
+-                    // there, and PropertyHelper.cs:554-557 (`if (!memberInfos.Any()) { return; }`)
+-                    // returns without writing that value. That is the only write this method can
+-                    // prove is suppressed — for a MULTI-segment key it does NOT prove the object
+-                    // graph is untouched: the intermediate loop (PropertyHelper.cs:523-551) can
+-                    // still instantiate and attach a new intermediate object before this check is
+-                    // ever reached. See BindingRejectionReason.NoWritableTarget's own doc comment
+-                    // (Issue #1098) for the single- vs. multi-segment distinction.
 -                    foreach (var candidate in traversalTypes)
 -                    {
 -                        if (candidate.GetMember(segment).Length > 0)

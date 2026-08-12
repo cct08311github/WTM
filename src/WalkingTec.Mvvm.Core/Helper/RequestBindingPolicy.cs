@@ -161,11 +161,15 @@ namespace WalkingTec.Mvvm.Core
     /// them, so the allow/deny decision and the reason it is computed from share exactly one
     /// walk — not two copies that can drift the way the declaring-type/name check above already
     /// did once. The two controllers log <c>Debug</c> instead of <c>Warning</c> for exactly one
-    /// reason, <see cref="BindingRejectionReason.NoWritableTarget"/>, which is the only one
-    /// mechanically provable (from <c>PropertyHelper.cs:554-557</c>) to never write anything;
-    /// every other reason — including a segment name that merely LOOKS like a harmless typo —
-    /// stays exactly as loud as before. The set of rejected keys does not change: this is a
-    /// logging-severity change, not a policy change.
+    /// reason, <see cref="BindingRejectionReason.NoWritableTarget"/>, which is the only one where
+    /// the FINAL segment is mechanically provable (from <c>PropertyHelper.cs:554-557</c>) to
+    /// resolve to no member — see <see cref="BindingRejectionReason.NoWritableTarget"/>'s own doc
+    /// comment (updated for Issue #1098) for why that is a true no-write guarantee for
+    /// single-segment keys but not for multi-segment ones, where the intermediate loop can still
+    /// instantiate an intermediate object as a side effect before the final segment is ever
+    /// checked; every other reason — including a segment name that merely LOOKS like a harmless
+    /// typo — stays exactly as loud as before. The set of rejected keys does not change: this is
+    /// a logging-severity change, not a policy change.
     /// </para>
     /// </summary>
     public static partial class RequestBindingPolicy
@@ -353,14 +357,18 @@ namespace WalkingTec.Mvvm.Core
                     }
 
                     // Last segment resolves to zero members against the DEEPEST traversal type.
-                    // A real write can land only if some type the real traversal could have
-                    // frozen at — i.e. some entry already collected in traversalTypes — resolves
-                    // this exact segment name too. If NONE of them do, then no matter which of
-                    // those types the real (value-dependent) traversal actually froze at,
-                    // tempType.GetMember(level.Last()) also finds nothing there, and
-                    // PropertyHelper.cs:554-557 (`if (!memberInfos.Any()) { return; }`) returns
-                    // without writing anything — the only rejection this method can prove is a
-                    // true no-op. See BindingRejectionReason.NoWritableTarget's own doc comment.
+                    // A real write of the FINAL segment's VALUE can land only if some type the
+                    // real traversal could have frozen at — i.e. some entry already collected in
+                    // traversalTypes — resolves this exact segment name too. If NONE of them do,
+                    // then no matter which of those types the real (value-dependent) traversal
+                    // actually froze at, tempType.GetMember(level.Last()) also finds nothing
+                    // there, and PropertyHelper.cs:554-557 (`if (!memberInfos.Any()) { return; }`)
+                    // returns without writing that value. That is the only write this method can
+                    // prove is suppressed — for a MULTI-segment key it does NOT prove the object
+                    // graph is untouched: the intermediate loop (PropertyHelper.cs:523-551) can
+                    // still instantiate and attach a new intermediate object before this check is
+                    // ever reached. See BindingRejectionReason.NoWritableTarget's own doc comment
+                    // (Issue #1098) for the single- vs. multi-segment distinction.
                     foreach (var candidate in traversalTypes)
                     {
                         if (candidate.GetMember(segment).Length > 0)

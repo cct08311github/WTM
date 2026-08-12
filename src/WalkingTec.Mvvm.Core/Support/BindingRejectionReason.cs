@@ -18,11 +18,12 @@ namespace WalkingTec.Mvvm.Core
     /// logged several Warnings from what is supposed to be a security-relevant logger. That
     /// trains operators to ignore it, burying the rejections that actually matter. This enum
     /// lets the two controller <c>RedoUpdateModel</c> implementations log at <c>Debug</c>
-    /// instead of <c>Warning</c> for the one rejection class that is mechanically provable to
-    /// never write anything (<see cref="NoWritableTarget"/>), while every other reason — which
-    /// could still correspond to a real out-of-scope binding attempt — stays exactly as loud as
-    /// before. The SET of rejected keys is unchanged; only how loudly each reason is logged
-    /// changed.
+    /// instead of <c>Warning</c> for the one rejection class where the FINAL path segment is
+    /// mechanically provable to resolve to no member (<see cref="NoWritableTarget"/> — see its
+    /// own doc comment for why that is a true no-write guarantee for single-segment keys but not
+    /// for multi-segment ones), while every other reason — which could still correspond to a
+    /// real out-of-scope binding attempt — stays exactly as loud as before. The SET of rejected
+    /// keys is unchanged; only how loudly each reason is logged changed.
     /// </para>
     /// </summary>
     public enum BindingRejectionReason
@@ -42,9 +43,13 @@ namespace WalkingTec.Mvvm.Core
         PathTooDeep,
 
         /// <summary>
-        /// The <b>only</b> rejection reason that is mechanically provable to never write
-        /// anything — the sole class this repository's <c>RedoUpdateModel</c> is allowed to log
-        /// at <c>Debug</c> instead of <c>Warning</c>.
+        /// The <b>only</b> rejection reason where the FINAL path segment is mechanically provable
+        /// to resolve to no member against every type the real traversal could have frozen at —
+        /// the sole class this repository's <c>RedoUpdateModel</c> is allowed to log at
+        /// <c>Debug</c> instead of <c>Warning</c>. <b>Issue #1098: this is a proof about the FINAL
+        /// segment's own write only — it is not a proof that calling
+        /// <c>PropertyHelper.SetPropertyValue</c> leaves the object graph untouched.</b> See the
+        /// single- vs. multi-segment paragraphs below for the distinction.
         /// <para>
         /// The final path segment resolves to zero members against <b>every</b> type
         /// <c>PropertyHelper.SetPropertyValue</c>'s own intermediate loop
@@ -61,14 +66,43 @@ namespace WalkingTec.Mvvm.Core
         /// one of those candidates, then no matter where the real, value-dependent traversal
         /// froze, <c>tempType.GetMember(level.Last())</c> also finds nothing there, and
         /// <c>PropertyHelper.cs:554-557</c> (<c>if (!memberInfos.Any()) { return; }</c>) returns
-        /// without writing anything. The rejection provably suppressed nothing.
+        /// without writing the caller-supplied VALUE. That is the only write this classification
+        /// proves is suppressed — see the multi-segment paragraph below for what it does NOT
+        /// prove.
         /// </para>
         /// <para>
-        /// This is exactly why a single unresolvable segment on a single-segment key (e.g. the
-        /// LayUI transport keys this classification exists to quiet) always lands here rather
-        /// than <see cref="UnresolvedIntermediateSegment"/>: with no intermediate hops, the
+        /// <b>Single-segment keys: this really is a true no-op.</b> When the key has exactly one
+        /// segment (e.g. the LayUI transport keys this classification exists to quiet —
+        /// <c>_DONOT_USE_CS</c>, <c>_DONOT_USE_VMNAME</c>, <c>__RequestVerificationToken</c>,
+        /// <c>page</c>, <c>limit</c>, …), <c>PropertyHelper.SetPropertyValue</c>'s intermediate
+        /// loop (<c>PropertyHelper.cs:523-551</c>, which only iterates while
+        /// <c>i &lt; level.Count - 1</c>) never runs at all, so nothing between entry and the
+        /// final-segment check above can touch the object graph. Rejecting a single-segment key
+        /// really does suppress nothing beyond the no-op the call would have been anyway. This is
+        /// also why a single unresolvable segment on a single-segment key always lands here
+        /// rather than <see cref="UnresolvedIntermediateSegment"/>: with no intermediate hops, the
         /// candidate set is just <c>{ sourceType }</c>, and it already failed to resolve against
         /// that one type by construction.
+        /// </para>
+        /// <para>
+        /// <b>Multi-segment keys: the proof above does not extend to "nothing is written."</b>
+        /// When the key has more than one segment, <c>PropertyHelper.SetPropertyValue</c>'s
+        /// intermediate loop DOES run before the final-segment check above is ever reached, and it
+        /// writes: for a non-final segment whose resolved member's current VALUE is
+        /// <see langword="null"/> and whose type has a public parameterless constructor,
+        /// <c>PropertyHelper.cs:538-541</c> calls <c>member.SetMemberValue(temp, newInstance,
+        /// null)</c> — instantiating a new intermediate object and attaching it to the traversed
+        /// object as a side effect, regardless of what the final segment goes on to resolve to. A
+        /// key like <c>"A.B"</c>, where <c>A</c> resolves cleanly to a type with a public
+        /// parameterless constructor and <c>B</c> resolves to zero members everywhere, still
+        /// classifies as <see cref="NoWritableTarget"/> — and calling
+        /// <c>PropertyHelper.SetPropertyValue</c> for that exact key (bypassing this policy) sets
+        /// the caller's <c>A</c> property from <see langword="null"/> to a freshly-constructed
+        /// instance, a real state mutation, even though the value actually supplied for <c>B</c>
+        /// never lands anywhere. Rejecting such a key DOES suppress that instantiation. See
+        /// <c>RequestBindingPolicyTests867</c>'s multi-segment <see cref="NoWritableTarget"/>
+        /// tests for both the classification and the direct
+        /// <c>PropertyHelper.SetPropertyValue</c> proof.
         /// </para>
         /// </summary>
         NoWritableTarget,

@@ -1,11 +1,11 @@
 diff --git a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
-index 8b5813a5f..b2da70c21 100644
+index a29321255..61a9b6994 100644
 --- a/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
 +++ b/src/WalkingTec.Mvvm.Core/Helper/RequestBindingPolicy.cs
-@@ -361,9 +361,16 @@ namespace WalkingTec.Mvvm.Core
-                     // PropertyHelper.cs:554-557 (`if (!memberInfos.Any()) { return; }`) returns
-                     // without writing anything — the only rejection this method can prove is a
-                     // true no-op. See BindingRejectionReason.NoWritableTarget's own doc comment.
+@@ -369,9 +369,16 @@ namespace WalkingTec.Mvvm.Core
+                     // still instantiate and attach a new intermediate object before this check is
+                     // ever reached. See BindingRejectionReason.NoWritableTarget's own doc comment
+                     // (Issue #1098) for the single- vs. multi-segment distinction.
 +                    // MUTANT test/mutants wtmsec867-nowritabletarget-shallower-candidate-guard-neutralize:
 +                    // condition neutralized (compile-preserving `&& false`) so the last segment is
 +                    // never checked against any SHALLOWER candidate type in traversalTypes -- only
