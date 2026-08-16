@@ -58,7 +58,7 @@ containing ANY of:
                           `$(...)` (command substitution, e.g. the Dockerfile's own
                           `$(openssl rand -base64 32)` / `$(cat /run/secrets/...)`
                           examples -- CONFIRMED present in this repo today, the exact
-                          case that broke CI). Also covers GitHub/Gitea Actions'
+                          case that broke CI). Also covers GitHub/internal CI'
                           `${{ secrets.X }}` expression syntax, which starts with `$`.
   - backtick (`` ` ``) -- legacy POSIX `sh` command substitution, the same semantic class
                           as `$(...)` (a subshell's stdout becomes the value) under older

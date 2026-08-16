@@ -2,7 +2,7 @@
 # #925: local test harness for scripts/reconcile-release-version.sh -- the version /
 # CHANGELOG reconciliation logic .github/workflows/publish-nuget.yml's "Determine and
 # reconcile package version" step runs on every publish. A real publish cannot be
-# exercised from this repo (no Gitea/GitHub API calls, no irreversible package push), so
+# exercised from this repo (no internal infrastructure/GitHub API calls, no irreversible package push), so
 # this harness proves the logic directly against fabricated version.props/CHANGELOG.md
 # fixtures instead. Mirrors test/release-script-tests.sh's structure: isolated temp repo,
 # `run_case`/`run_case_expect_failure` helpers, output captured to a file rather than

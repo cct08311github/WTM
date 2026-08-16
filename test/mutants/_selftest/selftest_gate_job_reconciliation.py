@@ -23,7 +23,7 @@ specific gap: it extracts the `gate` job's ACTUAL `run:` script from the live
 .github/workflows/mutation-gate.yml (never a hand-copied text duplicate that could
 drift from what CI really runs, and never a rewritten copy that could accidentally
 "fix" a bug the real file still has) and executes it -- via the same
-`bash --noprofile --norc -eo pipefail <script>` invocation GitHub Actions/Gitea uses
+`bash --noprofile --norc -eo pipefail <script>` invocation GitHub Actions/internal infrastructure uses
 for an unqualified `shell: bash` step -- under controlled env vars covering:
 
 **Extraction method, and why (second round, #973 follow-up)**: this script's first
@@ -143,7 +143,7 @@ def extract_gate_summarize_script() -> str:
 
 
 def run_script(script: str, env_overrides: dict, cwd: Path) -> subprocess.CompletedProcess:
-    """Runs the extracted step body the same way GitHub Actions/Gitea's act_runner
+    """Runs the extracted step body the same way GitHub Actions/internal infrastructure's act_runner
     does for an unqualified `shell: bash` step: `bash --noprofile --norc -eo pipefail
     <scriptfile>`. Written to a real temp file (not `bash -c "$script"`) for the
     closest possible fidelity to how the actual runner invokes it."""
