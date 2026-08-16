@@ -2,7 +2,7 @@
 
 > [!WARNING]
 > **狀態：草稿。未發布。** 追蹤於 #833。
-> 發布通道（Gitea issue／GitHub Security Advisory／兩者）尚未裁決。
+> 發布通道（internal infrastructure issue／GitHub Security Advisory／兩者）尚未裁決。
 > 標為「仍未修」的項目就是真的還沒修，不是待補欄位。
 
 ---

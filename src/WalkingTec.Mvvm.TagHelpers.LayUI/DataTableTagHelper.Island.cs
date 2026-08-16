@@ -16,7 +16,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 {
     // Issue #470 Slice O1: opt-in (WtmUIOptions.UseSelectIslandRender, default OFF —
     // the SAME flag Slices J/K/L/M/N1 use) eval-free 'renderGrid' JSON island render
-    // for <wt:grid>/DataTableTagHelper. Design authority: Gitea issue #470 comment
+    // for <wt:grid>/DataTableTagHelper. Design authority: internal infrastructure issue #470 comment
     // 18118 ("Slice O design brief"). This file is intentionally split from
     // DataTableTagHelper.cs (which stays completely UNTOUCHED except for the
     // `partial` keyword and the single branch point in Process()) so the flag-OFF

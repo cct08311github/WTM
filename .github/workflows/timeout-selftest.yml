@@ -1,6 +1,6 @@
 name: Timeout Self-Test
 
-# Issue #926 positive control: proves that Gitea Actions' act_runner fork
+# Issue #926 positive control: proves that internal CI' act_runner fork
 # (gitea.com/gitea/act) actually ENFORCES step-level `timeout-minutes` --
 # not just parses it. Same shape and purpose as mutation-gate.yml's
 # `meta-selftest` job, which exists to prove the mutation harness itself

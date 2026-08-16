@@ -25,13 +25,13 @@ namespace WalkingTec.Mvvm.Core.Test.Security
     ///
     /// <para>
     /// <b>Mechanism choice:</b> the issue's own suggestion -- extract every <c>#N</c> reference
-    /// from the doc, query the Gitea API, fail if one listed as unfixed is closed -- is
+    /// from the doc, query the internal infrastructure API, fail if one listed as unfixed is closed -- is
     /// implemented here, not replaced. A live network call in a unit test is unusual, but the
     /// alternative (a periodically-refreshed local cache of issue states) only moves the same
     /// staleness problem one level down: the cache itself would need the exact same "did anyone
     /// remember to update this" discipline #863 exists because nobody had. A live check has
     /// exactly one failure mode (network/auth unavailable) and it is handled explicitly below
-    /// (skip, not fail, not silently pass) rather than inherited invisibly. This repo's Gitea
+    /// (skip, not fail, not silently pass) rather than inherited invisibly. This repo's internal infrastructure
     /// instance also does not require authentication for a read on this specific, public repo's
     /// issue endpoints (verified 2026-07-29 with a bare unauthenticated GET returning 200 with
     /// the correct <c>state</c>), so a missing token narrows what this test can prove (it will
@@ -69,7 +69,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
         // unqualified `#(\d+)` scan empirically pulled in exactly this case (#681, closed, cited
         // inside the #721 bullet) as a false positive during this test's own development.
         private static readonly Regex IssueRefPattern = new(@"(?m)^-\s*\*\*#(\d+)", RegexOptions.Compiled);
-        private const string GiteaApiBase = "https://mac-mini.tailde842d.ts.net/api/v1";
+        private const string GiteaApiBase = "https://internal.registry.invalid/api/v1";
         private const string RepoOwner = "chiu0831";
         private const string RepoName = "WTM";
 
@@ -182,7 +182,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
 
         /// <summary>
         /// The live #863 enforcement: every issue number the doc's "未修，已立案" section names
-        /// must actually still be open on Gitea. Skips (Assert.Inconclusive -- visible in the test
+        /// must actually still be open on internal infrastructure. Skips (Assert.Inconclusive -- visible in the test
         /// run output as its own outcome, distinct from Passed) rather than failing or silently
         /// passing when the API is unreachable, since neither "the network is down" nor "no token
         /// is configured" says anything about whether the doc has drifted.
@@ -219,7 +219,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
                 catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
                 {
                     Assert.Inconclusive(
-                        $"#863: skipped -- could not reach the Gitea API to verify issue #{issueNumber} " +
+                        $"#863: skipped -- could not reach the internal infrastructure API to verify issue #{issueNumber} " +
                         $"(no network path to {GiteaApiBase}, or the request timed out/was refused). " +
                         $"This is an environment limitation, not a passing or failing result for the " +
                         $"doc-drift check itself. Underlying error: {ex.GetType().Name}: {ex.Message}");
@@ -229,7 +229,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
                 if (state == null)
                 {
                     Assert.Inconclusive(
-                        $"#863: skipped -- Gitea API request for issue #{issueNumber} did not return a " +
+                        $"#863: skipped -- internal infrastructure API request for issue #{issueNumber} did not return a " +
                         "usable 'state' field (auth required and no/invalid token configured, the API " +
                         "shape changed, or a non-success status was returned). This is an environment " +
                         "limitation, not a passing or failing result for the doc-drift check itself.");
@@ -244,7 +244,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
 
             Assert.AreEqual(0, closedButClaimedUnfixed.Count,
                 "#863: docs/production-readiness.md's '新揭露的缺口（未修，已立案）' section lists " +
-                $"{string.Join(", ", closedButClaimedUnfixed)} as unfixed, but Gitea reports " +
+                $"{string.Join(", ", closedButClaimedUnfixed)} as unfixed, but internal infrastructure reports " +
                 $"{(closedButClaimedUnfixed.Count == 1 ? "it is" : "they are")} closed. This is the " +
                 "Red Line's own comparison baseline drifting -- update the doc (remove/rewrite the " +
                 "stale entry) so it matches reality.");
@@ -268,9 +268,9 @@ namespace WalkingTec.Mvvm.Core.Test.Security
         }
 
         /// <summary>
-        /// Prefers the GITEA_TOKEN environment variable (the portable, CI-friendly form -- a
+        /// Prefers the REGISTRY_TOKEN environment variable (the portable, CI-friendly form -- a
         /// secret injected by the runner, not a path on disk that may not exist in that
-        /// environment) and falls back to this maintainer's local convention (~/.gitea-token,
+        /// environment) and falls back to this maintainer's local convention (.local-token-file,
         /// documented in the gitea-issue-workflow skill) for a same-token experience when run by
         /// hand. Returns null (not throws) when neither is present -- the caller treats an absent
         /// token as "proceed unauthenticated", not as a reason to skip, since this repo's issue
@@ -278,7 +278,7 @@ namespace WalkingTec.Mvvm.Core.Test.Security
         /// </summary>
         private static string? ResolveGiteaToken()
         {
-            var envToken = Environment.GetEnvironmentVariable("GITEA_TOKEN");
+            var envToken = Environment.GetEnvironmentVariable("REGISTRY_TOKEN");
             if (!string.IsNullOrWhiteSpace(envToken))
             {
                 return envToken.Trim();

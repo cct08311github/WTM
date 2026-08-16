@@ -8,25 +8,22 @@ extensions, and an actively-updated dependency baseline.
 
 ## Install
 
-The canonical source is a self-hosted Gitea NuGet registry; a sanitized mirror is
-published to GitHub Packages for external consumers:
+This package is published to **GitHub Packages**:
 
 ```bash
-# Gitea (authoritative)
-dotnet nuget add source "https://mac-mini.tailde842d.ts.net/api/packages/chiu0831/nuget/index.json" \
-  --name gitea --username <user> --password <token>
-
-# GitHub Packages (mirror)
 dotnet nuget add source "https://nuget.pkg.github.com/cct08311github/index.json" \
   --name github-wtm --username <github-user> --password <github-token>
 
-dotnet add package WalkingTec.Mvvm.Core
+dotnet add package WalkingTec.Mvvm.Core --source github-wtm
 ```
+
+A GitHub Personal Access Token with the `read:packages` scope is required to consume
+GitHub Packages, even for public packages — create one at
+<https://github.com/settings/tokens>.
 
 ## Source & Documentation
 
-- Repository (Gitea, authoritative): https://mac-mini.tailde842d.ts.net/chiu0831/WTM
-- Public mirror: https://github.com/cct08311github/WTM
+- Repository (this mirror): https://github.com/cct08311github/WTM
 - Changelog: see `CHANGELOG.md` in the repository root
 - Developer manual: `docs/wtm-developer-manual.md`
 

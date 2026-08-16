@@ -1,4 +1,4 @@
-name: Publish NuGet to Gitea Packages
+name: Publish NuGet to internal package registry
 
 on:
   workflow_dispatch:
@@ -29,7 +29,7 @@ jobs:
       group: publish-nuget-release
       cancel-in-progress: false
     env:
-      PACKAGE_SOURCE: https://mac-mini.tailde842d.ts.net/api/packages/chiu0831/nuget/index.json
+      PACKAGE_SOURCE: https://internal.registry.invalid/api/packages/chiu0831/nuget/index.json
 
     steps:
       # fetch-depth: 0 (full history, not the shallow default) makes this heavier than
@@ -144,7 +144,7 @@ jobs:
       # These five pack steps only ever write to the local nupkgs/ directory -- nothing
       # here is a publish. Every check in this job (smoke, vulnerability scan, cohort
       # check, sanitize/leak-gate/nuspec checks) runs against exactly these files before
-      # the first `nuget push` anywhere (see "Push to Gitea Packages" below and #925
+      # the first `nuget push` anywhere (see "Push to internal package registry" below and #925
       # cross-vendor review finding 3).
       # Core is packed first against whatever NuGet cache the runner started with --
       # normally cold for the first restore of the job's transitive dependency set
@@ -203,7 +203,7 @@ jobs:
           sha256sum nupkgs/*.nupkg
 
       # ── #925: pre-publish verification gate ─────────────────────────────────────────
-      # Everything from here down to (and not including) "Push to Gitea Packages" runs
+      # Everything from here down to (and not including) "Push to internal package registry" runs
       # BEFORE the first `nuget push` to any registry. Any failure aborts the job with
       # nothing published — the packages built above exist only as local files in
       # nupkgs/ at that point, not on any registry.
@@ -218,12 +218,12 @@ jobs:
       # OOM-kills this runner, #902 — re-running it a second time inside every publish
       # would either contend for the same 2-capacity runner or double the release
       # wall-clock) and the mutation-gate verdicts (inherently slower still — each mutant
-      # is its own build+test cycle). Querying Gitea Actions' own recorded run/job
+      # is its own build+test cycle). Querying internal CI' own recorded run/job
       # conclusion for this SHA as a substitute was considered and rejected: this repo's
       # own operational history (CLAUDE.md "CI red does not mean failed",
       # docs/ci-operations.md pitfall #4) is that the job `conclusion` field is actively
       # unreliable for exactly the jobs that would matter here (`build-and-test`) due to
-      # a known Gitea Actions artifact-upload quirk, and reading raw job logs via the
+      # a known internal CI artifact-upload quirk, and reading raw job logs via the
       # Actions API the way the documented human SOP does would need to be validated
       # against a live run to trust — which this change cannot do (no real publish is
       # possible in this repo, and getting the API call wrong would either silently
@@ -231,7 +231,7 @@ jobs:
       # without being able to prove it works would be exactly the "moving it and hoping"
       # this issue exists to stop, so it is named as a gap instead.
       #
-      # #925 fact 3: the smoke test previously ran AFTER both the Gitea and GitHub
+      # #925 fact 3: the smoke test previously ran AFTER both the internal infrastructure and GitHub
       # publish stages and only installed 4 of the then-6 packages, so a break in Etl or
       # the S3 file handler package (removed, #1054) would have been discovered only
       # once already-immutable versions were live on both registries. It now runs here,
@@ -259,7 +259,7 @@ jobs:
       #    $RUNNER_TEMP-scoped directory for these steps so there is nothing to reuse,
       #    and a dedicated NuGet.Config lists ONLY nuget.org (for genuine third-party
       #    transitive dependencies) plus the just-built local nupkgs/ folder — never the
-      #    Gitea or GitHub registries — so the five WTM packages under test can only ever
+      #    internal infrastructure or GitHub registries — so the five WTM packages under test can only ever
       #    resolve from the candidate build.
       # Largest single budget in this job: the step body deliberately empties
       # NUGET_PACKAGES (see the header comment's finding-6 explanation), so unlike
@@ -287,7 +287,7 @@ jobs:
 
           # Candidate-feed-only NuGet.Config: nuget.org for genuine third-party
           # transitive dependencies (EF Core, Quartz, ...), plus the local nupkgs/
-          # folder for the five WTM packages under test. Deliberately NOT the Gitea or
+          # folder for the five WTM packages under test. Deliberately NOT the internal infrastructure or
           # GitHub Packages registries -- if the candidate build is missing from
           # nupkgs/, restore must fail loudly, never silently fall back to an
           # already-published version of the same package id+version.
@@ -415,16 +415,16 @@ jobs:
           fi
 
       # #925 cross-vendor review finding 3 (partial support): before pushing anything,
-      # check whether this exact version already exists PARTIALLY on the Gitea
+      # check whether this exact version already exists PARTIALLY on the internal infrastructure
       # registry -- the exact "package N of 5 failed last time" scenario described in
-      # the "Push to Gitea Packages" step's comment below. `--skip-duplicate` alone
+      # the "Push to internal package registry" step's comment below. `--skip-duplicate` alone
       # cannot distinguish "clean idempotent re-run" from "topping up a broken partial
       # publish with content from a different commit"; this can, and refuses to
       # proceed on the latter (see scripts/check-package-cohort.py for exactly what it
       # checks and its exit codes; NOTE its own header comment on how far this has been
-      # exercised, since a live Gitea/GitHub API call was out of scope for the session
+      # exercised, since a live internal infrastructure/GitHub API call was out of scope for the session
       # that authored it).
-      - name: Verify version cohort not partially published (Gitea)
+      - name: Verify version cohort not partially published (internal infrastructure)
         timeout-minutes: 5
         env:
           PKG_VERSION: ${{ steps.version.outputs.version }}
@@ -439,8 +439,8 @@ jobs:
       # ── GitHub mirror sync — checks only, no push yet ────────────────────────────────
       # Required secret: GH_MIRROR_PAT — a Personal Access Token for account
       # `cct08311github` with scopes: repo, workflow, write:packages, read:packages.
-      # Add it in Gitea repo Settings → Secrets → GH_MIRROR_PAT.
-      # (must NOT start with GITHUB_ — Gitea reserves that prefix)
+      # Add it in internal infrastructure repo Settings → Secrets → GH_MIRROR_PAT.
+      # (must NOT start with GITHUB_ — internal infrastructure reserves that prefix)
       #
       # These steps run only on real tag pushes (not workflow_dispatch without
       # a tag ref).
@@ -460,9 +460,9 @@ jobs:
       #
       # #925 cross-vendor review finding 3: EVERY step in this section — including the
       # sanitized re-pack and its nuspec check, and the GitHub package-cohort check —
-      # now runs BEFORE "Push to Gitea Packages" (the job's first irreversible action;
-      # see that step below). The original ordering pushed to Gitea FIRST and ran these
-      # checks only afterward, so a failure here used to leave Gitea packages published
+      # now runs BEFORE "Push to internal package registry" (the job's first irreversible action;
+      # see that step below). The original ordering pushed to internal infrastructure FIRST and ran these
+      # checks only afterward, so a failure here used to leave internal infrastructure packages published
       # with no matching GitHub sync and no way to have caught it beforehand.
 
       - name: Configure GitHub remote
@@ -528,8 +528,8 @@ jobs:
 
       # ── Apply .sync/ manifest to produce a filtered tree for GitHub ──────────
       # All three steps operate on a temporary local branch `sync-to-github-tmp`
-      # so that the Gitea working tree is never modified.  One commit bundles all
-      # manifest changes; that commit (not the raw Gitea HEAD) is what gets
+      # so that the internal infrastructure working tree is never modified.  One commit bundles all
+      # manifest changes; that commit (not the raw internal infrastructure HEAD) is what gets
       # pushed to GitHub's dotnet10 and tagged.
       # Order matches README.md: replace → exclude → sanitize.
 
@@ -558,8 +558,8 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           _M="mac""-mini"          # rewrites via full-host rule in .sed
-          _G="GITEA""_"            # rewrites via \bGITEA_TOKEN/HOST/USER\b rules
-          _T="tailde842d"          # rewrites: s|tailde842d|internal-tailnet|g
+          _G="GITEA""_"            # rewrites via \bREGISTRY_TOKEN/HOST/USER\b rules
+          _T="internal-tailnet"          # rewrites: s|internal-tailnet|internal-tailnet|g
           _N="\.ts\.net"           # rewrites as part of full-host rule in .sed
           # #696: `git grep` exits 1 for "no match" (expected — the tree is
           # clean) but exits >1 for a real failure (bad pattern, I/O error,
@@ -678,7 +678,7 @@ jobs:
           # "Push dotnet10 branch to GitHub" below has any chance to run its
           # merge-fallback path (`git merge github/dotnet10 -X ours`, which can accept
           # non-conflicting mirror-only files into the tree). Every later step that
-          # needs "the sanitized Gitea tree" uses this exact SHA, never a live re-read
+          # needs "the sanitized internal infrastructure tree" uses this exact SHA, never a live re-read
           # of HEAD, so nothing downstream can accidentally observe post-merge content.
           echo "SANITIZED_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "Captured SANITIZED_SHA=$(git rev-parse HEAD)"
@@ -712,7 +712,7 @@ jobs:
       # re-derived afterward — so even if that merge later creates a new commit on
       # sync-to-github-tmp to satisfy GitHub's non-fast-forward push, this step has
       # already built (and, once past the checks below, will ship) exactly the
-      # Gitea-authored sanitized tree and nothing else. `git archive` of a fixed
+      # internal infrastructure-authored sanitized tree and nothing else. `git archive` of a fixed
       # commit-ish is git's own guarantee of "exactly that tree, nothing more" — there
       # is no code path by which content from `github/dotnet10` can reach this
       # extraction. The extraction directory also has no `.git` at all (a plain `tar`
@@ -724,7 +724,7 @@ jobs:
       # and therefore no PAT-bearing remote URL, anywhere near the `dotnet pack`
       # process.
       # Five dotnet pack invocations in one run: block, plus the per-nupkg nuspec
-      # sanity loop -- sized as roughly the five individual Gitea pack steps' combined
+      # sanity loop -- sized as roughly the five individual internal infrastructure pack steps' combined
       # budget above, though restores here should mostly hit the now-warm shared
       # NuGet cache those steps already populated.
       - name: Re-pack from sanitized source for GitHub Packages
@@ -744,7 +744,7 @@ jobs:
 
           mkdir -p nupkgs-github
           # #925: PackageVersion, not Version, is what NuGet packs into the nuspec here
-          # (see the identical comment on the Gitea pack steps above) -- both are passed.
+          # (see the identical comment on the internal infrastructure pack steps above) -- both are passed.
           dotnet pack "$PACK_DIR/src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj"                         -c Release -o nupkgs-github /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
           dotnet pack "$PACK_DIR/src/WalkingTec.Mvvm.TagHelpers.LayUI/WalkingTec.Mvvm.TagHelpers.LayUI.csproj" -c Release -o nupkgs-github /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
           dotnet pack "$PACK_DIR/src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj"                           -c Release -o nupkgs-github /p:Version=$PKG_VERSION /p:PackageVersion=$PKG_VERSION
@@ -768,13 +768,13 @@ jobs:
           echo "Sanitized nupkgs ready (built from SANITIZED_SHA=${SANITIZED_SHA}):"
           sha256sum nupkgs-github/*.nupkg
 
-      # #925 cross-vendor review finding 3: same partial-cohort check as the Gitea one
+      # #925 cross-vendor review finding 3: same partial-cohort check as the internal infrastructure one
       # above, against GitHub Packages' registry instead. Uses the standard NuGet V3
       # protocol (same script, different service index + token), not a
       # GitHub-Packages-specific API call.
-      # A few points more generous than the Gitea cohort check above: this crosses
+      # A few points more generous than the internal infrastructure cohort check above: this crosses
       # the public internet to github.com rather than staying on the tailnet-local
-      # Gitea host.
+      # internal infrastructure host.
       - name: Verify version cohort not partially published (GitHub Packages)
         if: startsWith(github.ref, 'refs/tags/')
         timeout-minutes: 8
@@ -791,19 +791,19 @@ jobs:
       # ── Everything above this line is a CHECK. Nothing below is reversible. ──────────
       # #925 cross-vendor review finding 3: this is now the FIRST place in the job that
       # can have an irreversible, externally-visible effect — every local check (pack,
-      # smoke, vulnerability scan, artifact count, Gitea cohort) and, on a tag push,
+      # smoke, vulnerability scan, artifact count, internal infrastructure cohort) and, on a tag push,
       # every sanitized-tree check (manifest lint, leak-gate x2, sanitized re-pack +
       # nuspec check, GitHub cohort) has already passed by this point. Previously this
       # push ran FIRST, before any of those; a failure partway through the checks below
-      # would have already left Gitea packages live with nothing to have caught it.
+      # would have already left internal infrastructure packages live with nothing to have caught it.
 
       # Issue #678: common.props now sets IncludeSymbols/SymbolPackageFormat=snupkg, so
       # `dotnet pack` above also emits a *.snupkg (symbol package, containing the PDB +
       # SourceLink map) alongside each *.nupkg in nupkgs/. No separate push step is
       # needed for it: `dotnet nuget push` auto-detects the adjacent *.snupkg for each
       # *.nupkg it pushes and publishes it to the source's SymbolPackagePublish
-      # resource unless `--no-symbols` is passed (see `dotnet nuget push` docs). Gitea's
-      # NuGet service index (https://mac-mini.tailde842d.ts.net/api/packages/chiu0831/nuget/index.json)
+      # resource unless `--no-symbols` is passed (see `dotnet nuget push` docs). internal infrastructure's
+      # NuGet service index (https://internal.registry.invalid/api/packages/chiu0831/nuget/index.json)
       # advertises `SymbolPackagePublish/4.9.0`, and this was confirmed live: pushing
       # `*.nupkg` here also ships the matching `*.snupkg`. A prior revision added a
       # dedicated "Push symbol packages" step on the (incorrect) premise that the glob
@@ -811,7 +811,7 @@ jobs:
       # (harmless only via --skip-duplicate) and was removed. Do not re-add it; if the
       # symbol endpoint ever needs independent failure isolation from the primary
       # publish, that must be done via `--no-symbols` on this step plus a separate
-      # explicit `*.snupkg` push, verified end-to-end against Gitea before merging —
+      # explicit `*.snupkg` push, verified end-to-end against internal infrastructure before merging —
       # not by re-adding a step that runs after (and depends on) this one having
       # already pushed the symbols implicitly.
       #
@@ -826,12 +826,12 @@ jobs:
       # GitHub Packages" below are the two genuinely irreversible network pushes in
       # this job, and the ones this repo's cross-vendor review specifically flagged
       # as unbounded -- a hang here previously held one of this runner's two job
-      # slots for up to the Gitea instance's 3-hour ENDLESS_TASK_TIMEOUT ceiling,
+      # slots for up to the internal infrastructure instance's 3-hour ENDLESS_TASK_TIMEOUT ceiling,
       # since neither this step nor the job itself carried any real timeout.
       # Deliberately generous, not tight: killing a `dotnet nuget push` mid-batch is
       # NOT free of consequence (some of the five packages may already be live, others
       # not), but it is a KNOWN, already-defended-against failure mode in this exact
-      # file -- "Verify version cohort not partially published (Gitea)" above exists
+      # file -- "Verify version cohort not partially published (internal infrastructure)" above exists
       # specifically to detect that partial state on the NEXT run and refuse to
       # proceed rather than silently re-publish over it. An indefinite hang has no
       # such recovery path and a certain cost (denying the runner's other capacity
@@ -841,7 +841,7 @@ jobs:
       # tailnet-local host as the runner -- normal completion is expected in well
       # under a minute; this is headroom for a genuinely stuck connection, not a
       # realistic estimate of success-path duration.
-      - name: Push to Gitea Packages
+      - name: Push to internal package registry
         timeout-minutes: 20
         run: |
           dotnet nuget push "nupkgs/*.nupkg" \
@@ -864,7 +864,7 @@ jobs:
           if git push github HEAD:refs/heads/dotnet10; then
             echo "Fast-forward push succeeded."
           else
-            echo "Non-fast-forward detected; attempting merge (Gitea is authoritative — -X ours)."
+            echo "Non-fast-forward detected; attempting merge (internal infrastructure is authoritative — -X ours)."
             git fetch github dotnet10
             # -X ours resolves content conflicts but leaves modify/delete conflicts
             # unresolved (merge exits non-zero). We handle those explicitly below.
@@ -878,11 +878,11 @@ jobs:
             git merge github/dotnet10 \
               -X ours \
               --allow-unrelated-histories \
-              -m "merge: sync Gitea release to GitHub (auto-resolve excludes)" \
+              -m "merge: sync release to GitHub (auto-resolve excludes)" \
               --no-edit || MERGE_EXIT=$?
 
             # Resolve any remaining modify/delete conflicts deterministically.
-            # Gitea/HEAD is authoritative: files deleted here (excluded from mirror)
+            # internal infrastructure/HEAD is authoritative: files deleted here (excluded from mirror)
             # stay deleted; files deleted on the mirror but present here stay present.
             UNMERGED=$(git ls-files -u | wc -l | tr -d ' ')
             if [ "${UNMERGED}" -gt 0 ]; then
@@ -917,7 +917,7 @@ jobs:
               fi
 
               git commit --no-edit \
-                -m "merge: sync Gitea release to GitHub (auto-resolve excludes)"
+                -m "merge: sync release to GitHub (auto-resolve excludes)"
             fi
 
             # Leak-gate: re-scan after merge resolution (#659), using the same
@@ -962,7 +962,7 @@ jobs:
               echo "::error::tag ${TAG} already exists on GitHub at ${EXISTING_SHA} (tree ${EXISTING_TREE}), which DIFFERS from the tree about to be published (${NEW_TREE}). Refusing to force-move a tag whose existing content differs -- this would silently overwrite a DIFFERENT release. If this is genuinely intentional, delete the GitHub tag manually first and re-run."
               exit 1
             fi
-            echo "tag ${TAG} already exists on GitHub at ${EXISTING_SHA} with an IDENTICAL tree -- safe idempotent re-tag (e.g. a Gitea tag-object-dedup retry produced a new commit object wrapping the same content)."
+            echo "tag ${TAG} already exists on GitHub at ${EXISTING_SHA} with an IDENTICAL tree -- safe idempotent re-tag (e.g. a internal infrastructure tag-object-dedup retry produced a new commit object wrapping the same content)."
           else
             echo "tag ${TAG} does not exist on GitHub yet -- first publish."
           fi
@@ -1056,7 +1056,7 @@ jobs:
           fi
 
       # Issue #678: deliberately `*.nupkg` only here — GitHub Packages' NuGet registry
-      # has never supported symbol packages (no snupkg endpoint), unlike Gitea. Do not
+      # has never supported symbol packages (no snupkg endpoint), unlike internal infrastructure. Do not
       # add a matching *.snupkg push for this source; it has nowhere to land.
       #
       # #925 cross-vendor review finding 2: nupkgs-github/ was built earlier in this
@@ -1065,16 +1065,16 @@ jobs:
       # may hold a merge commit from "Push dotnet10 branch to GitHub" above. This step
       # only pushes files that already exist on disk; it does not pack anything itself.
       # The second of the two irreversible pushes flagged by issue #926's
-      # cross-vendor review (see "Push to Gitea Packages" above for the full
+      # cross-vendor review (see "Push to internal package registry" above for the full
       # reasoning on why bounding, not exempting, is the right call here). Sized
-      # even more generously than the Gitea push: this crosses the public internet
+      # even more generously than the internal infrastructure push: this crosses the public internet
       # to a third-party-hosted registry (github.com), not a tailnet-local host, and
-      # by this point in the job Gitea, the GitHub branch, and the GitHub tag are
+      # by this point in the job internal infrastructure, the GitHub branch, and the GitHub tag are
       # already durably published -- a timeout here loses only the GitHub Packages
       # mirror copy, an independently retryable, low-blast-radius gap, not the
       # release itself. "Verify version cohort not partially published (GitHub
       # Packages)" above is this push's equivalent recovery mechanism for a partial
-      # multi-package push, same as the Gitea side.
+      # multi-package push, same as the internal infrastructure side.
       - name: Push NuGet packages to GitHub Packages
         if: startsWith(github.ref, 'refs/tags/')
         timeout-minutes: 25
