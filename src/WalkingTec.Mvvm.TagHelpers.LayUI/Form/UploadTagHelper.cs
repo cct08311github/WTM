@@ -193,7 +193,7 @@ function {Id}DoPreview(fileid){{
 		layui.layer.photos({{
 			photos: {{
 				data: [{{
-					src: '/_Framework/GetFile/'+ fileid+'?_DONOT_USE_CS={(vm != null ? vm.CurrentCS : "")}'
+					src: '/_Framework/GetFile/'+ fileid+'?_DONOT_USE_CS={JsStringEncoder.Escape(vm != null ? vm.CurrentCS : "")}'
 				}}]
 			}},
 			anim: 5
@@ -206,10 +206,10 @@ layui.use(['upload'],function(){{
   /* 普通图片上传 */
   var uploadInst = layui.upload.render({{
     elem: '#{Id}button'
-    ,url: '{url}'
+    ,url: '{JsStringEncoder.Escape(url)}'
     ,size: {FileSize}
     ,accept: 'file'
-    {(ext == "" ? "" : $", exts: '{ext}'")}
+    {(ext == "" ? "" : $", exts: '{JsStringEncoder.Escape(ext)}'")}
     ,xhr: xhrOnProgress
     ,progress: function (value) {{
         $('.layui-progress .layui-progress-bar').css(
@@ -275,23 +275,23 @@ layui.use(['upload'],function(){{
             if (Field.Model != null && Field.Model.ToString() != Guid.Empty.ToString())
             {
                 var geturl = $"/_Framework/GetFileName/{Field.Model}";
-                var downloadurl = $"/_Framework/GetFile/{Field.Model}";
+                var downloadurl = $"/_Framework/GetFile/{JsStringEncoder.Escape(Field.Model?.ToString())}";
                 if (vm != null)
                 {
                     geturl += $"?_DONOT_USE_CS={vm.CurrentCS}";
-                    downloadurl += $"?_DONOT_USE_CS={vm.CurrentCS}";
+                    downloadurl += $"?_DONOT_USE_CS={JsStringEncoder.Escape(vm.CurrentCS)}";
                 }
-                var picurl = $"/_Framework/GetFile?id={Field.Model}&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}";
+                var picurl = $"/_Framework/GetFile?id={JsStringEncoder.Escape(Field.Model?.ToString())}&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}";
                 if (vm != null)
                 {
-                    picurl += $"&_DONOT_USE_CS={vm.CurrentCS}";
+                    picurl += $"&_DONOT_USE_CS={JsStringEncoder.Escape(vm.CurrentCS)}";
                 }
                 output.PostElement.AppendHtml($@"
 <script>
 $.ajax({{
   cache: false,
   type: 'GET',
-  url: '{geturl}',
+  url: '{JsStringEncoder.Escape(geturl)}',
   async: true,
   success: function(data) {{
     {(ShowPreview == true ? $@"{(Disabled == true?$@"

@@ -68,7 +68,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
             output.PostElement.AppendHtml($@"
 <script>
   layui.use(['ueditorconfig'], function () {{
-    layui.ueditor.loadEditor('{Id}').ready(function(){{this.setContent('{(DefaultValue != null ? DefaultValue.ToString() : Field?.Model?.ToString())}')}});
+    layui.ueditor.loadEditor('{Id}').ready(function(){{this.setContent('{JsStringEncoder.Escape(DefaultValue != null ? DefaultValue.ToString() : Field?.Model?.ToString())}')}});
   }});
 </script>
 ");

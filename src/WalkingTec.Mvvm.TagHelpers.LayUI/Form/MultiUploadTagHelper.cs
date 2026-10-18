@@ -225,12 +225,12 @@ layui.use(['upload'],function(){{
   /* 普通图片上传 */
   var uploadInst = layui.upload.render({{
     elem: '#{Id}button'
-    ,url: '{url}'
+    ,url: '{JsStringEncoder.Escape(url)}'
     ,size: {FileSize}
     ,accept: 'file'
     ,multiple:true
     ,number:{NumFileOnce}
-    {(ext == "" ? "" : $", exts: '{ext}'")}
+    {(ext == "" ? "" : $", exts: '{JsStringEncoder.Escape(ext)}'")}
     ,before: function(obj){{
         index = layui.layer.load(2);
         {Id}preview = obj;
@@ -244,7 +244,7 @@ layui.use(['upload'],function(){{
         {Id}selected.push(res.Data.Id);
         {Id}SetValues();
         {(ShowPreview == true ? $@"
-            $('#{Id}label').append('<label id=""label'+res.Data.Id+'""><img alt=""'+res.Data.Name+'"" layer-src=""/_Framework/GetFile?id='+ res.Data.Id+'&_DONOT_USE_CS={(vm != null ? vm.CurrentCS : "")}"" src=""/_Framework/GetFile?id='+ res.Data.Id+'&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}&_DONOT_USE_CS={(vm!=null?vm.CurrentCS:"")}""  class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64} id=""preview'+res.Data.Id+'"" style=""cursor:pointer;margin-bottom:5px"" /><i class=""layui-icon layui-icon-close"" style=""font-size: 20px;position:relative;left:-10px;top:-27px;color: #ff0000;cursor: pointer;"" id=""del'+res.Data.Id+'""></i></label> ');
+            $('#{Id}label').append('<label id=""label'+res.Data.Id+'""><img alt=""'+res.Data.Name+'"" layer-src=""/_Framework/GetFile?id='+ res.Data.Id+'&_DONOT_USE_CS={JsStringEncoder.Escape(vm != null ? vm.CurrentCS : "")}"" src=""/_Framework/GetFile?id='+ res.Data.Id+'&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}&_DONOT_USE_CS={JsStringEncoder.Escape(vm!=null?vm.CurrentCS:"")}""  class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64} id=""preview'+res.Data.Id+'"" style=""cursor:pointer;margin-bottom:5px"" /><i class=""layui-icon layui-icon-close"" style=""font-size: 20px;position:relative;left:-10px;top:-27px;color: #ff0000;cursor: pointer;"" id=""del'+res.Data.Id+'""></i></label> ');
             $('#preview'+res.Data.Id).on('click',function(){{
               {Id}DoPreview(res.Data.Id);
             }});
@@ -274,25 +274,25 @@ layui.use(['upload'],function(){{
                 foreach (var fileId in allfileids)
                 {
                     var geturl = $"/_Framework/GetFileName/{fileId}";
-                    var downloadurl = $"/_Framework/GetFile/{fileId}";
-                    var previewurl = $"/_Framework/ViewFile/{fileId}";
+                    var downloadurl = $"/_Framework/GetFile/{JsStringEncoder.Escape(fileId)}";
+                    var previewurl = $"/_Framework/ViewFile/{JsStringEncoder.Escape(fileId)}";
                     if (vm != null)
                     {
                         geturl += $"?_DONOT_USE_CS={vm.CurrentCS}";
-                        downloadurl += $"?_DONOT_USE_CS={vm.CurrentCS}";
-                        previewurl += $"?_DONOT_USE_CS={vm.CurrentCS}";
+                        downloadurl += $"?_DONOT_USE_CS={JsStringEncoder.Escape(vm.CurrentCS)}";
+                        previewurl += $"?_DONOT_USE_CS={JsStringEncoder.Escape(vm.CurrentCS)}";
                     }
-                    var picurl = $"/_Framework/GetFile?id={fileId}&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}";
+                    var picurl = $"/_Framework/GetFile?id={JsStringEncoder.Escape(fileId)}&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}";
                     if (vm != null)
                     {
-                        picurl += $"&_DONOT_USE_CS={vm.CurrentCS}";
+                        picurl += $"&_DONOT_USE_CS={JsStringEncoder.Escape(vm.CurrentCS)}";
                     }
                     output.PostElement.AppendHtml($@"
 <script>
 $.ajax({{
   cache: false,
   type: 'GET',
-  url: '{geturl}',
+  url: '{JsStringEncoder.Escape(geturl)}',
   async: true,
   success: function(data) {{
     {(ShowPreview == true ? $@" {(Disabled == true? $@"

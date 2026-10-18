@@ -125,7 +125,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
                 }
                 output.PostElement.AppendHtml($@"<script>
-ff.LoadComboItems('tree','{ItemUrl}','{Id}','{Field.Name}',{JsonSerializer.Serialize(vals)},function(){{
+ff.LoadComboItems('tree','{JsStringEncoder.Escape(ItemUrl)}','{Id}','{Field.Name}',{JsonSerializer.Serialize(vals)},function(){{
 }})
 
 </script>");
@@ -136,7 +136,7 @@ ff.LoadComboItems('tree','{ItemUrl}','{Id}','{Field.Name}',{JsonSerializer.Seria
 var {Id} = xmSelect.render({{
     el: '#{Id}',
     name:'{Field.Name}',
-    tips:'{EmptyText}',
+    tips:'{JsStringEncoder.Escape(EmptyText)}',
     disabled: {Disabled.ToString().ToLower()},
     {(THProgram._localizer["Sys.LayuiDateLan"] == "CN" ? "language:'zn'," : "language:'en',")}
 	autoRow: {AutoRow.ToString().ToLower()},
@@ -196,7 +196,7 @@ var {Id} = xmSelect.render({{
     on:function(data){{
         {((LinkField != null || string.IsNullOrEmpty(LinkId) == false) ? @$"
             if (eval(""{(string.IsNullOrEmpty(ChangeFunc) ? "1==1" : FormatFuncName(ChangeFunc))}"") != false) {{
-                var u = ""{(TriggerUrl ?? "")}"";
+                var u = ""{JsStringEncoder.Escape(TriggerUrl ?? "")}"";
                 if (u.indexOf(""?"") == -1) {{
                     u += ""?t="" + new Date().getTime();
                 }}
@@ -210,7 +210,7 @@ var {Id} = xmSelect.render({{
 }});
      {Id}defaultvalues = {JsonSerializer.Serialize(vals)};
         {(vals?.Count > 0 && (LinkField != null || string.IsNullOrEmpty(LinkId) == false) ? @$"
-                var {Id}u = ""{(TriggerUrl ?? "")}"";
+                var {Id}u = ""{JsStringEncoder.Escape(TriggerUrl ?? "")}"";
                 if ({Id}u.indexOf(""?"") == -1) {{
                     {Id}u += ""?t="" + new Date().getTime();
                 }}

@@ -381,7 +381,7 @@ $('#{Id}_Select').on('click',function(){{
     filter.Ids.push(vals[i].value);
   }};
   var ffilter = $.extend(filter, {Id}filter)
-  ff.OpenDialog2('/_Framework/Selector', '{windowid}', '{WindowTitle ?? THProgram._localizer["Sys.PleaseSelect"]}',{WindowWidth?.ToString() ?? "null"}, {WindowHeight?.ToString() ?? "600"},'#Temp{Id}', ffilter);
+  ff.OpenDialog2('/_Framework/Selector', '{windowid}', '{JsStringEncoder.Escape(WindowTitle ?? THProgram._localizer["Sys.PleaseSelect"])}',{WindowWidth?.ToString() ?? "null"}, {WindowHeight?.ToString() ?? "600"},'#Temp{Id}', ffilter);
 }});
 </script>
 {searchPanelTemplate}
