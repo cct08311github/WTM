@@ -152,6 +152,8 @@ namespace WalkingTec.Mvvm.Core
         #region Current User
 
         private LoginUserInfo _loginUserInfo;
+        // set once a remote token has been rejected, so it is not re-validated (and re-logged) on every access
+        private bool _remoteTokenRejected;
         public LoginUserInfo LoginUserInfo
         {
             get
@@ -185,9 +187,14 @@ namespace WalkingTec.Mvvm.Core
                     var remoteToken = HttpContext?.Request.Query["_remotetoken"][0];
                     if (ConfigInfo.HasMainHost == false)
                     {
+                        if (_remoteTokenRejected)
+                        {
+                            return null;
+                        }
                         _loginUserInfo = TryResolveRemoteToken(remoteToken);
                         if (_loginUserInfo == null)
                         {
+                            _remoteTokenRejected = true;
                             return null;
                         }
                     }
@@ -242,8 +249,9 @@ namespace WalkingTec.Mvvm.Core
                 var handler = new JwtSecurityTokenHandler { MapInboundClaims = false };
                 principal = handler.ValidateToken(remoteToken, ConfigInfo.JwtOptions.CreateValidationParameters(), out _);
             }
-            catch (Exception ex) when (ex is SecurityTokenException || ex is ArgumentException)
+            catch (Exception ex)
             {
+                // any validation failure is treated as anonymous
                 _loggerFactory?.CreateLogger<WTMContext>().LogWarning("Remote token validation failed: {ExceptionType}", ex.GetType().Name);
                 return null;
             }

@@ -42,10 +42,11 @@ namespace WalkingTec.Mvvm.Core.Test
             DateTime? notBefore = null,
             DateTime? expires = null,
             bool withExpiration = true,
-            string algorithm = SecurityAlgorithms.HmacSha256)
+            string algorithm = SecurityAlgorithms.HmacSha256,
+            string subject = "admin")
         {
             var credentials = new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key)), algorithm);
-            var claims = new List<Claim> { new Claim(AuthConstants.JwtClaimTypes.Subject, "admin") };
+            var claims = new List<Claim> { new Claim(AuthConstants.JwtClaimTypes.Subject, subject) };
             var token = new JwtSecurityToken(
                 issuer: issuer,
                 audience: audience,
@@ -136,6 +137,79 @@ namespace WalkingTec.Mvvm.Core.Test
             var result = wtm.LoginUserInfo;
             Assert.IsNotNull(result);
             Assert.AreEqual("admin", result.ITCode);
+        }
+
+        [TestMethod]
+        public void TamperedPayloadIsRejected()
+        {
+            var token = CreateToken(subject: "user1");
+            var parts = token.Split('.');
+            var tamperedPayload = Base64Url($"{{\"{AuthConstants.JwtClaimTypes.Subject}\":\"admin\",\"iss\":\"{TestIssuer}\",\"aud\":\"{TestAudience}\",\"exp\":{DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeSeconds()}}}");
+            // keep the original header and signature, only the payload differs
+            var wtm = CreateContext($"{parts[0]}.{tamperedPayload}.{parts[2]}");
+            wtm.Cache.Add($"{GlobalConstants.CacheKey.UserInfo}:{"user1" + "$`$" + (string)null}", new LoginUserInfo { ITCode = "user1" });
+            Assert.IsNull(wtm.LoginUserInfo);
+        }
+
+        [TestMethod]
+        public void CacheMissReloadsUserAndAddsToCache()
+        {
+            var previous = WTMContext.ReloadUserFunc;
+            try
+            {
+                WTMContext.ReloadUserFunc = (ctx, itcode) => new LoginUserInfo { ITCode = itcode };
+                var wtm = CreateContext(CreateToken(subject: "user2"));
+                var result = wtm.LoginUserInfo;
+                Assert.IsNotNull(result);
+                Assert.AreEqual("user2", result.ITCode);
+                var cached = wtm.Cache.Get<LoginUserInfo>($"{GlobalConstants.CacheKey.UserInfo}:{"user2" + "$`$" + (string)null}");
+                Assert.IsNotNull(cached);
+                Assert.AreEqual("user2", cached.ITCode);
+            }
+            finally
+            {
+                WTMContext.ReloadUserFunc = previous;
+            }
+        }
+
+        [TestMethod]
+        public void CacheMissWithUnknownUserIsAnonymousWithoutException()
+        {
+            var previous = WTMContext.ReloadUserFunc;
+            try
+            {
+                WTMContext.ReloadUserFunc = (ctx, itcode) => null;
+                var wtm = CreateContext(CreateToken(subject: "nobody"));
+                LoginUserInfo result = null;
+                try
+                {
+                    result = wtm.LoginUserInfo;
+                }
+                catch (Exception ex)
+                {
+                    Assert.Fail($"Unexpected exception: {ex.GetType().Name}");
+                }
+                Assert.IsNull(result);
+            }
+            finally
+            {
+                WTMContext.ReloadUserFunc = previous;
+            }
+        }
+
+        [TestMethod]
+        public void EmptyTokenIsRejected()
+        {
+            var wtm = CreateContext("");
+            Assert.IsNull(wtm.LoginUserInfo);
+        }
+
+        [TestMethod]
+        public void RepeatedAccessWithInvalidTokenStaysAnonymous()
+        {
+            var wtm = CreateContext("not-a-jwt");
+            Assert.IsNull(wtm.LoginUserInfo);
+            Assert.IsNull(wtm.LoginUserInfo);
         }
     }
 }
