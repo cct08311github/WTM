@@ -169,7 +169,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                                 }
                                 ContentResult cr = new ContentResult()
                                 {
-                                    Content = $"<script>var redirect='{(u?.ToLower().StartsWith("/login/logout")==true?"":u)}'+ window.location.hash; if(redirect=='/'){{window.location.href='{lp}'; }}  else{{window.location.href='{lp}?ReturnUrl='+encodeURIComponent(redirect);}}</script>",
+                                    Content = $"<script>var redirect='{JsStringEncoder.Escape(u?.ToLower().StartsWith("/login/logout")==true?"":u)}'+ window.location.hash; if(redirect=='/'){{window.location.href='{JsStringEncoder.Escape(lp)}'; }}  else{{window.location.href='{JsStringEncoder.Escape(lp)}?ReturnUrl='+encodeURIComponent(redirect);}}</script>",
                                     ContentType = "text/html",                                    
                                     StatusCode = 200
                                 };

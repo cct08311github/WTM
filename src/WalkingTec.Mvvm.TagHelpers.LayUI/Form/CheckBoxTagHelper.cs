@@ -92,7 +92,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     });
 
                 }
-                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('checkbox','{ItemUrl}','{Id}','{Field.Name}',{JsonSerializer.Serialize(values)},undefined,{Disabled.ToString().ToLower()})</script>");
+                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('checkbox','{JsStringEncoder.Escape(ItemUrl)}','{Id}','{Field.Name}',{JsonSerializer.Serialize(values)},undefined,{Disabled.ToString().ToLower()})</script>");
             }
             else
             {

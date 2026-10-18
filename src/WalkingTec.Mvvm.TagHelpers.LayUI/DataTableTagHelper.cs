@@ -954,11 +954,11 @@ case '{item.Area + item.ControllerName + item.ActionName + item.QueryString}':{{
                             }
                             if (item.IsRedirect == true)
                             {
-                                actionScript = $"ff.LoadPage(tempUrl,{item.IsRedirect.ToString().ToLower()},'{item.DialogTitle ?? ""}',isPost===true&&ids!==null&&ids!==undefined?{{'Ids':ids}}:undefined);";
+                                actionScript = $"ff.LoadPage(tempUrl,{item.IsRedirect.ToString().ToLower()},'{JsStringEncoder.Escape(item.DialogTitle)}',isPost===true&&ids!==null&&ids!==undefined?{{'Ids':ids}}:undefined);";
                             }
                             else
                             {
-                                actionScript = $"ff.OpenDialog(tempUrl,'{Guid.NewGuid().ToNoSplitString()}','{item.DialogTitle}',{width},{height},isPost===true&&ids!==null&&ids!==undefined?{{'Ids':ids}}:undefined,{item.Max.ToString().ToLower()});";
+                                actionScript = $"ff.OpenDialog(tempUrl,'{Guid.NewGuid().ToNoSplitString()}','{JsStringEncoder.Escape(item.DialogTitle)}',{width},{height},isPost===true&&ids!==null&&ids!==undefined?{{'Ids':ids}}:undefined,{item.Max.ToString().ToLower()});";
                             }
                         }
                         else
@@ -971,7 +971,7 @@ case '{item.Area + item.ControllerName + item.ActionName + item.QueryString}':{{
                             {
                                 if (item.IsRedirect == true)
                                 {
-                                    actionScript = $"ff.LoadPage(tempUrl,false,'{item.DialogTitle ?? ""}',isPost===true&&ids!==null&&ids!==undefined?{{'Ids':ids}}:undefined);";
+                                    actionScript = $"ff.LoadPage(tempUrl,false,'{JsStringEncoder.Escape(item.DialogTitle)}',isPost===true&&ids!==null&&ids!==undefined?{{'Ids':ids}}:undefined);";
                                 }
                                 else
                                 {
@@ -994,7 +994,7 @@ case '{item.Area + item.ControllerName + item.ActionName + item.QueryString}':{{
                     if (string.IsNullOrEmpty(item.PromptMessage) == false)
                     {
                         actionScript = $@"
-        layer.confirm('{item.PromptMessage}', {{title:'{THProgram._localizer["Sys.Info"]}'}},function(index){{
+        layer.confirm('{JsStringEncoder.Escape(item.PromptMessage)}', {{title:'{THProgram._localizer["Sys.Info"]}'}},function(index){{
             {actionScript}
         layer.close(index);
       }});";

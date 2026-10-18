@@ -72,7 +72,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
             if (string.IsNullOrEmpty(ItemUrl) == false)
             {
-                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('radio','{ItemUrl}','{Id}','{Field.Name}',{JsonSerializer.Serialize(values)})</script>");
+                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('radio','{JsStringEncoder.Escape(ItemUrl)}','{Id}','{Field.Name}',{JsonSerializer.Serialize(values)})</script>");
             }
             else
             {

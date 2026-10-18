@@ -93,8 +93,9 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
 
             var html = Render(helper, "wt:form");
 
-            AssertContains(html, "layui-form-danger", "&lg;b&rg;");
-            AssertNotContains(html, "<b>value</b>");
+            // angle brackets are HTML-encoded, then the text is escaped for the JavaScript string literal
+            AssertContains(html, "layui-form-danger", "bad \\u0026lt;b\\u0026gt;value\\u0026lt;/b\\u0026gt;");
+            AssertNotContains(html, "<b>value</b>", "&lg;b&rg;");
         }
 
         [TestMethod]

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using Microsoft.Extensions.Logging.Abstractions;
 using System;
+using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
@@ -117,7 +118,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             {
                 if (!string.IsNullOrEmpty(ConfirmTxt))
                 {
-                    Click = $"layer.confirm('{ConfirmTxt}', {{icon: 3, title:'{THProgram._localizer["Sys.Info"]}'}}, function(index){{ {Click};layer.close(index); }})";
+                    Click = $"layer.confirm('{JsStringEncoder.Escape(ConfirmTxt)}', {{icon: 3, title:'{THProgram._localizer["Sys.Info"]}'}}, function(index){{ {Click};layer.close(index); }})";
                 }
                 //if (this is SubmitButtonTagHelper)
                 //{
