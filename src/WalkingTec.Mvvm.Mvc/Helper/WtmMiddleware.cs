@@ -34,7 +34,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
             if (context.Request.Path == "/v1/activities" && context.Request.QueryString.Value != "?inneruse=1")
             {
-                var txt = (await wtm.CallAPI("", $"{wtm.HostAddress}/v1/activities?inneruse=1")).Data;
+                var txt = (await wtm.CallAPI("", $"{wtm.HostAddress}/v1/activities?inneruse=1", headers: BuildForwardHeaders(context))).Data;
                 var cul = Thread.CurrentThread.CurrentCulture;
                 if (cul.Name?.ToLower() == "zh" || cul.Name?.ToLower() == "zh-cn")
                 {
@@ -113,6 +113,30 @@ namespace WalkingTec.Mvvm.Mvc
             var mediaType = mt.MediaType.Value;
             return string.Equals(mediaType, "application/json", StringComparison.OrdinalIgnoreCase)
                 || (mediaType != null && mediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Builds the headers for an internal call back to this same host: the caller's Authorization and Cookie
+        /// headers, only when present. Returns null when there is nothing to forward.
+        /// </summary>
+        public static Dictionary<string, string> BuildForwardHeaders(HttpContext context)
+        {
+            if (context?.Request?.Headers == null)
+            {
+                return null;
+            }
+            var rv = new Dictionary<string, string>();
+            var auth = context.Request.Headers["Authorization"].ToString();
+            if (string.IsNullOrEmpty(auth) == false)
+            {
+                rv["Authorization"] = auth;
+            }
+            var cookie = context.Request.Headers["Cookie"].ToString();
+            if (string.IsNullOrEmpty(cookie) == false)
+            {
+                rv["Cookie"] = cookie;
+            }
+            return rv.Count == 0 ? null : rv;
         }
 
         private string TranslateWorkflow(string txt)

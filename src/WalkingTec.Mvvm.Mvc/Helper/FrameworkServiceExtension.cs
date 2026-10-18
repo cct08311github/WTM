@@ -678,7 +678,16 @@ namespace WalkingTec.Mvvm.Mvc
             services.AddMvc(options =>
             {
                 options.Conventions.Add(new MyNewtonsoftJsonConvention(null));
+                if (conf.WorkflowOptions.RequireAuthentication)
+                {
+                    options.Conventions.Add(new WorkflowApiAuthorizationConvention(conf.WorkflowOptions.RequireAdminRole));
+                }
             });
+            if (conf.WorkflowOptions.RequireAuthentication && conf.WorkflowOptions.RequireAdminRole)
+            {
+                services.AddHttpContextAccessor();
+                services.AddSingleton<IAuthorizationHandler, WorkflowAdminRequirementHandler>();
+            }
 
             var allTypes = Utils.GetAllModels();
 
@@ -894,6 +903,9 @@ namespace WalkingTec.Mvvm.Mvc
 
             //warn (never throw) when IsQuickDebug is on outside Development
             WtmEnvironmentHelper.LogQuickDebugWarning(configs, hostEnv != null && Microsoft.Extensions.Hosting.HostEnvironmentEnvExtensions.IsDevelopment(hostEnv), securityLogger);
+
+            //warn (never throw) when workflow is enabled without authentication on its API endpoints
+            WorkflowApiSecurity.LogUnprotectedWarning(configs, securityLogger);
 
             var lg = app.ApplicationServices.GetRequiredService<LinkGenerator>();
             var gd = app.ApplicationServices.GetRequiredService<GlobalData>();
