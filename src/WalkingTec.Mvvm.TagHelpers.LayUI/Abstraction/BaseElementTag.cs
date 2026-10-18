@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Razor.TagHelpers;
+using WalkingTec.Mvvm.Core;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
 {
@@ -185,14 +186,14 @@ layui.use(['form'],function(){{
 layui.use(['autocomplete'],function(){{
   layui.autocomplete.render({{
     elem: $('#{item.Id}')[0],
-    url: '{item.SearchUrl}',
+    url: '{JsStringEncoder.Escape(item.SearchUrl)}',
     cache: false,
     template_val: '{{{{d.Value}}}}',
     template_txt: '{{{{d.Text}}}}',
     onselect: function (data) {{
       $('#{item.Id}').val(data.Value);
      {FormatFuncName(item.ChangeFunc)};
-     ff.ChainChange('{item.TriggerUrl}/'+data.Value, data.elem);
+     ff.ChainChange('{JsStringEncoder.Escape(item.TriggerUrl)}/'+data.Value, data.elem);
     }}
   }});
 }})
@@ -206,7 +207,7 @@ layui.use(['autocomplete'],function(){{
 layui.use(['autocomplete'],function(){{
   layui.autocomplete.render({{
     elem: $('#{item.Id}')[0],
-    url: '{item.SearchUrl}',
+    url: '{JsStringEncoder.Escape(item.SearchUrl)}',
     cache: false,
     template_val: '{{{{d.Value}}}}',
     template_txt: '{{{{d.Text}}}}',

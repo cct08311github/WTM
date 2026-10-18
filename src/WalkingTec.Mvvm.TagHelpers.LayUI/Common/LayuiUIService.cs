@@ -18,11 +18,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             string windowid = Guid.NewGuid().ToString();
             if (showDialog == true)
             {
-                innerClick = $"ff.OpenDialog('{url}','{Guid.NewGuid().ToNoSplitString()}','{title ?? ""}',{width?.ToString() ?? "null"},{height?.ToString() ?? "null"},undefined,{max.ToString().ToLower()});";
+                innerClick = $"ff.OpenDialog('{JsStringEncoder.Escape(url)}','{Guid.NewGuid().ToNoSplitString()}','{JsStringEncoder.Escape(title)}',{width?.ToString() ?? "null"},{height?.ToString() ?? "null"},undefined,{max.ToString().ToLower()});";
             }
             else
             {
-                innerClick = $"$.ajax({{cache: false,type: 'GET',url: '{url}',async: true,success: function(data, textStatus, request) {{eval(data);}} }});";
+                innerClick = $"$.ajax({{cache: false,type: 'GET',url: '{JsStringEncoder.Escape(url)}',async: true,success: function(data, textStatus, request) {{eval(data);}} }});";
             }
             string funcname = $"x{buttonID.Replace("-", "")}click";
             var click = $"<script>function {funcname}(){{{innerClick};return false;}}</script>";
@@ -118,7 +118,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
                     value = "";
                 }
             }
-            return $@"<input class='layui-input' style='height:28px'  name='{name ?? ""}' id='{id}' value='{value ?? ""}' {disable}  onclick='ff.SetGridCellDate(""{id}"",""{dateType.ToString().ToLower()}"")'/>";
+            return $@"<input class='layui-input' style='height:28px'  name='{name ?? ""}' id='{id}' value='{value ?? ""}' {disable}  onclick='ff.SetGridCellDate(""{JsStringEncoder.Escape(id)}"",""{dateType.ToString().ToLower()}"")'/>";
         }
 
 
@@ -134,16 +134,16 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             switch (rtype)
             {
                 case RedirectTypesEnum.Layer:
-                    innerClick = $"ff.OpenDialog('{url}','{Guid.NewGuid().ToNoSplitString()}','{title ?? ""}',{width?.ToString() ?? "null"},{height?.ToString() ?? "null"},undefined,{max.ToString().ToLower()});";
+                    innerClick = $"ff.OpenDialog('{JsStringEncoder.Escape(url)}','{Guid.NewGuid().ToNoSplitString()}','{JsStringEncoder.Escape(title)}',{width?.ToString() ?? "null"},{height?.ToString() ?? "null"},undefined,{max.ToString().ToLower()});";
                     break;
                 case RedirectTypesEnum.Self:
-                    innerClick = $"ff.BgRequest('{url}',undefined,'{currentdivid}');";
+                    innerClick = $"ff.BgRequest('{JsStringEncoder.Escape(url)}',undefined,'{JsStringEncoder.Escape(currentdivid)}');";
                     break;
                 case RedirectTypesEnum.NewWindow:
-                    innerClick = $"ff.LoadPage('{url}',true,'{title ?? ""}');";
+                    innerClick = $"ff.LoadPage('{JsStringEncoder.Escape(url)}',true,'{JsStringEncoder.Escape(title)}');";
                     break;
                 case RedirectTypesEnum.NewTab:
-                    innerClick = $"ff.LoadPage('{url}',false,'{title ?? ""}');";
+                    innerClick = $"ff.LoadPage('{JsStringEncoder.Escape(url)}',false,'{JsStringEncoder.Escape(title)}');";
                     break;
                 default:
                     break;
@@ -169,7 +169,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             var innerClick = "";
             string windowid = Guid.NewGuid().ToString();
             var url = $"/_Framework/GetFile/{fileID}?_DONOT_USE_CS={_DONOT_USE_CS}";
-            innerClick = $"layui.layer.photos({{photos: {{data: [{{src: '{url}'}}]}},anim: 5}});";
+            innerClick = $"layui.layer.photos({{photos: {{data: [{{src: '{JsStringEncoder.Escape(url)}'}}]}},anim: 5}});";
             string funcname = $"x{buttonID.Replace("-", "")}click";
             var click = $"<script>function {funcname}(){{{innerClick};return false;}}</script>";
             string rv = "";

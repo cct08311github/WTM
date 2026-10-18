@@ -602,7 +602,7 @@ layui.use(['table'], function(){{
     }}
 {Id}defaultfilter = {{}};
 {Id}filterback = {{}};
-{Id}url = '{Url}';
+{Id}url = '{JsStringEncoder.Escape(Url)}';
 $.extend(true,{Id}defaultfilter ,{Id}option);
     {TableJSVar} = table.render({Id}option);
     {(UseLocalData ? $@"ff.LoadLocalData(""{Id}"",{Id}option,{ListVM.GetDataJson().Replace("<script>", "$$script$$").Replace("</script>", "$$#script$$")},{string.IsNullOrEmpty(ListVM.DetailGridPrix).ToString().ToLower()}); " : $@"
@@ -611,7 +611,7 @@ $.extend(true,{Id}defaultfilter ,{Id}option);
 setTimeout(function(){{
     var tempwhere = {{}};
     $.extend(tempwhere,{Id}defaultfilter.where);
-    table.reload('{Id}',{{url:'{Url}',where: $.extend(tempwhere,ff.GetSearchFormData('{SearchPanelId}','{fieldPre}')),}});
+    table.reload('{Id}',{{url:'{JsStringEncoder.Escape(Url)}',where: $.extend(tempwhere,ff.GetSearchFormData('{SearchPanelId}','{fieldPre}')),}});
 }},100);
 " : $@"
         var {Id}optionempty =  Object.assign({{}}, {Id}option);
@@ -851,7 +851,7 @@ setTimeout(function(){{
                 {
                     url = $"{url}&_DONOT_USE_VMNAME={vmQualifiedName}";
                 }
-                var script = new StringBuilder($"var tempUrl = '{url}',whereStr={JsonSerializer.Serialize(item.whereStr)};");
+                var script = new StringBuilder($"var tempUrl = '{JsStringEncoder.Escape(url)}',whereStr={JsonSerializer.Serialize(item.whereStr)};");
 
                 switch (item.ParameterType)
                 {

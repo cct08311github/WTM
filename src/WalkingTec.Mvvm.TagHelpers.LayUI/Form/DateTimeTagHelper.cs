@@ -217,7 +217,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 }
                 else
                 {
-                    Min = $"'{Min}'";
+                    Min = $"'{JsStringEncoder.Escape(Min)}'";
                 }
             }
             if (!string.IsNullOrEmpty(Max))
@@ -228,7 +228,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 }
                 else
                 {
-                    Max = $"'{Max}'";
+                    Max = $"'{JsStringEncoder.Escape(Max)}'";
                 }
             }
 
@@ -247,8 +247,8 @@ layui.use(['laydate'],function(){{
   var dateIns = laydate.render({{
     elem: '#{Id}',
     type: '{Type.ToString().ToLower()}'
-    {(string.IsNullOrEmpty(RangeSplit) ? string.Empty : $",range:'{RangeSplit}'")}
-    {(string.IsNullOrEmpty(Format) ? string.Empty : $",format: '{Format}'")}
+    {(string.IsNullOrEmpty(RangeSplit) ? string.Empty : $",range:'{JsStringEncoder.Escape(RangeSplit)}'")}
+    {(string.IsNullOrEmpty(Format) ? string.Empty : $",format: '{JsStringEncoder.Escape(Format)}'")}
     {(string.IsNullOrEmpty(Min) ? string.Empty : $",min: {Min}")}
     {(string.IsNullOrEmpty(Max) ? string.Empty : $",max: {Max}")}
     {(!ZIndex.HasValue ? string.Empty : $",zIndex: {ZIndex.Value}")}

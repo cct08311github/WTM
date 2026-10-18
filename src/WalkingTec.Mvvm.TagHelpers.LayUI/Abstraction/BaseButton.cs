@@ -110,7 +110,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             {
                 if (string.IsNullOrEmpty(sbt.SubmitUrl) == false && context.Items.ContainsKey("formid") == true)
                 {
-                    submitButtonUrl = $"$('#{context.Items["formid"]}').attr('action','{sbt.SubmitUrl}');";
+                    submitButtonUrl = $"$('#{context.Items["formid"]}').attr('action','{JsStringEncoder.Escape(sbt.SubmitUrl)}');";
                 }
             }
             string onclick = null;

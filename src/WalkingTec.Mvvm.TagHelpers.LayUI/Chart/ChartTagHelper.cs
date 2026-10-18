@@ -97,10 +97,10 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Chart
                 {
                     tooltip = @$"tooltip:{{
 formatter: function (params) {{
-    var xl = '{(NameX == "" ? "" : NameX + ":")}';
-    var yl = '{(NameY == "" ? "" : NameY + ":")}';
-    var al = '{(NameAddition == "" ? "" : NameAddition + ":")}';
-    var cl = '{(NameCategory == "" ? "" : NameCategory + ":")}';
+    var xl = '{(NameX == "" ? "" : JsStringEncoder.Escape(NameX) + ":")}';
+    var yl = '{(NameY == "" ? "" : JsStringEncoder.Escape(NameY) + ":")}';
+    var al = '{(NameAddition == "" ? "" : JsStringEncoder.Escape(NameAddition) + ":")}';
+    var cl = '{(NameCategory == "" ? "" : JsStringEncoder.Escape(NameCategory) + ":")}';
     return params.seriesName + ' <br/>'
                 + xl + params.value[0] + ' <br/>'
                 + yl + params.value[1] + ' <br/>'
@@ -129,18 +129,18 @@ formatter: function (params) {{
             {
                 if (IsHorizontal == false)
                 {
-                    xAxis = $"xAxis: {{name:'{NameX}',type: 'category'}},";
-                    yAxis = $"yAxis: {{name:'{NameY}'}},";
+                    xAxis = $"xAxis: {{name:'{JsStringEncoder.Escape(NameX)}',type: 'category'}},";
+                    yAxis = $"yAxis: {{name:'{JsStringEncoder.Escape(NameY)}'}},";
                 }
                 else
                 {
-                    xAxis = $"xAxis: {{name:'{NameY}'}},";
-                    yAxis = $"yAxis: {{name:'{NameX}',type: 'category'}},";
+                    xAxis = $"xAxis: {{name:'{JsStringEncoder.Escape(NameY)}'}},";
+                    yAxis = $"yAxis: {{name:'{JsStringEncoder.Escape(NameX)}',type: 'category'}},";
                 }
                 if (Type == ChartTypeEnum.Scatter)
                 {
-                    xAxis = $"xAxis: {{ name:'{NameX}',type: 'value',splitLine: {{ lineStyle: {{ type: 'dashed'}} }} }},";
-                    yAxis = $"yAxis:{{name:'{NameY}',splitLine:{{lineStyle:{{type: 'dashed'}} }},scale: true}},";
+                    xAxis = $"xAxis: {{ name:'{JsStringEncoder.Escape(NameX)}',type: 'value',splitLine: {{ lineStyle: {{ type: 'dashed'}} }} }},";
+                    yAxis = $"yAxis:{{name:'{JsStringEncoder.Escape(NameY)}',splitLine:{{lineStyle:{{type: 'dashed'}} }},scale: true}},";
                 }
             }
             //string scatterlegend = "";
@@ -155,10 +155,10 @@ var themeTemp ={(Theme == null ? "'default'" : $"'{Theme.ToString()}'")};
 {Id}Chart = echarts.init(document.getElementById('{Id}'),themeTemp);
 {Id}ChartType = '{typeSeries}';
 {Id}ChartLegend = '{ShowLegend.ToString().ToLower()}';
-{Id}ChartUrl = '{TriggerUrl}';
+{Id}ChartUrl = '{JsStringEncoder.Escape(TriggerUrl)}';
 var {Id}option;
 {Id}Chart.setOption({{
-    {(string.IsNullOrEmpty(Title) ? "" : $"title:{{text: '{Title}'}},")}
+    {(string.IsNullOrEmpty(Title) ? "" : $"title:{{text: '{JsStringEncoder.Escape(Title)}'}},")}
     {tooltip}
     {xAxis}
     {yAxis}

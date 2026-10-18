@@ -3,6 +3,7 @@ using System.Linq;
 
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
+using WalkingTec.Mvvm.Core;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
 {
@@ -171,7 +172,7 @@ layui.use(['slider'],function(){{
     ,tips:{Tips.ToString().ToLower()}
     ,input:{Input.ToString().ToLower()}
     {(SliderType == null || SliderType.Value == SliderTypeEnum.Default ? string.Empty : (SliderHeight == null ? string.Empty : $",height:{SliderHeight.Value}"))}
-    {(string.IsNullOrEmpty(Theme) ? string.Empty : $",theme: '{Theme}'")}
+    {(string.IsNullOrEmpty(Theme) ? string.Empty : $",theme: '{JsStringEncoder.Escape(Theme)}'")}
     ,change: function(value){{defaultFunc(value,sliderIns);
     {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $"{ChangeFunc}(value,sliderIns)")}
     }}

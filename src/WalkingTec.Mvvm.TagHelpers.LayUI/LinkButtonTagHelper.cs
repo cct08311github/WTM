@@ -81,13 +81,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     }}
     catch(e){{ {formid}validate = true;}}
     if({formid}validate == true){{
-    ff.OpenDialog('{Url}', '{windowid}', '{WindowTitle ?? ""}',{WindowWidth?.ToString() ?? "null"}, {WindowHeight?.ToString() ?? "null"}, ff.GetPostData('{context.Items["formid"]}'),{Max.ToString().ToLower()})
+    ff.OpenDialog('{JsStringEncoder.Escape(Url)}', '{windowid}', '{JsStringEncoder.Escape(WindowTitle)}',{WindowWidth?.ToString() ?? "null"}, {WindowHeight?.ToString() ?? "null"}, ff.GetPostData('{context.Items["formid"]}'),{Max.ToString().ToLower()})
     }}
 ";
                 }
                 else
                 {
-                    Click = $"ff.OpenDialog('{Url}', '{windowid}', '{WindowTitle ?? ""}',{WindowWidth?.ToString() ?? "null"}, {WindowHeight?.ToString() ?? "null"},undefined,{Max.ToString().ToLower()})";
+                    Click = $"ff.OpenDialog('{JsStringEncoder.Escape(Url)}', '{windowid}', '{JsStringEncoder.Escape(WindowTitle)}',{WindowWidth?.ToString() ?? "null"}, {WindowHeight?.ToString() ?? "null"},undefined,{Max.ToString().ToLower()})";
                 }
             }
             else if (Target == ButtonTargetEnum.self)
@@ -101,13 +101,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     }}
     catch(e){{ {formid}validate = true;}}
     if({formid}validate == true){{
-    ff.BgRequest('{Url}',ff.GetPostData('{context.Items["formid"]}'),'{vm?.ViewDivId}')
+    ff.BgRequest('{JsStringEncoder.Escape(Url)}',ff.GetPostData('{context.Items["formid"]}'),'{vm?.ViewDivId}')
     }}
 ";
                 }
                 else
                 {
-                    Click = $"ff.BgRequest('{Url}')";
+                    Click = $"ff.BgRequest('{JsStringEncoder.Escape(Url)}')";
                 }
             }
             else if (Target == ButtonTargetEnum.newwindow)
@@ -115,16 +115,16 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 if (Url.StartsWith("~"))
                 {
                     Url = Url.TrimStart('~');
-                    Click = $"ff.SetCookie('#{Url}','{WindowTitle ?? ""}',true);window.open('{Url}')";
+                    Click = $"ff.SetCookie('#{JsStringEncoder.Escape(Url)}','{JsStringEncoder.Escape(WindowTitle)}',true);window.open('{JsStringEncoder.Escape(Url)}')";
                 }
                 else
                 {
-                    Click = $"ff.SetCookie('#{Url}','{WindowTitle ?? ""}',true);window.open('/Home/PIndex#{Url}')";
+                    Click = $"ff.SetCookie('#{JsStringEncoder.Escape(Url)}','{JsStringEncoder.Escape(WindowTitle)}',true);window.open('/Home/PIndex#{JsStringEncoder.Escape(Url)}')";
                 }
             }
             else if(Target == ButtonTargetEnum.currentwindow)
             {
-                Click = $"ff.LoadPage('{Url}',false,'{WindowTitle ?? ""}');";
+                Click = $"ff.LoadPage('{JsStringEncoder.Escape(Url)}',false,'{JsStringEncoder.Escape(WindowTitle)}');";
             }
             base.Process(context, output);
         }
