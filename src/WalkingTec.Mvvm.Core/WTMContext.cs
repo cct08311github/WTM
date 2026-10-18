@@ -5,6 +5,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Net.Http;
 using System.Reflection;
+using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -18,6 +19,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Logging.Debug;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
 using WalkingTec.Mvvm.Core.Auth;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Json;
@@ -183,32 +185,10 @@ namespace WalkingTec.Mvvm.Core
                     var remoteToken = HttpContext?.Request.Query["_remotetoken"][0];
                     if (ConfigInfo.HasMainHost == false)
                     {
-                        JwtSecurityToken token = new JwtSecurityToken();
-                        try
-                        {
-                            token = new JwtSecurityToken(remoteToken);
-                        }
-                        catch { }
-                        var userIdStr = token.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault();
-                        var tenant = token.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault();
-                        string usercode = userIdStr;
-                        var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{userIdStr + "$`$" + tenant}";
-                        _loginUserInfo = Cache.Get<LoginUserInfo>(cacheKey);
+                        _loginUserInfo = TryResolveRemoteToken(remoteToken);
                         if (_loginUserInfo == null)
                         {
-                            try
-                            {
-                                _loginUserInfo = ReloadUser(usercode);
-                            }
-                            catch { }
-                            if (_loginUserInfo != null)
-                            {
-                                Cache.Add(cacheKey, _loginUserInfo);
-                            }
-                            else
-                            {
-                                return null;
-                            }
+                            return null;
                         }
                     }
                     else if (string.IsNullOrEmpty(remoteToken) == false)
@@ -244,6 +224,51 @@ namespace WalkingTec.Mvvm.Core
                     Cache.Add($"{GlobalConstants.CacheKey.UserInfo}:{_loginUserInfo.ITCode + "$`$" + _loginUserInfo?.TenantCode}", value);
                 }
             }
+        }
+
+        /// <summary>
+        /// Validate the remote token before trusting any of its claims.
+        /// Returns null (anonymous) when the token is missing or fails validation.
+        /// </summary>
+        private LoginUserInfo TryResolveRemoteToken(string remoteToken)
+        {
+            if (string.IsNullOrEmpty(remoteToken))
+            {
+                return null;
+            }
+            ClaimsPrincipal principal;
+            try
+            {
+                var handler = new JwtSecurityTokenHandler { MapInboundClaims = false };
+                principal = handler.ValidateToken(remoteToken, ConfigInfo.JwtOptions.CreateValidationParameters(), out _);
+            }
+            catch (Exception ex) when (ex is SecurityTokenException || ex is ArgumentException)
+            {
+                _loggerFactory?.CreateLogger<WTMContext>().LogWarning("Remote token validation failed: {ExceptionType}", ex.GetType().Name);
+                return null;
+            }
+            var userIdStr = principal.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault();
+            var tenant = principal.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault();
+            if (string.IsNullOrEmpty(userIdStr))
+            {
+                return null;
+            }
+            string usercode = userIdStr;
+            var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{userIdStr + "$`$" + tenant}";
+            var rv = Cache.Get<LoginUserInfo>(cacheKey);
+            if (rv == null)
+            {
+                try
+                {
+                    rv = ReloadUser(usercode);
+                }
+                catch { }
+                if (rv != null)
+                {
+                    Cache.Add(cacheKey, rv);
+                }
+            }
+            return rv;
         }
 
         private Type _localizerType;
