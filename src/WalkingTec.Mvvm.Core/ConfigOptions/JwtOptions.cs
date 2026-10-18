@@ -1,4 +1,7 @@
+using System;
 using System.Text;
+using Microsoft.IdentityModel.Tokens;
+using WalkingTec.Mvvm.Core.Auth;
 
 namespace WalkingTec.Mvvm.Core
 {
@@ -26,5 +29,29 @@ namespace WalkingTec.Mvvm.Core
             }
         }
         public string LoginPath { get; set; }
+
+        /// <summary>
+        /// Build the parameters used to validate tokens issued with these options
+        /// (signature, algorithm, issuer, audience and lifetime are all required).
+        /// </summary>
+        public TokenValidationParameters CreateValidationParameters()
+        {
+            return new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidIssuer = Issuer,
+                ValidateAudience = true,
+                ValidAudience = Audience,
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SecurityKey)),
+                ValidateLifetime = true,
+                RequireExpirationTime = true,
+                RequireSignedTokens = true,
+                ValidAlgorithms = new[] { SecurityAlgorithms.HmacSha256 },
+                ClockSkew = TimeSpan.FromSeconds(30),
+                NameClaimType = AuthConstants.JwtClaimTypes.Name,
+                RoleClaimType = AuthConstants.JwtClaimTypes.Role
+            };
+        }
     }
 }
