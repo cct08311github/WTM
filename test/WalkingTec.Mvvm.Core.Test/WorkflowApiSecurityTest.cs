@@ -119,8 +119,17 @@ namespace WalkingTec.Mvvm.Core.Test
         [TestMethod]
         public void ForwardHeaders_NullWhenNothingPresent()
         {
-            Assert.IsNull(WtmMiddleware.BuildForwardHeaders(new DefaultHttpContext()));
-            Assert.IsNull(WtmMiddleware.BuildForwardHeaders(null));
+            Assert.IsNull(WtmMiddleware.BuildForwardHeaders(new DefaultHttpContext(), true));
+            Assert.IsNull(WtmMiddleware.BuildForwardHeaders(null, true));
+        }
+
+        [TestMethod]
+        public void ForwardHeaders_NullWhenAuthenticationNotRequired()
+        {
+            var ctx = new DefaultHttpContext();
+            ctx.Request.Headers["Authorization"] = "Bearer abc";
+            ctx.Request.Headers["Cookie"] = "a=1";
+            Assert.IsNull(WtmMiddleware.BuildForwardHeaders(ctx, false));
         }
 
         [TestMethod]
@@ -130,14 +139,14 @@ namespace WalkingTec.Mvvm.Core.Test
             ctx.Request.Headers["Authorization"] = "Bearer abc";
             ctx.Request.Headers["Cookie"] = "a=1; b=2";
             ctx.Request.Headers["X-Other"] = "zzz";
-            var h = WtmMiddleware.BuildForwardHeaders(ctx);
+            var h = WtmMiddleware.BuildForwardHeaders(ctx, true);
             Assert.AreEqual(2, h.Count);
             Assert.AreEqual("Bearer abc", h["Authorization"]);
             Assert.AreEqual("a=1; b=2", h["Cookie"]);
 
             var only = new DefaultHttpContext();
             only.Request.Headers["Cookie"] = "a=1";
-            var h2 = WtmMiddleware.BuildForwardHeaders(only);
+            var h2 = WtmMiddleware.BuildForwardHeaders(only, true);
             Assert.AreEqual(1, h2.Count);
             Assert.IsFalse(h2.ContainsKey("Authorization"));
         }

@@ -34,7 +34,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
             if (context.Request.Path == "/v1/activities" && context.Request.QueryString.Value != "?inneruse=1")
             {
-                var txt = (await wtm.CallAPI("", $"{wtm.HostAddress}/v1/activities?inneruse=1", headers: BuildForwardHeaders(context))).Data;
+                var txt = (await wtm.CallAPI("", $"{wtm.HostAddress}/v1/activities?inneruse=1", headers: BuildForwardHeaders(context, wtm.ConfigInfo.WorkflowOptions.RequireAuthentication))).Data;
                 var cul = Thread.CurrentThread.CurrentCulture;
                 if (cul.Name?.ToLower() == "zh" || cul.Name?.ToLower() == "zh-cn")
                 {
@@ -117,11 +117,12 @@ namespace WalkingTec.Mvvm.Mvc
 
         /// <summary>
         /// Builds the headers for an internal call back to this same host: the caller's Authorization and Cookie
-        /// headers, only when present. Returns null when there is nothing to forward.
+        /// headers, only when present and only when <paramref name="requireAuthentication"/> is true.
+        /// Returns null when there is nothing to forward (always null when the setting is off).
         /// </summary>
-        public static Dictionary<string, string> BuildForwardHeaders(HttpContext context)
+        public static Dictionary<string, string> BuildForwardHeaders(HttpContext context, bool requireAuthentication)
         {
-            if (context?.Request?.Headers == null)
+            if (requireAuthentication == false || context?.Request?.Headers == null)
             {
                 return null;
             }
