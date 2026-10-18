@@ -26,6 +26,12 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * **修改：**   `WtmMiddleware` 改为异步读取请求体，不再阻塞线程池线程（#17）
 * **修改：**   升级存在已知漏洞的依赖，均在同一主版本内：`System.Security.Cryptography.Pkcs` 9.0.21、`SQLitePCLRaw.lib.e_sqlite3` 2.1.12、`Microsoft.OpenApi` 2.7.5（#14）。只有升级主版本才能修复的依赖见 #77、#78
 * **修改：**   仓库示例密钥 `CHANGE-ME-development-only-placeholder-key` 加入不安全密钥清单（#15）
+* **新增：**   `WorkflowOptions:RequireAuthentication`／`WorkflowOptions:RequireAdminRole`（默认均为 false）：开启后，工作流 API（`Elsa.Server.Api.*` 控制器）要求 WTM 已登录用户，并可额外要求流程管理员角色；启用了工作流但未开启时，启动输出 Warning。内部调用 `/v1/activities` 时，凭证只会转发到配置的 `Domains:server` 或 `AllowedHosts` 中的主机（#13）
+* **修复：**   内部调用 `/v1/activities` 失败时，返回内部调用的状态码；原来会返回空白的 200 或 500（#13）
+* **修改：**   LayUI TagHelper、`PrivilegeFilter`、`FrameworkFilter` 以及 `FResultExtension`（`Alert`／`Message`／`RefreshGrid`／`RedirectUrl`）中，嵌入 JavaScript 字符串的值统一通过新增的 `JsStringEncoder` 转义。解析后的值不变，因此页面显示不变；只有值中含引号、`<>&` 等字符时，生成的源码文字才会不同（#24、#25）
+* **修复：**   表单服务端错误信息中的 `<`、`>` 原来会显示为非标准的 `&lg;`／`&rg;`，现在正确显示为文字（#24）
+* **修复：**   `FResultExtension.RedirectUrl` 原来写成 `location.url`，实际不会跳转；现在改为 `location.href`，会真正跳转（#25）
+* **修改：**   `framework_layui.js` 中按名称查找图表、默认值、筛选条件等全局变量时，改用 `window[...]`，不再使用 `eval`；找不到时略过，不再抛出异常（#25）
 * **升级说明：**
     1. 使用内置 `TokenService` 签发的令牌、以及 Cookie 登录（含 LayUI 页面）都不受 #3 影响
     2. 如有外部系统使用同一把密钥自行签发令牌，请确认这些令牌：使用 HS256、带有 `exp`、不带未来的 `nbf`。暂时无法带上 `exp` 的，可设置 `JwtOptions:AllowTokensWithoutExpiry=true` 过渡；算法与 `nbf` 的要求没有开关可以放宽
