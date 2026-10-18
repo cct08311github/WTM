@@ -37,7 +37,7 @@ namespace WalkingTec.Mvvm.Admin.Api
         {
             if (width == null && height == null)
             {
-                return Upload(fp, sm, groupName, csName);
+                return Upload(fp, sm, groupName, subdir, extra, csName);
             }
             var FileData = Request.Form.Files[0];
 
