@@ -126,6 +126,32 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region ExposeExceptionDetails
+
+        /// <summary>
+        /// Controls whether the full exception text (Exception.ToString(), which includes the stack trace)
+        /// is written to the response when an unhandled exception occurs while a result is executed.
+        /// When not set (null, the default) the value of <see cref="IsQuickDebug"/> is used, so existing
+        /// applications behave exactly as before. Set to false to always return the generic error page text,
+        /// even if IsQuickDebug is enabled; set to true to expose the details explicitly.
+        /// Bound from the configuration root, e.g. "ExposeExceptionDetails": false.
+        /// </summary>
+        public bool? ExposeExceptionDetails { get; set; }
+
+        /// <summary>
+        /// The effective setting: <see cref="ExposeExceptionDetails"/> if it is set, otherwise <see cref="IsQuickDebug"/>.
+        /// </summary>
+        public static bool ShouldExposeExceptionDetails(Configs configs)
+        {
+            if (configs == null)
+            {
+                return false;
+            }
+            return configs.ExposeExceptionDetails ?? configs.IsQuickDebug;
+        }
+
+        #endregion
+
         #region Tenant
 
         private bool? _enableTenant;

@@ -915,6 +915,9 @@ namespace WalkingTec.Mvvm.Mvc
             var securityLogger = app.ApplicationServices.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("WalkingTec.Mvvm.Security");
             configs.JwtOptions.EnsureSecureKey(hostEnv != null && Microsoft.Extensions.Hosting.HostEnvironmentEnvExtensions.IsDevelopment(hostEnv), securityLogger);
 
+            //warn (never throw) when IsQuickDebug is on outside Development
+            WtmEnvironmentHelper.LogQuickDebugWarning(configs, hostEnv != null && Microsoft.Extensions.Hosting.HostEnvironmentEnvExtensions.IsDevelopment(hostEnv), securityLogger);
+
             var lg = app.ApplicationServices.GetRequiredService<LinkGenerator>();
             var gd = app.ApplicationServices.GetRequiredService<GlobalData>();
             var localfactory = app.ApplicationServices.GetRequiredService<IStringLocalizerFactory>();
