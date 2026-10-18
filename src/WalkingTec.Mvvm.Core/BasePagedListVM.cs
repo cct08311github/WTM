@@ -165,13 +165,13 @@ namespace WalkingTec.Mvvm.Core
                 Guid g = Guid.NewGuid();
                 var FileName = typeof(TModel).Name + "_" + DateTime.Now.ToString("yyyyMMddHHmmssffff");
                 //文件根目录            
-                string RootPath = $"{Wtm.ConfigInfo.HostRoot}\\export{g}";
+                string RootPath = Path.Combine(Wtm.ConfigInfo.HostRoot, $"export{g}");
 
                 //文件夹目录
-                string FilePath = $"{RootPath}//FileFolder";
+                string FilePath = Path.Combine(RootPath, "FileFolder");
 
                 //压缩包目录
-                string ZipPath = $"{RootPath}//{g}.zip";
+                string ZipPath = Path.Combine(RootPath, $"{g}.zip");
 
                 //打开文件夹
                 DirectoryInfo FileFolder = new DirectoryInfo(FilePath);
@@ -201,7 +201,7 @@ namespace WalkingTec.Mvvm.Core
                 {
                     var data = query.Skip(i * ExportMaxCount).Take(ExportMaxCount).ToList();
                     var WorkBook = GenerateWorkBook(data);
-                    string SavePath = $"{FilePath}/{FileName}_{i + 1}.xlsx";
+                    string SavePath = Path.Combine(FilePath, $"{FileName}_{i + 1}.xlsx");
                     File.WriteAllBytes(SavePath, WorkBook);
                 }
 
