@@ -697,35 +697,28 @@ namespace WalkingTec.Mvvm.Mvc
 
         public static IServiceCollection AddWtmCrossDomain(this IServiceCollection services, IConfiguration config)
         {
-            var conf = config.Get<Configs>();
+            var conf = config.Get<Configs>() ?? new Configs();
             services.AddCors(options =>
             {
                 if (conf.CorsOptions?.Policy?.Count > 0)
                 {
                     foreach (var item in conf.CorsOptions.Policy)
                     {
-                        string[] domains = item.Domain?.Split(',');
+                        var domain = item.Domain;
                         options.AddPolicy(item.Name,
                            builder =>
                            {
-                               builder.WithOrigins(domains)
-                                                   .AllowAnyHeader()
-                                                   .AllowAnyMethod()
-                                                   .AllowCredentials()
-                                                   .WithExposedHeaders("Content-Disposition");
+                               WtmCorsHelper.ConfigureConfiguredPolicy(builder, domain);
                            });
                     }
                 }
                 else
                 {
-                    options.AddPolicy("_donotusedefault",
+                    var corsOptions = conf.CorsOptions;
+                    options.AddPolicy(WtmCorsHelper.DefaultPolicyName,
                         builder =>
                         {
-                            builder.SetIsOriginAllowed((a) => true)
-                                                .AllowAnyHeader()
-                                                .AllowAnyMethod()
-                                                .AllowCredentials()
-                                                .WithExposedHeaders("Content-Disposition");
+                            WtmCorsHelper.ConfigureDefaultPolicy(builder, corsOptions);
                         });
                 }
             });
@@ -1126,6 +1119,9 @@ namespace WalkingTec.Mvvm.Mvc
         public static IApplicationBuilder UseWtmCrossDomain(this IApplicationBuilder app)
         {
             var configs = app.ApplicationServices.GetRequiredService<IOptionsMonitor<Configs>>().CurrentValue;
+            var corsHostEnv = app.ApplicationServices.GetService<Microsoft.Extensions.Hosting.IHostEnvironment>();
+            var corsLogger = app.ApplicationServices.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("WalkingTec.Mvvm.Security");
+            WtmCorsHelper.LogStartupDiagnostics(configs.CorsOptions, corsHostEnv != null && Microsoft.Extensions.Hosting.HostEnvironmentEnvExtensions.IsDevelopment(corsHostEnv), corsLogger);
             if (configs.CorsOptions.EnableAll == true)
             {
                 if (configs.CorsOptions?.Policy?.Count > 0)
@@ -1134,7 +1130,7 @@ namespace WalkingTec.Mvvm.Mvc
                 }
                 else
                 {
-                    app.UseCors("_donotusedefault");
+                    app.UseCors(WtmCorsHelper.DefaultPolicyName);
                 }
             }
             return app;
