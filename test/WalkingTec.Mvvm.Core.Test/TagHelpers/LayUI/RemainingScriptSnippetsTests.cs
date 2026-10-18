@@ -256,8 +256,8 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
 
             AssertContains(preview,
                 // markup created after a new file has been uploaded
-                "layer-src=\"/_Framework/GetFile?id='+ res.Data.Id+'&_DONOT_USE_CS=" + HostileAttrThenJs + "\"",
-                "src=\"/_Framework/GetFile?id='+ res.Data.Id+'&stream=true&width=64&height=64&_DONOT_USE_CS=" + HostileAttrThenJs + "\"",
+                "layer-src=\"/_Framework/GetFile?id='+ LayuiTestVM_FilesHtmlEnc(res.Data.Id)+'&_DONOT_USE_CS=" + HostileAttrThenJs + "\"",
+                "src=\"/_Framework/GetFile?id='+ LayuiTestVM_FilesHtmlEnc(res.Data.Id)+'&stream=true&width=64&height=64&_DONOT_USE_CS=" + HostileAttrThenJs + "\"",
                 "layer-src=\"/_Framework/GetFile/" + id + "?_DONOT_USE_CS=" + HostileAttrThenJs + "\"",
                 "src=\"/_Framework/GetFile?id=" + id + "&stream=true&width=64&height=64&_DONOT_USE_CS=" + HostileAttrThenJs + "\"");
             AssertContains(link, "href='/_Framework/GetFile/" + id + "?_DONOT_USE_CS=" + HostileAttrThenJs + "'");

@@ -188,6 +188,9 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             output.PostElement.SetHtmlContent($@"
 <input type='hidden' id='{Id}'  {requiredtext} />
 <script>
+  function {Id}HtmlEnc(s){{
+    return String(s == null ? '' : s).replace(/[&<>""']/g, function(c){{ return '&#' + c.charCodeAt(0) + ';'; }});
+  }}
   var {Id}selected = {initselected};
 {Id}SetValues();
   function {Id}SetValues(){{
@@ -196,7 +199,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     var count = 0;
     for(count=0; count< {Id}selected.length;count++){{
         var name = ""{Field.Name}["" + count + ""].FileId"";
-        f.append($('<input {Id}hidden=""{Id}"" type=""hidden"" name=""' + name + '"" value=""' + {Id}selected[count] + '"">'));
+        f.append($('<input {Id}hidden=""{Id}"" type=""hidden"" name=""' + name + '"" value=""' + {Id}HtmlEnc({Id}selected[count]) + '"">'));
     }}
     if(count > 0){{
         f.find(""#{Id}"").val(""1"");
@@ -253,7 +256,7 @@ layui.use(['upload'],function(){{
         {Id}selected.push(res.Data.Id);
         {Id}SetValues();
         {(ShowPreview == true ? $@"
-            $('#{Id}label').append('<label id=""label'+res.Data.Id+'""><img alt=""'+res.Data.Name+'"" layer-src=""/_Framework/GetFile?id='+ res.Data.Id+'&_DONOT_USE_CS={JsAttr(vm != null ? vm.CurrentCS : "")}"" src=""/_Framework/GetFile?id='+ res.Data.Id+'&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}&_DONOT_USE_CS={JsAttr(vm!=null?vm.CurrentCS:"")}""  class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64} id=""preview'+res.Data.Id+'"" style=""cursor:pointer;margin-bottom:5px"" /><i class=""layui-icon layui-icon-close"" style=""font-size: 20px;position:relative;left:-10px;top:-27px;color: #ff0000;cursor: pointer;"" id=""del'+res.Data.Id+'""></i></label> ');
+            $('#{Id}label').append('<label id=""label'+{Id}HtmlEnc(res.Data.Id)+'""><img alt=""'+{Id}HtmlEnc(res.Data.Name)+'"" layer-src=""/_Framework/GetFile?id='+ {Id}HtmlEnc(res.Data.Id)+'&_DONOT_USE_CS={JsAttr(vm != null ? vm.CurrentCS : "")}"" src=""/_Framework/GetFile?id='+ {Id}HtmlEnc(res.Data.Id)+'&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}&_DONOT_USE_CS={JsAttr(vm!=null?vm.CurrentCS:"")}""  class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64} id=""preview'+{Id}HtmlEnc(res.Data.Id)+'"" style=""cursor:pointer;margin-bottom:5px"" /><i class=""layui-icon layui-icon-close"" style=""font-size: 20px;position:relative;left:-10px;top:-27px;color: #ff0000;cursor: pointer;"" id=""del'+{Id}HtmlEnc(res.Data.Id)+'""></i></label> ');
             $('#preview'+res.Data.Id).on('click',function(){{
               {Id}DoPreview(res.Data.Id);
             }});
@@ -261,7 +264,7 @@ layui.use(['upload'],function(){{
               {Id}DoDelete(res.Data.Id);
             }});
       " : $@"
-           $('#{Id}label').append(""<label id='label""+res.Data.Id+""'><button class='layui-btn layui-btn-sm layui-btn-danger' type='button' id='del""+res.Data.Id+""' style='color:white;margin-left:0px;'>""+res.Data.Name +""  {WalkingTec.Mvvm.TagHelpers.LayUI.THProgram._localizer["Sys.Delete"]}</button><br/></label>"");
+           $('#{Id}label').append(""<label id='label""+{Id}HtmlEnc(res.Data.Id)+""'><button class='layui-btn layui-btn-sm layui-btn-danger' type='button' id='del""+{Id}HtmlEnc(res.Data.Id)+""' style='color:white;margin-left:0px;'>""+{Id}HtmlEnc(res.Data.Name) +""  {WalkingTec.Mvvm.TagHelpers.LayUI.THProgram._localizer["Sys.Delete"]}</button><br/></label>"");
            $('#del'+res.Data.Id).on('click',function(){{
               {Id}DoDelete(res.Data.Id);
           }});
@@ -310,12 +313,12 @@ $.ajax({{
   async: true,
   success: function(data) {{
     {(ShowPreview == true ? $@" {(Disabled == true? $@"
-      $('#{Id}label').append('<label id=""label{fileId}""><img layer-src=""{downloadurl}"" src=""{picurl}"" alt=""'+data+'""  class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64} id=""preview{fileId}"" style=""cursor:pointer;margin-bottom:5px""/></label> ');
+      $('#{Id}label').append('<label id=""label{fileId}""><img layer-src=""{downloadurl}"" src=""{picurl}"" alt=""'+{Id}HtmlEnc(data)+'""  class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64} id=""preview{fileId}"" style=""cursor:pointer;margin-bottom:5px""/></label> ');
             $('#preview{fileIdJs}').on('click',function(){{
               {Id}DoPreview();
             }});
 " :$@"
-      $('#{Id}label').append('<label id=""label{fileId}""><img layer-src=""{downloadurl}"" src=""{picurl}"" alt=""'+data+'"" class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64} id=""preview{fileId}"" style=""cursor:pointer;margin-bottom:5px""/><i class=""layui-icon layui-icon-close"" style=""font-size: 20px;position:relative;left:-10px;top:-27px;color: #ff0000;cursor:pointer;margin-bottom:5px"" id=""del{fileId}""></i></label> ');
+      $('#{Id}label').append('<label id=""label{fileId}""><img layer-src=""{downloadurl}"" src=""{picurl}"" alt=""'+{Id}HtmlEnc(data)+'"" class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64} id=""preview{fileId}"" style=""cursor:pointer;margin-bottom:5px""/><i class=""layui-icon layui-icon-close"" style=""font-size: 20px;position:relative;left:-10px;top:-27px;color: #ff0000;cursor:pointer;margin-bottom:5px"" id=""del{fileId}""></i></label> ');
             $('#del{fileIdJs}').on('click',function(){{
               {Id}DoDelete('{fileIdJs}');
             }});
@@ -324,9 +327,9 @@ $.ajax({{
             }});
 ")}
     " : $@"{(Disabled == true? $@"
-        $('#{Id}label').append(""<label id='label{fileId}'><a class='layui-btn layui-btn-primary layui-btn-xs' style='margin:9px 0;width:unset width:300px;' href='{downloadurl}'>""+data+""</a></label>"");
+        $('#{Id}label').append(""<label id='label{fileId}'><a class='layui-btn layui-btn-primary layui-btn-xs' style='margin:9px 0;width:unset width:300px;' href='{downloadurl}'>""+{Id}HtmlEnc(data)+""</a></label>"");
 " :$@"
-        $('#{Id}label').append(""<label id='label{fileId}'><button class='layui-btn layui-btn-sm layui-btn-danger' type='button' id='del{fileId}' style='color:white'>""+data+""  {WalkingTec.Mvvm.TagHelpers.LayUI.THProgram._localizer["Sys.Delete"]}</button><br/></label>"");
+        $('#{Id}label').append(""<label id='label{fileId}'><button class='layui-btn layui-btn-sm layui-btn-danger' type='button' id='del{fileId}' style='color:white'>""+{Id}HtmlEnc(data)+""  {WalkingTec.Mvvm.TagHelpers.LayUI.THProgram._localizer["Sys.Delete"]}</button><br/></label>"");
         $('#del{fileIdJs}').on('click',function(){{
           {Id}DoDelete('{fileIdJs}');
         }});
