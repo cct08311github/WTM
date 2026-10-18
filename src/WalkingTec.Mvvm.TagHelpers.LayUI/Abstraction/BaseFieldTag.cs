@@ -150,7 +150,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             {
                 string lb = "";
                 if(LabelText != "") {
-                    lb = $"{requiredDot}{LabelText}:";
+                    lb = $"{requiredDot}{HtmlText(LabelText)}:";
                 }
                 string instyle = $"style=\"{(LabelWidth == null || string.IsNullOrEmpty(PaddingText) == false ? "" : "margin-left:" + (LabelWidth + 30) + "px;")}";
                 if(this is DisplayTagHelper)
@@ -182,7 +182,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             {
                 postHtml += $@"
     </div>
-<div class=""layui-form-mid layui-word-aux"">{PaddingText}</div>
+<div class=""layui-form-mid layui-word-aux"">{HtmlText(PaddingText)}</div>
 </div>
 ";
 

@@ -67,7 +67,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         {
             output.TagName = "li";
             output.TagMode = TagMode.StartTagAndEndTag;
-            output.Content.SetHtmlContent(Title);
+            output.Content.SetHtmlContent(HtmlText(Title));
             base.Process(context, output);
         }
     }

@@ -86,11 +86,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 output.Attributes.SetAttribute("class", btnclass);
                 if (string.IsNullOrEmpty(Icon) == false)
                 {
-                    output.Content.SetHtmlContent($@"<i class=""{HtmlAttributeEncoder.Encode(Icon)}""></i> {Text ?? ""}");
+                    output.Content.SetHtmlContent($@"<i class=""{HtmlAttributeEncoder.Encode(Icon)}""></i> {HtmlText(Text) ?? ""}");
                 }
                 else
                 {
-                    output.Content.SetHtmlContent(Text ?? string.Empty);
+                    output.Content.SetHtmlContent(HtmlText(Text) ?? string.Empty);
                 }
             }
             else
@@ -98,11 +98,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 if (string.IsNullOrEmpty(Icon) == false)
                 {
                     output.Attributes.SetAttribute("class", "shortcut");
-                    output.Content.SetHtmlContent($"<div><i class=\"{HtmlAttributeEncoder.Encode(Icon)}\"></i></div>{Text ?? ""}");
+                    output.Content.SetHtmlContent($"<div><i class=\"{HtmlAttributeEncoder.Encode(Icon)}\"></i></div>{HtmlText(Text) ?? ""}");
                 }
                 else
                 {
-                    output.Content.SetHtmlContent(Text ?? string.Empty);
+                    output.Content.SetHtmlContent(HtmlText(Text) ?? string.Empty);
                 }
             }
             string submitButtonUrl = "";

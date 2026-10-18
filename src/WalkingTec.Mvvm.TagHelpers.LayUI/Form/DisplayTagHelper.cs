@@ -13,6 +13,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
         public string Format { get; set; }
 
+        /// <summary>
+        /// Overrides UIOptions.EncodeHtmlContent for this display: true to HTML-encode the text,
+        /// false to emit it as is, not set to follow the global option.
+        /// </summary>
+        public bool? EncodeHtml { get; set; }
+
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
 
@@ -163,7 +169,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 {
                     val = DisplayText;
                 }
-                output.Content.AppendHtml(val);
+                output.Content.AppendHtml(HtmlText(val, EncodeHtml));
             }
             base.Process(context, output);
         }

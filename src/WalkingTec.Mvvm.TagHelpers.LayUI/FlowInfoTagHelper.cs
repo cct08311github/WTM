@@ -29,11 +29,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 <li class=""layui-timeline-item"">
     <i class=""layui-icon layui-timeline-axis"">&#xe63f;</i>
     <div class=""layui-timeline-content layui-text"">
-      <h3 class=""layui-timeline-title"">{item.Time}</h3>
+      <h3 class=""layui-timeline-title"">{HtmlText(item.Time)}</h3>
       <p>
-        {item.Message}
+        {HtmlText(item.Message)}
       </p>
-      <p>{(string.IsNullOrEmpty(item.Remark) ? "": "备注：" + item.Remark)}</p>
+      <p>{(string.IsNullOrEmpty(item.Remark) ? "": "备注：" + HtmlText(item.Remark))}</p>
     </div>
   </li>
 ");

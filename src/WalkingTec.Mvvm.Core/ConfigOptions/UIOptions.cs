@@ -7,6 +7,14 @@ namespace WalkingTec.Mvvm.Core.ConfigOptions
         public DateTimeOptions DateTime { get; set; }
         public SearchPanelOptions SearchPanel { get; set; }
 
+        /// <summary>
+        /// When true, text coming from data or configuration that LayUI TagHelpers and the grid
+        /// place into HTML content (display values, titles, labels, button text, flow info, grid cells
+        /// without a custom format) is HTML-encoded. Default is false: the text is emitted as is, so
+        /// pages that intentionally render HTML keep working.
+        /// </summary>
+        public bool EncodeHtmlContent { get; set; }
+
         public class DataTableOptions
         {
             /// <summary>

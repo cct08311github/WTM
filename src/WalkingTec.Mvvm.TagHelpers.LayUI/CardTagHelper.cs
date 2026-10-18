@@ -34,7 +34,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 output.Attributes.SetAttribute("class", "layui-card");
                 output.Attributes.SetAttribute("style", style);
                 string pre = $@"
-    <div class=""layui-card-header"">{Title}</div>
+    <div class=""layui-card-header"">{HtmlText(Title)}</div>
         <div class=""layui-card-body"">
 ";
                 string post = $@"
@@ -48,7 +48,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 output.Attributes.SetAttribute("class", "layui-card");
                 output.Attributes.SetAttribute("style", style);
                 string pre = $@"
-    <div class=""layui-card-header"" style=""background-color:#fafafa"">{Title}</div>
+    <div class=""layui-card-header"" style=""background-color:#fafafa"">{HtmlText(Title)}</div>
         <div class=""layui-card-body"">
 ";
                 string post = $@"
