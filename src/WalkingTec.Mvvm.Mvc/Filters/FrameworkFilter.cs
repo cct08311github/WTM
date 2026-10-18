@@ -410,7 +410,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
             if (context.Exception != null)
             {
                 context.ExceptionHandled = true;
-                if (ctrl.Wtm.ConfigInfo.IsQuickDebug == true)
+                if (Configs.ShouldExposeExceptionDetails(ctrl.Wtm.ConfigInfo))
                 {
                     context.HttpContext.Response.WriteAsync(context.Exception.ToString());
                 }
