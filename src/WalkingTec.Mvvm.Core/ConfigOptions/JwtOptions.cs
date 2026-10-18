@@ -23,12 +23,13 @@ namespace WalkingTec.Mvvm.Core
         private const int MinKeyLength = 32;
         private const int MinDistinctChars = 5;
 
-        // Values published in this repository (framework default and demo appsettings samples).
+        // Values published in this repository (framework default and demo appsettings samples, incl. the demo placeholder).
         // Anyone can look them up, so they must never be used to sign tokens outside Development.
         private static readonly string[] KnownPublicKeys = new[]
         {
             "wtmwtmwtmwtmwtmwtm",
-            "superSecretKey@345"
+            "superSecretKey@345",
+            "CHANGE-ME-development-only-placeholder-key"
         };
 
         private const string DefaultKey = "wtmwtmwtmwtmwtmwtm";
