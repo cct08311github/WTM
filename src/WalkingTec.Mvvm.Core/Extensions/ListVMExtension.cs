@@ -51,6 +51,22 @@ namespace WalkingTec.Mvvm.Core.Extensions
             return $"[{sb}]";
         }
 
+        /// <summary>
+        /// A cell color is later placed into a style and a script on the page, so when HTML encoding is on
+        /// only letters, digits and the characters of color notations (# ( ) , . % and space) are accepted.
+        /// </summary>
+        private static bool IsSafeCssColor(string color)
+        {
+            foreach (var c in color)
+            {
+                if (!(char.IsAsciiLetterOrDigit(c) || c == '#' || c == '(' || c == ')' || c == ',' || c == '.' || c == '%' || c == ' '))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         private static string GetFormatResult(BaseVM vm, ColumnFormatInfo info)
         {
             string rv = "";
@@ -121,6 +137,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
             sb.Append('{');
             bool containsID = false;
             bool addHiddenID = false;
+            bool encodeHtml = (self as BaseVM)?.ConfigInfo?.UIOptions?.EncodeHtmlContent == true;
             Dictionary<string, (string, string)> colorcolumns = new Dictionary<string, (string, string)>();
             foreach (var baseCol in self.GetHeaders())
             {
@@ -224,6 +241,11 @@ namespace WalkingTec.Mvvm.Core.Extensions
                                 else
                                 {
                                     html = info.ToString();
+                                    //opt-in: a plain value (not the result of a column format, which is HTML by design) is data, so encode it
+                                    if (encodeHtml)
+                                    {
+                                        html = HtmlAttributeEncoder.Encode(html);
+                                    }
                                 }
                             }
 
@@ -325,7 +347,10 @@ namespace WalkingTec.Mvvm.Core.Extensions
                     {
                         bg = "#" + bg;
                     }
-                    sb.Append($",\"{cc.Key}__bgcolor\":\"{bg}\"");
+                    if (encodeHtml == false || IsSafeCssColor(bg))
+                    {
+                        sb.Append($",\"{cc.Key}__bgcolor\":\"{bg}\"");
+                    }
                 }
                 if (string.IsNullOrEmpty(cc.Value.Item2) == false)
                 {
@@ -334,7 +359,10 @@ namespace WalkingTec.Mvvm.Core.Extensions
                     {
                         fore = "#" + fore;
                     }
-                    sb.Append($",\"{cc.Key}__forecolor\":\"{fore}\"");
+                    if (encodeHtml == false || IsSafeCssColor(fore))
+                    {
+                        sb.Append($",\"{cc.Key}__forecolor\":\"{fore}\"");
+                    }
                 }
             }
             if (containsID == false)

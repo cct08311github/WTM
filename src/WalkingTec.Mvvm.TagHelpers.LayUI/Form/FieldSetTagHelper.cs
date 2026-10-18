@@ -21,7 +21,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             {
                 output.Attributes.SetAttribute("class", "layui-elem-field layui-field-title");
             }
-            string content = $@"<legend>{Title}</legend>";
+            string content = $@"<legend>{HtmlText(Title)}</legend>";
             var innerContent = output.GetChildContentAsync().Result.GetContent();
             if (string.IsNullOrEmpty(innerContent?.Trim()) == false)
             {

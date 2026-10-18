@@ -1,4 +1,8 @@
+using Microsoft.AspNetCore.Mvc.Rendering;
+using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
@@ -15,6 +19,43 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         public string Class { get; set; }
 
         public string Style { get; set; }
+
+        /// <summary>
+        /// Set by the Razor runtime; used to reach the request services (and so the configuration).
+        /// </summary>
+        [HtmlAttributeNotBound]
+        [ViewContext]
+        public ViewContext ViewContext { get; set; }
+
+        /// <summary>
+        /// Optional explicit configuration source. When it is not set the configuration is taken from
+        /// the request services of <see cref="ViewContext"/>.
+        /// </summary>
+        [HtmlAttributeNotBound]
+        public IOptionsMonitor<Configs> ConfigsMonitor { get; set; }
+
+        /// <summary>
+        /// True when <c>UIOptions.EncodeHtmlContent</c> is enabled. Default (and when the configuration
+        /// can not be reached) is false.
+        /// </summary>
+        protected bool EncodeHtmlContent
+        {
+            get
+            {
+                var monitor = ConfigsMonitor ?? ViewContext?.HttpContext?.RequestServices?.GetService<IOptionsMonitor<Configs>>();
+                return monitor?.CurrentValue?.UIOptions?.EncodeHtmlContent == true;
+            }
+        }
+
+        /// <summary>
+        /// Returns <paramref name="text"/> HTML-encoded when <c>UIOptions.EncodeHtmlContent</c> is
+        /// enabled (or when <paramref name="overrideValue"/> is true), otherwise unchanged, so the
+        /// output with the default setting is exactly what it was before.
+        /// </summary>
+        protected string HtmlText(string text, bool? overrideValue = null)
+        {
+            return (overrideValue ?? EncodeHtmlContent) ? HtmlAttributeEncoder.Encode(text) : text;
+        }
 
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {

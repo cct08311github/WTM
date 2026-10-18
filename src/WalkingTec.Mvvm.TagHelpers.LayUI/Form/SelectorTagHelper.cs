@@ -219,7 +219,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
                         val = Field.Model.ToString();
                     }
                 }
-                output.Content.AppendHtml(string.Join(",", value));
+                output.Content.AppendHtml(HtmlText(string.Join(",", value)));
 
                 base.Process(context, output);
             }
@@ -363,13 +363,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
                 if (Disabled == true)
                 {
                     output.PostElement.AppendHtml($@"
-<button class='layui-btn layui-btn-sm layui-btn-disabled' type='button' id='{Id}_Select' style='color:gray;position:absolute;right:0px'>{SelectButtonText ?? " . . . "}</button>
+<button class='layui-btn layui-btn-sm layui-btn-disabled' type='button' id='{Id}_Select' style='color:gray;position:absolute;right:0px'>{(SelectButtonText == null ? " . . . " : HtmlText(SelectButtonText))}</button>
 ");
                 }
                 else
                 {
                     output.PostElement.AppendHtml($@"
-<button class='layui-btn layui-btn-sm layui-btn-warm' type='button' id='{Id}_Select' style='color:white;position:absolute;right:0px'>{SelectButtonText ?? " . . . "}</button>
+<button class='layui-btn layui-btn-sm layui-btn-warm' type='button' id='{Id}_Select' style='color:white;position:absolute;right:0px'>{(SelectButtonText == null ? " . . . " : HtmlText(SelectButtonText))}</button>
 <script>
 var {Id}filter = {{}};
 $('#{Id}_Select').on('click',function(){{

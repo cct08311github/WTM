@@ -785,7 +785,7 @@ setTimeout(function(){{
                         {
                             rowBtnStrBuilder.Append("{{#  if(d." + item.BindVisiableColName + " == true || d." + item.BindVisiableColName + " == 'true' || d." + item.BindVisiableColName + " == 'True' ){ }}");
                         }
-                        rowBtnStrBuilder.Append($@"<a class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "layui-btn-primary" : $"{HtmlAttributeEncoder.Encode(item.ButtonClass)}")} layui-btn-xs"" lay-event=""{HtmlAttributeEncoder.Encode(item.Area + item.ControllerName + item.ActionName + item.QueryString)}"">{item.Name}</a>");
+                        rowBtnStrBuilder.Append($@"<a class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "layui-btn-primary" : $"{HtmlAttributeEncoder.Encode(item.ButtonClass)}")} layui-btn-xs"" lay-event=""{HtmlAttributeEncoder.Encode(item.Area + item.ControllerName + item.ActionName + item.QueryString)}"">{ActionText(vm, item.Name)}</a>");
                         if (condition == true)
                         {
                             rowBtnStrBuilder.Append("{{#  } else{ }}");
@@ -794,7 +794,7 @@ setTimeout(function(){{
                     }
                     else
                     {
-                        rowBtnStrBuilder.Append($@"<a class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "layui-btn-primary" : $"{HtmlAttributeEncoder.Encode(item.ButtonClass)}")} layui-btn-xs"" onclick=""ff.RemoveGridRow('{Id}',{Id}option,{{{{d.LAY_INDEX}}}});"">{item.Name}</a>");
+                        rowBtnStrBuilder.Append($@"<a class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "layui-btn-primary" : $"{HtmlAttributeEncoder.Encode(item.ButtonClass)}")} layui-btn-xs"" onclick=""ff.RemoveGridRow('{Id}',{Id}option,{{{{d.LAY_INDEX}}}});"">{ActionText(vm, item.Name)}</a>");
                     }
                 }
 
@@ -826,7 +826,7 @@ setTimeout(function(){{
                         }
                         toolBarBtnStrBuilder.Append($@"<button type=""button"" class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "" : $"{HtmlAttributeEncoder.Encode(item.ButtonClass)}")} layui-btn-sm layui-unselect layui-form-select downpanel"" style=""z-index:9999;"" id=""btn_{HtmlAttributeEncoder.Encode(item.ButtonId)}"">
                                  <div class=""layui-select-title"" style=""padding-right:20px;"">
-                                        {item.Name}
+                                        {ActionText(vm, item.Name)}
                                  <i class=""layui-edge""></i>
                                  </div>
                                  <dl class=""layui-anim layui-anim-upbit"" style=""top: initial;padding:1px 0px 0px 0px;"" >
@@ -843,7 +843,7 @@ setTimeout(function(){{
                         string substyle = "style=\"";
                         substyle += isSub ? "width: 100%;" : "";
                         substyle += "\"";
-                        toolBarBtnStrBuilder.Append($@"<a href=""javascript:void(0)"" onclick=""wtToolBarFunc_{Id}({{event:'{JsStringEncoder.Escape(item.Area + item.ControllerName + item.ActionName + item.QueryString)}'}});"" class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "" : $"{HtmlAttributeEncoder.Encode(item.ButtonClass)}")} layui-btn-sm"" {substyle}>{icon}{item.Name}</a>");
+                        toolBarBtnStrBuilder.Append($@"<a href=""javascript:void(0)"" onclick=""wtToolBarFunc_{Id}({{event:'{JsStringEncoder.Escape(item.Area + item.ControllerName + item.ActionName + item.QueryString)}'}});"" class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "" : $"{HtmlAttributeEncoder.Encode(item.ButtonClass)}")} layui-btn-sm"" {substyle}>{icon}{ActionText(vm, item.Name)}</a>");
                     }
                 }
                 var url = item.Url;
@@ -1008,6 +1008,14 @@ var isPost = false;
                 gridBtnEventStrBuilder.Append($@"}};break;
 ");
             }
+        }
+
+        /// <summary>
+        /// Text of a grid action button; HTML-encoded when UIOptions.EncodeHtmlContent is enabled.
+        /// </summary>
+        private static string ActionText(BaseVM vm, string name)
+        {
+            return vm?.ConfigInfo?.UIOptions?.EncodeHtmlContent == true ? HtmlAttributeEncoder.Encode(name) : name;
         }
 
         private string getTemplate(string field,string random)
