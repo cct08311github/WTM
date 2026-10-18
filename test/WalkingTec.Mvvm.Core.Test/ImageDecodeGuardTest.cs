@@ -117,6 +117,73 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.IsNull(image);
         }
 
+        [TestMethod]
+        [Timeout(2000)]
+        public void CraftedBigTiffHeaderIsRejectedQuickly()
+        {
+            // BigTIFF header + first IFD offset 16 + IFD entry count 5e9 (GHSA-wmxv-xphr-5c9g): the TIFF parser
+            // would spin; the restricted configuration must never route it to a TIFF decoder.
+            var bytes = new byte[24];
+            bytes[0] = 0x49; bytes[1] = 0x49;           // II
+            bytes[2] = 0x2B; bytes[3] = 0x00;           // BigTIFF magic 43
+            bytes[4] = 0x08; bytes[5] = 0x00;           // offset size 8
+            bytes[8] = 0x10;                            // first IFD at 16
+            System.BitConverter.GetBytes(5_000_000_000UL).CopyTo(bytes, 16);
+            using var ms = new MemoryStream(bytes);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var ok = ImageDecodeGuard.TryLoad(ms, new ImageDecodeLimits(), out var image, out _);
+            Assert.IsFalse(ok);
+            Assert.IsNull(image);
+            Assert.IsTrue(sw.ElapsedMilliseconds < 2000);
+        }
+
+        [TestMethod]
+        public void AnimatedGifLoadsOnlyFirstFrame()
+        {
+            using var src = new Image<Rgba32>(8, 8);
+            src.Frames.AddFrame(src.Frames.RootFrame);
+            var ms = new MemoryStream();
+            src.Save(ms, new GifEncoder());
+            ms.Position = 0;
+            Assert.IsTrue(ImageDecodeGuard.TryLoad(ms, new ImageDecodeLimits(), out var image, out _));
+            using (image)
+            {
+                Assert.AreEqual(1, image.Frames.Count);
+            }
+        }
+
+        [TestMethod]
+        public void RejectedNonSeekableStreamKeepsBufferedCopy()
+        {
+            var data = System.Text.Encoding.UTF8.GetBytes("not an image");
+            using var ns = new NonSeekableStream(new MemoryStream(data));
+            Assert.IsFalse(ImageDecodeGuard.TryLoad(ns, new ImageDecodeLimits(), out var image, out var buffer, out _));
+            Assert.IsNull(image);
+            Assert.IsNotNull(buffer);
+            using (buffer)
+            {
+                Assert.AreEqual(0, buffer.Position);
+                CollectionAssert.AreEqual(data, buffer.ToArray());
+            }
+        }
+
+        [TestMethod]
+        public void ResizeTargetIsClampedAndGuardedAgainstZero()
+        {
+            var l = new ImageDecodeLimits();
+            Assert.IsFalse(ImageDecodeGuard.TryResolveSize(30000, 30000, 100, 100, l, out _, out _));
+            Assert.IsFalse(ImageDecodeGuard.TryResolveSize(0, null, 100, 100, l, out _, out _));
+            Assert.IsFalse(ImageDecodeGuard.TryResolveSize(-5, null, 100, 100, l, out _, out _));
+            Assert.IsFalse(ImageDecodeGuard.TryResolveSize(null, null, 100, 100, l, out _, out _));
+            // aspect ratio math that would give 0 is raised to 1
+            Assert.IsTrue(ImageDecodeGuard.TryResolveSize(1, null, 8000, 1, l, out var w, out var h));
+            Assert.AreEqual(1, w); Assert.AreEqual(1, h);
+            // derived side above the maximum is rejected
+            Assert.IsFalse(ImageDecodeGuard.TryResolveSize(null, 1, 8000, 1, l, out _, out _));
+            Assert.IsTrue(ImageDecodeGuard.TryResolveSize(null, 4000, 1, 1, l, out w, out h));
+            Assert.AreEqual(4000, w); Assert.AreEqual(4000, h);
+        }
+
         private class NonSeekableStream : Stream
         {
             private readonly Stream _s;

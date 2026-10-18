@@ -13,6 +13,7 @@ using WalkingTec.Mvvm.Core.Extensions;
 using System.Linq;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace WalkingTec.Mvvm.Admin.Api
 {
@@ -46,28 +47,31 @@ namespace WalkingTec.Mvvm.Admin.Api
             // Mitigation for ImageSharp advisories (#78): format allowlist + size/dimension limits before decoding
             var limits = ImageDecodeLimits.FromConfiguration(HttpContext.RequestServices.GetService<IConfiguration>());
             Image oimage;
+            string error;
             using (var upstream = FileData.OpenReadStream())
             {
-                if (!ImageDecodeGuard.TryLoad(upstream, limits, out oimage, out _) || oimage == null)
+                if (!ImageDecodeGuard.TryLoad(upstream, limits, out oimage, out error) || oimage == null)
                 {
+                    LogImageRejected("UploadImage", error);
                     return BadRequest(Localizer["Sys.UploadFailed"]);
                 }
             }
-            if (width == null)
+            WalkingTec.Mvvm.Core.Models.IWtmFile file;
+            using (oimage)
             {
-                width = height * oimage.Width / oimage.Height;
+                if (!ImageDecodeGuard.TryResolveSize(width, height, oimage.Width, oimage.Height, limits, out var tw, out var th))
+                {
+                    LogImageRejected("UploadImage", "Requested size out of range");
+                    return BadRequest(Localizer["Sys.UploadFailed"]);
+                }
+                using (var ms = new MemoryStream())
+                {
+                    oimage.Mutate(x => x.Resize(tw, th));
+                    oimage.SaveAsJpeg(ms);
+                    ms.Position = 0;
+                    file = fp.Upload(FileData.FileName, FileData.Length, ms, groupName, subdir, extra, sm, Wtm.CreateDC(cskey: csName));
+                }
             }
-            if (height == null)
-            {
-                height = width * oimage.Height / oimage.Width;
-            }
-            MemoryStream ms = new MemoryStream();
-            oimage.Mutate(x => x.Resize(width.Value, height.Value));
-            oimage.SaveAsJpeg(ms);
-            ms.Position = 0;
-            var file = fp.Upload(FileData.FileName, FileData.Length, ms, groupName, subdir, extra, sm, Wtm.CreateDC(cskey: csName));
-            oimage.Dispose();
-            ms.Dispose();
 
             if (file != null)
             {
@@ -76,6 +80,13 @@ namespace WalkingTec.Mvvm.Admin.Api
             }
             return BadRequest(Localizer["Sys.UploadFailed"]);
 
+        }
+
+        private void LogImageRejected(string action, string reason)
+        {
+            // reason is a fixed string from the guard, never file content
+            HttpContext.RequestServices.GetService<ILoggerFactory>()?.CreateLogger<FileApiController>()
+                .LogWarning("{Action}: image rejected by upload guard: {Reason}", action, reason);
         }
 
         [HttpGet("[action]/{id}")]
@@ -98,36 +109,47 @@ namespace WalkingTec.Mvvm.Admin.Api
             {
                 return BadRequest(Localizer["Sys.FileNotFound"]);
             }
+            Stream source = file.DataStream;
+            MemoryStream buffer = null;
             try
             {
                 if (width != null || height != null)
                 {
                     // Mitigation for ImageSharp advisories (#78); on rejection fall through to the raw file below
                     var limits = ImageDecodeLimits.FromConfiguration(HttpContext.RequestServices.GetService<IConfiguration>());
-                    ImageDecodeGuard.TryLoad(file.DataStream, limits, out Image oimage, out _);
-                    if (file.DataStream != null && file.DataStream.CanSeek)
+                    var loaded = ImageDecodeGuard.TryLoad(file.DataStream, limits, out Image oimage, out buffer, out var error);
+                    if (buffer != null)
+                    {
+                        // the provider stream is consumed now; serve the fallback from the buffered copy
+                        source = buffer;
+                    }
+                    else if (file.DataStream != null && file.DataStream.CanSeek)
                     {
                         file.DataStream.Position = 0;
                     }
-                    if (oimage != null)
+                    if (!loaded)
                     {
-                        if (width == null)
+                        LogImageRejected("GetFile", error);
+                    }
+                    else
+                    {
+                        using (oimage)
                         {
-                            width = oimage.Width * height / oimage.Height;
+                            if (ImageDecodeGuard.TryResolveSize(width, height, oimage.Width, oimage.Height, limits, out var tw, out var th))
+                            {
+                                using (var ms = new MemoryStream())
+                                {
+                                    oimage.Mutate(x => x.Resize(tw, th));
+                                    oimage.SaveAsJpeg(ms);
+                                    ms.Position = 0;
+                                    await ms.CopyToAsync(Response.Body);
+                                }
+                                file.DataStream?.Dispose();
+                                buffer?.Dispose();
+                                return new EmptyResult();
+                            }
+                            LogImageRejected("GetFile", "Requested size out of range");
                         }
-                        if (height == null)
-                        {
-                            height = oimage.Height * width / oimage.Width;
-                        }
-                        var ms = new MemoryStream();
-                        oimage.Mutate(x => x.Resize(width.Value, height.Value));
-                        oimage.SaveAsJpeg(ms);
-                        ms.Position = 0;
-                        await ms?.CopyToAsync(Response.Body);
-                        file.DataStream.Dispose();
-                        ms.Dispose();
-                        oimage.Dispose();
-                        return new EmptyResult();
                     }
                 }
             }
@@ -136,12 +158,13 @@ namespace WalkingTec.Mvvm.Admin.Api
             var ext = file.FileExt.ToLower();
             if (ext == "mp4")
             {
-                return File(file.DataStream, "video/mpeg4", enableRangeProcessing: true);
+                return File(source, "video/mpeg4", enableRangeProcessing: true);
             }
             else
             {
-                await file.DataStream?.CopyToAsync(Response.Body);
-                file.DataStream.Dispose();
+                await source?.CopyToAsync(Response.Body);
+                file.DataStream?.Dispose();
+                buffer?.Dispose();
                 return new EmptyResult();
             }
         }

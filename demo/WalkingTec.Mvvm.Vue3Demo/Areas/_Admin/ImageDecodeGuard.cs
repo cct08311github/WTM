@@ -20,12 +20,20 @@ namespace WalkingTec.Mvvm.Admin.Api
         public const long DefaultMaxBytes = 10L * 1024 * 1024;
         public const int DefaultMaxWidth = 8192;
         public const int DefaultMaxHeight = 8192;
-        public const long DefaultMaxPixels = 40_000_000;
+        public const long DefaultMaxPixels = 25_000_000;
+        public const int DefaultMaxFrames = 1;
+        public const int DefaultMaxResizeWidth = 4096;
+        public const int DefaultMaxResizeHeight = 4096;
 
         public long MaxBytes { get; set; } = DefaultMaxBytes;
         public int MaxWidth { get; set; } = DefaultMaxWidth;
         public int MaxHeight { get; set; } = DefaultMaxHeight;
         public long MaxPixels { get; set; } = DefaultMaxPixels;
+        /// <summary>Frames decoded from multi-frame images (animated GIF/WebP). Thumbnails only need the first frame.</summary>
+        public int MaxFrames { get; set; } = DefaultMaxFrames;
+        /// <summary>Upper bound for the requested thumbnail width/height.</summary>
+        public int MaxResizeWidth { get; set; } = DefaultMaxResizeWidth;
+        public int MaxResizeHeight { get; set; } = DefaultMaxResizeHeight;
 
         public static ImageDecodeLimits FromConfiguration(IConfiguration configuration)
         {
@@ -39,6 +47,9 @@ namespace WalkingTec.Mvvm.Admin.Api
             if (int.TryParse(section["MaxWidth"], out var w) && w > 0) rv.MaxWidth = w;
             if (int.TryParse(section["MaxHeight"], out var h) && h > 0) rv.MaxHeight = h;
             if (long.TryParse(section["MaxPixels"], out var p) && p > 0) rv.MaxPixels = p;
+            if (int.TryParse(section["MaxFrames"], out var f) && f > 0) rv.MaxFrames = f;
+            if (int.TryParse(section["MaxResizeWidth"], out var rw) && rw > 0) rv.MaxResizeWidth = rw;
+            if (int.TryParse(section["MaxResizeHeight"], out var rh) && rh > 0) rv.MaxResizeHeight = rh;
             return rv;
         }
     }
@@ -50,34 +61,62 @@ namespace WalkingTec.Mvvm.Admin.Api
     /// </summary>
     public static class ImageDecodeGuard
     {
+        // Only the allowed formats are registered, so that Identify/Load never even parse TIFF, TGA, PBM, QOI...
+        // (the default Configuration registers all of them, and e.g. a 24 byte BigTIFF hangs the TIFF parser,
+        // GHSA-wmxv-xphr-5c9g, before any allowlist check could run).
+        // Note: allowed decoders can carry ICC profiles; never read IccProfile.Entries on untrusted images
+        // (GHSA-gwg2-r3hj-4w44).
+        private static readonly Configuration RestrictedConfiguration = new Configuration(
+            new JpegConfigurationModule(), new PngConfigurationModule(), new GifConfigurationModule(),
+            new BmpConfigurationModule(), new WebpConfigurationModule());
+
+        private static DecoderOptions Options(ImageDecodeLimits limits) => new DecoderOptions
+        {
+            Configuration = RestrictedConfiguration,
+            MaxFrames = (uint)Math.Max(1, limits?.MaxFrames ?? ImageDecodeLimits.DefaultMaxFrames)
+        };
+
         /// <summary>
         /// Validates the stream and, if it passes, fully decodes it. Returns false (image == null) otherwise.
         /// The input stream is buffered into memory (bounded by MaxBytes), so it need not be seekable.
         /// </summary>
         public static bool TryLoad(Stream input, ImageDecodeLimits limits, out Image image, out string error)
         {
+            var ok = TryLoad(input, limits, out image, out var buffer, out error);
+            buffer?.Dispose();
+            return ok;
+        }
+
+        /// <summary>
+        /// Same as the other overload, but hands the buffered copy of the input back to the caller (also when the
+        /// image is rejected) so a non-seekable source that has been consumed can still be served. The caller
+        /// owns and must dispose <paramref name="buffer"/>; it is null when the input was too large to buffer.
+        /// </summary>
+        public static bool TryLoad(Stream input, ImageDecodeLimits limits, out Image image, out MemoryStream buffer, out string error)
+        {
             image = null;
-            if (!TryBuffer(input, limits, out var ms, out error))
+            limits ??= new ImageDecodeLimits();
+            if (!TryBuffer(input, limits, out buffer, out error))
             {
                 return false;
             }
-            using (ms)
+            if (!Validate(buffer, limits, out error))
             {
-                if (!Validate(ms, limits, out error))
-                {
-                    return false;
-                }
-                ms.Position = 0;
-                try
-                {
-                    image = Image.Load(ms);
-                    return true;
-                }
-                catch (Exception)
-                {
-                    error = "Invalid image";
-                    return false;
-                }
+                buffer.Position = 0;
+                return false;
+            }
+            buffer.Position = 0;
+            try
+            {
+                image = Image.Load(Options(limits), buffer);
+                buffer.Position = 0;
+                return true;
+            }
+            catch (Exception)
+            {
+                buffer.Position = 0;
+                error = "Invalid image";
+                return false;
             }
         }
 
@@ -94,7 +133,7 @@ namespace WalkingTec.Mvvm.Admin.Api
             try
             {
                 seekable.Position = 0;
-                var info = Image.Identify(seekable);
+                var info = Image.Identify(Options(limits), seekable);
                 seekable.Position = 0;
                 if (info == null)
                 {
@@ -125,6 +164,35 @@ namespace WalkingTec.Mvvm.Admin.Api
             }
         }
 
+        /// <summary>
+        /// Resolves the thumbnail size from the requested width/height (either may be null, not both) keeping the
+        /// aspect ratio. Returns false when a value is out of range (&lt;= 0 or above the configured maximum).
+        /// </summary>
+        public static bool TryResolveSize(int? width, int? height, int sourceWidth, int sourceHeight, ImageDecodeLimits limits, out int targetWidth, out int targetHeight)
+        {
+            targetWidth = 0;
+            targetHeight = 0;
+            limits ??= new ImageDecodeLimits();
+            if ((width == null && height == null) || sourceWidth <= 0 || sourceHeight <= 0)
+            {
+                return false;
+            }
+            if ((width != null && (width <= 0 || width > limits.MaxResizeWidth))
+                || (height != null && (height <= 0 || height > limits.MaxResizeHeight)))
+            {
+                return false;
+            }
+            long w = width ?? Math.Max(1L, (long)height.Value * sourceWidth / sourceHeight);
+            long h = height ?? Math.Max(1L, (long)width.Value * sourceHeight / sourceWidth);
+            if (w > limits.MaxResizeWidth || h > limits.MaxResizeHeight)
+            {
+                return false;
+            }
+            targetWidth = (int)w;
+            targetHeight = (int)h;
+            return true;
+        }
+
         private static bool IsAllowed(IImageFormat format)
         {
             return format is JpegFormat || format is PngFormat || format is GifFormat
@@ -135,7 +203,6 @@ namespace WalkingTec.Mvvm.Admin.Api
         {
             error = null;
             ms = null;
-            limits ??= new ImageDecodeLimits();
             if (input == null)
             {
                 error = "Invalid image";
