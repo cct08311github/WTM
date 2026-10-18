@@ -1,0 +1,58 @@
+version: 2
+
+updates:
+  # Vue3Demo front-end. All npm version updates are grouped into one weekly PR
+  # so the build check in .github/workflows/clientapp.yml runs once per batch.
+  - package-ecosystem: npm
+    directory: /demo/WalkingTec.Mvvm.Vue3Demo/ClientApp
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Taipei
+    open-pull-requests-limit: 5
+    groups:
+      vue3demo-clientapp:
+        applies-to: version-updates
+        patterns: ["*"]
+      vue3demo-clientapp-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps-demo)"
+    labels: ["dependencies"]
+
+  # NuGet projects are listed explicitly: the repo root has no PackageReference
+  # (only the .sln and shared .props), and listing project folders avoids
+  # relying on solution discovery and duplicate PRs.
+  - package-ecosystem: nuget
+    directories:
+      - /src/*
+      - /test/*
+      - /demo/*
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Taipei
+    open-pull-requests-limit: 5
+    ignore:
+      # Skip major bumps for version updates (breaking changes, handled by hand).
+      # Per GitHub docs, `update-types` only affects version updates; security
+      # updates are always created regardless of this setting.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    commit-message:
+      prefix: "chore(deps)"
+    labels: ["dependencies"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Taipei
+    commit-message:
+      prefix: "ci(deps)"
+    labels: ["dependencies"]
