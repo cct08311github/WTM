@@ -10,6 +10,27 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
+## 未发布（发布时将编为 10.0.0.4）
+
+* **修改（BREAKING）：**   Bearer（JwtBearer）认证改用与远程令牌相同的校验规则（#3）：令牌必须带 `exp`；只接受 HS256；校验 `nbf`；过期判定允许 30 秒时钟偏差（原为 0 秒）
+* **新增：**   `JwtOptions:AllowTokensWithoutExpiry`（默认 false），过渡期内允许不带 `exp` 的令牌，启动时输出 Warning（#3）
+* **新增：**   `Configs.ExposeExceptionDetails`（默认跟随 `IsQuickDebug`），可单独关闭响应中的异常详情；非 Development 环境开启 `IsQuickDebug` 时，启动输出 Critical 日志（#26）
+* **新增：**   `CorsOptions:AllowCredentialsWithAnyOrigin`（默认 true，行为不变）；启用 `EnableAll` 但未配置 Policy 时，启动输出警告（#12）
+* **新增：**   `Configs.BufferJsonBodyOnly`（默认 false，行为不变），开启后只缓冲 JSON 请求体（#17）
+* **新增：**   运行期间热重载 JWT 签名密钥时输出警告：更换密钥需重启；改为不安全的密钥时输出 Critical（#21）
+* **修复：**   Excel 导入：某个可选列为空时，后面各列不再错位（#86）
+* **修复：**   生成的 Excel 导出文件与模板文件符合 OOXML 规范（#87）
+* **修复：**   `wt:upload`、`wt:multiupload`、`wt:ueditor` 放在 `wt:form` 之外时不再抛出异常（#88）
+* **修复：**   导出 zip 的临时路径在 Linux／macOS 上正确建立子目录（#89）
+* **修复：**   CORS 的 `Domain` 配置项会去除空白；`Domain` 为空时不再导致启动失败（#12）
+* **修改：**   `WtmMiddleware` 改为异步读取请求体，不再阻塞线程池线程（#17）
+* **修改：**   升级存在已知漏洞的依赖，均在同一主版本内：`System.Security.Cryptography.Pkcs` 9.0.21、`SQLitePCLRaw.lib.e_sqlite3` 2.1.12、`Microsoft.OpenApi` 2.7.5（#14）。只有升级主版本才能修复的依赖见 #77、#78
+* **修改：**   仓库示例密钥 `CHANGE-ME-development-only-placeholder-key` 加入不安全密钥清单（#15）
+* **升级说明：**
+    1. 使用内置 `TokenService` 签发的令牌、以及 Cookie 登录（含 LayUI 页面）都不受 #3 影响
+    2. 如有外部系统使用同一把密钥自行签发令牌，请确认这些令牌：使用 HS256、带有 `exp`、不带未来的 `nbf`。暂时无法带上 `exp` 的，可设置 `JwtOptions:AllowTokensWithoutExpiry=true` 过渡；算法与 `nbf` 的要求没有开关可以放宽
+    3. 其余新增配置项的默认值都与原行为一致
+
 ## 10.0.0.3(2026-10-18)
 
 * **新增：**   JwtOptions:AllowInsecureKey（默认 false）。设为 true 时，非 Development 环境下不安全的签名密钥不再阻止启动，改为每次启动输出 Critical 日志；仅作为无法立即更换密钥时的过渡手段
