@@ -80,7 +80,7 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
         public static List<string> SchemaErrors(byte[] bytes)
         {
             using var doc = SpreadsheetDocument.Open(new MemoryStream(bytes), false);
-            return new OpenXmlValidator(FileFormatVersions.Office2010).Validate(doc)
+            return new OpenXmlValidator(FileFormatVersions.Microsoft365).Validate(doc)
                 .Select(e => e.Description + " @ " + e.Path?.XPath)
                 .ToList();
         }

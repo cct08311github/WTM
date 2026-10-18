@@ -167,6 +167,35 @@ namespace WalkingTec.Mvvm.Core
         }
 
         /// <summary>
+        /// 将颜色转换为 OOXML 要求的 8 位 ARGB 十六进制字符串。
+        /// 6 位 RGB (可带 #) 补上不透明的 FF alpha，8 位原样保留。
+        /// </summary>
+        public static string ToArgb(string color)
+        {
+            var c = (color ?? string.Empty).Trim().TrimStart('#').ToUpperInvariant();
+            return c.Length == 6 ? "FF" + c : c;
+        }
+
+        /// <summary>
+        /// 计算 SheetProtection 的 password 属性值 (ECMA-376 legacy 16 位哈希，4 位十六进制)。
+        /// 该属性必须是 hexBinary，不能直接写明文。
+        /// </summary>
+        public static string LegacyPasswordHash(string password)
+        {
+            password ??= string.Empty;
+            int hash = 0;
+            for (int i = password.Length - 1; i >= 0; i--)
+            {
+                hash = ((hash >> 14) & 0x01) | ((hash << 1) & 0x7fff);
+                hash ^= password[i];
+            }
+            hash = ((hash >> 14) & 0x01) | ((hash << 1) & 0x7fff);
+            hash ^= password.Length;
+            hash ^= 0xCE4B;
+            return hash.ToString("X4");
+        }
+
+        /// <summary>
         /// 创建标题样式
         /// </summary>
         public static Stylesheet CreateStylesheet(string headerBackColor = "B0C4DE", string headerFontColor = "000000")
@@ -177,9 +206,9 @@ namespace WalkingTec.Mvvm.Core
             var fonts = new Fonts(
                 new Font(), // 0 - 默认
                 new Font(  // 1 - 标题
-                    new FontName() { Val = "Calibri" },
                     new FontSize() { Val = 12 },
-                    new Color() { Rgb = headerFontColor }
+                    new Color() { Rgb = ToArgb(headerFontColor) },
+                    new FontName() { Val = "Calibri" }
                 )
             );
 
@@ -188,8 +217,8 @@ namespace WalkingTec.Mvvm.Core
                 new Fill(new PatternFill() { PatternType = PatternValues.None }),     // 0
                 new Fill(new PatternFill() { PatternType = PatternValues.Gray125 }),   // 1
                 new Fill(new PatternFill(                                             // 2 - 标题背景色
-                    new BackgroundColor() { Rgb = headerBackColor },
-                    new ForegroundColor() { Rgb = headerBackColor }
+                    new BackgroundColor() { Rgb = ToArgb(headerBackColor) },
+                    new ForegroundColor() { Rgb = ToArgb(headerBackColor) }
                 ) { PatternType = PatternValues.Solid })
             );
 
