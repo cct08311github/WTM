@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using System.Net;
+using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Test.Mock;
@@ -453,6 +456,81 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
             const string escaped = "SchooldoEdit?a=\\u00271\\u0027\\u00222\\u0022\\u003C/script\\u003E";
             AssertContains(html, "({event:'" + escaped + "'});", "case '" + escaped + "':{");
             AssertNotContains(html, "event:'SchooldoEdit?a='1'", "case 'SchooldoEdit?a='1'");
+        }
+
+        // minimal decoder for the content of a quoted JavaScript string literal
+        private static string UnescapeJsLiteral(string literal)
+        {
+            var sb = new StringBuilder();
+            for (int i = 0; i < literal.Length; i++)
+            {
+                char c = literal[i];
+                if (c != '\\')
+                {
+                    sb.Append(c);
+                    continue;
+                }
+                char n = literal[++i];
+                switch (n)
+                {
+                    case 'n': sb.Append('\n'); break;
+                    case 'r': sb.Append('\r'); break;
+                    case 't': sb.Append('\t'); break;
+                    case 'u':
+                        sb.Append((char)Convert.ToInt32(literal.Substring(i + 1, 4), 16));
+                        i += 4;
+                        break;
+                    default: sb.Append(n); break; // \\ \' \"
+                }
+            }
+            return sb.ToString();
+        }
+
+        private static void AssertEventKeyIsConsistent(string query)
+        {
+            var key = "School" + "doEdit" + query;
+            var listVm = new ActionAttributesListVM { Wtm = QuickDebugContext(), Query = query };
+
+            var html = Render(new DataTableTagHelper { Vm = Self(listVm, "Vm"), Url = "/School/Search" }, "wt:grid");
+
+            // (1) lay-event attribute of the row button
+            var layEvent = Regex.Match(html, "lay-event=\"([^\"]*)\"");
+            Assert.IsTrue(layEvent.Success, html);
+            var fromAttribute = WebUtility.HtmlDecode(layEvent.Groups[1].Value);
+
+            // (2) event literal of the toolbar onclick: the attribute is decoded by the browser first, then the script runs
+            var onclick = Regex.Match(html, "onclick=\"(wtToolBarFunc_[^\"]*)\"");
+            Assert.IsTrue(onclick.Success, html);
+            var handler = WebUtility.HtmlDecode(onclick.Groups[1].Value);
+            var eventLiteral = Regex.Match(handler, @"\{event:'((?:\\.|[^'\\])*)'\}", RegexOptions.Singleline);
+            Assert.IsTrue(eventLiteral.Success, handler);
+            var fromToolbar = UnescapeJsLiteral(eventLiteral.Groups[1].Value);
+
+            // (3) matching case label of the generated switch
+            var caseLiteral = Regex.Match(html, @"case '((?:\\.|[^'\\])*)':\{", RegexOptions.Singleline);
+            Assert.IsTrue(caseLiteral.Success, html);
+            var fromCase = UnescapeJsLiteral(caseLiteral.Groups[1].Value);
+
+            Assert.AreEqual(key, fromAttribute, "lay-event");
+            Assert.AreEqual(key, fromToolbar, "toolbar onclick");
+            Assert.AreEqual(key, fromCase, "case label");
+        }
+
+        [TestMethod]
+        public void Grid_ActionEventKey_HostileQueryString_DecodesConsistently()
+        {
+            AssertEventKeyIsConsistent("?a='1'&b=\"2\"<x>&#39;\\z\r\n\t</script>\u2028");
+        }
+
+        [TestMethod]
+        public void Grid_ActionEventKey_OrdinaryQueryString_DecodesConsistentlyAndIsUnchanged()
+        {
+            AssertEventKeyIsConsistent("?id={{d.ID}}");
+            AssertEventKeyIsConsistent("?name=" + Cjk);
+
+            var listVm = new ActionAttributesListVM { Wtm = QuickDebugContext(), Query = "?id={{d.ID}}" };
+            var html = Render(new DataTableTagHelper { Vm = Self(listVm, "Vm"), Url = "/School/Search" }, "wt:grid");
+            AssertContains(html, "lay-event=\"SchooldoEdit?id={{d.ID}}\"", "({event:'SchooldoEdit?id={{d.ID}}'});", "case 'SchooldoEdit?id={{d.ID}}':{");
         }
 
         [TestMethod]
