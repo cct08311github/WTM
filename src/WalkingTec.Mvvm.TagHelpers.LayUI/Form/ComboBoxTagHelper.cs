@@ -175,7 +175,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     });
 
                 }
-                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('combo','{ItemUrl}','{Id}','{Field.Name}',{JsonSerializer.Serialize(selectVal)})</script>");
+                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('combo','{JsStringEncoder.Escape(ItemUrl)}','{Id}','{Field.Name}',{JsonSerializer.Serialize(selectVal)})</script>");
             }
 
             else
@@ -247,7 +247,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 var {Id} = xmSelect.render({{
     el: '#{Id}',
     name:'{Field.Name}',
-    tips:'{EmptyText}',
+    tips:'{JsStringEncoder.Escape(EmptyText)}',
     disabled: {Disabled.ToString().ToLower()},
     {(THProgram._localizer["Sys.LayuiDateLan"] =="CN"? "language:'zn'," : "language:'en',")}
 	autoRow: {AutoRow.ToString().ToLower()},
@@ -301,7 +301,7 @@ var {Id} = xmSelect.render({{
     on:function(data){{
         {((LinkField != null || string.IsNullOrEmpty(LinkId) == false)?@$"
             if (eval(""{(string.IsNullOrEmpty(ChangeFunc)?"1==1":FormatFuncName(ChangeFunc))}"") != false) {{
-                var u = ""{(TriggerUrl??"")}"";
+                var u = ""{JsStringEncoder.Escape(TriggerUrl)}"";
                 if (u.indexOf(""?"") == -1) {{
                     u += ""?t="" + new Date().getTime();
                 }}
@@ -315,7 +315,7 @@ var {Id} = xmSelect.render({{
 }});
      {Id}defaultvalues = {JsonSerializer.Serialize(selectVal)};
         {(selectVal?.Count>0 && (LinkField != null || string.IsNullOrEmpty(LinkId) == false) ? @$"
-                var {Id}u = ""{(TriggerUrl ?? "")}"";
+                var {Id}u = ""{JsStringEncoder.Escape(TriggerUrl)}"";
                 if ({Id}u.indexOf(""?"") == -1) {{
                     {Id}u += ""?t="" + new Date().getTime();
                 }}

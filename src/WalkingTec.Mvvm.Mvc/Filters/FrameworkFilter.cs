@@ -361,7 +361,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
             if (context.Result is PartialViewResult pvr)
             {
                 model = pvr.Model as BaseVM;
-                context.HttpContext.Response.WriteAsync($"<script>try{{ff.ResizeChart('{model?.ViewDivId}')}}catch{{}}</script>");
+                context.HttpContext.Response.WriteAsync($"<script>try{{ff.ResizeChart('{JsStringEncoder.Escape(model?.ViewDivId)}')}}catch{{}}</script>");
             }
 
             //如果是来自Error，则已经记录过日志，跳过

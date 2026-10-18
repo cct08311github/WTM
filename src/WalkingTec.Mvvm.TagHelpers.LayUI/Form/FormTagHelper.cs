@@ -210,7 +210,7 @@ $('#{search.SearchBtnId}').on('click', function () {{
                         {
                             firstkey = key;
                         }
-                        string temperr = error.ErrorMessage.Replace("<", "&lg;").Replace(">", "&rg;");
+                        string temperr = JsStringEncoder.Escape((error.ErrorMessage ?? string.Empty).Replace("<", "&lt;").Replace(">", "&gt;"));
                         output.PostElement.AppendHtml($@"
 $(""#{Id}"").find(""button[type=submit]:first"").parent().prepend(""<div class='layui-input-block' style='text-align:left'><label style='color:red'>{temperr}</label></div>"");
 ");

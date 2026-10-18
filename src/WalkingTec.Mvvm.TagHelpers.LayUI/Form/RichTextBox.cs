@@ -82,7 +82,7 @@ layui.use('layedit', function(){{
   var layedit = layui.layedit;
   layedit.set({{
     uploadImage: {{
-      url: '{url}'
+      url: '{JsStringEncoder.Escape(url)}'
     }}
   }});
   var index = layedit.build('{Id}'{(Height.HasValue?$",{{height:{Height.Value}}}":"")});

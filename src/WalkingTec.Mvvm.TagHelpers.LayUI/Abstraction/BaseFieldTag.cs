@@ -108,7 +108,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 <script>
     window['{this.Id}'].update({{
     layVerify:'required',
-    layReqText:'{THProgram._localizer["Validate.{0}required", Field?.Metadata?.DisplayName ?? Field?.Metadata?.Name]}'
+    layReqText:'{JsStringEncoder.Escape(THProgram._localizer["Validate.{0}required", Field?.Metadata?.DisplayName ?? Field?.Metadata?.Name])}'
 }});
 </script>
 ";

@@ -176,10 +176,10 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     x.Disabled,
                     Checked = x.Selected
                 }).ToArray();
-                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('transfer','{ItemUrl}','{Id}','{Field.Name}',{JsonSerializer.Serialize(selectVal)})</script>");
+                output.PostElement.AppendHtml($"<script>ff.LoadComboItems('transfer','{JsStringEncoder.Escape(ItemUrl)}','{Id}','{Field.Name}',{JsonSerializer.Serialize(selectVal)})</script>");
             }
 
-            var title = $"['{(string.IsNullOrEmpty(LeftTitle) ? THProgram._localizer["Sys.ForSelect"] : LeftTitle)}','{(string.IsNullOrEmpty(RightTitle) ? THProgram._localizer["Sys.Selected"] : RightTitle)}']";
+            var title = $"['{JsStringEncoder.Escape(string.IsNullOrEmpty(LeftTitle) ? THProgram._localizer["Sys.ForSelect"] : LeftTitle)}','{JsStringEncoder.Escape(string.IsNullOrEmpty(RightTitle) ? THProgram._localizer["Sys.Selected"] : RightTitle)}']";
             var content = $@"
 <script>
 layui.use(['transfer'],function(){{
@@ -209,7 +209,7 @@ layui.use(['transfer'],function(){{
     ,data:{JsonSerializer.Serialize(data,new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase})}
     {(string.IsNullOrEmpty(DefaultValue) ? string.Empty : $",value:defaultVal")}
     ,id:'{Id}'
-    ,text:{{none:'{NonePlaceholder}',searchNone:'{SearchNonePlaceholder}'}}
+    ,text:{{none:'{JsStringEncoder.Escape(NonePlaceholder)}',searchNone:'{JsStringEncoder.Escape(SearchNonePlaceholder)}'}}
     {(!EnableSearch ? string.Empty : ",showSearch:true")}
     {(!Width.HasValue ? string.Empty : $",width:{Width}")}
     {(!Height.HasValue ? string.Empty : $",height:{Height}")}
