@@ -377,10 +377,10 @@ namespace WalkingTec.Mvvm.Core
 
             var fonts = new Fonts(
                 new Font(), // 0 - 默认
-                new Font(   // 1 - 标题字体
-                    new FontName() { Val = "Calibri" },
+                new Font(   // 1 - 标题字体 (子元素顺序须符合 CT_Font: sz, color, name)
                     new FontSize() { Val = 12 },
-                    new Color() { Rgb = new HexBinaryValue(headerFontColor) }
+                    new Color() { Rgb = new HexBinaryValue(OpenXmlHelper.ToArgb(headerFontColor)) },
+                    new FontName() { Val = "Calibri" }
                 )
             );
 
@@ -388,7 +388,7 @@ namespace WalkingTec.Mvvm.Core
                 new Fill(new PatternFill() { PatternType = PatternValues.None }),
                 new Fill(new PatternFill() { PatternType = PatternValues.Gray125 }),
                 new Fill(   // 2 - 标题背景
-                    new PatternFill(new ForegroundColor() { Rgb = new HexBinaryValue(headerBackColor) })
+                    new PatternFill(new ForegroundColor() { Rgb = new HexBinaryValue(OpenXmlHelper.ToArgb(headerBackColor)) })
                     { PatternType = PatternValues.Solid }
                 )
             );

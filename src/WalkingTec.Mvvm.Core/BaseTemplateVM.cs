@@ -251,30 +251,32 @@ namespace WalkingTec.Mvvm.Core
                         }
                     }
 
-                    // 冻结窗格
-                    var sheetProperties = new SheetProperties();
-                    sheetProperties.AppendChild(new Pane()
-                    {
-                        VerticalSplit = 1,
-                        HorizontalSplit = 0,
-                        TopLeftCell = "A2",
-                        ActivePane = PaneValues.BottomLeft,
-                        State = PaneStateValues.Frozen
-                    });
-                    sheetPart.Worksheet.AppendChild(sheetProperties);
+                    // 冻结首行: Pane 属于 SheetViews/SheetView，且 SheetViews 必须是 Worksheet 的第一个子元素 (早于 Columns / SheetData)
+                    var sheetView = new SheetView(
+                        new Pane()
+                        {
+                            VerticalSplit = 1,
+                            HorizontalSplit = 0,
+                            TopLeftCell = "A2",
+                            ActivePane = PaneValues.BottomLeft,
+                            State = PaneStateValues.Frozen
+                        },
+                        new Selection() { Pane = PaneValues.BottomLeft, ActiveCell = "A2", SequenceOfReferences = new ListValue<StringValue>() { InnerText = "A2" } })
+                    { WorkbookViewId = 0 };
+                    sheetPart.Worksheet.InsertAt(new SheetViews(sheetView), 0);
 
-                    // 保护Sheet
+                    // 保护Sheet: SheetProtection 必须紧跟 SheetData (早于 DataValidations)
                     if (IsProtect)
                     {
-                        sheetPart.Worksheet.AppendChild(new SheetProtection()
+                        sheetPart.Worksheet.InsertAfter(new SheetProtection()
                         {
                             Sheet = true,
-                            Password = "password"
-                        });
+                            Password = OpenXmlHelper.LegacyPasswordHash("password")
+                        }, sheetData);
                     }
 
-                    // 隐藏第2和第3个Sheet
-                    workbookPart.Workbook.AppendChild(new BookViews(new WorkbookView() { ShowHorizontalScroll = true }));
+                    // 隐藏第2和第3个Sheet: BookViews 必须位于 Sheets 之前
+                    workbookPart.Workbook.InsertBefore(new BookViews(new WorkbookView() { ShowHorizontalScroll = true }), workbookPart.Workbook.GetFirstChild<Sheets>());
                     enumSheet.State = SheetStateValues.Hidden;
                     dataSheet.State = SheetStateValues.Hidden;
 
@@ -291,16 +293,16 @@ namespace WalkingTec.Mvvm.Core
             // 字体
             var fonts = new Fonts(
                 new Font(), // 0 - 默认
-                new Font(new FontName() { Val = "Calibri" }, new FontSize() { Val = 11 }) // 1 - 标题
+                new Font(new FontSize() { Val = 11 }, new FontName() { Val = "Calibri" }) // 1 - 标题 (子元素顺序须符合 CT_Font: sz, color, name)
             );
 
             // 填充
             var fills = new Fills(
                 new Fill(new PatternFill() { PatternType = PatternValues.None }),
                 new Fill(new PatternFill() { PatternType = PatternValues.Gray125 }),
-                new Fill(new PatternFill(new ForegroundColor() { Rgb = new HexBinaryValue("D9E2F3") }) { PatternType = PatternValues.Solid }),  // 2 - 灰色
-                new Fill(new PatternFill(new ForegroundColor() { Rgb = new HexBinaryValue("FFF2CC") }) { PatternType = PatternValues.Solid }),  // 3 - 黄色
-                new Fill(new PatternFill(new ForegroundColor() { Rgb = new HexBinaryValue("FCE4EC") }) { PatternType = PatternValues.Solid })   // 4 - 红色
+                new Fill(new PatternFill(new ForegroundColor() { Rgb = new HexBinaryValue("FFD9E2F3") }) { PatternType = PatternValues.Solid }),  // 2 - 灰色
+                new Fill(new PatternFill(new ForegroundColor() { Rgb = new HexBinaryValue("FFFFF2CC") }) { PatternType = PatternValues.Solid }),  // 3 - 黄色
+                new Fill(new PatternFill(new ForegroundColor() { Rgb = new HexBinaryValue("FFFCE4EC") }) { PatternType = PatternValues.Solid })   // 4 - 红色
             );
 
             // 边框
