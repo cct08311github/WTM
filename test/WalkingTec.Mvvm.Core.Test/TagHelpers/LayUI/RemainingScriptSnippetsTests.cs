@@ -131,6 +131,35 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
         }
 
         [TestMethod]
+        public void Slider_SingleElementArrayDefault_NonRange_IsTreatedAsSingleValue()
+        {
+            var html = Render(new SliderTagHelper { Field = Field(NewVm(), x => x.Memo), DefaultValue = "[5]" }, "wt:slider");
+
+            AssertContains(html, "name='Memo' value='5'", ",value:5\n");
+            AssertNotContains(html, ",value:[");
+        }
+
+        [TestMethod]
+        public void Slider_SingleElementArrayDefault_Range_UsesElementForBothEnds()
+        {
+            var html = Render(new SliderTagHelper
+            {
+                Field = Field(NewVm(), x => x.Memo),
+                Field1 = Field(NewVm(), x => x.Color),
+                DefaultValue = "[5]",
+            }, "wt:slider");
+
+            AssertContains(html, "name='Memo' value='5'", "name='Color' value='5'", ",range:true", ",value:[5,5]\n");
+        }
+
+        [TestMethod]
+        public void Slider_EmptyArrayDefault_IsDroppedWithoutThrowing()
+        {
+            AssertNotContains(Render(new SliderTagHelper { Field = Field(NewVm(), x => x.Memo), DefaultValue = "[]" }, "wt:slider"),
+                ",value:");
+        }
+
+        [TestMethod]
         public void Slider_NoDefaultValue_OmitsValue()
         {
             AssertNotContains(Render(new SliderTagHelper { Field = Field(NewVm(), x => x.Score) }, "wt:slider"), ",value:");
