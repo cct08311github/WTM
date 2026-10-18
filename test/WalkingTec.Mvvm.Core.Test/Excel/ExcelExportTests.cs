@@ -152,6 +152,9 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
                 vm.DC.Set<School>().Add(new School { SchoolCode = i.ToString("000"), SchoolName = "s" + i, SchoolType = SchoolTypeEnum.PUB, Remark = "x" });
             }
             vm.DC.SaveChanges();
+            var tempDir = System.IO.Path.GetDirectoryName(root);
+            var rootName = System.IO.Path.GetFileName(root);
+            string[] strayDirs() => System.IO.Directory.GetDirectories(tempDir, rootName + "*").Where(d => System.IO.Path.GetFileName(d).Contains('\\')).ToArray();
 
             try
             {
@@ -167,12 +170,22 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
                     using (var s = entry.Open()) { s.CopyTo(ms); }
                     Assert.IsTrue(XlsxTestHelper.LooksLikeZip(ms.ToArray()));
                 }
+
+                // Issue #89: a hard-coded "\\export" made a sibling directory with a backslash in its name on Linux/macOS.
+                Assert.IsTrue(System.IO.Directory.Exists(root), "temp files must be created under HostRoot");
+                Assert.AreEqual(0, strayDirs().Length, "no directory with a backslash in its name may be created");
+                // the temp export folder (and the zip inside it) is removed after the bytes are read
+                Assert.AreEqual(0, System.IO.Directory.GetFileSystemEntries(root).Length, "temp export folder must be cleaned up");
             }
             finally
             {
                 if (System.IO.Directory.Exists(root))
                 {
                     System.IO.Directory.Delete(root, true);
+                }
+                foreach (var d in strayDirs())
+                {
+                    System.IO.Directory.Delete(d, true);
                 }
             }
         }
