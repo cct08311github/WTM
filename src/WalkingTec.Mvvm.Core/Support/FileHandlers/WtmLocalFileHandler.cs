@@ -16,7 +16,6 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
     public class WtmLocalFileHandler : WtmFileHandlerBase
     {
         private const string DefaultLocation = "./uploads";
-        private const int MaxExtensionLength = 10;
 
         public WtmLocalFileHandler(WTMContext wtm) : base(wtm)
         {
@@ -66,7 +65,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             {
                 Directory.CreateDirectory(fulldir);
             }
-            var filename = $"{Guid.NewGuid().ToNoSplitString()}.{GetSafeExtension(fileName)}";
+            var filename = $"{Guid.NewGuid().ToNoSplitString()}.{FileNameSanitizer.GetSafeExtension(fileName)}";
             var fullPath = Path.Combine(fulldir, filename);
             using (var fileStream = File.Create(fullPath))
             {
@@ -107,24 +106,6 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
                 throw new ArgumentException("The sub directory must be a relative path.", nameof(subdir));
             }
             return Path.Combine(root, subdir);
-        }
-
-        /// <summary>
-        /// Use only the leaf of the client supplied name and keep the extension only when it is short and alphanumeric.
-        /// </summary>
-        private static string GetSafeExtension(string fileName)
-        {
-            if (string.IsNullOrEmpty(fileName))
-            {
-                return string.Empty;
-            }
-            var leaf = Path.GetFileName(fileName.Replace('\\', '/'));
-            var ext = leaf.Substring(leaf.LastIndexOf('.') + 1);
-            if (ext.Length == 0 || ext.Length > MaxExtensionLength || ext.All(char.IsAsciiLetterOrDigit) == false)
-            {
-                return string.Empty;
-            }
-            return ext;
         }
 
         private static bool IsInside(string root, string fullPath)
