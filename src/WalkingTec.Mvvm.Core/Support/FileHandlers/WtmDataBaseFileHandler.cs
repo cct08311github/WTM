@@ -31,6 +31,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
 
         public  IWtmFile UploadToDB(string fileName, long fileLength, Stream data, string groupName = null, string subdir = null, string extra = null)
         {
+            fileName = FileNameSanitizer.GetLeafName(fileName);
             FileAttachment file = new FileAttachment();
             file.FileName = fileName;
             file.Length = fileLength;
@@ -38,13 +39,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             file.SaveMode = _modeName;
             file.ExtraInfo = extra;
             file.TenantCode = wtm.LoginUserInfo?.CurrentTenant;
-            var ext = string.Empty;
-            if (string.IsNullOrEmpty(fileName) == false)
-            {
-                var dotPos = fileName.LastIndexOf('.');
-                ext = fileName.Substring(dotPos + 1);
-            }
-            file.FileExt = ext;
+            file.FileExt = FileNameSanitizer.GetSafeExtension(fileName);
             using (var dataStream = new MemoryStream())
             {
                 data.CopyTo(dataStream);

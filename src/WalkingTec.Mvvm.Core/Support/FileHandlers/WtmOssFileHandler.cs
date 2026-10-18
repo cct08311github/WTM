@@ -53,12 +53,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
 
         public override (string path, string handlerInfo) Upload(string fileName, long fileLength, Stream data, string group = null, string subdir = null, string extra = null)
         {
-            var ext = string.Empty;
-            if (string.IsNullOrEmpty(fileName) == false)
-            {
-                var dotPos = fileName.LastIndexOf('.');
-                ext = fileName.Substring(dotPos + 1);
-            }
+            var ext = FileNameSanitizer.GetSafeExtension(fileName);
 
             var ossSettings = wtm.ConfigInfo.FileUploadOptions.Settings.Where(x => x.Key.ToLower() == "oss").Select(x => x.Value).FirstOrDefault();
             FileHandlerOptions groupInfo = null;
@@ -80,21 +75,12 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
             }
 
 
-            string pathHeader = "";
-            if (string.IsNullOrEmpty(subdir) == false)
+            string sub = subdir;
+            if (string.IsNullOrEmpty(sub))
             {
-                pathHeader = Path.Combine(pathHeader, subdir);
+                sub = WtmFileProvider._subDirFunc?.Invoke(this);
             }
-            else
-            {
-                var sub = WtmFileProvider._subDirFunc?.Invoke(this);
-                if (string.IsNullOrEmpty(sub) == false)
-                {
-                    pathHeader = Path.Combine(pathHeader, sub);
-                }
-            }
-            var fullPath = Path.Combine(pathHeader, $"{Guid.NewGuid().ToNoSplitString()}.{ext}");
-            fullPath = fullPath.Replace("\\", "/");
+            var fullPath = FileNameSanitizer.BuildObjectKey(sub, $"{Guid.NewGuid().ToNoSplitString()}.{ext}");
             var imagetypes = new string[]{ "jpg","jpeg","bmp","tif","gif","png"};
             ObjectMetadata md = new ObjectMetadata();
             ext = ext.ToLower();

@@ -98,6 +98,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
                 fileName = "unknown";
             }
             fileName = fileName.Replace("<", "").Replace(">","").Replace(" ", "");
+            fileName = FileNameSanitizer.GetLeafName(fileName);
             if (fh is WtmDataBaseFileHandler lfh)
             {
                 return lfh.UploadToDB(fileName, fileLength, data, group, subdir, extra);
@@ -113,13 +114,7 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
                     file.UploadTime = DateTime.Now;
                     file.SaveMode = string.IsNullOrEmpty(saveMode) == true ? _wtm.ConfigInfo.FileUploadOptions.SaveFileMode : saveMode;
                     file.ExtraInfo = extra;
-                    var ext = string.Empty;
-                    if (string.IsNullOrEmpty(fileName) == false)
-                    {
-                        var dotPos = fileName.LastIndexOf('.');
-                        ext = fileName[(dotPos + 1)..];
-                    }
-                    file.FileExt = ext;
+                    file.FileExt = FileNameSanitizer.GetSafeExtension(fileName);
                     file.Path = rv.path;
                     file.HandlerInfo = rv.handlerInfo;
                     file.TenantCode = _wtm.LoginUserInfo?.CurrentTenant;
