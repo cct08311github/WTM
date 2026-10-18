@@ -1,5 +1,6 @@
 # node
 **/node_modules
+**/dist
 
 **/.DS_Store
 **/.vscode
@@ -11,12 +12,15 @@
 **/publish
 **/Publish
 **/.env
+# The Vite build in the Dockerfile reads ClientApp/.env (it holds no secrets)
+!demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/.env
 
 # Project
 **/Bin
 **/bin
 **/Obj
 **/obj
+**/TestResults
 **/Logs
 **/logs
 
