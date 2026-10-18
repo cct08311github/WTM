@@ -37,7 +37,10 @@ export function wtmBuildPlugin(): Plugin {
                     }
                 }
             })
-            fs.writeFile(path.join(__dirname, "public", "menu.json"), JSON.stringify(views), function err() { })
+            // sort keys so the output does not depend on OS readdir order (consumers look entries up by key only)
+            const sorted = {}
+            Object.keys(views).sort().forEach((k) => { sorted[k] = views[k] })
+            fs.writeFile(path.join(__dirname, "public", "menu.json"), JSON.stringify(sorted), function err() { })
         }
     }
 }
