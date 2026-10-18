@@ -524,7 +524,8 @@ namespace WalkingTec.Mvvm.Mvc
 
             //fail fast before any database is touched below (EnsureCreate). The environment is taken from the registered IHostEnvironment instance if there is one,
             //otherwise from configuration / process environment variables; if it cannot be determined it is treated as Production (fail closed).
-            //(the Development warning is logged later by UseWtmContext, where a logger is available)
+            //(the Development warning, or the Critical message when JwtOptions:AllowInsecureKey bypasses the check, is logged later by UseWtmContext, where a logger is available;
+            // an application that never calls UseWtmContext therefore gets no log line for the bypass)
             if (WtmEnvironmentHelper.ResolveIsDevelopment(services, config) == false)
             {
                 conf.JwtOptions.EnsureSecureKey(false, null);

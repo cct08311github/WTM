@@ -12,6 +12,14 @@ namespace WalkingTec.Mvvm.Core
         public string Issuer { get; set; } = "http://localhost";
         public string Audience { get; set; } = "http://localhost";
         public int Expires { get; set; } = 3600;
+
+        /// <summary>
+        /// Explicit opt-out of the startup key check (config: JwtOptions:AllowInsecureKey, default false).
+        /// When true, an insecure signing key no longer aborts startup outside Development; a Critical
+        /// message is logged on every start instead. Intended only as a transitional measure for systems
+        /// that cannot replace the key immediately.
+        /// </summary>
+        public bool AllowInsecureKey { get; set; }
         private const int MinKeyLength = 32;
         private const int MinDistinctChars = 5;
 
@@ -78,8 +86,11 @@ namespace WalkingTec.Mvvm.Core
         }
 
         /// <summary>
-        /// Guard used at application startup. Outside Development an insecure key aborts startup;
+        /// Guard used at application startup. Outside Development an insecure key aborts startup unless
+        /// <see cref="AllowInsecureKey"/> is true, in which case a Critical message is logged instead;
         /// in Development only a warning is logged. The key value is never written to any message.
+        /// Note: the early call in AddWtmContext has no logger, so the Critical message is emitted by the
+        /// later call in UseWtmContext; an application that never calls UseWtmContext gets no log line.
         /// </summary>
         public void EnsureSecureKey(bool isDevelopment, ILogger logger)
         {
@@ -92,7 +103,12 @@ namespace WalkingTec.Mvvm.Core
                 logger?.LogWarning("JwtOptions.SecurityKey is missing, shorter than 32 characters, too repetitive, or a publicly known sample value. This is tolerated in Development only; supply a unique random key of at least 32 characters (for example via the JwtOptions__SecurityKey environment variable or a secret manager) before deploying.");
                 return;
             }
-            throw new InvalidOperationException("JwtOptions.SecurityKey is missing, shorter than 32 characters, too repetitive, or a publicly known sample value, so the application refuses to start outside the Development environment. Supply a unique random key of at least 32 characters, for example via the JwtOptions__SecurityKey environment variable or a secret manager.");
+            if (AllowInsecureKey)
+            {
+                logger?.LogCritical("The JwtOptions.SecurityKey startup check was explicitly bypassed via JwtOptions:AllowInsecureKey. The signing key is missing, shorter than 32 characters, too repetitive, or a publicly known sample value, so anyone who knows or guesses it can forge valid tokens. Supply a unique random key of at least 32 characters (for example via the JwtOptions__SecurityKey environment variable or a secret manager) and remove JwtOptions:AllowInsecureKey.");
+                return;
+            }
+            throw new InvalidOperationException("JwtOptions.SecurityKey is missing, shorter than 32 characters, too repetitive, or a publicly known sample value, so the application refuses to start outside the Development environment. Supply a unique random key of at least 32 characters, for example via the JwtOptions__SecurityKey environment variable or a secret manager. If the key cannot be replaced immediately, JwtOptions:AllowInsecureKey=true starts the application anyway (not recommended).");
         }
         public string LoginPath { get; set; }
 

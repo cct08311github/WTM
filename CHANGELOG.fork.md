@@ -10,6 +10,13 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
+## 10.0.0.3(2026-10-18)
+
+* **新增：**   JwtOptions:AllowInsecureKey（默认 false）。设为 true 时，非 Development 环境下不安全的签名密钥不再阻止启动，改为每次启动输出 Critical 日志；仅作为无法立即更换密钥时的过渡手段
+* **升级说明：**
+    1. 默认行为与 10.0.0.2 相同，不影响已配置安全密钥的部署
+    2. Critical 日志由 `UseWtmContext` 输出；从不调用 `UseWtmContext` 的非标准应用仍可正常启动，但不会有该日志
+
 ## 10.0.0.2(2026-10-18)
 
 * **修改（BREAKING）：**   非 Development 环境下，若 JwtOptions.SecurityKey 未配置（框架默认值）、为空或长度不足 32 位、字符种类过少、或为仓库示例值（忽略大小写，含末尾补 x 的变体），应用启动时将直接失败；Development 环境仅输出警告
@@ -20,6 +27,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
     4. 负载均衡或多实例部署时，所有实例必须使用相同的密钥，否则令牌无法在实例间互相校验
     5. 使用 `AddWtmContextForConsole` 的控制台应用不受影响
     6. 更换密钥后，已签发的 JWT 将失效，用户需要重新获取令牌；Cookie 登录不受影响（Cookie 由 ASP.NET Data Protection 保护，不使用该密钥）
+    7. 自 10.0.0.3 起可通过 `JwtOptions:AllowInsecureKey=true` 显式跳过该检查（仅限过渡期，不建议长期使用）
 
 ## 10.0.0.1(2026-10-18)
 
