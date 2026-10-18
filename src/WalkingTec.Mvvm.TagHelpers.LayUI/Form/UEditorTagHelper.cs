@@ -30,7 +30,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
             string strHeight = Height == null ? "200px" : (Height + "px");
             output.Attributes.Add("style", $"width:{strWidth};height:{strHeight};");
             output.Attributes.Add("isrich", "1");
-            var vm = context.Items["model"] as BaseVM;
+            var vm = context.Items.TryGetValue("model", out var modelItem) ? modelItem as BaseVM : null;
             string url = "UploadForLayUIUEditor";
             if (string.IsNullOrEmpty(ConnectionString) == true)
             {

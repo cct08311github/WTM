@@ -115,7 +115,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             {
                 ext = CustomType;
             }
-            var vm = context.Items["model"] as BaseVM;
+            var vm = context.Items.TryGetValue("model", out var modelItem) ? modelItem as BaseVM : null;
             var url = "/_Framework/Upload?1=1";
             if (UploadType == UploadTypeEnum.ImageFile)
             {
