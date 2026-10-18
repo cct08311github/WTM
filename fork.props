@@ -1,0 +1,50 @@
+<Project>
+  <!--
+      本文件仅属于 fork，上游（dotnetcore/WTM）不存在。
+      version.props 与上游保持逐字节一致，以便合并上游时不产生冲突；
+      fork 自己的版本号在这里派生：<上游版本>.<fork 修订号>，例如 10.0.0.2。
+
+      为什么用四段式版本：
+      上游在 nuget.org 上发布三段式版本（如 10.0.0），且 PackageId 与本 fork 相同
+      （WalkingTec.Mvvm.Core / .Mvc / .TagHelpers.LayUI）。四段式版本永远不会与上游的
+      三段式版本冲突，同时 NuGet 比较时 10.0.0.2 > 10.0.0，fork 的包始终高于对应的上游版本。
+
+      ForkRevision 维护规则：
+        1. 每发布一个 fork 版本，ForkRevision 加 1，并在 CHANGELOG.fork.md 中记录；
+        2. 每次合并上游的版本号升级（version.props 的 VersionPrefix 变化）后，ForkRevision 重置为 1；
+        3. 上游变更日志见 CHANGELOG.md，fork 变更日志见 CHANGELOG.fork.md。
+  -->
+  <PropertyGroup>
+    <ForkRevision>2</ForkRevision>
+
+    <!-- 保留上游版本号，并将 VersionPrefix 改为四段式 -->
+    <UpstreamVersionPrefix>$(VersionPrefix)</UpstreamVersionPrefix>
+    <VersionPrefix>$(UpstreamVersionPrefix).$(ForkRevision)</VersionPrefix>
+  </PropertyGroup>
+
+  <!--
+      version.props 中的 FileVersion/Version/PackageVersion 已按旧的 VersionPrefix 展开，
+      MSBuild 属性不会随 VersionPrefix 的修改而重新计算，因此这里按与 version.props 相同的条件逻辑重新计算。
+
+      FileVersion（以及由 Version 推导的 AssemblyVersion）必须是合法的四段数字版本（每段不超过 65535）。
+      上游逻辑在 Debug 且设置了 Build_BuildNumber 时会追加第五段（并且随后被无条件赋值覆盖）；
+      这里明确只使用 $(VersionPrefix)，不再追加 Build_BuildNumber。
+      构建号仍然体现在 Version / PackageVersion 的预发布后缀中。
+  -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <FileVersion>$(VersionPrefix)</FileVersion>
+
+    <Version Condition="'$(VersionSuffix)' != '' AND '$(Build_BuildNumber)' != ''">$(VersionPrefix)-$(VersionSuffix)-$(Build_BuildNumber)</Version>
+    <Version Condition="'$(VersionSuffix)' == '' AND '$(Build_BuildNumber)' == ''">$(VersionPrefix)</Version>
+
+    <PackageVersion Condition="'$(VersionSuffix)' != '' AND '$(Build_BuildNumber)' != ''">$(VersionPrefix)-$(VersionSuffix)-$(Build_BuildNumber)</PackageVersion>
+    <PackageVersion Condition="'$(VersionSuffix)' == ''">$(VersionPrefix)</PackageVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <FileVersion>$(VersionPrefix)</FileVersion>
+    <Version>$(VersionPrefix)</Version>
+    <PackageVersion>$(VersionPrefix)</PackageVersion>
+  </PropertyGroup>
+
+</Project>
