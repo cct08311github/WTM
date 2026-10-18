@@ -21,7 +21,7 @@ namespace WalkingTec.Mvvm.Admin.Test
         public FrameworkUserApiTest()
         {
             _seed = Guid.NewGuid().ToString();
-            _controller = MockController.CreateApi<FrameworkUserController>(new Demo.DataContext(_seed, DBTypeEnum.Memory), "user");
+            _controller = MockController.CreateApi<FrameworkUserController>(new WalkingTec.Mvvm.Vue3Demo.DataContext(_seed, DBTypeEnum.Memory), "user");
         }
 
         [TestMethod]
@@ -45,7 +45,7 @@ namespace WalkingTec.Mvvm.Admin.Test
             var rv = _controller.Add(vm);
             Assert.IsInstanceOfType(rv.Result, typeof(OkObjectResult));
 
-            using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new WalkingTec.Mvvm.Vue3Demo.DataContext(_seed, DBTypeEnum.Memory))
             {
                 var data = context.Set<FrameworkUser>().FirstOrDefault();
                 Assert.AreEqual(data.ITCode, "itcode");
@@ -61,7 +61,7 @@ namespace WalkingTec.Mvvm.Admin.Test
         public void EditTest()
         {
             FrameworkUser v = new FrameworkUser();
-            using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new WalkingTec.Mvvm.Vue3Demo.DataContext(_seed, DBTypeEnum.Memory))
             {
                 v.ITCode = "itcode";
                 v.Name = "name";
@@ -82,7 +82,7 @@ namespace WalkingTec.Mvvm.Admin.Test
             var rv = _controller.Edit(vm);
             Assert.IsInstanceOfType(rv.Result, typeof(OkObjectResult));
 
-            using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new WalkingTec.Mvvm.Vue3Demo.DataContext(_seed, DBTypeEnum.Memory))
             {
                 var data = context.Set<FrameworkUser>().FirstOrDefault();
                 Assert.AreEqual(data.ITCode, "itcode");
@@ -97,7 +97,7 @@ namespace WalkingTec.Mvvm.Admin.Test
         public void GetTest()
         {
             FrameworkUser v = new FrameworkUser();
-            using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new WalkingTec.Mvvm.Vue3Demo.DataContext(_seed, DBTypeEnum.Memory))
             {
                 v.ITCode = "itcode";
                 v.Name = "name";
@@ -115,7 +115,7 @@ namespace WalkingTec.Mvvm.Admin.Test
         {
             FrameworkUser v1 = new FrameworkUser();
             FrameworkUser v2 = new FrameworkUser();
-            using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new WalkingTec.Mvvm.Vue3Demo.DataContext(_seed, DBTypeEnum.Memory))
             {
                 v1.ITCode = "itcode";
                 v1.Name = "name";
@@ -134,7 +134,7 @@ namespace WalkingTec.Mvvm.Admin.Test
             var rv = _controller.BatchDelete(new string[] { v1.ID.ToString(), v2.ID.ToString() });
             Assert.IsInstanceOfType(rv.Result, typeof(OkObjectResult));
 
-            using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new WalkingTec.Mvvm.Vue3Demo.DataContext(_seed, DBTypeEnum.Memory))
             {
                 Assert.AreEqual(context.Set<FrameworkUser>().Count(), 0);
             }
@@ -160,7 +160,7 @@ namespace WalkingTec.Mvvm.Admin.Test
         private Guid AddPhoto()
         {
             FileAttachment v = new FileAttachment();
-            using (var context = new Demo.DataContext(_seed, DBTypeEnum.Memory))
+            using (var context = new WalkingTec.Mvvm.Vue3Demo.DataContext(_seed, DBTypeEnum.Memory))
             {
 
                 v.FileName = "PEsnw";
