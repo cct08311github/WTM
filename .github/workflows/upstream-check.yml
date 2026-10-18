@@ -1,0 +1,30 @@
+name: Upstream Check
+
+# 每週檢查上游 dotnetcore/WTM 的 dotnet10 是否有新 commit，有就開一張 upstream-sync Issue。
+# 只開 Issue，不會 merge 或 push。流程見 FORK.md 第 5 節。
+on:
+  schedule:
+    - cron: '0 1 * * 1' # 週一 01:00 UTC = 台北時間 09:00
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency: upstream-check
+
+jobs:
+  upstream-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: dotnet10
+          fetch-depth: 0
+
+      - name: Check upstream and open tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/upstream-check.sh
