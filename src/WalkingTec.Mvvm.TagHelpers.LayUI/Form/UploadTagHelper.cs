@@ -164,11 +164,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             var requiredtext = "";
             if (Field.Metadata.IsRequired)
             {
-                requiredtext = $" lay-verify=\"required\" lay-reqText=\"{THProgram._localizer["Validate.{0}required", Field?.Metadata?.DisplayName ?? Field?.Metadata?.Name]}\"";
+                requiredtext = $" lay-verify=\"required\" lay-reqText=\"{HtmlAttributeEncoder.Encode(THProgram._localizer["Validate.{0}required", Field?.Metadata?.DisplayName ?? Field?.Metadata?.Name].Value)}\"";
             }
 
             output.PostElement.SetHtmlContent($@"
-<input type='hidden' id='{Id}' name='{Field.Name}' value='{Field.Model}' {requiredtext} />
+<input type='hidden' id='{Id}' name='{Field.Name}' value='{HtmlAttributeEncoder.Encode(Field.Model)}' {requiredtext} />
 ");    
             if (ShowProgress != null)
             {

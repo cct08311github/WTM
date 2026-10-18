@@ -29,11 +29,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             string rv = "";
             if (buttonType == ButtonTypesEnum.Link)
             {
-                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'>{buttonText}</a>";
+                rv = $"<a id='{HtmlAttributeEncoder.Encode(buttonID)}' onclick='{HtmlAttributeEncoder.Encode(funcname)}()' style='{HtmlAttributeEncoder.Encode(style ?? "color:blue;cursor:pointer")}' class='{HtmlAttributeEncoder.Encode(buttonClass)}'>{buttonText}</a>";
             }
             if (buttonType == ButtonTypesEnum.Button)
             {
-                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}'>{buttonText}</a>";
+                rv = $"<a id='{HtmlAttributeEncoder.Encode(buttonID)}' onclick='{HtmlAttributeEncoder.Encode(funcname)}()' style='{HtmlAttributeEncoder.Encode(style)}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{HtmlAttributeEncoder.Encode(buttonClass)}")}'>{buttonText}</a>";
             }
             rv += click;
             return rv;
@@ -44,11 +44,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             string rv = "";
             if (buttonType == ButtonTypesEnum.Link)
             {
-                rv = $"<a  style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}' href='/_Framework/GetFile/{fileID}?_DONOT_USE_CS={_DONOT_USE_CS}'>{buttonText}</a>";
+                rv = $"<a  style='{HtmlAttributeEncoder.Encode(style ?? "color:blue;cursor:pointer")}' class='{HtmlAttributeEncoder.Encode(buttonClass)}' href='/_Framework/GetFile/{fileID}?_DONOT_USE_CS={HtmlAttributeEncoder.Encode(_DONOT_USE_CS)}'>{buttonText}</a>";
             }
             if (buttonType == ButtonTypesEnum.Button)
             {
-                rv = $"<a  style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}' href='/_Framework/GetFile/{fileID}?_DONOT_USE_CS={_DONOT_USE_CS}'>{buttonText}</a>";
+                rv = $"<a  style='{HtmlAttributeEncoder.Encode(style)}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{HtmlAttributeEncoder.Encode(buttonClass)}")}' href='/_Framework/GetFile/{fileID}?_DONOT_USE_CS={HtmlAttributeEncoder.Encode(_DONOT_USE_CS)}'>{buttonText}</a>";
             }
             return rv;
         }
@@ -57,20 +57,20 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
         {
             var disable = isReadOnly ? " disabled='' class='layui-disabled'" : " ";
             var selected = ischeck ? " checked" : " ";
-            return $@"<input lay-skin='primary' type='checkbox' name='{name ?? ""}' id='{(name == null ? "" : Utils.GetIdByName(name))}' value='{value ?? ""}' title='{text ?? ""}' {selected} {disable}/>";
+            return $@"<input lay-skin='primary' type='checkbox' name='{HtmlAttributeEncoder.Encode(name)}' id='{HtmlAttributeEncoder.Encode(name == null ? "" : Utils.GetIdByName(name))}' value='{HtmlAttributeEncoder.Encode(value)}' title='{HtmlAttributeEncoder.Encode(text)}' {selected} {disable}/>";
         }
 
         public string MakeRadio(bool ischeck, string text = null, string name = null, string value = null, bool isReadOnly = false)
         {
             var selected = ischeck ? " checked" : " ";
             var disable = isReadOnly ? " disabled='' class='layui-disabled'" : " ";
-            return $@"<input lay-skin='primary' type='radio' name='{name ?? ""}' id='{(name == null ? "" : Utils.GetIdByName(name))}' value='{value ?? ""}' title='{text ?? ""}' {selected} {disable}/>";
+            return $@"<input lay-skin='primary' type='radio' name='{HtmlAttributeEncoder.Encode(name)}' id='{HtmlAttributeEncoder.Encode(name == null ? "" : Utils.GetIdByName(name))}' value='{HtmlAttributeEncoder.Encode(value)}' title='{HtmlAttributeEncoder.Encode(text)}' {selected} {disable}/>";
         }
 
         public string MakeCombo(string name = null, List<ComboSelectListItem> value = null, string selectedValue = null, string emptyText = null, bool isReadOnly = false)
         {
             var disable = isReadOnly ? " disabled='' class='layui-disabled'" : " ";
-            string rv = $"<select name='{name}' id='{(name == null ? "" : Utils.GetIdByName(name))}' class='layui-input' style='height:28px'   {disable} lay-ignore>";
+            string rv = $"<select name='{HtmlAttributeEncoder.Encode(name)}' id='{HtmlAttributeEncoder.Encode(name == null ? "" : Utils.GetIdByName(name))}' class='layui-input' style='height:28px'   {disable} lay-ignore>";
             if (string.IsNullOrEmpty(emptyText) == false)
             {
                 rv += $@"
@@ -83,13 +83,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
                     if (item.Value.ToString().ToLower() == selectedValue?.ToLower())
                     {
                         rv += $@"
-<option value='{item.Value}' selected>{item.Text}</option>";
+<option value='{HtmlAttributeEncoder.Encode(item.Value)}' selected>{item.Text}</option>";
 
                     }
                     else
                     {
                         rv += $@"
-<option value='{item.Value}'>{item.Text}</option>";
+<option value='{HtmlAttributeEncoder.Encode(item.Value)}'>{item.Text}</option>";
                     }
                 }
             }
@@ -102,7 +102,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
         public string MakeTextBox(string name = null, string value = null, string emptyText = null, bool isReadOnly = false)
         {
             var disable = isReadOnly ? " disabled='' class='layui-disabled'" : " ";
-            return $@"<input class='layui-input' style='height:28px'  name='{name ?? ""}' id='{(name == null ? "" : Utils.GetIdByName(name))}' value='{value ?? ""}' {disable} />";
+            return $@"<input class='layui-input' style='height:28px'  name='{HtmlAttributeEncoder.Encode(name)}' id='{HtmlAttributeEncoder.Encode(name == null ? "" : Utils.GetIdByName(name))}' value='{HtmlAttributeEncoder.Encode(value)}' {disable} />";
         }
 
         public string MakeDateTime(string name = null, string value = null, string emptyText = null, bool isReadOnly = false, DateTimeTypeEnum? dateType = DateTimeTypeEnum.DateTime)
@@ -118,7 +118,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
                     value = "";
                 }
             }
-            return $@"<input class='layui-input' style='height:28px'  name='{name ?? ""}' id='{id}' value='{value ?? ""}' {disable}  onclick='ff.SetGridCellDate(""{JsStringEncoder.Escape(id)}"",""{dateType.ToString().ToLower()}"")'/>";
+            return $@"<input class='layui-input' style='height:28px'  name='{HtmlAttributeEncoder.Encode(name)}' id='{HtmlAttributeEncoder.Encode(id)}' value='{HtmlAttributeEncoder.Encode(value)}' {disable}  onclick='ff.SetGridCellDate(""{JsStringEncoder.Escape(id)}"",""{dateType.ToString().ToLower()}"")'/>";
         }
 
 
@@ -153,11 +153,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             string rv = "";
             if (buttonType == ButtonTypesEnum.Link)
             {
-                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'>{buttonText}</a>";
+                rv = $"<a id='{HtmlAttributeEncoder.Encode(buttonID)}' onclick='{HtmlAttributeEncoder.Encode(funcname)}()' style='{HtmlAttributeEncoder.Encode(style ?? "color:blue;cursor:pointer")}' class='{HtmlAttributeEncoder.Encode(buttonClass)}'>{buttonText}</a>";
             }
             if (buttonType == ButtonTypesEnum.Button)
             {
-                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}'>{buttonText}</a>";
+                rv = $"<a id='{HtmlAttributeEncoder.Encode(buttonID)}' onclick='{HtmlAttributeEncoder.Encode(funcname)}()' style='{HtmlAttributeEncoder.Encode(style)}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{HtmlAttributeEncoder.Encode(buttonClass)}")}'>{buttonText}</a>";
             }
             rv += click;
             return rv;
@@ -175,22 +175,22 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             string rv = "";
             if (buttonType == ButtonTypesEnum.Link)
             {
-                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'>{buttonText}</a>";
+                rv = $"<a id='{HtmlAttributeEncoder.Encode(buttonID)}' onclick='{HtmlAttributeEncoder.Encode(funcname)}()' style='{HtmlAttributeEncoder.Encode(style ?? "color:blue;cursor:pointer")}' class='{HtmlAttributeEncoder.Encode(buttonClass)}'>{buttonText}</a>";
             }
             if (buttonType == ButtonTypesEnum.Button)
             {
-                rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}'>{buttonText}</a>";
+                rv = $"<a id='{HtmlAttributeEncoder.Encode(buttonID)}' onclick='{HtmlAttributeEncoder.Encode(funcname)}()' style='{HtmlAttributeEncoder.Encode(style)}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{HtmlAttributeEncoder.Encode(buttonClass)}")}'>{buttonText}</a>";
             }
             switch (buttonType)
             {
                 case ButtonTypesEnum.Button:
-                    rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}'>{buttonText}</a>";
+                    rv = $"<a id='{HtmlAttributeEncoder.Encode(buttonID)}' onclick='{HtmlAttributeEncoder.Encode(funcname)}()' style='{HtmlAttributeEncoder.Encode(style)}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{HtmlAttributeEncoder.Encode(buttonClass)}")}'>{buttonText}</a>";
                     break;
                 case ButtonTypesEnum.Link:
-                    rv = $"<a id='{buttonID}' onclick='{funcname}()' style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'>{buttonText}</a>";
+                    rv = $"<a id='{HtmlAttributeEncoder.Encode(buttonID)}' onclick='{HtmlAttributeEncoder.Encode(funcname)}()' style='{HtmlAttributeEncoder.Encode(style ?? "color:blue;cursor:pointer")}' class='{HtmlAttributeEncoder.Encode(buttonClass)}'>{buttonText}</a>";
                     break;
                 case ButtonTypesEnum.Img:
-                    rv = $"<img src='{url}&width={width??50}&height={height??50}' id='{buttonID}' onclick='{funcname}()' style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'/>";
+                    rv = $"<img src='{HtmlAttributeEncoder.Encode(url)}&width={width??50}&height={height??50}' id='{HtmlAttributeEncoder.Encode(buttonID)}' onclick='{HtmlAttributeEncoder.Encode(funcname)}()' style='{HtmlAttributeEncoder.Encode(style ?? "color:blue;cursor:pointer")}' class='{HtmlAttributeEncoder.Encode(buttonClass)}'/>";
                     break;
                 default:
                     break;
@@ -210,11 +210,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             string rv = "";
             if (buttonType == ButtonTypesEnum.Link)
             {
-                rv = $"<a id='{buttonID}'  style='{style ?? "color:blue;cursor:pointer"}' class='{buttonClass ?? ""}'>{buttonText}</a>";
+                rv = $"<a id='{HtmlAttributeEncoder.Encode(buttonID)}'  style='{HtmlAttributeEncoder.Encode(style ?? "color:blue;cursor:pointer")}' class='{HtmlAttributeEncoder.Encode(buttonClass)}'>{buttonText}</a>";
             }
             if (buttonType == ButtonTypesEnum.Button)
             {
-                rv = $"<a id='{buttonID}' style='{style ?? ""}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{buttonClass}")}'>{buttonText}</a>";
+                rv = $"<a id='{HtmlAttributeEncoder.Encode(buttonID)}' style='{HtmlAttributeEncoder.Encode(style)}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{HtmlAttributeEncoder.Encode(buttonClass)}")}'>{buttonText}</a>";
             }
             rv += click;
             return rv;

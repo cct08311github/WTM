@@ -2,6 +2,7 @@ using System.Linq;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 using WalkingTec.Mvvm.Core.Extensions;
+using WalkingTec.Mvvm.Core;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
 {
@@ -62,11 +63,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             var requiredtext = "";
             if (Field.Metadata.IsRequired)
             {
-                requiredtext = $" lay-verify=\"required\" lay-reqText=\"{THProgram._localizer["Validate.{0}required", Field?.Metadata?.DisplayName ?? Field?.Metadata?.Name]}\"";
+                requiredtext = $" lay-verify=\"required\" lay-reqText=\"{HtmlAttributeEncoder.Encode(THProgram._localizer["Validate.{0}required", Field?.Metadata?.DisplayName ?? Field?.Metadata?.Name].Value)}\"";
             }
 
             var content = $@"
-<input type='hidden' id='{Id}' name='{Field.Name}' value='{val}' {requiredtext}/>
+<input type='hidden' id='{Id}' name='{Field.Name}' value='{HtmlAttributeEncoder.Encode(val)}' {requiredtext}/>
 <script>
 layui.use('colorpicker', function(){{
   var colorpicker = layui.colorpicker;

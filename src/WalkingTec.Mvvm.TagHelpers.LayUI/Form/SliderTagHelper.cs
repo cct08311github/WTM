@@ -149,8 +149,8 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
 
             var content = $@"
-<input type='hidden' name='{Field.Name}' value='{value0}' class='layui-input'>
-{(Field1 == null ? string.Empty : $"<input type='hidden' name='{Field1.Name}' value='{value1}' class='layui-input'>")}
+<input type='hidden' name='{Field.Name}' value='{HtmlAttributeEncoder.Encode(value0)}' class='layui-input'>
+{(Field1 == null ? string.Empty : $"<input type='hidden' name='{Field1.Name}' value='{HtmlAttributeEncoder.Encode(value1)}' class='layui-input'>")}
 <script>
 layui.use(['slider'],function(){{
   var $ = layui.$;

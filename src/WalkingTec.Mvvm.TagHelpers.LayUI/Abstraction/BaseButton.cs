@@ -86,7 +86,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 output.Attributes.SetAttribute("class", btnclass);
                 if (string.IsNullOrEmpty(Icon) == false)
                 {
-                    output.Content.SetHtmlContent($@"<i class=""{Icon}""></i> {Text ?? ""}");
+                    output.Content.SetHtmlContent($@"<i class=""{HtmlAttributeEncoder.Encode(Icon)}""></i> {Text ?? ""}");
                 }
                 else
                 {
@@ -98,7 +98,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 if (string.IsNullOrEmpty(Icon) == false)
                 {
                     output.Attributes.SetAttribute("class", "shortcut");
-                    output.Content.SetHtmlContent($"<div><i class=\"{Icon}\"></i></div>{Text ?? ""}");
+                    output.Content.SetHtmlContent($"<div><i class=\"{HtmlAttributeEncoder.Encode(Icon)}\"></i></div>{Text ?? ""}");
                 }
                 else
                 {

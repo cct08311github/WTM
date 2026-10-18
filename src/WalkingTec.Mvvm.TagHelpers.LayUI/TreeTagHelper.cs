@@ -234,12 +234,12 @@ var {Id} = xmSelect.render({{
                         foreach (var item in Field.Model as dynamic)
                         {
                             hidden += $@"
-<input type='hidden' name='{Field?.Name}' value='{item.ToString()}'/>";
+<input type='hidden' name='{Field?.Name}' value='{HtmlAttributeEncoder.Encode((string)item.ToString())}'/>";
                         }
                     }
                     else
                     {
-                        hidden += $"<input type='hidden' name='{Field?.Name}' value='{Field.Model}'/>";
+                        hidden += $"<input type='hidden' name='{Field?.Name}' value='{HtmlAttributeEncoder.Encode(Field.Model)}'/>";
                     }
                     hidden += " </p>";
                 }
