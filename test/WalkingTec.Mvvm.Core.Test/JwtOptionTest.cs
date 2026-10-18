@@ -133,6 +133,115 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.AreEqual(0, logger.Entries.Count);
         }
 
+        private static JwtOption OptionFor(bool secure, bool allowInsecure)
+        {
+            var option = secure ? new JwtOption { SecurityKey = RandomKey() } : new JwtOption { SecurityKey = RepoSampleKeys[1] };
+            option.AllowInsecureKey = allowInsecure;
+            return option;
+        }
+
+        [TestMethod]
+        public void AllowInsecureKeyDefaultsToFalse()
+        {
+            Assert.IsFalse(new JwtOption().AllowInsecureKey);
+        }
+
+        [TestMethod]
+        public void AllowInsecureKeyOutsideDevelopmentLogsCriticalInsteadOfThrowing()
+        {
+            var logger = new CapturingLogger();
+            var option = OptionFor(secure: false, allowInsecure: true);
+            option.EnsureSecureKey(false, logger);
+
+            Assert.AreEqual(1, logger.Entries.Count);
+            Assert.AreEqual(LogLevel.Critical, logger.Entries[0].Level);
+            var message = logger.Entries[0].Message;
+            Assert.IsTrue(message.Contains("JwtOptions:AllowInsecureKey"));
+            Assert.IsTrue(message.Contains("JwtOptions__SecurityKey"));
+            Assert.IsFalse(message.Contains(option.SecurityKey));
+            foreach (var key in RepoSampleKeys)
+            {
+                Assert.IsFalse(message.Contains(key));
+            }
+        }
+
+        [TestMethod]
+        public void AllowInsecureKeyWithDefaultKeyCriticalMessageDoesNotContainKey()
+        {
+            var logger = new CapturingLogger();
+            var option = new JwtOption { AllowInsecureKey = true };
+            option.EnsureSecureKey(false, logger);
+
+            Assert.AreEqual(1, logger.Entries.Count);
+            Assert.AreEqual(LogLevel.Critical, logger.Entries[0].Level);
+            Assert.IsFalse(logger.Entries[0].Message.Contains(option.SecurityKey));
+            Assert.IsFalse(logger.Entries[0].Message.Contains("wtmwtmwtm"));
+        }
+
+        [TestMethod]
+        public void AllowInsecureKeyDoesNotThrowWithoutLogger()
+        {
+            // mirrors the early call in AddWtmContext, which has no logger
+            OptionFor(secure: false, allowInsecure: true).EnsureSecureKey(false, null);
+        }
+
+        [TestMethod]
+        public void EnsureSecureKeyBehaviourMatrix()
+        {
+            // (secure key, AllowInsecureKey, isDevelopment) -> expected outcome
+            foreach (var secure in new[] { true, false })
+            foreach (var allow in new[] { true, false })
+            foreach (var dev in new[] { true, false })
+            {
+                var logger = new CapturingLogger();
+                var option = OptionFor(secure, allow);
+                var label = $"secure={secure}, allow={allow}, dev={dev}";
+
+                if (secure)
+                {
+                    option.EnsureSecureKey(dev, logger);
+                    Assert.AreEqual(0, logger.Entries.Count, label);
+                }
+                else if (dev)
+                {
+                    option.EnsureSecureKey(true, logger);
+                    Assert.AreEqual(1, logger.Entries.Count, label);
+                    Assert.AreEqual(LogLevel.Warning, logger.Entries[0].Level, label);
+                }
+                else if (allow)
+                {
+                    option.EnsureSecureKey(false, logger);
+                    Assert.AreEqual(1, logger.Entries.Count, label);
+                    Assert.AreEqual(LogLevel.Critical, logger.Entries[0].Level, label);
+                }
+                else
+                {
+                    Assert.ThrowsExactly<InvalidOperationException>(() => option.EnsureSecureKey(false, logger), label);
+                    Assert.AreEqual(0, logger.Entries.Count, label);
+                }
+            }
+        }
+
+        [TestMethod]
+        public void BoundConfigAllowInsecureKeyTrue()
+        {
+            var conf = BindConfigs(new Dictionary<string, string> { ["JwtOptions:AllowInsecureKey"] = "true" });
+            Assert.IsTrue(conf.JwtOptions.AllowInsecureKey);
+            Assert.IsTrue(conf.JwtOptions.IsInsecureKey());
+            conf.JwtOptions.EnsureSecureKey(false, null); // must not throw
+        }
+
+        [TestMethod]
+        public void BoundConfigAllowInsecureKeyDefaultsToFalse()
+        {
+            var conf = BindConfigs(new Dictionary<string, string> { ["JwtOptions:Issuer"] = "http://example.invalid" });
+            Assert.IsFalse(conf.JwtOptions.AllowInsecureKey);
+            Assert.ThrowsExactly<InvalidOperationException>(() => conf.JwtOptions.EnsureSecureKey(false, null));
+
+            var explicitFalse = BindConfigs(new Dictionary<string, string> { ["JwtOptions:AllowInsecureKey"] = "false" });
+            Assert.IsFalse(explicitFalse.JwtOptions.AllowInsecureKey);
+        }
+
         private static string RandomKeyOfLength(int length)
         {
             var sb = new System.Text.StringBuilder();
