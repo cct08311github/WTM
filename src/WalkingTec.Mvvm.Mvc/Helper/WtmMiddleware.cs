@@ -3,12 +3,14 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Options;
+using Microsoft.Net.Http.Headers;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
 
@@ -32,7 +34,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
             if (context.Request.Path == "/v1/activities" && context.Request.QueryString.Value != "?inneruse=1")
             {
-                var txt = wtm.CallAPI("", $"{wtm.HostAddress}/v1/activities?inneruse=1").Result.Data;
+                var txt = (await wtm.CallAPI("", $"{wtm.HostAddress}/v1/activities?inneruse=1")).Data;
                 var cul = Thread.CurrentThread.CurrentCulture;
                 if (cul.Name?.ToLower() == "zh" || cul.Name?.ToLower() == "zh-cn")
                 {
@@ -49,33 +51,68 @@ namespace WalkingTec.Mvvm.Mvc
                 context.Response.Cookies.Append("pagemode", wtm.ConfigInfo.PageMode.ToString());
                 context.Response.Cookies.Append("tabmode", wtm.ConfigInfo.TabMode.ToString());
             }
-            if (context.Request.ContentLength > 0 && context.Request.HasFormContentType == false)
-            {
-                try
-                {
-                    context.Request.EnableBuffering();
-                    context.Request.Body.Position = 0;
-                    StreamReader tr = new StreamReader(context.Request.Body);
-                    string body = tr.ReadToEndAsync().Result;
-                    context.Request.Body.Position = 0;
-                    if (context.Items.ContainsKey("DONOTUSE_REQUESTBODY") == false)
-                    {
-                        context.Items.Add("DONOTUSE_REQUESTBODY", body);
-                    }
-                    else
-                    {
-                        context.Items["DONOTUSE_REQUESTBODY"] = body;
-                    }
-                }
-                catch {
-                    context.Request.Body.Position = 0;
-                }
-            }
+            await BufferRequestBodyAsync(context, wtm.ConfigInfo.BufferJsonBodyOnly);
             await _next(context);
             if (context.Response.StatusCode == 404)
             {
                 await context.Response.WriteAsync(string.Empty);
             }
+        }
+
+        /// <summary>
+        /// The key of <see cref="HttpContext.Items"/> that holds the buffered request body.
+        /// </summary>
+        public const string RequestBodyItemKey = "DONOTUSE_REQUESTBODY";
+
+        /// <summary>
+        /// Buffers the request body (non-form requests with a body) into <see cref="HttpContext.Items"/>
+        /// and rewinds the body stream to position 0.
+        /// </summary>
+        /// <param name="context">current http context</param>
+        /// <param name="jsonOnly">when true only application/json and *+json bodies are buffered; default behavior (false) buffers every non-form body</param>
+        public static async Task BufferRequestBodyAsync(HttpContext context, bool jsonOnly = false)
+        {
+            if (context.Request.ContentLength > 0 && context.Request.HasFormContentType == false)
+            {
+                if (jsonOnly && IsJsonContentType(context.Request.ContentType) == false)
+                {
+                    return;
+                }
+                try
+                {
+                    context.Request.EnableBuffering();
+                    context.Request.Body.Position = 0;
+                    string body;
+                    using (var tr = new StreamReader(context.Request.Body, Encoding.UTF8, true, 1024, leaveOpen: true))
+                    {
+                        body = await tr.ReadToEndAsync();
+                    }
+                    context.Request.Body.Position = 0;
+                    if (context.Items.ContainsKey(RequestBodyItemKey) == false)
+                    {
+                        context.Items.Add(RequestBodyItemKey, body);
+                    }
+                    else
+                    {
+                        context.Items[RequestBodyItemKey] = body;
+                    }
+                }
+                catch
+                {
+                    context.Request.Body.Position = 0;
+                }
+            }
+        }
+
+        private static bool IsJsonContentType(string contentType)
+        {
+            if (string.IsNullOrEmpty(contentType) || MediaTypeHeaderValue.TryParse(contentType, out var mt) == false)
+            {
+                return false;
+            }
+            var mediaType = mt.MediaType.Value;
+            return string.Equals(mediaType, "application/json", StringComparison.OrdinalIgnoreCase)
+                || (mediaType != null && mediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase));
         }
 
         private string TranslateWorkflow(string txt)
