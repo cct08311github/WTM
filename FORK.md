@@ -92,6 +92,7 @@ git merge --no-ff upstream/dotnet10
 | `src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs` | 啟動時的金鑰檢查（`AddWtmContext`、`UseWtmContext`） | #2 |
 | `test/WalkingTec.Mvvm.Test.Mock/MockWtmContext.cs` | 選用參數 `remoteToken` | #1 |
 | `demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/wtmbuild.ts` | 路徑改為跨平台 | #35 |
+| `README.md`、`README.zh-CN.md` | 開頭多一段 fork 說明（其餘內容不動，降低同步衝突） | #19 |
 
 fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/WtmEnvironmentHelper.cs`、`test/WalkingTec.Mvvm.Core.Test/{RemoteTokenTest,JwtOptionTest}.cs`。
 
