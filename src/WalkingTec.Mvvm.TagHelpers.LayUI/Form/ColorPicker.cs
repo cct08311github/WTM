@@ -37,7 +37,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 {
                     if (item != "")
                     {
-                        prec += $"'{item}',";
+                        prec += $"'{JsStringEncoder.Escape(item)}',";
                     }
                 }
             }
@@ -73,7 +73,7 @@ layui.use('colorpicker', function(){{
   var colorpicker = layui.colorpicker;
   colorpicker.render({{
     elem: '#cp_{Id}'
-    ,color:'{val}'
+    ,color:'{JsStringEncoder.Escape(val)}'
     ,alpha : {EnableAlpha.ToString().ToLower()}
     ,format: '{(EnableAlpha==true? "rgb":"hex")}'
     ,predefine: {(PredefinedColors == null ? "false" : "true")}
