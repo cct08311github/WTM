@@ -19,7 +19,8 @@ namespace WalkingTec.Mvvm.Core.Test
         private static readonly string[] RepoSampleKeys = new[]
         {
             "wtmwtmwtmwtmwtmwtm",
-            "superSecretKey@345"
+            "superSecretKey@345",
+            "CHANGE-ME-development-only-placeholder-key"
         };
 
         private static string RandomKey()
@@ -273,8 +274,8 @@ namespace WalkingTec.Mvvm.Core.Test
         {
             foreach (var key in RepoSampleKeys)
             {
-                var padded = key.PadRight(38, 'x');
-                Assert.AreEqual(38, padded.Length);
+                var padded = key.PadRight(key.Length + 6, 'x');
+                Assert.AreEqual(key.Length + 6, padded.Length);
                 Assert.IsTrue(new JwtOption { SecurityKey = padded }.IsInsecureKey(), "sample key padded beyond 32 characters must be rejected");
                 Assert.IsTrue(new JwtOption { SecurityKey = padded.Replace('x', 'X') }.IsInsecureKey(), "upper-case padding must be rejected");
             }
