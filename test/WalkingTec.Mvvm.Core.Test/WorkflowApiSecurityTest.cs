@@ -2,15 +2,21 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.ApplicationModels;
 using Microsoft.AspNetCore.Mvc.Authorization;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using WalkingTec.Mvvm.Core.ConfigOptions;
 using WalkingTec.Mvvm.Core.Support.Json;
 using WalkingTec.Mvvm.Mvc;
+using WalkingTec.Mvvm.Test.Mock;
 
 // dummy controller types: only the type name matters for the convention
 namespace Elsa.Server.Api.Endpoints.Dummy
@@ -116,39 +122,183 @@ namespace WalkingTec.Mvvm.Core.Test
             WorkflowApiSecurity.LogUnprotectedWarning(null, null);
         }
 
-        [TestMethod]
-        public void ForwardHeaders_NullWhenNothingPresent()
+        private static Configs Cfg(bool requireAuth, string serverAddress = null, string cookiePre = null)
         {
-            Assert.IsNull(WtmMiddleware.BuildForwardHeaders(new DefaultHttpContext(), true));
-            Assert.IsNull(WtmMiddleware.BuildForwardHeaders(null, true));
+            var c = new Configs();
+            c.WorkflowOptions.RequireAuthentication = requireAuth;
+            if (cookiePre != null)
+            {
+                c.CookiePre = cookiePre;
+            }
+            if (serverAddress != null)
+            {
+                c.Domains = new Dictionary<string, Domain> { { "server", new Domain { Address = serverAddress } } };
+            }
+            return c;
+        }
+
+        private const string AuthCookie = ".AspNetCore..CookieWithJwtAuth";
+
+        [TestMethod]
+        public void SelfCall_AuthOff_UnchangedAddressAndNoHeaders()
+        {
+            var r = WorkflowApiSecurity.ResolveSelfCall(Cfg(false, "https://srv.example"), "app.example", "http", "app.example", "Bearer abc", AuthCookie + "=1");
+            Assert.AreEqual("http://app.example", r.BaseAddress);
+            Assert.IsNull(r.Headers);
+            Assert.IsFalse(r.CredentialsWithheld);
         }
 
         [TestMethod]
-        public void ForwardHeaders_NullWhenAuthenticationNotRequired()
+        public void SelfCall_ServerDomain_UsedAndCredentialsForwarded_AuthorizationAndAuthCookieOnly()
         {
-            var ctx = new DefaultHttpContext();
-            ctx.Request.Headers["Authorization"] = "Bearer abc";
-            ctx.Request.Headers["Cookie"] = "a=1";
-            Assert.IsNull(WtmMiddleware.BuildForwardHeaders(ctx, false));
+            var cookie = "other=1; " + AuthCookie + "=tok; " + AuthCookie + "C1=part; theme=dark";
+            var r = WorkflowApiSecurity.ResolveSelfCall(Cfg(true, "https://srv.example/"), null, "https", "attacker.example", "Bearer abc", cookie);
+            Assert.AreEqual("https://srv.example", r.BaseAddress);
+            Assert.AreEqual("Bearer abc", r.Headers["Authorization"]);
+            Assert.AreEqual(AuthCookie + "=tok; " + AuthCookie + "C1=part", r.Headers["Cookie"]);
+            Assert.AreEqual(2, r.Headers.Count);
+            Assert.IsFalse(r.CredentialsWithheld);
         }
 
         [TestMethod]
-        public void ForwardHeaders_CopiesAuthorizationAndCookieOnly()
+        public void SelfCall_CookiePrefixIsPartOfCookieName()
         {
-            var ctx = new DefaultHttpContext();
-            ctx.Request.Headers["Authorization"] = "Bearer abc";
-            ctx.Request.Headers["Cookie"] = "a=1; b=2";
-            ctx.Request.Headers["X-Other"] = "zzz";
-            var h = WtmMiddleware.BuildForwardHeaders(ctx, true);
-            Assert.AreEqual(2, h.Count);
-            Assert.AreEqual("Bearer abc", h["Authorization"]);
-            Assert.AreEqual("a=1; b=2", h["Cookie"]);
+            var name = WorkflowApiSecurity.GetAuthCookieName(Cfg(true, cookiePre: "x"));
+            Assert.AreEqual(".AspNetCore.x.CookieWithJwtAuth", name);
+            Assert.AreEqual(AuthCookie, WorkflowApiSecurity.GetAuthCookieName(new Configs()));
+            var r = WorkflowApiSecurity.ResolveSelfCall(Cfg(true, "https://srv.example", "x"), null, "https", "h", null, AuthCookie + "=1; " + name + "=2");
+            Assert.AreEqual(name + "=2", r.Headers["Cookie"]);
+            Assert.IsFalse(r.Headers.ContainsKey("Authorization"));
+        }
 
-            var only = new DefaultHttpContext();
-            only.Request.Headers["Cookie"] = "a=1";
-            var h2 = WtmMiddleware.BuildForwardHeaders(only, true);
-            Assert.AreEqual(1, h2.Count);
-            Assert.IsFalse(h2.ContainsKey("Authorization"));
+        [TestMethod]
+        public void SelfCall_NoServerDomain_AllowedHostMatch_ForwardsToRequestHost()
+        {
+            var r = WorkflowApiSecurity.ResolveSelfCall(Cfg(true), "other.example;App.Example", "https", "app.example:8443", "Bearer abc", null);
+            Assert.AreEqual("https://app.example:8443", r.BaseAddress);
+            Assert.AreEqual("Bearer abc", r.Headers["Authorization"]);
+        }
+
+        [TestMethod]
+        public void SelfCall_NoServerDomain_WildcardOrMissingAllowedHosts_WithholdsCredentials()
+        {
+            foreach (var allowed in new[] { null, "", "*", "*.example", "other.example" })
+            {
+                var r = WorkflowApiSecurity.ResolveSelfCall(Cfg(true), allowed, "https", "app.example", "Bearer abc", AuthCookie + "=1");
+                Assert.IsNull(r.Headers, allowed);
+                Assert.IsTrue(r.CredentialsWithheld, allowed);
+                Assert.AreEqual("https://app.example", r.BaseAddress);
+            }
+        }
+
+        [TestMethod]
+        public void SelfCall_PlainHttpToNonLoopback_WithholdsCredentials_LoopbackAllowed()
+        {
+            var bad = WorkflowApiSecurity.ResolveSelfCall(Cfg(true, "http://srv.example"), null, "https", "h", "Bearer abc", null);
+            Assert.IsNull(bad.Headers);
+            Assert.IsTrue(bad.CredentialsWithheld);
+            var badHost = WorkflowApiSecurity.ResolveSelfCall(Cfg(true), "app.example", "http", "app.example", "Bearer abc", null);
+            Assert.IsNull(badHost.Headers);
+            Assert.IsTrue(badHost.CredentialsWithheld);
+            foreach (var h in new[] { "localhost:5000", "127.0.0.1:5000", "[::1]:5000" })
+            {
+                var ok = WorkflowApiSecurity.ResolveSelfCall(Cfg(true), h, "http", h, "Bearer abc", null);
+                Assert.AreEqual("Bearer abc", ok.Headers?["Authorization"], h);
+            }
+        }
+
+        [TestMethod]
+        public void SelfCall_NothingToForward_NoHeadersButNotWithheld()
+        {
+            var r = WorkflowApiSecurity.ResolveSelfCall(Cfg(true, "https://srv.example"), null, "https", "h", "", "other=1");
+            Assert.IsNull(r.Headers);
+            Assert.IsFalse(r.CredentialsWithheld);
+        }
+
+        private class FakeAccessor : IHttpContextAccessor
+        {
+            private readonly Func<HttpContext> _get;
+            public FakeAccessor(Func<HttpContext> get) { _get = get; }
+            public HttpContext HttpContext { get => _get(); set { } }
+        }
+
+        private static bool RunHandler(IHttpContextAccessor accessor)
+        {
+            var req = new WorkflowAdminRequirement();
+            var ctx = new AuthorizationHandlerContext(new[] { req }, new ClaimsPrincipal(), null);
+            new WorkflowAdminRequirementHandler(accessor).HandleAsync(ctx).GetAwaiter().GetResult();
+            return ctx.HasSucceeded;
+        }
+
+        private static IHttpContextAccessor AccessorWithRoles(params SimpleRole[] roles)
+        {
+            var wtm = MockWtmContext.CreateWtmContext();
+            wtm.LoginUserInfo = new LoginUserInfo { ITCode = "u", Roles = roles.ToList() };
+            var services = new ServiceCollection();
+            services.AddSingleton(wtm);
+            var http = new DefaultHttpContext { RequestServices = services.BuildServiceProvider() };
+            return new FakeAccessor(() => http);
+        }
+
+        [TestMethod]
+        public void Handler_NoHttpContext_NoWtmContext_Exception_NotSucceeded()
+        {
+            Assert.IsFalse(RunHandler(new FakeAccessor(() => null)));
+            Assert.IsFalse(RunHandler(new FakeAccessor(() => new DefaultHttpContext { RequestServices = new ServiceCollection().BuildServiceProvider() })));
+            Assert.IsFalse(RunHandler(new FakeAccessor(() => throw new InvalidOperationException("boom"))));
+            Assert.IsFalse(RunHandler(null));
+        }
+
+        [TestMethod]
+        public void Handler_NonAdmin_NotSucceeded()
+        {
+            Assert.IsFalse(RunHandler(AccessorWithRoles(new SimpleRole { RoleCode = "002", RoleName = "user" })));
+            Assert.IsFalse(RunHandler(AccessorWithRoles()));
+        }
+
+        [TestMethod]
+        public void Handler_AdminByCodeOrName_Succeeded()
+        {
+            Assert.IsTrue(RunHandler(AccessorWithRoles(new SimpleRole { RoleCode = "001", RoleName = "x" })));
+            Assert.IsTrue(RunHandler(AccessorWithRoles(new SimpleRole { RoleCode = "002", RoleName = "流程管理员" })));
+        }
+
+        [TestMethod]
+        public void Convention_CoversEveryControllerInElsaServerApiAssembly()
+        {
+            var asm = Assembly.Load("Elsa.Server.Api");
+            var controllers = asm.GetTypes()
+                .Where(t => t.IsClass && t.IsAbstract == false && typeof(Microsoft.AspNetCore.Mvc.ControllerBase).IsAssignableFrom(t))
+                .ToList();
+            Assert.IsTrue(controllers.Count > 0, "no controllers found in the Elsa.Server.Api assembly");
+            foreach (var t in controllers)
+            {
+                var m = Model(t);
+                new WorkflowApiAuthorizationConvention(false).Apply(m);
+                Assert.IsTrue(m.Filters.OfType<AuthorizeFilter>().Any(), t.FullName);
+                Assert.IsFalse(t.GetCustomAttributes(true).OfType<IAllowAnonymous>().Any(), "anonymous controller: " + t.FullName);
+                foreach (var method in t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                {
+                    Assert.IsFalse(method.GetCustomAttributes(true).OfType<IAllowAnonymous>().Any(), "anonymous action: " + t.FullName + "." + method.Name);
+                }
+            }
+        }
+
+        [TestMethod]
+        public void Config_BindsWorkflowOptionsFromConfiguration()
+        {
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string>
+            {
+                { "EnableWorkflow", "true" },
+                { "WorkflowOptions:RequireAuthentication", "true" },
+                { "WorkflowOptions:RequireAdminRole", "true" },
+            }).Build();
+            var c = config.Get<Configs>();
+            Assert.IsTrue(c.EnableWorkflow);
+            Assert.IsTrue(c.WorkflowOptions.RequireAuthentication);
+            Assert.IsTrue(c.WorkflowOptions.RequireAdminRole);
+            var empty = new ConfigurationBuilder().Build().Get<Configs>() ?? new Configs();
+            Assert.IsFalse(empty.WorkflowOptions.RequireAuthentication);
         }
     }
 }
