@@ -1,4 +1,5 @@
 using System;
+using WalkingTec.Mvvm.Core;
 
 namespace WalkingTec.Mvvm.Mvc
 {
@@ -17,13 +18,13 @@ namespace WalkingTec.Mvvm.Mvc
 
         public static FResult Alert(this FResult self, string msg, string title = null)
         {
-            self.ContentBuilder.Append($"ff.Alert('{msg}','{title??MvcProgram._localizer?["Sys.Info"]}');");
+            self.ContentBuilder.Append($"ff.Alert('{JsStringEncoder.Escape(msg)}','{JsStringEncoder.Escape(title??MvcProgram._localizer?["Sys.Info"])}');");
             return self;
         }
 
         public static FResult Message(this FResult self, string msg, string title = null)
         {
-            self.ContentBuilder.Append($"ff.Msg('{msg}','{title??MvcProgram._localizer?["Sys.Info"]}');");
+            self.ContentBuilder.Append($"ff.Msg('{JsStringEncoder.Escape(msg)}','{JsStringEncoder.Escape(title??MvcProgram._localizer?["Sys.Info"])}');");
             return self;
         }
 
@@ -38,7 +39,7 @@ namespace WalkingTec.Mvvm.Mvc
                     winId = "LAY_app_body";
                 }
             }
-            self.ContentBuilder.Append($"ff.RefreshGrid('{winId}',{index});");
+            self.ContentBuilder.Append($"ff.RefreshGrid('{JsStringEncoder.Escape(winId)}',{index});");
             return self;
         }
 
@@ -85,7 +86,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// <returns></returns>
         public static FResult RedirectUrl(this FResult self, string url)
         {
-            self.ContentBuilder.Append($"window.location.url='{url}'");
+            self.ContentBuilder.Append($"window.location.href='{JsStringEncoder.Escape(url)}';");
             return self;
         }
 

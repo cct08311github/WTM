@@ -426,7 +426,7 @@ window.ff = {
                             ff.triggerResize();
                           $(layero).find("div[ischart = '1']").each(
                                 function (index) {
-                                    eval($(this).attr('id') + 'Chart.resize();');
+                                    var c = window[$(this).attr('id') + 'Chart']; if (c && c.resize) { c.resize(); }
                                 }
                             );
                         }
@@ -434,7 +434,7 @@ window.ff = {
                             ff.triggerResize();
                             $(layero).find("div[ischart = '1']").each(
                                 function (index) {
-                                    eval($(this).attr('id') + 'Chart.resize();');
+                                    var c = window[$(this).attr('id') + 'Chart']; if (c && c.resize) { c.resize(); }
                                 }
                             );
                         }
@@ -442,7 +442,7 @@ window.ff = {
                             ff.triggerResize();
                           $(layero).find("div[ischart = '1']").each(
                                 function (index) {
-                                    eval($(this).attr('id') + 'Chart.resize();');
+                                    var c = window[$(this).attr('id') + 'Chart']; if (c && c.resize) { c.resize(); }
                                 }
                             );
                         }
@@ -583,7 +583,7 @@ window.ff = {
                     {
                        $("div[ischart = '1']").each(
                             function (index) {
-                                eval($(this).attr('id') + 'Chart.resize();');
+                                var c = window[$(this).attr('id') + 'Chart']; if (c && c.resize) { c.resize(); }
                             }
                         );
                     }
@@ -597,7 +597,7 @@ window.ff = {
                     {
                         $("#"+id).find("div[ischart = '1']").each(
                             function (index) {
-                               eval($(this).attr('id') + 'Chart.resize();');
+                               var c = window[$(this).attr('id') + 'Chart']; if (c && c.resize) { c.resize(); }
                             }
                         );
                     }
@@ -663,7 +663,7 @@ window.ff = {
                     if (controltype === "tree") {
                         var df = [];
                         if (usedefaultvalue == true) {
-                            df = eval(comboid + "defaultvalues");
+                            df = window[comboid + "defaultvalues"];
                         }
                        window[comboid].update({ data: ff.getTreeItems(data.Data,df) });
                     }
@@ -676,7 +676,7 @@ window.ff = {
                     if (controltype === "combo") {
                         var df = [];
                         if (usedefaultvalue == true) {
-                            df = eval(comboid + "defaultvalues"); 
+                            df = window[comboid + "defaultvalues"]; 
                       }
                         window[comboid].update({ data: ff.getComboItems(data.Data, df, usedefaultvalue) });
                     }
@@ -685,7 +685,7 @@ window.ff = {
                             item = data.Data[i];
                             if (usedefaultvalue == true) {
                                 var df = [];
-                                df = eval(comboid + "defaultvalues"); 
+                                df = window[comboid + "defaultvalues"]; 
                                 if (df.indexOf(item.Value) > -1) {
                                     target.append("<input type='checkbox'  name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "' checked />");
                                 }
@@ -709,7 +709,7 @@ window.ff = {
                             item = data.Data[i];
                             if (usedefaultvalue == true) {
                                 var df = [];
-                                df = eval(comboid + "defaultvalues");
+                                df = window[comboid + "defaultvalues"];
                                 if (df.indexOf(item.Value) > -1) {
                                     target.append("<input type='radio'  name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "' checked />");
                                 }
@@ -946,7 +946,7 @@ window.ff = {
         }
         var tc = $("#" + formId).closest("div[wtm-ctype='tc']")
         if (tc.length > 0) {
-            var obj = eval(tc[0].id + "selected");
+            var obj = window[tc[0].id + "selected"];
             if (obj !== undefined && obj !== null) {
                 for (var item in obj) {
                     if (listvm == "") {
@@ -1032,16 +1032,17 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
             $.ajax({
                 cache: false,
                 type: 'POST',
-                url: eval(chartid+"ChartUrl"),
+                url: window[chartid + "ChartUrl"],
                 data: postdata,
                 async: true,
                 success: function (data, textStatus, request) {
                     if (data.series != undefined) {
-                        data.series = data.series.replace(/"type":"charttype"/g, eval(chartid + 'ChartType'));
+                        data.series = data.series.replace(/"type":"charttype"/g, window[chartid + 'ChartType']);
                     }
-                    eval(chartid + 'Chart.setOption({dataset: JSON.parse(data.dataset),series: JSONfns.parse(data.series)},{replaceMerge:\'series\'});');
-                    if (eval(chartid + 'ChartLegend') == 'true') {
-                        eval(chartid + 'Chart.setOption({legend:JSON.parse(data.legend)});');
+                    var chart = window[chartid + 'Chart'];
+                    chart.setOption({dataset: JSON.parse(data.dataset),series: JSONfns.parse(data.series)},{replaceMerge:'series'});
+                    if (window[chartid + 'ChartLegend'] == 'true') {
+                        chart.setOption({legend:JSON.parse(data.legend)});
                     }
                 }
             });
@@ -1188,7 +1189,7 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
     },
 
     setSelectorPara: function (id, obj) {
-        eval(id + "filter = obj;");
+        window[id + "filter"] = obj;
     },
 
     guid: function () {
