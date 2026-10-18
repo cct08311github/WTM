@@ -195,6 +195,31 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region Workflow options
+
+        private WorkflowOption _workflowOptions;
+
+        /// <summary>
+        /// Optional protection for the workflow engine API endpoints (only used when EnableWorkflow is true)
+        /// </summary>
+        public WorkflowOption WorkflowOptions
+        {
+            get
+            {
+                if (_workflowOptions == null)
+                {
+                    _workflowOptions = new WorkflowOption();
+                }
+                return _workflowOptions;
+            }
+            set
+            {
+                _workflowOptions = value;
+            }
+        }
+
+        #endregion
+
 
         public string ErrorHandler { get; set; } = "/_Framework/Error";
 

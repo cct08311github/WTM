@@ -9,6 +9,9 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Net.Http.Headers;
 using WalkingTec.Mvvm.Core;
@@ -19,6 +22,7 @@ namespace WalkingTec.Mvvm.Mvc
     public class WtmMiddleware
     {
         private readonly RequestDelegate _next;
+        private static int _withheldWarned;
 
         public WtmMiddleware(RequestDelegate next)
         {
@@ -34,7 +38,25 @@ namespace WalkingTec.Mvvm.Mvc
             }
             if (context.Request.Path == "/v1/activities" && context.Request.QueryString.Value != "?inneruse=1")
             {
-                var txt = (await wtm.CallAPI("", $"{wtm.HostAddress}/v1/activities?inneruse=1")).Data;
+                var selfCall = WorkflowApiSecurity.ResolveSelfCall(
+                    wtm.ConfigInfo,
+                    context.RequestServices.GetService<IConfiguration>()?["AllowedHosts"],
+                    context.Request.Scheme,
+                    context.Request.Host.Value,
+                    context.Request.Headers["Authorization"].ToString(),
+                    context.Request.Headers["Cookie"].ToString());
+                if (selfCall.CredentialsWithheld && Interlocked.Exchange(ref _withheldWarned, 1) == 0)
+                {
+                    context.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("WalkingTec.Mvvm.Security")
+                        .LogWarning("WorkflowOptions:RequireAuthentication is enabled but no trusted address is available for the internal workflow call, so the caller's credentials are not forwarded and the call may be rejected. Configure Domains:server (or list the host in AllowedHosts).");
+                }
+                var inner = await wtm.CallAPI("", $"{selfCall.BaseAddress}/v1/activities?inneruse=1", headers: selfCall.Headers);
+                if (inner.StatusCode == null || (int)inner.StatusCode.Value < 200 || (int)inner.StatusCode.Value > 299)
+                {
+                    context.Response.StatusCode = inner.StatusCode == null ? StatusCodes.Status502BadGateway : (int)inner.StatusCode.Value;
+                    return;
+                }
+                var txt = inner.Data;
                 var cul = Thread.CurrentThread.CurrentCulture;
                 if (cul.Name?.ToLower() == "zh" || cul.Name?.ToLower() == "zh-cn")
                 {
