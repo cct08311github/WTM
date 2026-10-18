@@ -321,6 +321,16 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region BufferJsonBodyOnly
+
+        /// <summary>
+        /// Opt-in. When true, the request body is only buffered (into HttpContext.Items["DONOTUSE_REQUESTBODY"])
+        /// for application/json and *+json requests. Default false keeps the original behavior of buffering every non-form body.
+        /// </summary>
+        public bool BufferJsonBodyOnly { get; set; } = false;
+
+        #endregion
+
         #region UIOptions
 
         private UIOptions _uiOptions;
