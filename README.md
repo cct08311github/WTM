@@ -1,5 +1,12 @@
 English | [简体中文](./README.zh-CN.md)
 
+> **About this fork** — `cct08311github/WTM` is a maintained fork of [dotnetcore/WTM](https://github.com/dotnetcore/WTM) (branch `dotnet10`). It stays close to upstream and adds security fixes; new features are opt-in only, and breaking changes are avoided.
+>
+> - **Supported front-ends in this fork:** LayUI (server-rendered TagHelpers) — kept working and not deprecated — and Vue3. React, Blazor and Vue2 remain only as code-generator templates and are not guaranteed.
+> - **Versions:** fork packages use four-part versions `<upstream version>.<fork revision>` (e.g. `10.0.0.3`); fork changes are listed in [CHANGELOG.fork.md](./CHANGELOG.fork.md). Packages are not published yet.
+> - **CI:** [![CI](https://github.com/cct08311github/WTM/actions/workflows/ci.yml/badge.svg?branch=dotnet10)](https://github.com/cct08311github/WTM/actions/workflows/ci.yml) — the Azure Pipelines badges and the NuGet table below refer to upstream.
+> - Maintenance policy (LayUI protection, upstream sync, versioning): [FORK.md](./FORK.md).
+
 # WalkingTec.Mvvm for asp.net core
 
 Walkingtec.mvvm framework (WTM) is a rapid development framework based on .net core. It supports LayUI, React, VUE. WTM has built-in code generator to maximize development efficiency. It is a powerful tool for efficient web development.

@@ -1,5 +1,12 @@
 [English](./README.md) | 简体中文 
 
+> **关于本 fork**：`cct08311github/WTM` 是 [dotnetcore/WTM](https://github.com/dotnetcore/WTM)（`dotnet10` 分支）的维护分支。它与上游保持一致，并补充安全修复；新功能一律可选启用（opt-in），尽量避免破坏性变更。
+>
+> - **本 fork 支持的前端：** LayUI（服务端渲染 TagHelpers）和 Vue3。LayUI 会持续保持可用，不会废弃。React、Blazor、Vue2 只保留为代码生成器模板，不保证可用。
+> - **版本号：** fork 的包使用四段式版本 `<上游版本>.<fork 修订号>`（例如 `10.0.0.3`），fork 的变更见 [CHANGELOG.fork.md](./CHANGELOG.fork.md)。目前尚未发布包。
+> - **CI：** [![CI](https://github.com/cct08311github/WTM/actions/workflows/ci.yml/badge.svg?branch=dotnet10)](https://github.com/cct08311github/WTM/actions/workflows/ci.yml)。下方的 Azure Pipelines 徽章与 NuGet 表格指向的是上游。
+> - 维护政策（LayUI 保护、与上游同步、版本号规则）：见 [FORK.md](./FORK.md)。
+
 
 # WalkingTec.Mvvm for aspnet core
 
