@@ -521,6 +521,15 @@ namespace WalkingTec.Mvvm.Mvc
         {
             services.AddDUWENINKCaptcha();//使用验证码
             var conf = config.Get<Configs>();
+
+            //fail fast before any database is touched below (EnsureCreate). The environment is taken from the registered IHostEnvironment instance if there is one,
+            //otherwise from configuration / process environment variables; if it cannot be determined it is treated as Production (fail closed).
+            //(the Development warning is logged later by UseWtmContext, where a logger is available)
+            if (WtmEnvironmentHelper.ResolveIsDevelopment(services, config) == false)
+            {
+                conf.JwtOptions.EnsureSecureKey(false, null);
+            }
+
             WtmContextOption op = new WtmContextOption();
             options?.Invoke(op);
             services.Configure<Configs>(config);
@@ -899,6 +908,12 @@ namespace WalkingTec.Mvvm.Mvc
         public static IApplicationBuilder UseWtmContext(this IApplicationBuilder app, bool isspa = false)
         {
             var configs = app.ApplicationServices.GetRequiredService<IOptionsMonitor<Configs>>().CurrentValue;
+
+            //refuse to start with an insecure JWT signing key outside Development (fail fast, before any DB init)
+            var hostEnv = app.ApplicationServices.GetService<Microsoft.Extensions.Hosting.IHostEnvironment>();
+            var securityLogger = app.ApplicationServices.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("WalkingTec.Mvvm.Security");
+            configs.JwtOptions.EnsureSecureKey(hostEnv != null && Microsoft.Extensions.Hosting.HostEnvironmentEnvExtensions.IsDevelopment(hostEnv), securityLogger);
+
             var lg = app.ApplicationServices.GetRequiredService<LinkGenerator>();
             var gd = app.ApplicationServices.GetRequiredService<GlobalData>();
             var localfactory = app.ApplicationServices.GetRequiredService<IStringLocalizerFactory>();
