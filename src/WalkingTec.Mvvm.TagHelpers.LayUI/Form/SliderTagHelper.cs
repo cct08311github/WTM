@@ -150,6 +150,25 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             // so only that shape is accepted; anything else is dropped instead of reaching the script.
             string safeDefault = IsSafeDefaultValue(DefaultValue) ? DefaultValue : null;
 
+            // An array default is split into its elements. A single element ([5]) is treated as one value:
+            // non-range sliders get the plain number, range sliders use it for both ends ([5,5]) because
+            // layui expects two values there. An array without any element is dropped like any invalid value.
+            string scriptDefault = safeDefault;
+            string[] defaultItems = null;
+            if (safeDefault != null && safeDefault.StartsWith('[') && safeDefault.EndsWith(']'))
+            {
+                var tmp = safeDefault.TrimStart('[').TrimEnd(']').Replace(" ", string.Empty);
+                defaultItems = tmp.Split(",", StringSplitOptions.RemoveEmptyEntries).OrderBy(x => x).ToArray();
+                if (defaultItems.Length == 1)
+                {
+                    scriptDefault = range ? $"[{defaultItems[0]},{defaultItems[0]}]" : defaultItems[0];
+                }
+                else if (defaultItems.Length == 0)
+                {
+                    scriptDefault = null;
+                }
+            }
+
             string value0 = Field?.Model?.ToString();
             string value1 = Field1?.Model?.ToString();
             if (Field?.Model != null || Field1?.Model != null)
@@ -159,12 +178,18 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
             else if(string.IsNullOrEmpty(safeDefault) == false)
             {
-                if (safeDefault.StartsWith('[') && safeDefault.EndsWith(']'))
+                if (defaultItems != null)
                 {
-                    var tmp = safeDefault.TrimStart('[').TrimEnd(']').Replace(" ", string.Empty);
-                    var arr = tmp.Split(",", StringSplitOptions.RemoveEmptyEntries).OrderBy(x => x).ToArray();
-                    value0 = arr[0];
-                    value1 = arr[1];
+                    if (defaultItems.Length >= 2)
+                    {
+                        value0 = defaultItems[0];
+                        value1 = defaultItems[1];
+                    }
+                    else if (defaultItems.Length == 1)
+                    {
+                        value0 = defaultItems[0];
+                        value1 = defaultItems[0];
+                    }
                 }
                 else
                 {
@@ -189,7 +214,7 @@ layui.use(['slider'],function(){{
     {(Min == null ? string.Empty : $",min:{Min.Value}")}
     {(Max == null ? string.Empty : $",max:{Max.Value}")}
     {(!range ? string.Empty : $",range:true")}
-    {(safeDefault == null ? string.Empty : $",value:{safeDefault}")}
+    {(scriptDefault == null ? string.Empty : $",value:{scriptDefault}")}
     ,step:{Step}
     {(!Disabled ? string.Empty : ",disabled:true")}
     ,showstep:{ShowStep.ToString().ToLower()}
