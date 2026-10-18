@@ -46,6 +46,19 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
         {
         }
 
+        // Optional column is the last one, so a blank Remark leaves the row one cell short.
+        private class MajorRemarkLastTemplateVM : BaseTemplateVM
+        {
+            public ExcelPropety MajorCode = ExcelPropety.CreateProperty<Major>(x => x.MajorCode);
+            public ExcelPropety MajorName = ExcelPropety.CreateProperty<Major>(x => x.MajorName);
+            public ExcelPropety MajorType = ExcelPropety.CreateProperty<Major>(x => x.MajorType);
+            public new ExcelPropety Remark = ExcelPropety.CreateProperty<Major>(x => x.Remark);
+        }
+
+        private class MajorRemarkLastImportVM : BaseImportVM<MajorRemarkLastTemplateVM, Major>
+        {
+        }
+
         // DataContext variant with the (CS) constructor WTMContext.CreateDC() uses. Internal on purpose, so it is not
         // picked up by CS.Cis (which only scans exported types) and cannot affect other tests.
         internal sealed class ImportTestDataContext : DataContext
@@ -129,6 +142,29 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
                         }
                     }
                     sheetData.AppendChild(row);
+                }
+                workbook.Workbook.Save();
+            }
+            return ms.ToArray();
+        }
+
+        /// <summary>Removes the r="A2" attribute from every data row cell, like some non-Excel writers do. The header row is kept.</summary>
+        private static byte[] StripDataCellReferences(byte[] xlsx)
+        {
+            var ms = new MemoryStream();
+            ms.Write(xlsx, 0, xlsx.Length);
+            ms.Position = 0;
+            using (var doc = SpreadsheetDocument.Open(ms, true))
+            {
+                var workbook = doc.WorkbookPart;
+                var sheet = workbook.Workbook.GetFirstChild<Sheets>().Elements<Sheet>().OrderBy(s => s.SheetId.Value).First();
+                var sheetData = ((WorksheetPart)workbook.GetPartById(sheet.Id)).Worksheet.GetFirstChild<SheetData>();
+                foreach (var row in sheetData.Elements<Row>().Skip(1))
+                {
+                    foreach (var cell in row.Elements<Cell>())
+                    {
+                        cell.CellReference = null;
+                    }
                 }
                 workbook.Workbook.Save();
             }
@@ -350,6 +386,140 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
             vm.SetEntityList();
 
             Assert.AreEqual(1, vm.EntityList.Count);
+        }
+
+        // Regression for #86: Excel omits blank cells, the import used to read cells by list position.
+        [TestMethod]
+        public void Import_BlankOptionalCellInTheMiddle_KeepsLaterColumnsAligned()
+        {
+            var wtm = NewWtm(Guid.NewGuid().ToString());
+            var template = new MajorImportVM().GenerateTemplate(out _);
+            // Remark (column C) is blank => the C cell is not in the XML, MajorType (D) is the third cell of the row
+            var filled = FillTemplate(template,
+                new[] { "101", "Math", null, "必修" },
+                new[] { "102", "Physics", "has remark", "选修" });
+            var vm = NewImportVm<MajorImportVM>(wtm, filled);
+
+            vm.SetEntityList();
+
+            Assert.AreEqual(0, vm.ErrorListVM.EntityList.Count, string.Join("; ", vm.ErrorListVM.EntityList.Select(x => x.Message)));
+            Assert.AreEqual(2, vm.EntityList.Count);
+            Assert.AreEqual("101", vm.EntityList[0].MajorCode);
+            Assert.AreEqual("Math", vm.EntityList[0].MajorName);
+            Assert.IsTrue(string.IsNullOrEmpty(vm.EntityList[0].Remark));
+            Assert.AreEqual(MajorTypeEnum.Required, vm.EntityList[0].MajorType);
+            Assert.AreEqual("has remark", vm.EntityList[1].Remark);
+            Assert.AreEqual(MajorTypeEnum.Optional, vm.EntityList[1].MajorType);
+        }
+
+        [TestMethod]
+        public void Import_BlankLeadingOptionalCells_KeepLaterColumnsAligned()
+        {
+            var wtm = NewWtm(Guid.NewGuid().ToString());
+            var template = new MajorImportVM().GenerateTemplate(out _);
+            // code and name left empty: only C and D are in the XML (required-ness of text is checked later, on save)
+            var filled = FillTemplate(template, new[] { null, null, "x", "必修" });
+            var vm = NewImportVm<MajorImportVM>(wtm, filled);
+
+            vm.SetEntityList();
+
+            Assert.AreEqual(0, vm.ErrorListVM.EntityList.Count, string.Join("; ", vm.ErrorListVM.EntityList.Select(x => x.Message)));
+            Assert.AreEqual(1, vm.EntityList.Count);
+            Assert.IsTrue(string.IsNullOrEmpty(vm.EntityList[0].MajorCode));
+            Assert.IsTrue(string.IsNullOrEmpty(vm.EntityList[0].MajorName));
+            Assert.AreEqual("x", vm.EntityList[0].Remark);
+            Assert.AreEqual(MajorTypeEnum.Required, vm.EntityList[0].MajorType);
+        }
+
+        [TestMethod]
+        public void Import_BlankLastOptionalCell_ImportsRow()
+        {
+            var wtm = NewWtm(Guid.NewGuid().ToString());
+            var template = new MajorRemarkLastImportVM().GenerateTemplate(out _);
+            var filled = FillTemplate(template,
+                new[] { "201", "Chemistry", "选修", null },
+                new[] { "202", "Biology", "必修", "bio remark" });
+            var vm = NewImportVm<MajorRemarkLastImportVM>(wtm, filled);
+
+            vm.SetEntityList();
+
+            Assert.AreEqual(0, vm.ErrorListVM.EntityList.Count, string.Join("; ", vm.ErrorListVM.EntityList.Select(x => x.Message)));
+            Assert.AreEqual(2, vm.EntityList.Count);
+            Assert.AreEqual(MajorTypeEnum.Optional, vm.EntityList[0].MajorType);
+            Assert.IsTrue(string.IsNullOrEmpty(vm.EntityList[0].Remark));
+            Assert.AreEqual("bio remark", vm.EntityList[1].Remark);
+        }
+
+        [TestMethod]
+        public void Import_RowWithOnlyBlankCells_IsTreatedAsEmptyAndStopsImport()
+        {
+            var wtm = NewWtm(Guid.NewGuid().ToString());
+            var template = new MajorImportVM().GenerateTemplate(out _);
+            // second row has a cell for every column but all of them hold only whitespace/empty text
+            var filled = FillTemplate(template,
+                new[] { "301", "First", null, "必修" },
+                new[] { "", " ", "", "" },
+                new[] { "302", "AfterGap", null, "必修" });
+            var vm = NewImportVm<MajorImportVM>(wtm, filled);
+
+            vm.SetEntityList();
+
+            Assert.AreEqual(0, vm.ErrorListVM.EntityList.Count, string.Join("; ", vm.ErrorListVM.EntityList.Select(x => x.Message)));
+            Assert.AreEqual(1, vm.EntityList.Count);
+        }
+
+        [TestMethod]
+        public void Import_RowWithOnlyLastColumnFilled_IsNotTreatedAsEmpty()
+        {
+            var wtm = NewWtm(Guid.NewGuid().ToString());
+            var template = new MajorImportVM().GenerateTemplate(out _);
+            var filled = FillTemplate(template, new[] { null, null, null, "必修" });
+            var vm = NewImportVm<MajorImportVM>(wtm, filled);
+
+            vm.SetEntityList();
+
+            Assert.AreEqual(0, vm.ErrorListVM.EntityList.Count, string.Join("; ", vm.ErrorListVM.EntityList.Select(x => x.Message)));
+            Assert.AreEqual(1, vm.EntityList.Count, "the row has data in column D, so it is not an empty row");
+            Assert.AreEqual(MajorTypeEnum.Required, vm.EntityList[0].MajorType);
+        }
+
+        [TestMethod]
+        public void Import_CellsWithoutReference_AreReadInOrder()
+        {
+            var wtm = NewWtm(Guid.NewGuid().ToString());
+            var template = new MajorImportVM().GenerateTemplate(out _);
+            var filled = StripDataCellReferences(FillTemplate(template,
+                new[] { "401", "Art", "note", "必修" },
+                new[] { "402", "Music", "note 2", "选修" }));
+            var vm = NewImportVm<MajorImportVM>(wtm, filled);
+
+            vm.SetEntityList();
+
+            Assert.AreEqual(0, vm.ErrorListVM.EntityList.Count, string.Join("; ", vm.ErrorListVM.EntityList.Select(x => x.Message)));
+            Assert.AreEqual(2, vm.EntityList.Count);
+            Assert.AreEqual("401", vm.EntityList[0].MajorCode);
+            Assert.AreEqual("note", vm.EntityList[0].Remark);
+            Assert.AreEqual(MajorTypeEnum.Required, vm.EntityList[0].MajorType);
+            Assert.AreEqual("Music", vm.EntityList[1].MajorName);
+            Assert.AreEqual(MajorTypeEnum.Optional, vm.EntityList[1].MajorType);
+        }
+
+        [TestMethod]
+        public void Import_BlankOptionalCell_BatchSaveDataPersistsCorrectType()
+        {
+            var seed = Guid.NewGuid().ToString();
+            var wtm = NewWtm(seed);
+            var template = new MajorImportVM().GenerateTemplate(out _);
+            var filled = FillTemplate(template, new[] { "501", "Law", null, "必修" });
+            var vm = NewImportVm<MajorImportVM>(wtm, filled);
+
+            var ok = vm.BatchSaveData();
+
+            Assert.IsTrue(ok, string.Join("; ", vm.ErrorListVM.EntityList.Select(x => x.Message)));
+            using var check = new DataContext(seed, DBTypeEnum.Memory);
+            var saved = check.Set<Major>().Single();
+            Assert.AreEqual("Law", saved.MajorName);
+            Assert.AreEqual(MajorTypeEnum.Required, saved.MajorType);
         }
 
         #endregion

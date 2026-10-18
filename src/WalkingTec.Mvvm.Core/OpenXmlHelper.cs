@@ -147,6 +147,26 @@ namespace WalkingTec.Mvvm.Core
         }
 
         /// <summary>
+        /// 从单元格引用（如 "C2"、"AA10"、"$B$3"）解析出从 0 开始的列索引（A=0, B=1, ..., AA=26）。
+        /// 引用为空或不含列字母时返回 -1。
+        /// </summary>
+        public static int GetColumnIndex(string cellReference)
+        {
+            if (string.IsNullOrEmpty(cellReference)) return -1;
+            int index = 0;
+            bool hasLetter = false;
+            foreach (char ch in cellReference)
+            {
+                if (ch == '$' && !hasLetter) continue;
+                char upper = char.ToUpperInvariant(ch);
+                if (upper < 'A' || upper > 'Z') break;
+                hasLetter = true;
+                index = index * 26 + (upper - 'A' + 1);
+            }
+            return hasLetter ? index - 1 : -1;
+        }
+
+        /// <summary>
         /// 创建标题样式
         /// </summary>
         public static Stylesheet CreateStylesheet(string headerBackColor = "B0C4DE", string headerFontColor = "000000")

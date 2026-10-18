@@ -320,7 +320,8 @@ namespace WalkingTec.Mvvm.Core
                     for (int r = 1; r < allRows.Count; r++)
                     {
                         var row = allRows[r];
-                        var cells = row.Elements<Cell>().ToList();
+                        // Excel omits blank cells from the XML, so cells must be placed by their column reference, not by list position
+                        var cells = MapCellsByColumn(row.Elements<Cell>());
 
                         if (IsEmptyRowOpenXml(cells, columnCount))
                         {
@@ -331,12 +332,13 @@ namespace WalkingTec.Mvvm.Core
                         pIndex = 0;
                         for (int i = 0; i < columnCount; i++)
                         {
-                            string value = i < cells.Count ? GetCellTextValue(cells[i], workbookPart) : "";
+                            cells.TryGetValue(i, out Cell currentCell);
+                            string value = GetCellTextValue(currentCell, workbookPart);
                             ExcelPropety excelPropety = CopyExcelPropety(ListTemplateProptetys[pIndex]);
 
                             if (excelPropety.DataType == ColumnDataType.Text)
                             {
-                                value = GetCellFormulaValueOpenXml(cells.ElementAtOrDefault(i), value);
+                                value = GetCellFormulaValueOpenXml(currentCell, value);
                             }
 
                             if (excelPropety.DataType == ColumnDataType.Dynamic)
@@ -344,7 +346,8 @@ namespace WalkingTec.Mvvm.Core
                                 int dynamicColCount = excelPropety.DynamicColumns.Count();
                                 for (int dynamicColIndex = 0; dynamicColIndex < dynamicColCount; dynamicColIndex++)
                                 {
-                                    string dv = (i + dynamicColIndex < cells.Count) ? GetCellTextValue(cells[i + dynamicColIndex], workbookPart) : "";
+                                    cells.TryGetValue(i + dynamicColIndex, out Cell dynamicCell);
+                                    string dv = GetCellTextValue(dynamicCell, workbookPart);
                                     excelPropety.DynamicColumns[dynamicColIndex].ValueValidity(dv, ErrorListVM.EntityList, rowIndex);
                                 }
                                 i = i + dynamicColCount - 1;
@@ -448,12 +451,31 @@ namespace WalkingTec.Mvvm.Core
             return Value;
         }
 
-        private bool IsEmptyRowOpenXml(List<Cell> cells, int colCount, WorkbookPart workbookPart = null)
+        /// <summary>
+        /// 按列索引（从 0 开始）索引一行中的单元格。列取自 CellReference；
+        /// 没有 CellReference 的单元格（部分第三方工具写出的文件）按 Excel 规则顺延为上一个单元格的下一列。
+        /// </summary>
+        private static Dictionary<int, Cell> MapCellsByColumn(IEnumerable<Cell> cells)
+        {
+            var map = new Dictionary<int, Cell>();
+            int next = 0;
+            foreach (var cell in cells)
+            {
+                int col = OpenXmlHelper.GetColumnIndex(cell.CellReference?.Value);
+                if (col < 0) col = next;
+                map.TryAdd(col, cell);
+                next = col + 1;
+            }
+            return map;
+        }
+
+        private bool IsEmptyRowOpenXml(Dictionary<int, Cell> cells, int colCount, WorkbookPart workbookPart = null)
         {
             if (cells == null || cells.Count == 0) return true;
-            for (int i = 0; i < Math.Min(colCount, cells.Count); i++)
+            for (int i = 0; i < colCount; i++)
             {
-                string val = GetCellTextValue(cells[i], workbookPart);
+                if (!cells.TryGetValue(i, out Cell cell)) continue;
+                string val = GetCellTextValue(cell, workbookPart);
                 if (!string.IsNullOrEmpty(val?.Trim())) return false;
             }
             return true;
