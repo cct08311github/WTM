@@ -129,14 +129,15 @@ namespace WalkingTec.Mvvm.Core.Support.FileHandlers
 
         private static bool IsInside(string root, string fullPath)
         {
-            var rootFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
-            var target = Path.TrimEndingDirectorySeparator(fullPath);
-            if (string.Equals(rootFull, target, PathComparison))
+            var rootFull = Path.GetFullPath(root);
+            var target = Path.GetFullPath(fullPath);
+            if (string.Equals(Path.TrimEndingDirectorySeparator(rootFull), Path.TrimEndingDirectorySeparator(target), PathComparison))
             {
                 return true;
             }
-            return target.StartsWith(rootFull + Path.DirectorySeparatorChar, PathComparison)
-                || target.StartsWith(rootFull + Path.AltDirectorySeparatorChar, PathComparison);
+            // A filesystem root ("/" or "D:\") already ends with a separator, do not append a second one.
+            var prefix = Path.EndsInDirectorySeparator(rootFull) ? rootFull : rootFull + Path.DirectorySeparatorChar;
+            return target.StartsWith(prefix, PathComparison);
         }
 
         /// <summary>

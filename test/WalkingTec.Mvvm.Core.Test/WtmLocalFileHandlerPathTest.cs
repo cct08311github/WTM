@@ -77,6 +77,19 @@ namespace WalkingTec.Mvvm.Core.Test
             return new WtmLocalFileHandler(new WTMContext(monitor.Object, loggerFactory: loggerFactory.Object));
         }
 
+        private void AssertDirectory(string expectedRelativeToHost, string storedPath)
+        {
+            var expected = Path.GetFullPath(Path.Combine(_hostRoot, expectedRelativeToHost));
+            var actual = Path.GetDirectoryName(Path.GetFullPath(Path.Combine(_hostRoot, storedPath)));
+            Assert.AreEqual(expected, actual);
+        }
+
+        private static bool CallIsInside(string root, string fullPath)
+        {
+            var method = typeof(WtmLocalFileHandler).GetMethod("IsInside", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            return (bool)method.Invoke(null, new object[] { root, fullPath });
+        }
+
         private static MemoryStream Data(string text = "hello") => new MemoryStream(Encoding.UTF8.GetBytes(text));
 
         private string[] AllFilesUnderBase() =>
@@ -89,7 +102,7 @@ namespace WalkingTec.Mvvm.Core.Test
 
             var (path, _) = handler.Upload("photo.png", 5, Data("hello"), "docs", "2024/05");
 
-            Assert.AreEqual(Path.Combine("./docs", "2024/05"), Path.GetDirectoryName(path));
+            AssertDirectory(Path.Combine("docs", "2024", "05"), path);
             Assert.IsTrue(path.EndsWith(".png"));
             var full = Path.GetFullPath(Path.Combine(_hostRoot, path));
             Assert.IsTrue(File.Exists(full));
@@ -113,7 +126,7 @@ namespace WalkingTec.Mvvm.Core.Test
 
             var (path, _) = handler.Upload("a.txt", 1, Data());
 
-            Assert.AreEqual("./uploads", Path.GetDirectoryName(path));
+            AssertDirectory("uploads", path);
             Assert.IsTrue(File.Exists(Path.GetFullPath(Path.Combine(_hostRoot, path))));
         }
 
@@ -125,7 +138,7 @@ namespace WalkingTec.Mvvm.Core.Test
 
             var (path, _) = handler.Upload("a.txt", 1, Data(), "docs");
 
-            Assert.AreEqual(Path.Combine("./docs", "tenant1"), Path.GetDirectoryName(path));
+            AssertDirectory(Path.Combine("docs", "tenant1"), path);
         }
 
         [TestMethod]
@@ -138,8 +151,7 @@ namespace WalkingTec.Mvvm.Core.Test
         {
             if (subdir.Contains('\\') && Path.DirectorySeparatorChar == '/')
             {
-                // A backslash is an ordinary file name character on this platform, it cannot escape the root.
-                return;
+                Assert.Inconclusive("Windows-only: a backslash is an ordinary file name character on this platform.");
             }
             var handler = CreateHandler();
 
@@ -207,7 +219,7 @@ namespace WalkingTec.Mvvm.Core.Test
 
             var (path, _) = handler.Upload(fileName, 5, Data());
 
-            Assert.AreEqual("./uploads", Path.GetDirectoryName(path));
+            AssertDirectory("uploads", path);
             Assert.IsTrue(path.EndsWith(".png"));
             var files = AllFilesUnderBase();
             Assert.AreEqual(1, files.Length);
@@ -221,7 +233,7 @@ namespace WalkingTec.Mvvm.Core.Test
 
             var (path, _) = handler.Upload("a.b/../../../escape", 5, Data());
 
-            Assert.AreEqual("./uploads", Path.GetDirectoryName(path));
+            AssertDirectory("uploads", path);
             var files = AllFilesUnderBase();
             Assert.AreEqual(1, files.Length);
             Assert.AreEqual(Path.GetFullPath(Path.Combine(_hostRoot, "uploads")), Path.GetDirectoryName(files[0]));
@@ -268,7 +280,7 @@ namespace WalkingTec.Mvvm.Core.Test
 
             var (path, _) = handler.Upload("a.txt", 1, Data(), group);
 
-            Assert.AreEqual("./uploads", Path.GetDirectoryName(path));
+            AssertDirectory("uploads", path);
             Assert.IsTrue(File.Exists(Path.GetFullPath(Path.Combine(_hostRoot, path))));
         }
 
@@ -279,7 +291,7 @@ namespace WalkingTec.Mvvm.Core.Test
 
             var (path, _) = handler.Upload("a.txt", 1, Data(), "DOCS");
 
-            Assert.AreEqual("./docs", Path.GetDirectoryName(path));
+            AssertDirectory("docs", path);
         }
 
         [TestMethod]
@@ -289,7 +301,7 @@ namespace WalkingTec.Mvvm.Core.Test
 
             var (path, _) = handler.Upload("a.txt", 1, Data(), "anything");
 
-            Assert.AreEqual("./uploads", Path.GetDirectoryName(path));
+            AssertDirectory("uploads", path);
         }
 
         [TestMethod]
@@ -299,7 +311,7 @@ namespace WalkingTec.Mvvm.Core.Test
 
             var (path, _) = handler.Upload("a.txt", 1, Data(), "anything");
 
-            Assert.AreEqual("./uploads", Path.GetDirectoryName(path));
+            AssertDirectory("uploads", path);
             Assert.IsTrue(File.Exists(Path.GetFullPath(Path.Combine(_hostRoot, path))));
         }
 
@@ -342,6 +354,71 @@ namespace WalkingTec.Mvvm.Core.Test
 
             Assert.IsFalse(File.Exists(target));
             Assert.AreEqual(2, _logs.Count(x => x.level == LogLevel.Warning));
+        }
+
+        [TestMethod]
+        [DataRow(".")]
+        [DataRow("a/..")]
+        public void SubdirResolvingToTheRoot_IsAccepted(string subdir)
+        {
+            var handler = CreateHandler();
+
+            var (path, _) = handler.Upload("a.txt", 1, Data(), "default", subdir);
+
+            Assert.IsTrue(File.Exists(Path.GetFullPath(Path.Combine(_hostRoot, path))));
+            Assert.AreEqual(Path.GetFullPath(Path.Combine(_hostRoot, "uploads")),
+                Path.GetDirectoryName(AllFilesUnderBase().Single()));
+        }
+
+        [TestMethod]
+        public void GroupLocationWithTrailingSeparator_AcceptsSubdirs_AndStillRejectsEscapes()
+        {
+            var config = new Configs { HostRoot = _hostRoot };
+            config.FileUploadOptions = new FileUploadOptions
+            {
+                SaveFileMode = "local",
+                Settings = new Dictionary<string, List<FileHandlerOptions>>
+                {
+                    { "local", new List<FileHandlerOptions> { new FileHandlerOptions { GroupName = "default", GroupLocation = "./uploads/" } } }
+                }
+            };
+            var monitor = new Mock<IOptionsMonitor<Configs>>();
+            monitor.Setup(x => x.CurrentValue).Returns(config);
+            var handler = new WtmLocalFileHandler(new WTMContext(monitor.Object));
+
+            var (path, _) = handler.Upload("a.txt", 1, Data(), "default", "2024");
+
+            Assert.IsTrue(File.Exists(Path.GetFullPath(Path.Combine(_hostRoot, path))));
+            Assert.ThrowsExactly<ArgumentException>(() => handler.Upload("a.txt", 1, Data(), "default", "../uploads-evil"));
+            Assert.IsFalse(Directory.Exists(Path.Combine(_hostRoot, "uploads-evil")));
+        }
+
+        [TestMethod]
+        public void IsInside_FilesystemRoot_ContainsItsChildren()
+        {
+            var fsRoot = Path.GetPathRoot(Path.GetFullPath(_base));
+            var child = Path.GetFullPath(_base);
+
+            Assert.IsTrue(CallIsInside(fsRoot, child));
+            Assert.IsTrue(CallIsInside(fsRoot, fsRoot));
+            Assert.IsFalse(CallIsInside(_base, fsRoot));
+        }
+
+        [TestMethod]
+        public void IsInside_RootWithAndWithoutTrailingSeparator_BehaveTheSame()
+        {
+            var root = Path.GetFullPath(_hostRoot);
+            var withSep = root + Path.DirectorySeparatorChar;
+            var child = Path.Combine(root, "a", "b");
+            var sibling = root + "-sibling";
+
+            foreach (var r in new[] { root, withSep })
+            {
+                Assert.IsTrue(CallIsInside(r, child));
+                Assert.IsTrue(CallIsInside(r, root));
+                Assert.IsFalse(CallIsInside(r, sibling));
+                Assert.IsFalse(CallIsInside(r, Path.GetDirectoryName(root)));
+            }
         }
     }
 }
