@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
@@ -12,6 +13,7 @@ namespace WalkingTec.Mvvm.Core
         public string Audience { get; set; } = "http://localhost";
         public int Expires { get; set; } = 3600;
         private const int MinKeyLength = 32;
+        private const int MinDistinctChars = 5;
 
         // Values published in this repository (framework default and demo appsettings samples).
         // Anyone can look them up, so they must never be used to sign tokens outside Development.
@@ -33,7 +35,7 @@ namespace WalkingTec.Mvvm.Core
             }
             set {
                 _keyAssigned = true;
-                _securiteKey = value;
+                _securiteKey = value ?? string.Empty;
                 _wasPadded = _securiteKey.Length < MinKeyLength;
                 if (_wasPadded)
                 {
@@ -49,8 +51,9 @@ namespace WalkingTec.Mvvm.Core
 
         /// <summary>
         /// Returns true when the signing key is not safe for production use: it was never configured
-        /// (framework default), it was shorter than 32 characters before padding, or it equals a
-        /// value that is published in this repository.
+        /// (framework default), it was empty or shorter than 32 characters before padding, it has
+        /// fewer than 5 distinct characters, or it equals a value that is published in this repository
+        /// (compared case-insensitively, optionally followed by any number of 'x' padding characters).
         /// </summary>
         public bool IsInsecureKey()
         {
@@ -58,10 +61,15 @@ namespace WalkingTec.Mvvm.Core
             {
                 return true;
             }
+            var key = (_securiteKey ?? string.Empty).Trim();
+            if (key.Length == 0 || key.Distinct().Count() < MinDistinctChars)
+            {
+                return true;
+            }
             foreach (var known in KnownPublicKeys)
             {
-                if (string.Equals(_securiteKey, known, StringComparison.Ordinal)
-                    || string.Equals(_securiteKey, known.PadRight(MinKeyLength, 'x'), StringComparison.Ordinal))
+                if (key.StartsWith(known, StringComparison.OrdinalIgnoreCase)
+                    && key.Substring(known.Length).All(c => c == 'x' || c == 'X'))
                 {
                     return true;
                 }
@@ -81,10 +89,10 @@ namespace WalkingTec.Mvvm.Core
             }
             if (isDevelopment)
             {
-                logger?.LogWarning("JwtOptions.SecurityKey is missing, shorter than 32 characters, or a publicly known sample value. This is tolerated in Development only; supply a unique random key of at least 32 characters (for example via the JwtOptions__SecurityKey environment variable or a secret manager) before deploying.");
+                logger?.LogWarning("JwtOptions.SecurityKey is missing, shorter than 32 characters, too repetitive, or a publicly known sample value. This is tolerated in Development only; supply a unique random key of at least 32 characters (for example via the JwtOptions__SecurityKey environment variable or a secret manager) before deploying.");
                 return;
             }
-            throw new InvalidOperationException("JwtOptions.SecurityKey is missing, shorter than 32 characters, or a publicly known sample value, so the application refuses to start outside the Development environment. Supply a unique random key of at least 32 characters, for example via the JwtOptions__SecurityKey environment variable or a secret manager.");
+            throw new InvalidOperationException("JwtOptions.SecurityKey is missing, shorter than 32 characters, too repetitive, or a publicly known sample value, so the application refuses to start outside the Development environment. Supply a unique random key of at least 32 characters, for example via the JwtOptions__SecurityKey environment variable or a secret manager.");
         }
         public string LoginPath { get; set; }
 

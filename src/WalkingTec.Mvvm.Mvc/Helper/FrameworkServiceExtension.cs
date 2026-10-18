@@ -522,11 +522,10 @@ namespace WalkingTec.Mvvm.Mvc
             services.AddDUWENINKCaptcha();//使用验证码
             var conf = config.Get<Configs>();
 
-            //fail fast before any database is touched below; the host environment is already registered as an instance at this point.
+            //fail fast before any database is touched below (EnsureCreate). The environment is taken from the registered IHostEnvironment instance if there is one,
+            //otherwise from configuration / process environment variables; if it cannot be determined it is treated as Production (fail closed).
             //(the Development warning is logged later by UseWtmContext, where a logger is available)
-            var earlyEnv = services.Where(x => x.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostEnvironment))
-                .Select(x => x.ImplementationInstance).OfType<Microsoft.Extensions.Hosting.IHostEnvironment>().LastOrDefault();
-            if (earlyEnv != null && Microsoft.Extensions.Hosting.HostEnvironmentEnvExtensions.IsDevelopment(earlyEnv) == false)
+            if (WtmEnvironmentHelper.ResolveIsDevelopment(services, config) == false)
             {
                 conf.JwtOptions.EnsureSecureKey(false, null);
             }
