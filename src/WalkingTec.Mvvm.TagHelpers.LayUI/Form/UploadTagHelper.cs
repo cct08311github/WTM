@@ -63,6 +63,15 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         public string UploadMode { get; set; }
         public string ExtraQuery { get; set; }
 
+        /// <summary>
+        /// For a value that ends up inside an HTML attribute of markup built within a JavaScript string
+        /// literal: HTML-attribute-encode first, then JavaScript-escape the result.
+        /// </summary>
+        private static string JsAttr(string value)
+        {
+            return JsStringEncoder.Escape(HtmlAttributeEncoder.Encode(value));
+        }
+
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
             output.TagName = "button";
@@ -275,16 +284,20 @@ layui.use(['upload'],function(){{
             if (Field.Model != null && Field.Model.ToString() != Guid.Empty.ToString())
             {
                 var geturl = $"/_Framework/GetFileName/{Field.Model}";
-                var downloadurl = $"/_Framework/GetFile/{JsStringEncoder.Escape(Field.Model?.ToString())}";
+                // downloadurl / picurl are placed in HTML attributes of markup that is itself built inside a
+                // JavaScript string literal: encode for the attribute first, then escape for the literal.
+                var modelId = Field.Model?.ToString();
+                var modelIdJs = JsStringEncoder.Escape(modelId);
+                var downloadurl = $"/_Framework/GetFile/{JsAttr(modelId)}";
                 if (vm != null)
                 {
                     geturl += $"?_DONOT_USE_CS={vm.CurrentCS}";
-                    downloadurl += $"?_DONOT_USE_CS={JsStringEncoder.Escape(vm.CurrentCS)}";
+                    downloadurl += $"?_DONOT_USE_CS={JsAttr(vm.CurrentCS)}";
                 }
-                var picurl = $"/_Framework/GetFile?id={JsStringEncoder.Escape(Field.Model?.ToString())}&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}";
+                var picurl = $"/_Framework/GetFile?id={JsAttr(modelId)}&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}";
                 if (vm != null)
                 {
-                    picurl += $"&_DONOT_USE_CS={JsStringEncoder.Escape(vm.CurrentCS)}";
+                    picurl += $"&_DONOT_USE_CS={JsAttr(vm.CurrentCS)}";
                 }
                 output.PostElement.AppendHtml($@"
 <script>
@@ -297,16 +310,16 @@ $.ajax({{
     {(ShowPreview == true ? $@"{(Disabled == true?$@"
       $('#{Id}label').append('<img src=""{picurl}"" alt=""'+ data +'"" class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64}  id=""{Id}preview"" style=""cursor:pointer""/>');
             $('#{Id}preview').on('click',function(){{
-              {Id}DoPreview('{Field.Model}');
+              {Id}DoPreview('{modelIdJs}');
             }});
 " :$@"
       $('#{Id}label').append('<img src=""{picurl}"" alt=""'+ data +'"" class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64}  id=""{Id}preview"" style=""cursor:pointer""/>');
       $('#{Id}label').append('<i class=""layui-icon layui-icon-close"" style=""font-size: 20px;position:absolute;left:{(PreviewWidth ?? 64) - 10}px;top:-10px;color: #ff0000;"" id=""{Id}del""></i> ');
             $('#{Id}preview').on('click',function(){{
-              {Id}DoPreview('{Field.Model}');
+              {Id}DoPreview('{modelIdJs}');
             }});
      $('#{Id}del').on('click',function(){{
-        {Id}DoDelete('{Field.Model}');
+        {Id}DoDelete('{modelIdJs}');
       }});
 ")}
     " : $@"{(Disabled == true? $@"
@@ -314,7 +327,7 @@ $.ajax({{
 " :$@"
         $('#{Id}label').append(""<button class='layui-btn layui-btn-sm layui-btn-danger' type='button' id='{Id}del' style='color:white'>""+data+""  {THProgram._localizer["Sys.Delete"]}</button>"");
         $('#{Id}del').on('click',function(){{
-          {Id}DoDelete('{Field.Model}');
+          {Id}DoDelete('{modelIdJs}');
         }});
 ")}
     ")}

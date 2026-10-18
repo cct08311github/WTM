@@ -59,6 +59,15 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         public string UploadSubdir { get; set; }
         public string UploadMode { get; set;
         }
+        /// <summary>
+        /// For a value that ends up inside an HTML attribute of markup built within a JavaScript string
+        /// literal: HTML-attribute-encode first, then JavaScript-escape the result.
+        /// </summary>
+        private static string JsAttr(string value)
+        {
+            return JsStringEncoder.Escape(HtmlAttributeEncoder.Encode(value));
+        }
+
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
             string idstring = "";
@@ -164,7 +173,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             string initselected = "[";
             foreach (var fileId in idstring.Split('|', StringSplitOptions.RemoveEmptyEntries))
             {
-                initselected += $"\"{fileId}\",";
+                initselected += $"\"{JsStringEncoder.Escape(fileId)}\",";
             }
             if (initselected.EndsWith(","))
             {
@@ -244,7 +253,7 @@ layui.use(['upload'],function(){{
         {Id}selected.push(res.Data.Id);
         {Id}SetValues();
         {(ShowPreview == true ? $@"
-            $('#{Id}label').append('<label id=""label'+res.Data.Id+'""><img alt=""'+res.Data.Name+'"" layer-src=""/_Framework/GetFile?id='+ res.Data.Id+'&_DONOT_USE_CS={JsStringEncoder.Escape(vm != null ? vm.CurrentCS : "")}"" src=""/_Framework/GetFile?id='+ res.Data.Id+'&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}&_DONOT_USE_CS={JsStringEncoder.Escape(vm!=null?vm.CurrentCS:"")}""  class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64} id=""preview'+res.Data.Id+'"" style=""cursor:pointer;margin-bottom:5px"" /><i class=""layui-icon layui-icon-close"" style=""font-size: 20px;position:relative;left:-10px;top:-27px;color: #ff0000;cursor: pointer;"" id=""del'+res.Data.Id+'""></i></label> ');
+            $('#{Id}label').append('<label id=""label'+res.Data.Id+'""><img alt=""'+res.Data.Name+'"" layer-src=""/_Framework/GetFile?id='+ res.Data.Id+'&_DONOT_USE_CS={JsAttr(vm != null ? vm.CurrentCS : "")}"" src=""/_Framework/GetFile?id='+ res.Data.Id+'&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}&_DONOT_USE_CS={JsAttr(vm!=null?vm.CurrentCS:"")}""  class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64} id=""preview'+res.Data.Id+'"" style=""cursor:pointer;margin-bottom:5px"" /><i class=""layui-icon layui-icon-close"" style=""font-size: 20px;position:relative;left:-10px;top:-27px;color: #ff0000;cursor: pointer;"" id=""del'+res.Data.Id+'""></i></label> ');
             $('#preview'+res.Data.Id).on('click',function(){{
               {Id}DoPreview(res.Data.Id);
             }});
@@ -271,21 +280,26 @@ layui.use(['upload'],function(){{
             {
                 var allfileids = idstring.Split('|', StringSplitOptions.RemoveEmptyEntries);
 
-                foreach (var fileId in allfileids)
+                foreach (var rawFileId in allfileids)
                 {
-                    var geturl = $"/_Framework/GetFileName/{fileId}";
-                    var downloadurl = $"/_Framework/GetFile/{JsStringEncoder.Escape(fileId)}";
-                    var previewurl = $"/_Framework/ViewFile/{JsStringEncoder.Escape(fileId)}";
+                    // Each value below ends up inside an HTML attribute of markup built within a JavaScript
+                    // string literal (HTML-attribute-encode first, then JavaScript-escape), inside a JavaScript
+                    // string literal only (JavaScript-escape), or inside a jQuery selector within a literal.
+                    var fileId = JsAttr(rawFileId);
+                    var fileIdJs = JsStringEncoder.Escape(rawFileId);
+                    var geturl = $"/_Framework/GetFileName/{rawFileId}";
+                    var downloadurl = $"/_Framework/GetFile/{fileId}";
+                    var previewurl = $"/_Framework/ViewFile/{fileId}";
                     if (vm != null)
                     {
                         geturl += $"?_DONOT_USE_CS={vm.CurrentCS}";
-                        downloadurl += $"?_DONOT_USE_CS={JsStringEncoder.Escape(vm.CurrentCS)}";
-                        previewurl += $"?_DONOT_USE_CS={JsStringEncoder.Escape(vm.CurrentCS)}";
+                        downloadurl += $"?_DONOT_USE_CS={JsAttr(vm.CurrentCS)}";
+                        previewurl += $"?_DONOT_USE_CS={JsAttr(vm.CurrentCS)}";
                     }
-                    var picurl = $"/_Framework/GetFile?id={JsStringEncoder.Escape(fileId)}&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}";
+                    var picurl = $"/_Framework/GetFile?id={fileId}&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}";
                     if (vm != null)
                     {
-                        picurl += $"&_DONOT_USE_CS={JsStringEncoder.Escape(vm.CurrentCS)}";
+                        picurl += $"&_DONOT_USE_CS={JsAttr(vm.CurrentCS)}";
                     }
                     output.PostElement.AppendHtml($@"
 <script>
@@ -297,15 +311,15 @@ $.ajax({{
   success: function(data) {{
     {(ShowPreview == true ? $@" {(Disabled == true? $@"
       $('#{Id}label').append('<label id=""label{fileId}""><img layer-src=""{downloadurl}"" src=""{picurl}"" alt=""'+data+'""  class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64} id=""preview{fileId}"" style=""cursor:pointer;margin-bottom:5px""/></label> ');
-            $('#preview{fileId}').on('click',function(){{
+            $('#preview{fileIdJs}').on('click',function(){{
               {Id}DoPreview();
             }});
 " :$@"
       $('#{Id}label').append('<label id=""label{fileId}""><img layer-src=""{downloadurl}"" src=""{picurl}"" alt=""'+data+'"" class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64} id=""preview{fileId}"" style=""cursor:pointer;margin-bottom:5px""/><i class=""layui-icon layui-icon-close"" style=""font-size: 20px;position:relative;left:-10px;top:-27px;color: #ff0000;cursor:pointer;margin-bottom:5px"" id=""del{fileId}""></i></label> ');
-            $('#del{fileId}').on('click',function(){{
-              {Id}DoDelete('{fileId}');
+            $('#del{fileIdJs}').on('click',function(){{
+              {Id}DoDelete('{fileIdJs}');
             }});
-            $('#preview{fileId}').on('click',function(){{
+            $('#preview{fileIdJs}').on('click',function(){{
               {Id}DoPreview();
             }});
 ")}
@@ -313,8 +327,8 @@ $.ajax({{
         $('#{Id}label').append(""<label id='label{fileId}'><a class='layui-btn layui-btn-primary layui-btn-xs' style='margin:9px 0;width:unset width:300px;' href='{downloadurl}'>""+data+""</a></label>"");
 " :$@"
         $('#{Id}label').append(""<label id='label{fileId}'><button class='layui-btn layui-btn-sm layui-btn-danger' type='button' id='del{fileId}' style='color:white'>""+data+""  {WalkingTec.Mvvm.TagHelpers.LayUI.THProgram._localizer["Sys.Delete"]}</button><br/></label>"");
-        $('#del{fileId}').on('click',function(){{
-          {Id}DoDelete('{fileId}');
+        $('#del{fileIdJs}').on('click',function(){{
+          {Id}DoDelete('{fileIdJs}');
         }});
 ")}
     ")}

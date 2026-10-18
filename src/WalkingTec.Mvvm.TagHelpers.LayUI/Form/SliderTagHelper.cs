@@ -110,6 +110,26 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// </summary>
         public string OnTipsFunc { get; set; }
 
+        /// <summary>
+        /// True when the text only contains the characters of a JavaScript number or number array
+        /// (digits, '.', '-', ',', '[', ']' and spaces).
+        /// </summary>
+        private static bool IsSafeDefaultValue(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+            foreach (var c in value)
+            {
+                if (!(c >= '0' && c <= '9') && c != '.' && c != '-' && c != ',' && c != '[' && c != ']' && c != ' ')
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
             output.TagName = "div";
@@ -126,6 +146,10 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 output.Attributes.Add("style", "margin-top: 35px;display: inline-block;");
             }
 
+            // DefaultValue is emitted as a JavaScript expression (a number or an array such as [10,20]),
+            // so only that shape is accepted; anything else is dropped instead of reaching the script.
+            string safeDefault = IsSafeDefaultValue(DefaultValue) ? DefaultValue : null;
+
             string value0 = Field?.Model?.ToString();
             string value1 = Field1?.Model?.ToString();
             if (Field?.Model != null || Field1?.Model != null)
@@ -133,18 +157,18 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 value0 = Field?.Model == null ? "0" : Field.Model.ToString();
                 value1 = Field1?.Model == null ? "0" : Field1.Model.ToString();
             }
-            else if(string.IsNullOrEmpty(DefaultValue) == false)
+            else if(string.IsNullOrEmpty(safeDefault) == false)
             {
-                if (DefaultValue.StartsWith('[') && DefaultValue.EndsWith(']'))
+                if (safeDefault.StartsWith('[') && safeDefault.EndsWith(']'))
                 {
-                    var tmp = DefaultValue.TrimStart('[').TrimEnd(']').Replace(" ", string.Empty);
+                    var tmp = safeDefault.TrimStart('[').TrimEnd(']').Replace(" ", string.Empty);
                     var arr = tmp.Split(",", StringSplitOptions.RemoveEmptyEntries).OrderBy(x => x).ToArray();
                     value0 = arr[0];
                     value1 = arr[1];
                 }
                 else
                 {
-                    value0 = DefaultValue;
+                    value0 = safeDefault;
                 }
             }
 
@@ -165,7 +189,7 @@ layui.use(['slider'],function(){{
     {(Min == null ? string.Empty : $",min:{Min.Value}")}
     {(Max == null ? string.Empty : $",max:{Max.Value}")}
     {(!range ? string.Empty : $",range:true")}
-    {(DefaultValue == null ? string.Empty : $",value:{DefaultValue}")}
+    {(safeDefault == null ? string.Empty : $",value:{safeDefault}")}
     ,step:{Step}
     {(!Disabled ? string.Empty : ",disabled:true")}
     ,showstep:{ShowStep.ToString().ToLower()}
