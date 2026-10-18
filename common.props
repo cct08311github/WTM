@@ -1,5 +1,7 @@
 <Project>
   <Import Project=".\version.props" />
+  <!-- fork: 四段式版本号（<上游版本>.<fork 修订号>），见 fork.props -->
+  <Import Project=".\fork.props" />
   <PropertyGroup>
     <Product>WTM</Product>
     <PackageId>$(ProjectName)</PackageId>
