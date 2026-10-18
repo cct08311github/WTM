@@ -1,8 +1,10 @@
 version: 2
 
 updates:
-  # Vue3Demo front-end. All npm version updates are grouped into one weekly PR
-  # so the build check in .github/workflows/clientapp.yml runs once per batch.
+  # Vue3Demo front-end. Minor/patch version updates are grouped into one weekly
+  # PR so the build check in .github/workflows/clientapp.yml runs once per batch.
+  # Major updates stay out of the group and open one PR each, so a single
+  # breaking upgrade cannot block the whole batch (see #51 / #101).
   - package-ecosystem: npm
     directory: /demo/WalkingTec.Mvvm.Vue3Demo/ClientApp
     schedule:
@@ -15,6 +17,7 @@ updates:
       vue3demo-clientapp:
         applies-to: version-updates
         patterns: ["*"]
+        update-types: ["minor", "patch"]
       vue3demo-clientapp-security:
         applies-to: security-updates
         patterns: ["*"]
