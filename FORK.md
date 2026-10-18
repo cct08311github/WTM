@@ -98,7 +98,8 @@ fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.
 ## 7. CI、依賴更新與合併
 
 - **CI**：`.github/workflows/ci.yml`（`build-test`）會 build 整個 solution 並跑 Core 測試；`.github/workflows/clientapp.yml`（`clientapp-build`）只在 Vue3Demo 前端有變動時才建置
-- **分支保護**：`dotnet10` 必須透過 PR 合併，`build-test` 必須通過；禁止 force push 與刪除分支，管理員也一樣
+- **分支保護**：`dotnet10` 必須透過 PR 合併，`build-test`、`Analyze (csharp)`、`Analyze (javascript-typescript)`（CodeQL）都必須通過；禁止 force push 與刪除分支，管理員也一樣。`clientapp-build` 只在前端有變動時執行，所以沒有設為必要 check，改由每日排程在合併 npm PR 前確認
+- **自動合併**：repo 已開啟 GitHub auto-merge。非高風險的 PR 可以設定成「必要 check 全部通過後自動 squash」
 - **Dependabot**：`.github/dependabot.yml`
   - demo 前端的 npm 更新，每週合併成一個 PR
   - NuGet 不提出 major 版本的一般更新（安全更新不受這條限制）
