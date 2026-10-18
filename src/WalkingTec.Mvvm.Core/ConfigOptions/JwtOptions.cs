@@ -37,7 +37,10 @@ namespace WalkingTec.Mvvm.Core
         /// default false). By default a bearer token without an "exp" claim is rejected. When true, tokens that carry no
         /// expiry are accepted again (tokens that carry an expiry are still rejected once it has passed). Intended only as
         /// a transitional measure for clients that still present tokens issued without an expiry; a Warning is logged on
-        /// every start while it is enabled. Tokens issued by WTM always carry an expiry and are not affected.
+        /// every start while it is enabled. Tokens issued by the built-in TokenService always carry an expiry and are not
+        /// affected (custom ITokenService implementations may not). The setting is read at application startup; changing
+        /// it requires an application restart. Besides the expiry requirement, bearer validation now also enforces HS256
+        /// only and the "nbf" (not before) claim; this option does not relax either of them.
         /// </summary>
         public bool AllowTokensWithoutExpiry { get; set; }
         private const int MinKeyLength = 32;

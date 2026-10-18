@@ -99,7 +99,7 @@ namespace WalkingTec.Mvvm.Core.Test
             principal = null;
             try
             {
-                principal = new JwtSecurityTokenHandler().ValidateToken(token, parameters, out _);
+                principal = new JwtSecurityTokenHandler { MapInboundClaims = false }.ValidateToken(token, parameters, out _);
                 return true;
             }
             catch (SecurityTokenException)
@@ -125,6 +125,18 @@ namespace WalkingTec.Mvvm.Core.Test
         {
             Assert.IsFalse(new JwtOption().AllowTokensWithoutExpiry);
             Assert.IsTrue(BuildBearerOptions().TokenValidationParameters.RequireExpirationTime);
+        }
+
+        [TestMethod]
+        public void JwtBearerEventsArePreserved()
+        {
+            foreach (var allow in new[] { false, true })
+            {
+                var events = BuildBearerOptions(allow).Events;
+                Assert.IsNotNull(events, $"allow={allow}");
+                Assert.IsNotNull(events.OnMessageReceived, $"allow={allow}");
+                Assert.IsNotNull(events.OnTokenValidated, $"allow={allow}");
+            }
         }
 
         [TestMethod]
@@ -174,15 +186,19 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
-        public void ExpiryJustPastIsRejectedBeyondClockSkewInBothModes()
+        public async Task ExpiryJustPastIsRejectedBeyondClockSkewInBothModes()
         {
             // 30s clock skew: 10s past is tolerated, 2 minutes past is not
+            var withinSkew = CreateToken(expires: DateTime.UtcNow.AddSeconds(-10), notBefore: DateTime.UtcNow.AddMinutes(-5));
+            var beyondSkew = CreateToken(expires: DateTime.UtcNow.AddMinutes(-2), notBefore: DateTime.UtcNow.AddMinutes(-5));
             foreach (var allow in new[] { false, true })
             {
                 var parameters = BuildBearerOptions(allow).TokenValidationParameters;
                 Assert.AreEqual(TimeSpan.FromSeconds(30), parameters.ClockSkew);
-                Assert.IsTrue(IsValid(CreateToken(expires: DateTime.UtcNow.AddSeconds(-10), notBefore: DateTime.UtcNow.AddMinutes(-5)), parameters), $"allow={allow}");
-                Assert.IsFalse(IsValid(CreateToken(expires: DateTime.UtcNow.AddMinutes(-2), notBefore: DateTime.UtcNow.AddMinutes(-5)), parameters), $"allow={allow}");
+                Assert.IsTrue(IsValid(withinSkew, parameters), $"allow={allow}");
+                Assert.IsTrue(await IsValidWithJsonWebTokenHandlerAsync(withinSkew, parameters), $"allow={allow}");
+                Assert.IsFalse(IsValid(beyondSkew, parameters), $"allow={allow}");
+                Assert.IsFalse(await IsValidWithJsonWebTokenHandlerAsync(beyondSkew, parameters), $"allow={allow}");
             }
         }
 
@@ -221,7 +237,7 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
-        public void UnsignedTokenIsRejectedInBothModes()
+        public async Task UnsignedTokenIsRejectedInBothModes()
         {
             var unsigned = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
                 issuer: TestIssuer,
@@ -230,7 +246,9 @@ namespace WalkingTec.Mvvm.Core.Test
                 expires: DateTime.UtcNow.AddMinutes(30)));
             foreach (var allow in new[] { false, true })
             {
-                Assert.IsFalse(IsValid(unsigned, BuildBearerOptions(allow).TokenValidationParameters), $"allow={allow}");
+                var parameters = BuildBearerOptions(allow).TokenValidationParameters;
+                Assert.IsFalse(IsValid(unsigned, parameters), $"allow={allow}");
+                Assert.IsFalse(await IsValidWithJsonWebTokenHandlerAsync(unsigned, parameters), $"allow={allow}");
             }
         }
 
