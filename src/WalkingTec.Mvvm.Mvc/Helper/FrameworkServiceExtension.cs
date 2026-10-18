@@ -747,32 +747,7 @@ namespace WalkingTec.Mvvm.Mvc
             services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
                      .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
                      {
-                         options.TokenValidationParameters = new TokenValidationParameters
-                         {
-                             NameClaimType = AuthConstants.JwtClaimTypes.Name,
-                             RoleClaimType = AuthConstants.JwtClaimTypes.Role,
-
-                             ValidateIssuer = true,
-                             ValidIssuer = jwtOptions.Issuer,
-
-                             ValidateAudience = true,
-                             ValidAudience = jwtOptions.Audience,
-
-                             ValidateIssuerSigningKey = true,
-                             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.SecurityKey)),
-                             LifetimeValidator = (DateTime? notBefore, DateTime? expires, SecurityToken securityToken, TokenValidationParameters validationParameters) =>
-                             {
-                                 if (expires == null)
-                                 {
-                                     return true;
-                                 }
-                                 else
-                                 {
-                                     return expires.Value > DateTime.UtcNow;
-                                 }
-                             },
-                             ValidateLifetime = true
-                         };
+                         options.TokenValidationParameters = jwtOptions.CreateBearerValidationParameters();
                          options.Events = new JwtBearerEvents
                          {
                              OnMessageReceived = context =>
@@ -908,6 +883,7 @@ namespace WalkingTec.Mvvm.Mvc
             var securityLogger = app.ApplicationServices.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("WalkingTec.Mvvm.Security");
             var isDevelopmentEnv = hostEnv != null && Microsoft.Extensions.Hosting.HostEnvironmentEnvExtensions.IsDevelopment(hostEnv);
             configs.JwtOptions.EnsureSecureKey(isDevelopmentEnv, securityLogger);
+            configs.JwtOptions.LogExpiryPolicy(securityLogger);
 
             //detection only: the key used by JwtBearer is fixed at startup, so warn when a configuration reload changes it (no key in use is changed)
             var startupJwtOptions = configs.JwtOptions;
