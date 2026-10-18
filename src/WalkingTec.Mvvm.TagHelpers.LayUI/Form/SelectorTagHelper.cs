@@ -349,7 +349,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
                 var sb = new StringBuilder();
                 foreach (var item in list)
                 {
-                    sb.Append($"<input type='hidden' name='{Field.Name}' value='{item.ToString()}' />");
+                    sb.Append($"<input type='hidden' name='{Field.Name}' value='{HtmlAttributeEncoder.Encode(item.ToString())}' />");
                 }
                 hiddenStr = sb.ToString();
                 output.PreElement.AppendHtml($@"

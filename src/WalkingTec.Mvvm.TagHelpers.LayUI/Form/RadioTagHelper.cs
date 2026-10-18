@@ -131,7 +131,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 var item = listItems[i];
                 var selected = item.Selected ? " checked" : " ";
                 output.PostContent.AppendHtml($@"
-        <input type=""radio"" name=""{Field.Name}"" value=""{item.Value}"" title=""{item.Text}"" {selected} />
+        <input type=""radio"" name=""{Field.Name}"" value=""{HtmlAttributeEncoder.Encode(item.Value)}"" title=""{HtmlAttributeEncoder.Encode(item.Text)}"" {selected} />
         <script>
          {Id}defaultvalues = {JsonSerializer.Serialize(values)};
         </script>

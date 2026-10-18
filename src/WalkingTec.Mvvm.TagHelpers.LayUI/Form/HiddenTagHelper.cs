@@ -91,7 +91,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                                     {
                                         name = $"{Field.Name}[{count}].{pro.Name}";
                                     }
-                                    sb.Append($@"<input type=""hidden"" name=""{name}"" value=""{pro.GetValue(item)}"" class=""layui-input""/>
+                                    sb.Append($@"<input type=""hidden"" name=""{HtmlAttributeEncoder.Encode(name)}"" value=""{HtmlAttributeEncoder.Encode(pro.GetValue(item))}"" class=""layui-input""/>
 ");
                                 }
                                 count++;
@@ -101,7 +101,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                         {
                             foreach (var item in list)
                             {
-                                sb.Append($@"<input type=""hidden"" name=""{(string.IsNullOrEmpty(Name) ? Field.Name : Name)}"" value=""{item}"" class=""layui-input""/>
+                                sb.Append($@"<input type=""hidden"" name=""{HtmlAttributeEncoder.Encode(string.IsNullOrEmpty(Name) ? Field.Name : Name)}"" value=""{HtmlAttributeEncoder.Encode(item)}"" class=""layui-input""/>
 ");
                             }
                         }                        

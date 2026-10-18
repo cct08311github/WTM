@@ -647,7 +647,7 @@ setTimeout(function(){{
 
             //output.PreElement.AppendHtml($@"<div style=""text-align:right;padding-bottom:10px;padding-top:5px;margin-right:15px;line-height:35px;"">{toolBarBtnStrBuilder}</div>");
             output.PostElement.AppendHtml($@"
-{(string.IsNullOrEmpty(ListVM.DetailGridPrix) ? string.Empty : $"<input type=\"hidden\" name=\"{Vm.Name}.DetailGridPrix\" value=\"{ListVM.DetailGridPrix}\"/>")}
+{(string.IsNullOrEmpty(ListVM.DetailGridPrix) ? string.Empty : $"<input type=\"hidden\" name=\"{Vm.Name}.DetailGridPrix\" value=\"{HtmlAttributeEncoder.Encode(ListVM.DetailGridPrix)}\"/>")}
 ");
             if (hasButtonGroup == true)
             {
@@ -785,7 +785,7 @@ setTimeout(function(){{
                         {
                             rowBtnStrBuilder.Append("{{#  if(d." + item.BindVisiableColName + " == true || d." + item.BindVisiableColName + " == 'true' || d." + item.BindVisiableColName + " == 'True' ){ }}");
                         }
-                        rowBtnStrBuilder.Append($@"<a class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "layui-btn-primary" : $"{item.ButtonClass}")} layui-btn-xs"" lay-event=""{item.Area + item.ControllerName + item.ActionName + item.QueryString}"">{item.Name}</a>");
+                        rowBtnStrBuilder.Append($@"<a class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "layui-btn-primary" : $"{HtmlAttributeEncoder.Encode(item.ButtonClass)}")} layui-btn-xs"" lay-event=""{HtmlAttributeEncoder.Encode(item.Area + item.ControllerName + item.ActionName + item.QueryString)}"">{item.Name}</a>");
                         if (condition == true)
                         {
                             rowBtnStrBuilder.Append("{{#  } else{ }}");
@@ -794,7 +794,7 @@ setTimeout(function(){{
                     }
                     else
                     {
-                        rowBtnStrBuilder.Append($@"<a class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "layui-btn-primary" : $"{item.ButtonClass}")} layui-btn-xs"" onclick=""ff.RemoveGridRow('{Id}',{Id}option,{{{{d.LAY_INDEX}}}});"">{item.Name}</a>");
+                        rowBtnStrBuilder.Append($@"<a class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "layui-btn-primary" : $"{HtmlAttributeEncoder.Encode(item.ButtonClass)}")} layui-btn-xs"" onclick=""ff.RemoveGridRow('{Id}',{Id}option,{{{{d.LAY_INDEX}}}});"">{item.Name}</a>");
                     }
                 }
 
@@ -802,7 +802,7 @@ setTimeout(function(){{
                 if (!item.HideOnToolBar)
                 {
                     var icon = string.Empty;
-                    icon = $@"<i class=""{item.IconCls}""></i>";
+                    icon = $@"<i class=""{HtmlAttributeEncoder.Encode(item.IconCls)}""></i>";
 
                     //如果是按钮组容器，加载子按钮
                     if (item.ActionName?.Equals("ActionsGroup") == true
@@ -824,7 +824,7 @@ setTimeout(function(){{
                         {
                             return;
                         }
-                        toolBarBtnStrBuilder.Append($@"<button type=""button"" class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "" : $"{item.ButtonClass}")} layui-btn-sm layui-unselect layui-form-select downpanel"" style=""z-index:9999;"" id=""btn_{item.ButtonId}"">
+                        toolBarBtnStrBuilder.Append($@"<button type=""button"" class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "" : $"{HtmlAttributeEncoder.Encode(item.ButtonClass)}")} layui-btn-sm layui-unselect layui-form-select downpanel"" style=""z-index:9999;"" id=""btn_{HtmlAttributeEncoder.Encode(item.ButtonId)}"">
                                  <div class=""layui-select-title"" style=""padding-right:20px;"">
                                         {item.Name}
                                  <i class=""layui-edge""></i>
@@ -843,7 +843,7 @@ setTimeout(function(){{
                         string substyle = "style=\"";
                         substyle += isSub ? "width: 100%;" : "";
                         substyle += "\"";
-                        toolBarBtnStrBuilder.Append($@"<a href=""javascript:void(0)"" onclick=""wtToolBarFunc_{Id}({{event:'{item.Area + item.ControllerName + item.ActionName + item.QueryString}'}});"" class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "" : $"{item.ButtonClass}")} layui-btn-sm"" {substyle}>{icon}{item.Name}</a>");
+                        toolBarBtnStrBuilder.Append($@"<a href=""javascript:void(0)"" onclick=""wtToolBarFunc_{Id}({{event:'{JsStringEncoder.Escape(item.Area + item.ControllerName + item.ActionName + item.QueryString)}'}});"" class=""layui-btn {(string.IsNullOrEmpty(item.ButtonClass) ? "" : $"{HtmlAttributeEncoder.Encode(item.ButtonClass)}")} layui-btn-sm"" {substyle}>{icon}{item.Name}</a>");
                     }
                 }
                 var url = item.Url;
@@ -923,7 +923,7 @@ isPost = true;
                 }
 
                 gridBtnEventStrBuilder.Append($@"
-case '{item.Area + item.ControllerName + item.ActionName + item.QueryString}':{{");
+case '{JsStringEncoder.Escape(item.Area + item.ControllerName + item.ActionName + item.QueryString)}':{{");
                 if (item.ParameterType == GridActionParameterTypesEnum.AddRow)
                 {
                     Regex r = new Regex("<script>.*?</script>");
