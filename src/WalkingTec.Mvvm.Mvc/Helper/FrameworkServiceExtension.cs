@@ -913,7 +913,15 @@ namespace WalkingTec.Mvvm.Mvc
             //refuse to start with an insecure JWT signing key outside Development (fail fast, before any DB init)
             var hostEnv = app.ApplicationServices.GetService<Microsoft.Extensions.Hosting.IHostEnvironment>();
             var securityLogger = app.ApplicationServices.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("WalkingTec.Mvvm.Security");
-            configs.JwtOptions.EnsureSecureKey(hostEnv != null && Microsoft.Extensions.Hosting.HostEnvironmentEnvExtensions.IsDevelopment(hostEnv), securityLogger);
+            var isDevelopmentEnv = hostEnv != null && Microsoft.Extensions.Hosting.HostEnvironmentEnvExtensions.IsDevelopment(hostEnv);
+            configs.JwtOptions.EnsureSecureKey(isDevelopmentEnv, securityLogger);
+
+            //detection only: the key used by JwtBearer is fixed at startup, so warn when a configuration reload changes it (no key in use is changed)
+            var startupJwtOptions = configs.JwtOptions;
+            app.ApplicationServices.GetRequiredService<IOptionsMonitor<Configs>>().OnChange(reloaded =>
+            {
+                JwtOption.LogReloadChange(securityLogger, startupJwtOptions, reloaded?.JwtOptions, isDevelopmentEnv);
+            });
 
             var lg = app.ApplicationServices.GetRequiredService<LinkGenerator>();
             var gd = app.ApplicationServices.GetRequiredService<GlobalData>();

@@ -7,6 +7,17 @@ using WalkingTec.Mvvm.Core.Auth;
 
 namespace WalkingTec.Mvvm.Core
 {
+    /// <summary>Result of comparing the JWT signing key in use at startup with a reloaded configuration.</summary>
+    public enum JwtKeyReloadChange
+    {
+        /// <summary>The signing key is unchanged.</summary>
+        None,
+        /// <summary>The signing key changed to a value that passes the key check.</summary>
+        ChangedKey,
+        /// <summary>The signing key changed to an insecure value.</summary>
+        ChangedInsecureKey
+    }
+
     public class JwtOption
     {
         public string Issuer { get; set; } = "http://localhost";
@@ -110,6 +121,53 @@ namespace WalkingTec.Mvvm.Core
                 return;
             }
             throw new InvalidOperationException("JwtOptions.SecurityKey is missing, shorter than 32 characters, too repetitive, or a publicly known sample value, so the application refuses to start outside the Development environment. Supply a unique random key of at least 32 characters, for example via the JwtOptions__SecurityKey environment variable or a secret manager. If the key cannot be replaced immediately, JwtOptions:AllowInsecureKey=true starts the application anyway (not recommended).");
+        }
+
+        /// <summary>
+        /// Decides what a configuration reload means for the JWT signing key. Detection only: nothing is
+        /// thrown and no key in use is changed. Keys are compared in memory and never written to any message.
+        /// </summary>
+        public static JwtKeyReloadChange DescribeReloadChange(JwtOption startup, JwtOption current)
+        {
+            if (startup == null || current == null)
+            {
+                return JwtKeyReloadChange.None;
+            }
+            if (string.Equals(startup.SecurityKey, current.SecurityKey, StringComparison.Ordinal))
+            {
+                return JwtKeyReloadChange.None;
+            }
+            return current.IsInsecureKey() ? JwtKeyReloadChange.ChangedInsecureKey : JwtKeyReloadChange.ChangedKey;
+        }
+
+        /// <summary>
+        /// Logs the outcome of <see cref="DescribeReloadChange"/>: a Warning when the key changed (a restart is required
+        /// for token issuance and validation to agree), and a Critical message (Warning in Development) when the changed
+        /// key is also insecure. The key value is never written to any message.
+        /// </summary>
+        public static void LogReloadChange(ILogger logger, JwtOption startup, JwtOption current, bool isDevelopment)
+        {
+            if (logger == null)
+            {
+                return;
+            }
+            switch (DescribeReloadChange(startup, current))
+            {
+                case JwtKeyReloadChange.ChangedKey:
+                    logger.LogWarning("JwtOptions.SecurityKey changed after startup. A signing key change requires an application restart to take effect consistently; until then token issuance and token validation may disagree.");
+                    break;
+                case JwtKeyReloadChange.ChangedInsecureKey:
+                    const string insecure = "JwtOptions.SecurityKey changed after startup to a value that is missing, shorter than 32 characters, too repetitive, or a publicly known sample value. A signing key change requires an application restart to take effect consistently (token issuance and validation may disagree until then), and the startup key check and JwtOptions:AllowInsecureKey are not re-applied at runtime. Supply a unique random key of at least 32 characters.";
+                    if (isDevelopment)
+                    {
+                        logger.LogWarning(insecure);
+                    }
+                    else
+                    {
+                        logger.LogCritical(insecure);
+                    }
+                    break;
+            }
         }
         public string LoginPath { get; set; }
 

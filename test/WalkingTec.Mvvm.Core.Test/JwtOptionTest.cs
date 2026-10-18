@@ -434,5 +434,84 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.IsFalse(WtmEnvironmentHelper.ResolveIsDevelopment(new ServiceCollection(), ConfigWith()));
             Assert.IsFalse(WtmEnvironmentHelper.ResolveIsDevelopment(new ServiceCollection(), null));
         }
+
+        [TestMethod]
+        public void ReloadWithUnchangedKeyIsSilent()
+        {
+            var key = RandomKey();
+            var logger = new CapturingLogger();
+            var startup = new JwtOption { SecurityKey = key };
+            var current = new JwtOption { SecurityKey = key, Expires = 7200 };
+            Assert.AreEqual(JwtKeyReloadChange.None, JwtOption.DescribeReloadChange(startup, current));
+            JwtOption.LogReloadChange(logger, startup, current, false);
+            JwtOption.LogReloadChange(logger, startup, current, true);
+            Assert.AreEqual(0, logger.Entries.Count);
+
+            // an insecure key that did not change was already handled by the startup check
+            var insecure = new JwtOption { SecurityKey = RepoSampleKeys[1], AllowInsecureKey = true };
+            JwtOption.LogReloadChange(logger, insecure, new JwtOption { SecurityKey = RepoSampleKeys[1], AllowInsecureKey = true }, false);
+            Assert.AreEqual(0, logger.Entries.Count);
+        }
+
+        [TestMethod]
+        public void ReloadWithChangedSecureKeyWarnsAboutRestart()
+        {
+            var startup = new JwtOption { SecurityKey = RandomKey() };
+            var current = new JwtOption { SecurityKey = RandomKey() };
+            Assert.AreEqual(JwtKeyReloadChange.ChangedKey, JwtOption.DescribeReloadChange(startup, current));
+            foreach (var dev in new[] { true, false })
+            {
+                var logger = new CapturingLogger();
+                JwtOption.LogReloadChange(logger, startup, current, dev);
+                Assert.AreEqual(1, logger.Entries.Count);
+                Assert.AreEqual(LogLevel.Warning, logger.Entries[0].Level);
+                StringAssert.Contains(logger.Entries[0].Message, "restart");
+                Assert.IsFalse(logger.Entries[0].Message.Contains(startup.SecurityKey));
+                Assert.IsFalse(logger.Entries[0].Message.Contains(current.SecurityKey));
+            }
+        }
+
+        [TestMethod]
+        public void ReloadWithChangedInsecureKeyIsCriticalOutsideDevelopmentAndWarningInDevelopment()
+        {
+            var startup = new JwtOption { SecurityKey = RandomKey() };
+            foreach (var sample in RepoSampleKeys)
+            {
+                var current = new JwtOption { SecurityKey = sample, AllowInsecureKey = true };
+                Assert.AreEqual(JwtKeyReloadChange.ChangedInsecureKey, JwtOption.DescribeReloadChange(startup, current));
+
+                var prod = new CapturingLogger();
+                JwtOption.LogReloadChange(prod, startup, current, false);
+                Assert.AreEqual(1, prod.Entries.Count);
+                Assert.AreEqual(LogLevel.Critical, prod.Entries[0].Level);
+
+                var dev = new CapturingLogger();
+                JwtOption.LogReloadChange(dev, startup, current, true);
+                Assert.AreEqual(1, dev.Entries.Count);
+                Assert.AreEqual(LogLevel.Warning, dev.Entries[0].Level);
+
+                foreach (var message in new[] { prod.Entries[0].Message, dev.Entries[0].Message })
+                {
+                    StringAssert.Contains(message, "restart");
+                    StringAssert.Contains(message, "JwtOptions:AllowInsecureKey");
+                    Assert.IsFalse(message.Contains(startup.SecurityKey));
+                    Assert.IsFalse(message.Contains(current.SecurityKey));
+                    foreach (var key in RepoSampleKeys)
+                    {
+                        Assert.IsFalse(message.Contains(key));
+                    }
+                }
+            }
+        }
+
+        [TestMethod]
+        public void ReloadChangeDetectionToleratesMissingOptionsAndLogger()
+        {
+            var option = new JwtOption { SecurityKey = RandomKey() };
+            Assert.AreEqual(JwtKeyReloadChange.None, JwtOption.DescribeReloadChange(null, option));
+            Assert.AreEqual(JwtKeyReloadChange.None, JwtOption.DescribeReloadChange(option, null));
+            JwtOption.LogReloadChange(null, option, new JwtOption { SecurityKey = RandomKey() }, false);
+            JwtOption.LogReloadChange(new CapturingLogger(), option, null, false);
+        }
     }
 }
