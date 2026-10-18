@@ -31,6 +31,15 @@ namespace WalkingTec.Mvvm.Core
         /// that cannot replace the key immediately.
         /// </summary>
         public bool AllowInsecureKey { get; set; }
+
+        /// <summary>
+        /// Explicit opt-out of the required expiry claim for bearer tokens (config: JwtOptions:AllowTokensWithoutExpiry,
+        /// default false). By default a bearer token without an "exp" claim is rejected. When true, tokens that carry no
+        /// expiry are accepted again (tokens that carry an expiry are still rejected once it has passed). Intended only as
+        /// a transitional measure for clients that still present tokens issued without an expiry; a Warning is logged on
+        /// every start while it is enabled. Tokens issued by WTM always carry an expiry and are not affected.
+        /// </summary>
+        public bool AllowTokensWithoutExpiry { get; set; }
         private const int MinKeyLength = 32;
         private const int MinDistinctChars = 5;
 
@@ -170,6 +179,30 @@ namespace WalkingTec.Mvvm.Core
             }
         }
         public string LoginPath { get; set; }
+
+        /// <summary>
+        /// Build the parameters used by JwtBearer authentication: the same rules as <see cref="CreateValidationParameters"/>
+        /// (signature, HS256, issuer, audience, required expiry, 30 seconds of clock skew), except that the expiry claim
+        /// is optional when <see cref="AllowTokensWithoutExpiry"/> is true. A token that has an expiry is always checked
+        /// against it, in both modes.
+        /// </summary>
+        public TokenValidationParameters CreateBearerValidationParameters()
+        {
+            var parameters = CreateValidationParameters();
+            parameters.RequireExpirationTime = AllowTokensWithoutExpiry == false;
+            return parameters;
+        }
+
+        /// <summary>
+        /// Logs a Warning (never throws) when <see cref="AllowTokensWithoutExpiry"/> is enabled.
+        /// </summary>
+        public void LogExpiryPolicy(ILogger logger)
+        {
+            if (AllowTokensWithoutExpiry)
+            {
+                logger?.LogWarning("JwtOptions:AllowTokensWithoutExpiry is enabled: bearer tokens without an expiry claim are accepted and never expire. This is a transitional setting; make clients use tokens that carry an expiry and remove the option.");
+            }
+        }
 
         /// <summary>
         /// Build the parameters used to validate tokens issued with these options
