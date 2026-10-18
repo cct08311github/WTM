@@ -24,16 +24,6 @@ LABEL="upstream-sync"
 
 LAYUI_REGEX='^(src/WalkingTec\.Mvvm\.TagHelpers\.LayUI/|src/WalkingTec\.Mvvm\.Mvc/framework_layui\.js$|src/WalkingTec\.Mvvm\.Mvc/Views/|src/WalkingTec\.Mvvm\.Mvc/GeneratorFiles/Mvc/|src/WalkingTec\.Mvvm\.Mvc/_FrameworkController\.cs$|src/WalkingTec\.Mvvm\.Mvc/Filters/PrivilegeFilter\.cs$|src/WalkingTec\.Mvvm\.Mvc/Helper/FResultExtension\.cs$|src/WalkingTec\.Mvvm\.Core/.*(BasePagedListVM|BaseTemplateVM|BaseImportVM|LayUIMenu|MenuExtension))'
 
-# FORK.md 第 6 節分岔清單（新增分岔時需同步更新這裡）
-DIVERGED_FILES=(
-  'common.props'
-  'src/WalkingTec.Mvvm.Core/WTMContext.cs'
-  'src/WalkingTec.Mvvm.Core/ConfigOptions/JwtOptions.cs'
-  'src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs'
-  'test/WalkingTec.Mvvm.Test.Mock/MockWtmContext.cs'
-  'demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/wtmbuild.ts'
-)
-
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -61,8 +51,12 @@ NO_MERGE_COUNT="$(git rev-list --count --no-merges "HEAD..${UP}")"
 git diff --name-only "$BASE" "$UP" | tr -d '`' | cut -c1-300 > "$tmp/files.txt"
 FILE_COUNT="$(wc -l < "$tmp/files.txt" | tr -d ' ')"
 grep -E "$LAYUI_REGEX" "$tmp/files.txt" | head -n "$MAX_FILES" > "$tmp/layui.txt" || true
-printf '%s\n' "${DIVERGED_FILES[@]}" > "$tmp/diverged_all.txt"
-grep -Fxf "$tmp/diverged_all.txt" "$tmp/files.txt" > "$tmp/diverged.txt" || true
+# 分岔清單由 git 推導：fork 自共同祖先以來修改／刪除／改名的上游檔案（排除 fork 新增的檔案；
+# --no-renames 讓改名呈現為「刪除舊路徑」，舊路徑才是上游存在的檔案），
+# 再與上游同期間動到的同一類檔案取交集。
+git diff --no-renames --name-only --diff-filter=MD "$BASE" HEAD | tr -d '`' | cut -c1-300 | sort -u > "$tmp/diverged_all.txt"
+git diff --no-renames --name-only --diff-filter=MD "$BASE" "$UP" | tr -d '`' | cut -c1-300 | sort -u > "$tmp/upstream_touched.txt"
+grep -Fxf "$tmp/diverged_all.txt" "$tmp/upstream_touched.txt" | head -n "$MAX_FILES" > "$tmp/diverged.txt" || true
 head -n "$MAX_FILES" "$tmp/files.txt" > "$tmp/files_shown.txt"
 
 emit_list() { # $1=檔案 $2=無內容時的文字
@@ -103,7 +97,7 @@ emit_list() { # $1=檔案 $2=無內容時的文字
   echo "## 與分岔清單重疊的檔案"
   echo
   if [ -s "$tmp/diverged.txt" ]; then
-    echo "以下檔案同時被本 fork 修改過（FORK.md 第 6 節），合併時很可能衝突，請保留 fork 的修正並吸收上游變更："
+    echo "以下檔案同時被本 fork 修改過（由 git 推導：fork 自共同祖先以來修改／刪除的上游檔案），合併時很可能衝突，請保留 fork 的修正並吸收上游變更："
     echo
     emit_list "$tmp/diverged.txt" ""
   else
