@@ -17,5 +17,10 @@
     <ProjectReference Include="..\WalkingTec.Mvvm.Test.Mock\WalkingTec.Mvvm.Test.Mock.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Demo upload guard (ImageSharp mitigation, #78) is compiled in so it can be unit tested without referencing the web demo -->
+    <Compile Include="..\..\demo\WalkingTec.Mvvm.Vue3Demo\Areas\_Admin\ImageDecodeGuard.cs" Link="ImageDecodeGuard.cs" />
+  </ItemGroup>
+
 </Project>
 

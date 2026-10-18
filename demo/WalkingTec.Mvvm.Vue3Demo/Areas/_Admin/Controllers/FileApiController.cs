@@ -11,6 +11,8 @@ using WalkingTec.Mvvm.Core.Support.FileHandlers;
 using WalkingTec.Mvvm.Mvc;
 using WalkingTec.Mvvm.Core.Extensions;
 using System.Linq;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace WalkingTec.Mvvm.Admin.Api
 {
@@ -41,10 +43,15 @@ namespace WalkingTec.Mvvm.Admin.Api
             }
             var FileData = Request.Form.Files[0];
 
-            Image oimage = Image.Load(FileData.OpenReadStream());
-            if (oimage == null)
+            // Mitigation for ImageSharp advisories (#78): format allowlist + size/dimension limits before decoding
+            var limits = ImageDecodeLimits.FromConfiguration(HttpContext.RequestServices.GetService<IConfiguration>());
+            Image oimage;
+            using (var upstream = FileData.OpenReadStream())
             {
-                return BadRequest(Localizer["Sys.UploadFailed"]);
+                if (!ImageDecodeGuard.TryLoad(upstream, limits, out oimage, out _) || oimage == null)
+                {
+                    return BadRequest(Localizer["Sys.UploadFailed"]);
+                }
             }
             if (width == null)
             {
@@ -95,7 +102,13 @@ namespace WalkingTec.Mvvm.Admin.Api
             {
                 if (width != null || height != null)
                 {
-                    Image oimage = Image.Load(file.DataStream);
+                    // Mitigation for ImageSharp advisories (#78); on rejection fall through to the raw file below
+                    var limits = ImageDecodeLimits.FromConfiguration(HttpContext.RequestServices.GetService<IConfiguration>());
+                    ImageDecodeGuard.TryLoad(file.DataStream, limits, out Image oimage, out _);
+                    if (file.DataStream != null && file.DataStream.CanSeek)
+                    {
+                        file.DataStream.Position = 0;
+                    }
                     if (oimage != null)
                     {
                         if (width == null)
