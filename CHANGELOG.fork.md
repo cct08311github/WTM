@@ -32,6 +32,9 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * **修复：**   表单服务端错误信息中的 `<`、`>` 原来会显示为非标准的 `&lg;`／`&rg;`，现在正确显示为文字（#24）
 * **修复：**   `FResultExtension.RedirectUrl` 原来写成 `location.url`，实际不会跳转；现在改为 `location.href`，会真正跳转（#25）
 * **修改：**   `framework_layui.js` 中按名称查找图表、默认值、筛选条件等全局变量时，改用 `window[...]`，不再使用 `eval`；找不到时略过，不再抛出异常（#25）
+* **新增：**   `UIOptions:EncodeHtmlContent`（默认 false）：开启后，LayUI TagHelper 以 HTML 内容输出的数据文字（显示值、标题、label、按钮文字、流程信息、未自定义格式的表格单元格等）一律 HTML 编码；`wt:display` 可以用 `encode-html` 属性单独覆盖。默认输出不变（#24）
+* **修改：**   LayUI TagHelper 手工拼接的 HTML 属性值，统一通过新增的 `HtmlAttributeEncoder` 编码（只编码 `& < > " '`）；DataTable 工具栏与行按钮的 event key 在三处表示中解码后保持一致。浏览器解码后的值不变（#24）
+* **修改：**   Tab 生成的脚本不再使用 `eval`；ColorPicker 颜色值转义；Slider 的 `DefaultValue` 必须是数字或数字数组才会输出；Upload／MultiUpload 嵌在脚本中的 HTML 先做属性编码再做 JS 转义（#24、#25）
 * **升级说明：**
     1. 使用内置 `TokenService` 签发的令牌、以及 Cookie 登录（含 LayUI 页面）都不受 #3 影响
     2. 如有外部系统使用同一把密钥自行签发令牌，请确认这些令牌：使用 HS256、带有 `exp`、不带未来的 `nbf`。暂时无法带上 `exp` 的，可设置 `JwtOptions:AllowTokensWithoutExpiry=true` 过渡；算法与 `nbf` 的要求没有开关可以放宽
