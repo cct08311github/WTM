@@ -23,9 +23,11 @@ namespace WalkingTec.Mvvm.Core
         [CanNotEdit]
         public string ITCode { get; set; }
 
+        // 128: room for the salted PBKDF2 format (91 characters at the default iteration count). Databases created by earlier versions
+        // still have a 32 character column until it is widened by hand, see docs/migrations/password-hash-upgrade.md
         [Display(Name = "_Admin.Password")]
         [Required(AllowEmptyStrings = false, ErrorMessage = "Validate.{0}required")]
-        [StringLength(32, ErrorMessage = "Validate.{0}stringmax{1}")]
+        [StringLength(128, ErrorMessage = "Validate.{0}stringmax{1}")]
         public string Password { get; set; }
 
         [Display(Name = "_Admin.Name")]

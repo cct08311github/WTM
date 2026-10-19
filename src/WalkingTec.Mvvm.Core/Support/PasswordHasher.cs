@@ -35,11 +35,13 @@ namespace WalkingTec.Mvvm.Core
     /// <see cref="Utils.GetMD5String"/>, so stored data and login behaviour are unchanged.
     /// </para>
     /// <para>
-    /// Safety guard: the PBKDF2 format is longer than the 32 characters of the default <c>FrameworkUserBase.Password</c> column
-    /// (91 characters with the default iteration count). When <see cref="PasswordAlgorithm.Pbkdf2Sha256"/> is configured but the
-    /// known maximum length of the password column is smaller than that, the hasher does not produce PBKDF2 hashes (a database
-    /// would truncate or reject them): <see cref="Algorithm"/> falls back to <see cref="PasswordAlgorithm.Md5"/> and a Warning is
-    /// logged once when the hasher is created. Existing PBKDF2 hashes are still verified, and no rehash is requested.
+    /// Safety guard: the PBKDF2 format is longer than the 32 characters that the password column of databases created by
+    /// earlier versions holds (91 characters with the default iteration count; the model now allows 128, see
+    /// <c>docs/migrations/password-hash-upgrade.md</c>). When <see cref="PasswordAlgorithm.Pbkdf2Sha256"/> is configured but the
+    /// known maximum length of the password column is smaller than that, or the length could not be verified, the hasher does not
+    /// produce PBKDF2 hashes (a database would truncate or reject them): <see cref="Algorithm"/> falls back to
+    /// <see cref="PasswordAlgorithm.Md5"/> and a Warning is logged once when the hasher is created. Existing PBKDF2 hashes are
+    /// still verified, and no rehash is requested.
     /// </para>
     /// </summary>
     public class PasswordHasher
@@ -55,6 +57,9 @@ namespace WalkingTec.Mvvm.Core
         /// The same bound applies to the iteration count read from a stored hash, so a corrupted value cannot stall a login.
         /// </summary>
         public const int MaxStoredIterations = 2000000;
+
+        /// <summary>Where the column widening and enabling procedure is described (path inside the repository).</summary>
+        public const string MigrationDoc = "docs/migrations/password-hash-upgrade.md";
 
         private const int SaltSize = 16;
         private const int HashSize = 32;
@@ -87,7 +92,11 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="options">Password options; null means defaults (MD5).</param>
         /// <param name="maxStoredLength">Known maximum length of the password column, or null when unknown or unlimited.</param>
         /// <param name="logger">Receives the one-time Warning when the safety guard applies.</param>
-        public PasswordHasher(PasswordOption options, int? maxStoredLength = null, ILogger logger = null)
+        /// <param name="lengthUnverifiedReason">
+        /// Not null when the length of the password column in the database could not be verified (the text says why). PBKDF2 is then
+        /// not used, exactly as if the column were too short.
+        /// </param>
+        public PasswordHasher(PasswordOption options, int? maxStoredLength = null, ILogger logger = null, string lengthUnverifiedReason = null)
         {
             options = options ?? new PasswordOption();
             ConfiguredAlgorithm = options.Algorithm;
@@ -97,13 +106,18 @@ namespace WalkingTec.Mvvm.Core
                 logger?.LogWarning("PasswordOptions:Pbkdf2Iterations is {Configured}, outside the supported range {Min}..{Max}; {Used} is used instead.", options.Pbkdf2Iterations, MinIterations, MaxStoredIterations, Iterations);
             }
             Algorithm = ConfiguredAlgorithm;
-            if (ConfiguredAlgorithm == PasswordAlgorithm.Pbkdf2Sha256 && maxStoredLength.HasValue)
+            if (ConfiguredAlgorithm == PasswordAlgorithm.Pbkdf2Sha256)
             {
                 var needed = Pbkdf2OutputLength(Iterations);
-                if (maxStoredLength.Value < needed)
+                if (lengthUnverifiedReason != null)
                 {
                     Algorithm = PasswordAlgorithm.Md5;
-                    logger?.LogWarning("PasswordOptions:Algorithm is {Configured}, but the password column allows only {MaxLength} characters and the PBKDF2 format needs {Needed}. New passwords keep using MD5 until the column is widened.", ConfiguredAlgorithm, maxStoredLength.Value, needed);
+                    logger?.LogWarning("PasswordOptions:Algorithm is {Configured}, but the length of the password column could not be verified ({Reason}), so new passwords keep using MD5. The PBKDF2 format needs {Needed} characters; see {Doc}.", ConfiguredAlgorithm, lengthUnverifiedReason, needed, MigrationDoc);
+                }
+                else if (maxStoredLength.HasValue && maxStoredLength.Value < needed)
+                {
+                    Algorithm = PasswordAlgorithm.Md5;
+                    logger?.LogWarning("PasswordOptions:Algorithm is {Configured}, but the password column allows only {MaxLength} characters and the PBKDF2 format needs {Needed}. New passwords keep using MD5 until the column is widened; see {Doc}.", ConfiguredAlgorithm, maxStoredLength.Value, needed, MigrationDoc);
                 }
             }
         }

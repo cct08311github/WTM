@@ -340,13 +340,39 @@ namespace WalkingTec.Mvvm.Core.Test
         [TestMethod]
         public void PasswordMaxLengthIsReadFromTheModel()
         {
-            Assert.AreEqual(32, PasswordHasher.GetPasswordMaxLength(typeof(FrameworkUserBase), null));
-            Assert.AreEqual(32, PasswordHasher.GetPasswordMaxLength(null, null));
-            Assert.AreEqual(32, PasswordHasher.GetPasswordMaxLength(typeof(LoginTestUser), null));
+            Assert.AreEqual(128, PasswordHasher.GetPasswordMaxLength(typeof(FrameworkUserBase), null));
+            Assert.AreEqual(128, PasswordHasher.GetPasswordMaxLength(null, null));
+            Assert.AreEqual(128, PasswordHasher.GetPasswordMaxLength(typeof(LoginTestUser), null));
             using (var dc = new LoginTestContext(Guid.NewGuid().ToString("N")))
             {
-                Assert.AreEqual(32, PasswordHasher.GetPasswordMaxLength(typeof(LoginTestUser), dc));
+                Assert.AreEqual(128, PasswordHasher.GetPasswordMaxLength(typeof(LoginTestUser), dc));
             }
+        }
+
+        [TestMethod]
+        public void PasswordColumnInTheModelHoldsThePbkdf2Format()
+        {
+            var attribute = typeof(FrameworkUserBase).GetProperty("Password").GetCustomAttributes(typeof(System.ComponentModel.DataAnnotations.StringLengthAttribute), true)
+                .Cast<System.ComponentModel.DataAnnotations.StringLengthAttribute>().Single();
+            Assert.AreEqual(128, attribute.MaximumLength);
+            Assert.IsTrue(PasswordHasher.Pbkdf2OutputLength(PasswordHasher.MaxStoredIterations) <= 128, "even the highest iteration count fits");
+        }
+
+        [TestMethod]
+        public void GuardWarningNamesTheMigrationGuide()
+        {
+            var tooShort = new CapturingLogger();
+            Pbkdf2Hasher(100000, 32, tooShort);
+            var unverified = new CapturingLogger();
+            var hasher = new PasswordHasher(new PasswordOption { Algorithm = PasswordAlgorithm.Pbkdf2Sha256, Pbkdf2Iterations = PasswordHasher.MinIterations }, 128, unverified, "reason text");
+            Assert.AreEqual(PasswordAlgorithm.Md5, hasher.Algorithm, "an unverified column is treated like a too short one, whatever the model says");
+            Assert.IsTrue(hasher.FellBackToMd5);
+            foreach (var logger in new[] { tooShort, unverified })
+            {
+                var warning = logger.Entries.Single(x => x.Level == LogLevel.Warning);
+                StringAssert.Contains(warning.Message, "docs/migrations/password-hash-upgrade.md");
+            }
+            StringAssert.Contains(unverified.Entries.Single().Message, "reason text");
         }
     }
 }
