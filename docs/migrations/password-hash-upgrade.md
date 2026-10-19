@@ -47,11 +47,15 @@
 SQL Server：
 
 ```sql
-SELECT CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE
+SELECT TABLE_SCHEMA, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLLATION_NAME,
+       DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS DATABASE_COLLATION
 FROM INFORMATION_SCHEMA.COLUMNS
-WHERE TABLE_NAME = 'FrameworkUsers' AND COLUMN_NAME = 'Password';
--- 32 表示尚未加寬；-1 表示 MAX（可直接使用）
+WHERE TABLE_SCHEMA = SCHEMA_NAME() AND TABLE_NAME = 'FrameworkUsers' AND COLUMN_NAME = 'Password';
+-- CHARACTER_MAXIMUM_LENGTH：32 表示尚未加寬；-1 表示 MAX（可直接使用）
+-- COLLATION_NAME 與 DATABASE_COLLATION 相同時，§3 的 ALTER 不必寫 COLLATE；不同時要把 COLLATION_NAME 照抄進 ALTER
 ```
+
+記下這一列的 `IS_NULLABLE` 與 `COLLATION_NAME`，§3 加寬後再跑一次，確認兩者都沒變。資料庫定序與伺服器預設定序不同（例如 `Chinese_Taiwan_Stroke_CI_AS` 的資料庫放在 `SQL_Latin1_General_CP1_CI_AS` 的伺服器上）很常見，比較的對象是**資料庫**定序，不是伺服器的。
 
 沒有明確指定 schema 時，程式查的是連線登入帳號的預設 schema（`SCHEMA_NAME()`）。如果你的資料表在其他 schema，而 Warning 說「找不到 Password 欄位」，請在 `DbContext` 對應中明確指定該 schema（`ToTable("FrameworkUsers", "你的schema")`），或把登入帳號的預設 schema 設成資料表所在的 schema。
 
@@ -91,7 +95,7 @@ ALTER TABLE [FrameworkUsers] ALTER COLUMN [Password] NVARCHAR(128) NOT NULL;
 
 （有自訂 schema 時寫成 `[dbo].[FrameworkUsers]`。把 `nvarchar(32)` 加寬為 `nvarchar(128)` 通常只改中繼資料，很快；仍建議在低峰時段執行。）
 
-注意：SQL Server 的 `ALTER COLUMN` 會把欄位的定序（COLLATE）重設為資料庫預設值。如果原欄位使用非預設的定序，請在型別後面重複指定，例如 `NVARCHAR(128) COLLATE Chinese_Taiwan_Stroke_CI_AS NOT NULL`；原定序可從 `INFORMATION_SCHEMA.COLUMNS.COLLATION_NAME` 查到。
+注意：SQL Server 的 `ALTER COLUMN` 會把欄位的定序（COLLATE）重設為資料庫預設值。如果原欄位使用非預設的定序，請在型別後面重複指定，例如 `NVARCHAR(128) COLLATE Chinese_Taiwan_Stroke_CI_AS NOT NULL`；原定序可從 `INFORMATION_SCHEMA.COLUMNS.COLLATION_NAME` 查到；第 2 節的查詢會同時列出 `COLLATION_NAME` 與資料庫預設定序（`DATABASE_COLLATION`），兩者相同就不必寫 `COLLATE`。
 
 **MySQL**
 
