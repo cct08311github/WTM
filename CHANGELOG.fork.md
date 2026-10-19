@@ -14,6 +14,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 
 * **修改（Schema）：**   `FrameworkUserBase.Password` 长度由 32 调整为 128（为 PBKDF2 密码格式预留）。使用 `EnsureCreated` 的新数据库自动生效；既有数据库需手动加宽字段（见 [docs/migrations/password-hash-upgrade.md](docs/migrations/password-hash-upgrade.md)）；使用 EF Migrations 的应用需在同一次部署新增 AlterColumn 迁移，否则 EF 9+ 的 `Migrate()` 会因 PendingModelChangesWarning 失败
 * **新增：**   启用 `PasswordOptions:Algorithm=Pbkdf2Sha256` 前会检查数据库中 Password 字段的实际长度，不足或无法确认时自动退回 MD5 并输出 Warning；默认仍为 MD5
+* **修复（安全）：**   demo `FileApiController` 的 `UploadImage` 与 `GetFile` 缩略图在解码用户图片前先检查：只解析 JPEG／PNG／GIF／BMP／WebP（TIFF 等格式不再被解析），并限制文件大小、宽高、总像素、帧数与缩放目标尺寸，上限可通过 `ImageUploadLimits` 配置节调整。被拒绝时 `UploadImage` 返回原有的上传失败错误，`GetFile` 返回原文件。这是 ImageSharp 3.x 已知漏洞的短期缓解，验证码依赖支持 ImageSharp 4 后再升级（#78）
 
 ## 10.0.0.4(2026-10-19)
 
@@ -47,7 +48,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * **修复：**   OSS 上传的 object key 拒绝绝对路径、盘符与 `..` 片段，并在上传前检查；扩展名改为清理后的值；存入数据库的 `FileName` 只保存最后一段，`FileExt` 为清理后的扩展名（#128）
 * **新增：**   `PasswordOptions`（`Algorithm`：`Md5`（默认）／`Pbkdf2Sha256`；`Pbkdf2Iterations` 默认 600000）与 `PasswordHasher`：登录时同时接受旧的 MD5 与 `$pbkdf2-sha256$` 格式，以常数时间比较；`WTMContext` 新增 `HashPassword`／`VerifyPassword`。默认 MD5 时生成的哈希与 `Utils.GetMD5String` 完全相同，已存储的密码不会被改写。启用 `Pbkdf2Sha256` 前须先加宽用户表的 `Password` 字段（目前 32），字段放不下时自动沿用 MD5 并输出 Warning（#10）
 * **修改：**   `WTMContext.DoLogin` 改为先按 ITCode、租户与 `IsValid` 查出用户，再在内存中校验密码（原为在 SQL 中比较哈希），账号不存在时同样计算一次哈希以拉平耗时。默认 MD5 下登录结果不变；唯一差异是以小写存储的 MD5 现在在区分大小写的数据库中也能匹配（#10）
-* **修改：**   依赖更新（同一主版本内）：EF Core 10.0.13（Relational／SqlServer／InMemory）、Oracle.EntityFrameworkCore 10.23.26301、Microsoft.OpenApi 2.12.2 与 Swashbuckle.AspNetCore 10.3.x、Aliyun.OSS.SDK.NetCore 2.14.1、Fare 2.2.2
+* **修改：**   依赖更新（同一主版本内）：EF Core 10.0.13（Relational／SqlServer／InMemory）、Oracle.EntityFrameworkCore 10.23.26301、Microsoft.OpenApi 2.12.2 与 Swashbuckle.AspNetCore 10.3.x、Aliyun.OSS.SDK.NetCore 2.14.1、Fare 2.2.2。升级 OpenApi／Swashbuckle 后，生成的 swagger.json 中无类型（object／any）的属性不再输出 `nullable: true`（例如 `{"nullable":true}` 变为 `{}`），在 OpenAPI 3.0 中语义相同；路径、操作与其他 schema 不变，影响范围主要是 Elsa 与 System.Reflection 类型（#95）
 * **升级说明：**
     1. 使用内置 `TokenService` 签发的令牌、以及 Cookie 登录（含 LayUI 页面）都不受 #3 影响
     2. 如有外部系统使用同一把密钥自行签发令牌，请确认这些令牌：使用 HS256、带有 `exp`、不带未来的 `nbf`。暂时无法带上 `exp` 的，可设置 `JwtOptions:AllowTokensWithoutExpiry=true` 过渡；算法与 `nbf` 的要求没有开关可以放宽
