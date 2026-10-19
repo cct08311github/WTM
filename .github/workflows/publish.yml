@@ -1,0 +1,159 @@
+name: Publish
+
+# 推送 v* tag 或手動指定 tag 時，將三個套件發佈到 GitHub Packages。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish (e.g. v10.0.0.4)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Resolve and verify version
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$TAG' does not match ^v[0-9]+.[0-9]+.[0-9]+.[0-9]+\$"
+            exit 1
+          fi
+          version="$(dotnet msbuild src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj -getProperty:PackageVersion -p:Configuration=Release | tr -d '[:space:]')"
+          if [[ "v$version" != "$TAG" ]]; then
+            echo "::error::Tag '$TAG' does not match PackageVersion 'v$version' (version.props + fork.props)"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "Publishing version $version"
+
+      - name: Restore
+        run: dotnet restore WalkingTec.Mvvm.sln
+
+      - name: Build
+        run: dotnet build WalkingTec.Mvvm.sln -c Release --no-restore
+
+      - name: Test (Core)
+        run: dotnet test test/WalkingTec.Mvvm.Core.Test/WalkingTec.Mvvm.Core.Test.csproj -c Release --no-build
+
+      - name: Pack
+        env:
+          REPO_URL_BASE: https://github.com
+        run: |
+          set -euo pipefail
+          for proj in \
+            src/WalkingTec.Mvvm.Core/WalkingTec.Mvvm.Core.csproj \
+            src/WalkingTec.Mvvm.TagHelpers.LayUI/WalkingTec.Mvvm.TagHelpers.LayUI.csproj \
+            src/WalkingTec.Mvvm.Mvc/WalkingTec.Mvvm.Mvc.csproj; do
+            dotnet pack "$proj" -c Release --no-build -o artifacts/nupkg \
+              -p:RepositoryUrl="$REPO_URL_BASE/$GITHUB_REPOSITORY" \
+              -p:PackageProjectUrl="$REPO_URL_BASE/$GITHUB_REPOSITORY"
+          done
+
+      - name: Verify packages
+        env:
+          PKG_DIR: artifacts/nupkg
+        run: |
+          set -euo pipefail
+          V="$VERSION"
+          dir="${PKG_DIR:-artifacts/nupkg}"
+          fail() { echo "::error::$1"; exit 1; }
+
+          pkgs=()
+          while IFS= read -r line; do pkgs+=("$line"); done < <(find "$dir" -maxdepth 1 -type f -name '*.nupkg' ! -name '*.snupkg' | sort)
+          [[ "${#pkgs[@]}" -eq 3 ]] || fail "Expected exactly 3 .nupkg in $dir, found ${#pkgs[@]}: ${pkgs[*]:-none}"
+
+          for id in WalkingTec.Mvvm.Core WalkingTec.Mvvm.Mvc WalkingTec.Mvvm.TagHelpers.LayUI; do
+            f="$dir/$id.$V.nupkg"
+            [[ -f "$f" ]] || fail "Missing package $f"
+
+            nuspec="$(unzip -p "$f" '*.nuspec')"
+            pkg_version="$(printf '%s\n' "$nuspec" | grep -oE '<version>[^<]+</version>' | head -n1 | sed -E 's#</?version>##g')"
+            [[ "$pkg_version" == "$V" ]] || fail "$id: nuspec version '$pkg_version' != '$V'"
+
+            expected_repo="https://github.com/$GITHUB_REPOSITORY"
+            repo_url="$(printf '%s\n' "$nuspec" | grep -oE '<repository [^>]*>' | head -n1 | sed -nE 's/.*[ ]url="([^"]*)".*/\1/p')"
+            [[ "$repo_url" == "$expected_repo" ]] || fail "$id: nuspec repository url '$repo_url' != '$expected_repo'"
+
+            # 內部依賴必須精確鎖定在同一版本（pack 輸出為 version="X.Y.Z.R"，亦接受 [X.Y.Z.R]）
+            while IFS= read -r dep_ver; do
+              [[ "$dep_ver" == "$V" || "$dep_ver" == "[$V]" ]] \
+                || fail "$id: internal dependency version '$dep_ver' is not '$V'"
+            done < <(printf '%s\n' "$nuspec" \
+              | grep -oE '<dependency id="WalkingTec\.Mvvm\.[^"]*" version="[^"]*"' \
+              | sed -E 's/.*version="([^"]*)"/\1/')
+          done
+
+          # 依賴鏈至少要存在
+          has_dep() { # <package id> <dependency id>
+            unzip -p "$dir/$1.$V.nupkg" '*.nuspec' | grep -qE "<dependency id=\"$2\" version=\"(\[)?${V//./\\.}(\])?\""
+          }
+          has_dep WalkingTec.Mvvm.Mvc WalkingTec.Mvvm.TagHelpers.LayUI \
+            || fail "Mvc does not depend on TagHelpers.LayUI $V"
+          has_dep WalkingTec.Mvvm.TagHelpers.LayUI WalkingTec.Mvvm.Core \
+            || fail "TagHelpers.LayUI does not depend on Core $V"
+
+          echo "Package verification passed for $V"
+
+      - name: Upload nupkg artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: nupkg-${{ env.VERSION }}
+          path: artifacts/nupkg/*.nupkg
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Push to GitHub Packages
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          dotnet nuget push "artifacts/nupkg/*.nupkg"
+          --source https://nuget.pkg.github.com/cct08311github/index.json
+          --api-key "$NUGET_AUTH_TOKEN"
+          --skip-duplicate
+          --no-symbols
+
+      - name: Summary
+        run: |
+          set -euo pipefail
+          {
+            echo "## Published $VERSION"
+            echo
+            echo "- Tag: \`$TAG\`"
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Source: https://nuget.pkg.github.com/cct08311github/index.json"
+            echo
+            echo "### Packages"
+            for f in artifacts/nupkg/*.nupkg; do
+              echo "- \`$(basename "$f")\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
