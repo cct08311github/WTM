@@ -597,12 +597,31 @@ namespace WalkingTec.Mvvm.Core
             }
         }
 
-        private static readonly System.Collections.Concurrent.ConcurrentDictionary<(PasswordAlgorithm, int, int?), Lazy<PasswordHasher>> _passwordHashers = new System.Collections.Concurrent.ConcurrentDictionary<(PasswordAlgorithm, int, int?), Lazy<PasswordHasher>>();
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<(PasswordAlgorithm, int, int?, string), Lazy<PasswordHasher>> _passwordHashers = new System.Collections.Concurrent.ConcurrentDictionary<(PasswordAlgorithm, int, int?, string), Lazy<PasswordHasher>>();
         private PasswordHasher _passwordHasher;
+        private IPasswordColumnInspector _passwordColumnInspector;
+
+        /// <summary>
+        /// Looks up the real length of the password column in the database. Only used when PBKDF2 is configured; it never runs with the
+        /// default MD5 options. The setter replaces the inspector for this context only (for example in a test).
+        /// </summary>
+        public IPasswordColumnInspector PasswordColumnInspector
+        {
+            get
+            {
+                return _passwordColumnInspector ?? Core.PasswordColumnInspector.Default;
+            }
+            set
+            {
+                _passwordColumnInspector = value;
+            }
+        }
 
         /// <summary>
         /// The password hasher for the configured <see cref="Configs.PasswordOptions"/>. With the default options it produces and accepts
         /// the same MD5 hashes as <see cref="Utils.GetMD5String"/>.
+        /// When PBKDF2 is configured, it is used only if the password column of the real database (not just the EF model) can hold it, see
+        /// <see cref="PasswordColumnInspector"/> and docs/migrations/password-hash-upgrade.md.
         /// The setter replaces the hasher for this context only. A replacement must apply the same column length guard as the default
         /// one (see <see cref="Core.PasswordHasher"/>): do not produce PBKDF2 hashes while the password column is too short to hold them.
         /// </summary>
@@ -614,13 +633,50 @@ namespace WalkingTec.Mvvm.Core
                 {
                     var options = ConfigInfo?.PasswordOptions ?? new PasswordOption();
                     int? maxLength = null;
+                    string unverified = null;
                     if (options.Algorithm == PasswordAlgorithm.Pbkdf2Sha256)
                     {
-                        maxLength = PasswordHasher.GetPasswordMaxLength(GlobaInfo?.CustomUserType, _dc);
+                        //the model (or attributes) say what the application expects; the database says what is really there. Both must allow the longer format.
+                        var userType = GlobaInfo?.CustomUserType;
+                        maxLength = PasswordHasher.GetPasswordMaxLength(userType, _dc);
+                        IDataContext dc = null;
+                        string dcError = null;
+                        try
+                        {
+                            dc = DC;
+                        }
+                        catch (Exception ex)
+                        {
+                            dcError = ex.GetType().Name;
+                        }
+                        PasswordColumnInfo column;
+                        if (dcError != null)
+                        {
+                            column = PasswordColumnInfo.Unverified("no data context available: " + dcError);
+                        }
+                        else
+                        {
+                            try
+                            {
+                                column = PasswordColumnInspector.Inspect(dc, userType);
+                            }
+                            catch (Exception ex)
+                            {
+                                column = PasswordColumnInfo.Unverified("the column inspector failed: " + ex.GetType().Name);
+                            }
+                        }
+                        if (column.IsVerified == false)
+                        {
+                            unverified = column.Description;
+                        }
+                        else if (column.MaxLength.HasValue)
+                        {
+                            maxLength = maxLength.HasValue ? Math.Min(maxLength.Value, column.MaxLength.Value) : column.MaxLength;
+                        }
                     }
-                    var key = (options.Algorithm, options.Pbkdf2Iterations, maxLength);
+                    var key = (options.Algorithm, options.Pbkdf2Iterations, maxLength, unverified);
                     //Lazy: GetOrAdd may run the factory more than once under contention, and the constructor logs the guard Warning
-                    _passwordHasher = _passwordHashers.GetOrAdd(key, k => new Lazy<PasswordHasher>(() => new PasswordHasher(options, maxLength, _loggerFactory?.CreateLogger<WTMContext>()))).Value;
+                    _passwordHasher = _passwordHashers.GetOrAdd(key, k => new Lazy<PasswordHasher>(() => new PasswordHasher(options, maxLength, _loggerFactory?.CreateLogger<WTMContext>(), unverified))).Value;
                 }
                 return _passwordHasher;
             }

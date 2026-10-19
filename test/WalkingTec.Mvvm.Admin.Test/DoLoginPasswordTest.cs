@@ -227,11 +227,99 @@ namespace WalkingTec.Mvvm.Admin.Test
             AddUser("admin", stored);
             var wtm = CreateContext();
             wtm.ConfigInfo.PasswordOptions = new PasswordOption { Algorithm = PasswordAlgorithm.Pbkdf2Sha256, Pbkdf2Iterations = PasswordHasher.MinIterations };
-            Assert.AreEqual(PasswordAlgorithm.Md5, wtm.PasswordHasher.Algorithm, "the model column holds 32 characters");
+            //an existing database that was not migrated: the model says 128, the real column holds 32
+            wtm.PasswordColumnInspector = new FakePasswordColumnInspector(PasswordColumnInfo.Limited(32));
+            Assert.AreEqual(PasswordAlgorithm.Md5, wtm.PasswordHasher.Algorithm, "the real column holds 32 characters");
             Assert.IsTrue(wtm.PasswordHasher.FellBackToMd5);
             Assert.IsNotNull(wtm.DoLogin("admin", "000000", null));
             Assert.AreEqual(stored, StoredPassword("admin"), "no rehash into a column that is too short");
             Assert.AreEqual(Utils.GetMD5String("abc"), wtm.HashPassword("abc"));
+        }
+
+        [TestMethod]
+        public void UnwidenedColumn_Md5Default_LoginAndStartupUnaffected()
+        {
+            //an existing database as earlier versions created it: Password is a 32 character column, while the model now says 128
+            string ddl;
+            using (var cmd = _keepAlive.CreateCommand())
+            {
+                cmd.CommandText = "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'FrameworkUsers'";
+                ddl = (string)cmd.ExecuteScalar();
+            }
+            var narrow32 = ddl.Replace("\"Password\" TEXT NOT NULL", "\"Password\" VARCHAR(32) NOT NULL");
+            Assert.AreNotEqual(ddl, narrow32, "the generated DDL was not recognised");
+            Execute("DROP TRIGGER LogUserUpdates");
+            Execute("DROP TABLE FrameworkUsers");
+            Execute(narrow32);
+            Execute("CREATE TRIGGER LogUserUpdates AFTER UPDATE ON FrameworkUsers BEGIN INSERT INTO WriteLog VALUES (1); END");
+            var stored = Utils.GetMD5String("000000");
+            AddUser("admin", stored);
+
+            //startup: EnsureCreated on a database that already has tables changes nothing and does not throw
+            using (var dc = NewDc())
+            {
+                Assert.AreEqual(128, dc.Model.FindEntityType(typeof(FrameworkUser)).FindProperty("Password").GetMaxLength());
+                Assert.IsFalse(dc.Database.EnsureCreated());
+                dc.EnsureCreate();
+            }
+            Assert.AreEqual(32, ScalarLong("SELECT LENGTH(Password) FROM FrameworkUsers WHERE ITCode = 'admin'"));
+
+            //default (MD5) configuration: the column inspector is never involved
+            var inspector = new FakePasswordColumnInspector(PasswordColumnInfo.Limited(32));
+            var wtm = CreateContext();
+            wtm.PasswordColumnInspector = inspector;
+            Assert.IsNotNull(wtm.DoLogin("admin", "000000", null));
+            Assert.IsNull(CreateContext().DoLogin("admin", "wrong", null));
+            Assert.AreEqual(Utils.GetMD5String("abc"), wtm.HashPassword("abc"));
+            Assert.AreEqual(0, inspector.Calls);
+            Assert.AreEqual(stored, StoredPassword("admin"));
+            Assert.AreEqual(32, StoredPassword("admin").Length);
+            Assert.AreEqual(0, ScalarLong("SELECT COUNT(*) FROM WriteLog"));
+
+            //PBKDF2 configured, but the real column reports 32: still MD5, nothing is written
+            var configured = CreateContext();
+            configured.ConfigInfo.PasswordOptions = new PasswordOption { Algorithm = PasswordAlgorithm.Pbkdf2Sha256, Pbkdf2Iterations = PasswordHasher.MinIterations };
+            var narrow = new FakePasswordColumnInspector(PasswordColumnInfo.Limited(32));
+            configured.PasswordColumnInspector = narrow;
+            Assert.IsNotNull(configured.DoLogin("admin", "000000", null));
+            Assert.AreEqual(PasswordAlgorithm.Md5, configured.PasswordHasher.Algorithm);
+            Assert.IsNull(configured.DoLogin("admin", "wrong", null));
+            Assert.AreEqual(1, narrow.Calls);
+            Assert.AreEqual(stored, StoredPassword("admin"));
+            Assert.AreEqual(0, ScalarLong("SELECT COUNT(*) FROM WriteLog"), "no write into the narrow column");
+        }
+
+        [TestMethod]
+        public void ModelColumnHolds128Characters()
+        {
+            using (var dc = NewDc())
+            {
+                Assert.AreEqual(128, dc.Model.FindEntityType(typeof(FrameworkUser)).FindProperty("Password").GetMaxLength());
+            }
+        }
+
+        [TestMethod]
+        public void Pbkdf2ConfiguredOnTheWidenedColumnUpgradesPasswordsAtLogin()
+        {
+            //EnsureCreated made the column from the 128 character model; SQLite does not limit lengths, so the real inspector allows PBKDF2
+            var stored = Utils.GetMD5String("000000");
+            AddUser("admin", stored);
+            var options = new PasswordOption { Algorithm = PasswordAlgorithm.Pbkdf2Sha256, Pbkdf2Iterations = PasswordHasher.MinIterations };
+            var wtm = CreateContext();
+            wtm.ConfigInfo.PasswordOptions = options;
+            Assert.AreEqual(PasswordAlgorithm.Pbkdf2Sha256, wtm.PasswordHasher.Algorithm);
+            Assert.IsFalse(wtm.PasswordHasher.FellBackToMd5);
+            Assert.IsNotNull(wtm.DoLogin("admin", "000000", null));
+            var upgraded = StoredPassword("admin");
+            StringAssert.StartsWith(upgraded, "$pbkdf2-sha256$100000$");
+            Assert.IsTrue(upgraded.Length <= 128);
+            //the new hash keeps working, also from a context that has MD5 configured (dual format)
+            var again = CreateContext();
+            again.ConfigInfo.PasswordOptions = options;
+            Assert.IsNotNull(again.DoLogin("admin", "000000", null));
+            Assert.IsNull(again.DoLogin("admin", "wrong", null));
+            Assert.IsNotNull(CreateContext().DoLogin("admin", "000000", null));
+            Assert.AreEqual(upgraded, StoredPassword("admin"), "a current hash is not rewritten");
         }
 
         [TestMethod]
