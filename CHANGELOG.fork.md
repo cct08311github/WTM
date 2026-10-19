@@ -10,6 +10,10 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
+## 未发布
+
+* **新增：**   Oracle Database 最低支持版本为 19c（底层 ODP.NET 23；WTM 6.x 可连接 11g）。仍在使用 11g／12c 的应用，需先升级数据库，或改用其他整合方式。`Connections[].Version` 对 Oracle 只识别 19／21／23，其他值（例如 `11`、`12`）会改用 19 兼容模式（行为不变）；现在启动时会为每个这样的连接输出 Warning，说明已套用 19 兼容模式、且 19c 以下不受支持（#158）
+
 ## 10.0.0.5(2026-10-19)
 
 * **修改（Schema）：**   `FrameworkUserBase.Password` 长度由 32 调整为 128（为 PBKDF2 密码格式预留）。使用 `EnsureCreated` 的新数据库自动生效；既有数据库需手动加宽字段（见 [docs/migrations/password-hash-upgrade.md](docs/migrations/password-hash-upgrade.md)）；使用 EF Migrations 的应用需在同一次部署新增 AlterColumn 迁移，否则 EF 9+ 的 `Migrate()` 会因 PendingModelChangesWarning 失败

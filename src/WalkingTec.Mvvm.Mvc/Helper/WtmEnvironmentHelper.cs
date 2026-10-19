@@ -69,6 +69,42 @@ namespace WalkingTec.Mvvm.Mvc
             }
         }
 
+        /// <summary>
+        /// Maps an Oracle Connections[].Version value to the compatibility level that is applied and whether the
+        /// value is explicitly supported. 19, 21 and 23 are supported; any other non-empty value falls back to 19
+        /// compatibility (unchanged behaviour) and is reported as unsupported. An empty value means "not specified"
+        /// and also uses 19 compatibility without being reported.
+        /// </summary>
+        public static (int Compatibility, bool IsSupported) ResolveOracleCompatibility(string version)
+        {
+            switch (version)
+            {
+                case "19": return (19, true);
+                case "21": return (21, true);
+                case "23": return (23, true);
+                default: return (19, string.IsNullOrWhiteSpace(version));
+            }
+        }
+
+        /// <summary>
+        /// Logs one Warning per Oracle connection whose Version is set to a value other than 19, 21 or 23.
+        /// Behaviour is unchanged (19 compatibility is applied); never throws.
+        /// </summary>
+        public static void LogOracleVersionWarnings(Configs configs, ILogger logger)
+        {
+            if (configs?.Connections == null || logger == null)
+            {
+                return;
+            }
+            foreach (var cs in configs.Connections)
+            {
+                if (cs?.DbType == DBTypeEnum.Oracle && ResolveOracleCompatibility(cs.Version).IsSupported == false)
+                {
+                    logger.LogWarning("Connection '{Key}' uses Oracle with unsupported Version '{Version}'. Oracle 19c compatibility was applied. Oracle Database below 19c is not supported by this provider (ODP.NET 23); supported Version values are 19, 21 and 23.", cs.Key, cs.Version);
+                }
+            }
+        }
+
         private static bool IsDevelopmentName(string name)
         {
             return string.Equals(name?.Trim(), Environments.Development, StringComparison.OrdinalIgnoreCase);
