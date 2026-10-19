@@ -15,6 +15,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * **修改（Schema）：**   `FrameworkUserBase.Password` 长度由 32 调整为 128（为 PBKDF2 密码格式预留）。使用 `EnsureCreated` 的新数据库自动生效；既有数据库需手动加宽字段（见 [docs/migrations/password-hash-upgrade.md](docs/migrations/password-hash-upgrade.md)）；使用 EF Migrations 的应用需在同一次部署新增 AlterColumn 迁移，否则 EF 9+ 的 `Migrate()` 会因 PendingModelChangesWarning 失败
 * **新增：**   启用 `PasswordOptions:Algorithm=Pbkdf2Sha256` 前会检查数据库中 Password 字段的实际长度，不足或无法确认时自动退回 MD5 并输出 Warning；默认仍为 MD5
 * **修复（安全）：**   demo `FileApiController` 的 `UploadImage` 与 `GetFile` 缩略图在解码用户图片前先检查：只解析 JPEG／PNG／GIF／BMP／WebP（TIFF 等格式不再被解析），并限制文件大小、宽高、总像素、帧数与缩放目标尺寸，上限可通过 `ImageUploadLimits` 配置节调整。被拒绝时 `UploadImage` 返回原有的上传失败错误，`GetFile` 返回原文件。这是 ImageSharp 3.x 已知漏洞的短期缓解，验证码依赖支持 ImageSharp 4 后再升级（#78）
+* **修改：**   固定传递依赖 System.Security.Cryptography.Xml 至 10.0.13（修复 GHSA-r955-8q5j-3h83、GHSA-w3x6-4m5h-cxqf 等；Elsa 2.17 经 DataProtection 引入的 9.0.1 存在已知高危漏洞）。因 `Microsoft.AspNetCore.DataProtection` 已直接引用 10.0.9（其依赖 Xml >= 10.0.9），故使用 10.0.x 而非 9.0.21；并在 `WalkingTec.Mvvm.Mvc.csproj` 中取消该包的 net10.0 包剪除，使固定版本写入 nuspec（否则不含 ASP.NET Core 共享框架的使用方仍会还原到 9.0.1）。使用 Web SDK 的应用本就不受影响（#153）
 
 ## 10.0.0.4(2026-10-19)
 
