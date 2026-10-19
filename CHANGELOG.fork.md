@@ -40,6 +40,8 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * **修复：**   Upload／MultiUpload 前端脚本插入 HTML 前，先对文件名等运行期的值做 HTML 编码（#121）
 * **修复：**   Slider 的 `DefaultValue` 为单元素数组或空数组时不再抛出异常（#122）
 * **修复：**   OSS 上传的 object key 拒绝绝对路径、盘符与 `..` 片段，并在上传前检查；扩展名改为清理后的值；存入数据库的 `FileName` 只保存最后一段，`FileExt` 为清理后的扩展名（#128）
+* **新增：**   `PasswordOptions`（`Algorithm`：`Md5`（默认）／`Pbkdf2Sha256`；`Pbkdf2Iterations` 默认 600000）与 `PasswordHasher`：登录时同时接受旧的 MD5 与 `$pbkdf2-sha256$` 格式，以常数时间比较；`WTMContext` 新增 `HashPassword`／`VerifyPassword`。默认 MD5 时生成的哈希与 `Utils.GetMD5String` 完全相同，已存储的密码不会被改写。启用 `Pbkdf2Sha256` 前须先加宽用户表的 `Password` 字段（目前 32），字段放不下时自动沿用 MD5 并输出 Warning（#10）
+* **修改：**   `WTMContext.DoLogin` 改为先按 ITCode、租户与 `IsValid` 查出用户，再在内存中校验密码（原为在 SQL 中比较哈希），账号不存在时同样计算一次哈希以拉平耗时。默认 MD5 下登录结果不变；唯一差异是以小写存储的 MD5 现在在区分大小写的数据库中也能匹配（#10）
 * **修改：**   依赖更新（同一主版本内）：EF Core 10.0.13（Relational／SqlServer／InMemory）、Oracle.EntityFrameworkCore 10.23.26301、Microsoft.OpenApi 2.12.2 与 Swashbuckle.AspNetCore 10.3.x、Aliyun.OSS.SDK.NetCore 2.14.1、Fare 2.2.2
 * **升级说明：**
     1. 使用内置 `TokenService` 签发的令牌、以及 Cookie 登录（含 LayUI 页面）都不受 #3 影响
