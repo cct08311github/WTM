@@ -478,7 +478,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 else
                 {
-                    exist = BaseUserQuery.IgnoreQueryFilters().Any(x => x.ITCode == username && x.Password == Utils.GetMD5String(password) && x.TenantCode == tenant && x.IsValid==true);
+                    exist = CheckLoginPassword(username, password, tenant);
                 }
                 if (exist == false)
                 {
@@ -506,6 +506,144 @@ namespace WalkingTec.Mvvm.Core
                 user.RemoteToken = token.AccessToken;
                 return user;
             }
+        }
+
+        /// <summary>
+        /// Checks the password of an unauthenticated login in memory (the stored hash is no longer compared inside the SQL query),
+        /// so that every supported hash format can be verified. Same filters as before: account, tenant and IsValid.
+        /// A null password keeps its old meaning: it only matches an account whose stored password is empty, and no hashing work is done for it.
+        /// A hash that <see cref="Core.PasswordHasher.Verify"/> reports as outdated is replaced after a successful login.
+        /// </summary>
+        private bool CheckLoginPassword(string username, string password, string tenant)
+        {
+            var hasher = PasswordHasher;
+            var dc = DC;
+            var candidates = GetUserQuery(dc).IgnoreQueryFilters()
+                .Where(x => x.ITCode == username && x.TenantCode == tenant && x.IsValid == true)
+                .Select(x => new { x.ID, x.Password })
+                .ToList();
+            if (candidates.Count == 0)
+            {
+                //unknown account: spend about the same time as a real check
+                hasher.BurnTime(password);
+                return false;
+            }
+            foreach (var candidate in candidates)
+            {
+                if (password == null)
+                {
+                    //previously compared against GetMD5String(null), which is the empty string
+                    if (candidate.Password == string.Empty)
+                    {
+                        return true;
+                    }
+                    continue;
+                }
+                var result = hasher.Verify(candidate.Password, password);
+                if (result == PasswordVerifyResult.Failed)
+                {
+                    continue;
+                }
+                if (result == PasswordVerifyResult.SuccessRehashNeeded)
+                {
+                    TryRehashPassword(dc, candidate.ID, candidate.Password, password, hasher);
+                }
+                return true;
+            }
+            return false;
+        }
+
+        private IQueryable<FrameworkUserBase> GetUserQuery(IDataContext dc)
+        {
+            //resolved from the given context every time: BaseUserQuery caches the set of whichever context was current when it was first read
+            var set = dc.GetType().GetMethod("Set", Type.EmptyTypes).MakeGenericMethod(GlobaInfo.CustomUserType);
+            return set.Invoke(dc, null) as IQueryable<FrameworkUserBase>;
+        }
+
+        /// <summary>
+        /// Replaces the stored hash after a successful login, but only while the row still holds the hash that was verified,
+        /// so a password changed in the meantime is never reverted. The write touches nothing else: a single-statement update
+        /// (ExecuteUpdate) where the provider supports it, otherwise a short-lived separate context, never the change tracker of the request context.
+        /// A failure is logged and ignored; it must not block the login.
+        /// </summary>
+        private void TryRehashPassword(IDataContext dc, Guid userId, string verifiedStoredHash, string password, PasswordHasher hasher)
+        {
+            try
+            {
+                var newHash = hasher.Hash(password);
+                try
+                {
+                    GetUserQuery(dc).IgnoreQueryFilters()
+                        .Where(x => x.ID == userId && x.Password == verifiedStoredHash)
+                        .ExecuteUpdate(x => x.SetProperty(y => y.Password, newHash));
+                }
+                catch (Exception ex) when (ex is InvalidOperationException || ex is NotSupportedException)
+                {
+                    //providers without set based updates (for example the in memory provider)
+                    using (var fresh = dc.CreateNew())
+                    {
+                        var entity = GetUserQuery(fresh).IgnoreQueryFilters().Where(x => x.ID == userId).FirstOrDefault();
+                        if (entity != null && entity.Password == verifiedStoredHash)
+                        {
+                            entity.Password = newHash;
+                            fresh.SaveChanges();
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _loggerFactory?.CreateLogger<WTMContext>().LogWarning("Password rehash after login failed: {ExceptionType}", ex.GetType().Name);
+            }
+        }
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<(PasswordAlgorithm, int, int?), Lazy<PasswordHasher>> _passwordHashers = new System.Collections.Concurrent.ConcurrentDictionary<(PasswordAlgorithm, int, int?), Lazy<PasswordHasher>>();
+        private PasswordHasher _passwordHasher;
+
+        /// <summary>
+        /// The password hasher for the configured <see cref="Configs.PasswordOptions"/>. With the default options it produces and accepts
+        /// the same MD5 hashes as <see cref="Utils.GetMD5String"/>.
+        /// The setter replaces the hasher for this context only. A replacement must apply the same column length guard as the default
+        /// one (see <see cref="Core.PasswordHasher"/>): do not produce PBKDF2 hashes while the password column is too short to hold them.
+        /// </summary>
+        public PasswordHasher PasswordHasher
+        {
+            get
+            {
+                if (_passwordHasher == null)
+                {
+                    var options = ConfigInfo?.PasswordOptions ?? new PasswordOption();
+                    int? maxLength = null;
+                    if (options.Algorithm == PasswordAlgorithm.Pbkdf2Sha256)
+                    {
+                        maxLength = PasswordHasher.GetPasswordMaxLength(GlobaInfo?.CustomUserType, _dc);
+                    }
+                    var key = (options.Algorithm, options.Pbkdf2Iterations, maxLength);
+                    //Lazy: GetOrAdd may run the factory more than once under contention, and the constructor logs the guard Warning
+                    _passwordHasher = _passwordHashers.GetOrAdd(key, k => new Lazy<PasswordHasher>(() => new PasswordHasher(options, maxLength, _loggerFactory?.CreateLogger<WTMContext>()))).Value;
+                }
+                return _passwordHasher;
+            }
+            set
+            {
+                _passwordHasher = value;
+            }
+        }
+
+        /// <summary>
+        /// Hashes a password for storage in the user table (MD5 unless configured otherwise, see <see cref="Configs.PasswordOptions"/>).
+        /// </summary>
+        public string HashPassword(string password)
+        {
+            return PasswordHasher.Hash(password);
+        }
+
+        /// <summary>
+        /// Checks a password against a stored hash of any supported format.
+        /// </summary>
+        public PasswordVerifyResult VerifyPassword(string storedHash, string password)
+        {
+            return PasswordHasher.Verify(storedHash, password);
         }
 
         public Token RefreshToken()

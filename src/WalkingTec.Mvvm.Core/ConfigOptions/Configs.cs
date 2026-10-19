@@ -599,6 +599,31 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region PasswordOption configs
+
+        private PasswordOption _passwordOption;
+
+        /// <summary>
+        /// Password storage settings
+        /// </summary>
+        public PasswordOption PasswordOptions
+        {
+            get
+            {
+                if (_passwordOption == null)
+                {
+                    _passwordOption = new PasswordOption();
+                }
+                return _passwordOption;
+            }
+            set
+            {
+                _passwordOption = value;
+            }
+        }
+
+        #endregion
+
         #region DeepSeek
 
         private DeepSeekOption _deepSeek;

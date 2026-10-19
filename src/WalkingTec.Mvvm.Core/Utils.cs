@@ -720,6 +720,10 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         /// <param name="str"></param>
         /// <returns>返回大写32位MD5值</returns>
+        /// <remarks>
+        /// Unsalted MD5 is the legacy password format. Code that stores or checks user passwords should go through
+        /// <see cref="PasswordHasher"/> (<c>Wtm.HashPassword</c> / <c>Wtm.VerifyPassword</c>) instead, which also understands a stronger format.
+        /// </remarks>
         public static string GetMD5String(string str)
         {
             if(str == null)
