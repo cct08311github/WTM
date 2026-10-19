@@ -10,12 +10,13 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
-## 未发布
+## 10.0.0.5(2026-10-19)
 
 * **修改（Schema）：**   `FrameworkUserBase.Password` 长度由 32 调整为 128（为 PBKDF2 密码格式预留）。使用 `EnsureCreated` 的新数据库自动生效；既有数据库需手动加宽字段（见 [docs/migrations/password-hash-upgrade.md](docs/migrations/password-hash-upgrade.md)）；使用 EF Migrations 的应用需在同一次部署新增 AlterColumn 迁移，否则 EF 9+ 的 `Migrate()` 会因 PendingModelChangesWarning 失败
 * **新增：**   启用 `PasswordOptions:Algorithm=Pbkdf2Sha256` 前会检查数据库中 Password 字段的实际长度，不足或无法确认时自动退回 MD5 并输出 Warning；默认仍为 MD5
 * **修复（安全）：**   demo `FileApiController` 的 `UploadImage` 与 `GetFile` 缩略图在解码用户图片前先检查：只解析 JPEG／PNG／GIF／BMP／WebP（TIFF 等格式不再被解析），并限制文件大小、宽高、总像素、帧数与缩放目标尺寸，上限可通过 `ImageUploadLimits` 配置节调整。被拒绝时 `UploadImage` 返回原有的上传失败错误，`GetFile` 返回原文件。这是 ImageSharp 3.x 已知漏洞的短期缓解，验证码依赖支持 ImageSharp 4 后再升级（#78）
 * **修改：**   固定传递依赖 System.Security.Cryptography.Xml 至 10.0.13（修复 GHSA-r955-8q5j-3h83、GHSA-w3x6-4m5h-cxqf 等；Elsa 2.17 经 DataProtection 引入的 9.0.1 存在已知高危漏洞），同时将 System.Security.Cryptography.Pkcs 的固定版本由 9.0.21 调整为 10.0.13（Xml 10.0.13 要求 Pkcs >= 10.0.13；仍满足 GHSA-846f-f764-76mx、GHSA-2fmv-rv2c-59x7）。固定写在 `WalkingTec.Mvvm.Core`（会传递给 Mvc 与 TagHelpers.LayUI），并在其 csproj 中取消 Xml 的 net10.0 包剪除，使固定版本写入 nuspec（否则不含 ASP.NET Core 共享框架的类库／测试项目仍会还原到 9.0.1）。使用 Web SDK 的应用本就不受影响（#153）
+* **文档：**   `docs/migrations/password-hash-upgrade.md` §2 的 SQL Server 事前检查查询改为按 `TABLE_SCHEMA = SCHEMA_NAME()` 过滤（与程序实际检查一致），并一并列出 `DATA_TYPE`、`COLLATION_NAME` 与数据库默认排序规则，便于判断 §3 的 ALTER 是否需要写 `COLLATE`（已在 SQL Server 2019 实测 §2／§3／§5(a)）（#156）
 
 ## 10.0.0.4(2026-10-19)
 
