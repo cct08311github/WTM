@@ -81,6 +81,27 @@ namespace WalkingTec.Mvvm.Admin.Test
         }
 
         [TestMethod]
+        public void ChangePasswordWithDuplicateAccountNamesChecksEveryCandidate()
+        {
+            // two rows with the same account name, as can happen under a case insensitive collation
+            AddUser(Utils.GetMD5String("first"));
+            using (var context = new WalkingTec.Mvvm.Vue3Demo.DataContext(_seed, DBTypeEnum.Memory))
+            {
+                context.Set<FrameworkUser>().Add(new FrameworkUser { ITCode = "itcode", Name = "name2", Password = Utils.GetMD5String("second") });
+                context.SaveChanges();
+            }
+            foreach (var oldPassword in new[] { "first", "second" })
+            {
+                var vm = CreateChangeVm(oldPassword, "new");
+                vm.Validate();
+                Assert.IsTrue(vm.MSD.IsValid, oldPassword);
+            }
+            var wrong = CreateChangeVm("third", "new");
+            wrong.Validate();
+            Assert.IsFalse(wrong.MSD.IsValid);
+        }
+
+        [TestMethod]
         public void AdminPasswordResetStoresMd5()
         {
             AddUser(Utils.GetMD5String("old"));

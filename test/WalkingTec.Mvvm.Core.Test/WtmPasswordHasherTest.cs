@@ -52,7 +52,7 @@ namespace WalkingTec.Mvvm.Core.Test
         [TestMethod]
         public void Pbkdf2ConfiguredFallsBackToMd5WhileColumnHolds32Characters()
         {
-            var wtm = CreateContext(new PasswordOption { Algorithm = PasswordAlgorithm.Pbkdf2Sha256, Pbkdf2Iterations = 1000 });
+            var wtm = CreateContext(new PasswordOption { Algorithm = PasswordAlgorithm.Pbkdf2Sha256, Pbkdf2Iterations = 100000 });
             Assert.AreEqual(PasswordAlgorithm.Pbkdf2Sha256, wtm.PasswordHasher.ConfiguredAlgorithm);
             Assert.AreEqual(PasswordAlgorithm.Md5, wtm.PasswordHasher.Algorithm);
             Assert.IsTrue(wtm.PasswordHasher.FellBackToMd5);
@@ -64,9 +64,9 @@ namespace WalkingTec.Mvvm.Core.Test
         public void PasswordHasherCanBeReplaced()
         {
             var wtm = CreateContext(null);
-            var hasher = new PasswordHasher(new PasswordOption { Algorithm = PasswordAlgorithm.Pbkdf2Sha256, Pbkdf2Iterations = 1000 });
+            var hasher = new PasswordHasher(new PasswordOption { Algorithm = PasswordAlgorithm.Pbkdf2Sha256, Pbkdf2Iterations = 100000 });
             wtm.PasswordHasher = hasher;
-            StringAssert.StartsWith(wtm.HashPassword("abc"), "$pbkdf2-sha256$1000$");
+            StringAssert.StartsWith(wtm.HashPassword("abc"), "$pbkdf2-sha256$100000$");
         }
     }
 }

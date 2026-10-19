@@ -29,8 +29,9 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkUserVms
         public override void Validate()
         {
             List<ValidationResult> rv = new List<ValidationResult>();
-            var current = DC.Set<FrameworkUser>().Where(x => x.ITCode == LoginUserInfo.ITCode).SingleOrDefault();
-            if (current == null || Wtm.VerifyPassword(current.Password, OldPassword) == PasswordVerifyResult.Failed)
+            //several rows can share an account name (for example under a case insensitive collation), so check every candidate
+            var storedPasswords = DC.Set<FrameworkUser>().Where(x => x.ITCode == LoginUserInfo.ITCode).Select(x => x.Password).ToList();
+            if (storedPasswords.Any(x => Wtm.VerifyPassword(x, OldPassword) != PasswordVerifyResult.Failed) == false)
             {
                 MSD.AddModelError("OldPassword", Localizer["Login.OldPasswrodWrong"]);
             }

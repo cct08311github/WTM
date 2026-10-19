@@ -47,16 +47,24 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>Prefix of the PBKDF2 storage format.</summary>
         public const string Pbkdf2Prefix = "$pbkdf2-sha256$";
 
+        /// <summary>Lowest accepted <see cref="PasswordOption.Pbkdf2Iterations"/>; smaller configured values are raised to it.</summary>
+        public const int MinIterations = 100000;
+
+        /// <summary>
+        /// Highest accepted <see cref="PasswordOption.Pbkdf2Iterations"/>; larger configured values are lowered to it.
+        /// The same bound applies to the iteration count read from a stored hash, so a corrupted value cannot stall a login.
+        /// </summary>
+        public const int MaxStoredIterations = 2000000;
+
         private const int SaltSize = 16;
         private const int HashSize = 32;
-        // upper bound for the iteration count read from a stored hash, so a corrupted value cannot stall a login
-        private const int MaxStoredIterations = 10000000;
         private const string PasswordPropertyName = "Password";
 
         private static readonly Lazy<PasswordHasher> _default = new Lazy<PasswordHasher>(() => new PasswordHasher(new PasswordOption()));
 
         /// <summary>
-        /// A hasher with the default options (MD5). For code that has no <see cref="WTMContext"/>, such as seed data.
+        /// A hasher with the default options (MD5), meant for seeding data from code that has no <see cref="WTMContext"/>.
+        /// It ignores the configured <see cref="Configs.PasswordOptions"/>; use <see cref="WTMContext.HashPassword"/> for anything else.
         /// Hashes it creates are upgraded at login when a stronger algorithm is configured.
         /// </summary>
         public static PasswordHasher Default => _default.Value;
@@ -67,7 +75,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>The algorithm actually used by <see cref="Hash"/>; differs from <see cref="ConfiguredAlgorithm"/> only when the safety guard applies.</summary>
         public PasswordAlgorithm Algorithm { get; }
 
-        /// <summary>PBKDF2 iteration count used for new hashes.</summary>
+        /// <summary>PBKDF2 iteration count used for new hashes, after clamping to <see cref="MinIterations"/>..<see cref="MaxStoredIterations"/>.</summary>
         public int Iterations { get; }
 
         /// <summary>True when PBKDF2 was configured but the safety guard forced MD5.</summary>
@@ -83,7 +91,11 @@ namespace WalkingTec.Mvvm.Core
         {
             options = options ?? new PasswordOption();
             ConfiguredAlgorithm = options.Algorithm;
-            Iterations = options.Pbkdf2Iterations >= 1 ? options.Pbkdf2Iterations : PasswordOption.DefaultPbkdf2Iterations;
+            Iterations = Math.Min(Math.Max(options.Pbkdf2Iterations, MinIterations), MaxStoredIterations);
+            if (Iterations != options.Pbkdf2Iterations && ConfiguredAlgorithm == PasswordAlgorithm.Pbkdf2Sha256)
+            {
+                logger?.LogWarning("PasswordOptions:Pbkdf2Iterations is {Configured}, outside the supported range {Min}..{Max}; {Used} is used instead.", options.Pbkdf2Iterations, MinIterations, MaxStoredIterations, Iterations);
+            }
             Algorithm = ConfiguredAlgorithm;
             if (ConfiguredAlgorithm == PasswordAlgorithm.Pbkdf2Sha256 && maxStoredLength.HasValue)
             {
@@ -106,22 +118,31 @@ namespace WalkingTec.Mvvm.Core
                 return Utils.GetMD5String(password);
             }
             var salt = RandomNumberGenerator.GetBytes(SaltSize);
-            var hash = Rfc2898DeriveBytes.Pbkdf2(password ?? string.Empty, salt, Iterations, HashAlgorithmName.SHA256, HashSize);
+            var hash = DeriveKey(password ?? string.Empty, salt, Iterations, HashSize);
             return string.Concat(Pbkdf2Prefix, Iterations.ToString(CultureInfo.InvariantCulture), "$", Convert.ToBase64String(salt), "$", Convert.ToBase64String(hash));
         }
 
         /// <summary>
         /// Checks a password against a stored hash in either supported format. A null or empty stored value, a null password and
         /// an unrecognised stored format all give <see cref="PasswordVerifyResult.Failed"/>.
+        /// When PBKDF2 is in effect, a check that would otherwise be fast (legacy MD5, empty or unrecognised stored value) also
+        /// performs one dummy PBKDF2 derivation, so an account with a legacy hash cannot be told apart from an unknown account by
+        /// response time. A null password returns immediately without that work.
         /// </summary>
         public PasswordVerifyResult Verify(string stored, string password)
         {
-            if (string.IsNullOrEmpty(stored) || password == null)
+            if (password == null)
             {
+                return PasswordVerifyResult.Failed;
+            }
+            if (string.IsNullOrEmpty(stored))
+            {
+                EqualizeTiming();
                 return PasswordVerifyResult.Failed;
             }
             if (IsLegacyMd5(stored))
             {
+                EqualizeTiming();
                 var expected = Encoding.ASCII.GetBytes(Utils.GetMD5String(password));
                 var actual = Encoding.ASCII.GetBytes(stored.ToUpperInvariant());
                 if (CryptographicOperations.FixedTimeEquals(expected, actual) == false)
@@ -132,22 +153,43 @@ namespace WalkingTec.Mvvm.Core
             }
             if (TryParsePbkdf2(stored, out var iterations, out var salt, out var expectedHash))
             {
-                var actualHash = Rfc2898DeriveBytes.Pbkdf2(password, salt, iterations, HashAlgorithmName.SHA256, expectedHash.Length);
+                var actualHash = DeriveKey(password, salt, iterations, expectedHash.Length);
                 if (CryptographicOperations.FixedTimeEquals(actualHash, expectedHash) == false)
                 {
                     return PasswordVerifyResult.Failed;
                 }
                 return Algorithm == PasswordAlgorithm.Pbkdf2Sha256 && iterations < Iterations ? PasswordVerifyResult.SuccessRehashNeeded : PasswordVerifyResult.Success;
             }
+            EqualizeTiming();
             return PasswordVerifyResult.Failed;
         }
 
         /// <summary>
         /// Does the work of one hash and discards it, so a login for an unknown account costs about the same as one for a known account.
+        /// Does nothing for a null password (the path used to reload an already authenticated user).
         /// </summary>
         public void BurnTime(string password)
         {
-            Hash(password);
+            if (password != null)
+            {
+                Hash(password);
+            }
+        }
+
+        /// <summary>
+        /// Derives a PBKDF2-HMAC-SHA256 key. Virtual so that a test can observe or replace the expensive step.
+        /// </summary>
+        protected virtual byte[] DeriveKey(string password, byte[] salt, int iterations, int length)
+        {
+            return Rfc2898DeriveBytes.Pbkdf2(password, salt, iterations, HashAlgorithmName.SHA256, length);
+        }
+
+        private void EqualizeTiming()
+        {
+            if (Algorithm == PasswordAlgorithm.Pbkdf2Sha256)
+            {
+                DeriveKey(string.Empty, RandomNumberGenerator.GetBytes(SaltSize), Iterations, HashSize);
+            }
         }
 
         /// <summary>
@@ -183,7 +225,12 @@ namespace WalkingTec.Mvvm.Core
                     // fall back to the attributes
                 }
             }
-            var pi = userType.GetProperty(PasswordPropertyName, BindingFlags.Public | BindingFlags.Instance);
+            // a derived type may hide Password with "new": take the most derived declaration instead of letting GetProperty report an ambiguity
+            PropertyInfo pi = null;
+            for (var t = userType; t != null && pi == null; t = t.BaseType)
+            {
+                pi = t.GetProperty(PasswordPropertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+            }
             if (pi == null)
             {
                 return null;

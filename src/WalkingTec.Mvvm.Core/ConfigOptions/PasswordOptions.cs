@@ -24,7 +24,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>
         /// Default PBKDF2 iteration count.
         /// </summary>
-        public const int DefaultPbkdf2Iterations = 210000;
+        public const int DefaultPbkdf2Iterations = 600000;
 
         /// <summary>
         /// Algorithm used when a password is hashed (config: PasswordOptions:Algorithm, default Md5).
@@ -35,8 +35,9 @@ namespace WalkingTec.Mvvm.Core
         public PasswordAlgorithm Algorithm { get; set; } = PasswordAlgorithm.Md5;
 
         /// <summary>
-        /// PBKDF2 iteration count for new hashes (config: PasswordOptions:Pbkdf2Iterations, default 210000).
-        /// A value below 1 falls back to the default. A stored PBKDF2 hash with fewer iterations is upgraded at the next successful login.
+        /// PBKDF2 iteration count for new hashes (config: PasswordOptions:Pbkdf2Iterations, default 600000).
+        /// Values outside 100000..2000000 are clamped to that range (a Warning is logged). A stored PBKDF2 hash with fewer
+        /// iterations than the effective count is upgraded at the next successful login.
         /// </summary>
         public int Pbkdf2Iterations { get; set; } = DefaultPbkdf2Iterations;
     }
