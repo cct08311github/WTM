@@ -10,7 +10,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
-## 未发布（发布时将编为 10.0.0.4）
+## 10.0.0.4(2026-10-19)
 
 * **修改（BREAKING）：**   Bearer（JwtBearer）认证改用与远程令牌相同的校验规则（#3）：令牌必须带 `exp`；只接受 HS256；校验 `nbf`；过期判定允许 30 秒时钟偏差（原为 0 秒）
 * **新增：**   `JwtOptions:AllowTokensWithoutExpiry`（默认 false），过渡期内允许不带 `exp` 的令牌，启动时输出 Warning（#3）
@@ -40,6 +40,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * **修复：**   Upload／MultiUpload 前端脚本插入 HTML 前，先对文件名等运行期的值做 HTML 编码（#121）
 * **修复：**   Slider 的 `DefaultValue` 为单元素数组或空数组时不再抛出异常（#122）
 * **修复：**   OSS 上传的 object key 拒绝绝对路径、盘符与 `..` 片段，并在上传前检查；扩展名改为清理后的值；存入数据库的 `FileName` 只保存最后一段，`FileExt` 为清理后的扩展名（#128）
+* **修改：**   依赖更新（同一主版本内）：EF Core 10.0.13（Relational／SqlServer／InMemory）、Oracle.EntityFrameworkCore 10.23.26301、Microsoft.OpenApi 2.12.2 与 Swashbuckle.AspNetCore 10.3.x、Aliyun.OSS.SDK.NetCore 2.14.1、Fare 2.2.2
 * **升级说明：**
     1. 使用内置 `TokenService` 签发的令牌、以及 Cookie 登录（含 LayUI 页面）都不受 #3 影响
     2. 如有外部系统使用同一把密钥自行签发令牌，请确认这些令牌：使用 HS256、带有 `exp`、不带未来的 `nbf`。暂时无法带上 `exp` 的，可设置 `JwtOptions:AllowTokensWithoutExpiry=true` 过渡；算法与 `nbf` 的要求没有开关可以放宽

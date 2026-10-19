@@ -48,7 +48,7 @@
 - fork 修訂號 `ForkRevision` 放在 `fork.props`：每發佈一個 fork 版本就加 1；合併了上游的版號升級後，重設為 1
 - fork 的變更記錄寫在 `CHANGELOG.fork.md`
 - 下游取用 fork 套件時，建議在 `NuGet.Config` 設定 [Package Source Mapping](https://learn.microsoft.com/nuget/consume-packages/package-source-mapping)，讓 `WalkingTec.Mvvm.*` 只從 fork 的 feed 取得
-- 發佈通道尚未決定，目前暫不發佈（#27）
+- 發佈通道：維護者的私有 NuGet feed（不在 nuget.org）。第一個發佈版本是 `10.0.0.4`；發佈流程是在 GitHub 打 `v<版號>` tag，再從該 tag 打包 Core、Mvc、TagHelpers.LayUI 三個套件並上傳（#27）
 
 ## 5. 與上游同步
 
