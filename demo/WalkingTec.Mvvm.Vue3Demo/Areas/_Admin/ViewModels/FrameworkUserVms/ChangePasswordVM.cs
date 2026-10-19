@@ -29,7 +29,9 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkUserVms
         public override void Validate()
         {
             List<ValidationResult> rv = new List<ValidationResult>();
-            if (DC.Set<FrameworkUser>().Where(x => x.ITCode == LoginUserInfo.ITCode && x.Password == Utils.GetMD5String(OldPassword)).SingleOrDefault() == null)
+            //several rows can share an account name (for example under a case insensitive collation), so check every candidate
+            var storedPasswords = DC.Set<FrameworkUser>().Where(x => x.ITCode == LoginUserInfo.ITCode).Select(x => x.Password).ToList();
+            if (storedPasswords.Any(x => Wtm.VerifyPassword(x, OldPassword) != PasswordVerifyResult.Failed) == false)
             {
                 MSD.AddModelError("OldPassword", Localizer["Login.OldPasswrodWrong"]);
             }
@@ -44,7 +46,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkUserVms
             var user = DC.Set<FrameworkUser>().Where(x => x.ITCode == LoginUserInfo.ITCode).SingleOrDefault();
             if (user != null)
             {
-                user.Password = Utils.GetMD5String(NewPassword);
+                user.Password = Wtm.HashPassword(NewPassword);
             }
             DC.SaveChanges();
         }
