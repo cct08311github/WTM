@@ -132,6 +132,58 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # --skip-duplicate 會讓重複版本被靜默略過（job 仍成功但下游拿到舊程式碼），
+      # 因此推送前先檢查 feed，版本已存在就直接失敗。
+      - name: Check version not already published
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          failed=0
+
+          for id in WalkingTec.Mvvm.Core WalkingTec.Mvvm.Mvc WalkingTec.Mvvm.TagHelpers.LayUI; do
+            lower="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
+            url="https://nuget.pkg.github.com/cct08311github/download/$lower/index.json"
+            body="$tmp/$lower.json"
+
+            # curl 失敗（網路錯誤）時 -w 仍會輸出 000，交給下方 fail-closed 處理
+            status="$(curl --silent --show-error --max-time 30 --retry 2 --retry-delay 3 \
+              -u "$GITHUB_REPOSITORY_OWNER:$NUGET_AUTH_TOKEN" \
+              -o "$body" -w '%{http_code}' "$url" || true)"
+            status="${status:-000}"
+
+            case "$status" in
+              404)
+                echo "::notice::$id is not in the GitHub Packages feed yet (HTTP 404); nothing to conflict with"
+                ;;
+              200)
+                if exists="$(jq -r --arg v "$VERSION" \
+                  '[.versions[]? | ascii_downcase] | index($v | ascii_downcase) != null' "$body")"; then
+                  if [[ "$exists" == "true" ]]; then
+                    echo "::error::$id $VERSION already exists in the GitHub Packages feed. Bump the version (version.props/fork.props) and tag again; refusing to publish because duplicate pushes would be silently skipped"
+                    failed=1
+                  else
+                    echo "$id $VERSION is not in the feed yet"
+                  fi
+                else
+                  echo "::error::Could not parse the version list returned for $id (HTTP 200); refusing to publish"
+                  failed=1
+                fi
+                ;;
+              *)
+                echo "::error::Unexpected HTTP status $status while checking $id in the GitHub Packages feed; refusing to publish"
+                failed=1
+                ;;
+            esac
+          done
+
+          if [[ "$failed" -ne 0 ]]; then
+            exit 1
+          fi
+          echo "Version $VERSION is not yet published for any package"
+
       - name: Push to GitHub Packages
         env:
           NUGET_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -139,7 +191,6 @@ jobs:
           dotnet nuget push "artifacts/nupkg/*.nupkg"
           --source https://nuget.pkg.github.com/cct08311github/index.json
           --api-key "$NUGET_AUTH_TOKEN"
-          --skip-duplicate
           --no-symbols
 
       - name: Summary
