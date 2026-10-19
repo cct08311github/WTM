@@ -29,7 +29,16 @@
 - 欄位太短，或查不到（連不上、找不到資料表或欄位、權限不足、不支援的資料庫）→ **自動退回 MD5，並記錄一則 Warning**，Warning 中會指向本文件；
 - 預設 MD5 時完全不會做這個查詢，沒有任何額外負擔。
 
-查詢結果的快取規則：確定的答案在整個行程存活期間都有效，所以加寬欄位之後要**重新啟動應用程式**（通常就是部署新版本那一次）；「查不到」的結果只快取約 5 分鐘，之後會再試一次。
+查詢結果的快取規則：確定的答案快取約 1 小時，「查不到」的結果快取約 5 分鐘，之後都會重新查詢；同一個欄位同一時間只會有一個請求去查資料庫，其他同時進來的請求不會等待，會先拿到上一次的答案（還沒有答案時視同「查不到」，也就是暫時用 MD5）。資料庫連不上時，最多只會讓一個請求短暫等待（連線逾時約 5 秒）。為了立即生效，**加寬欄位之後、以及任何一次結構回滾之後，都請重新啟動應用程式**。
+
+### 部署新版本但尚未加寬欄位時
+
+這是最常見的情況，**不會影響啟動與登入**：
+
+- 預設演算法是 MD5 時，欄位檢查器**完全不會被呼叫**；MD5 雜湊是 32 字元，放得進既有的 32 字元欄位。
+- `EnsureCreated` 不會修改已存在的資料表，所以模型雖然已經寫著 128，資料庫裡的欄位仍然是 32；EF 不會在執行期檢查長度，登入、建立使用者、修改密碼都照舊運作。
+- 只有**啟用 PBKDF2** 才依賴欄位加寬；在加寬之前啟用，系統會退回 MD5 並記錄 Warning，**不會**讓啟動或登入失敗。
+- 沒有使用 EF Core Migrations、自己手動管理資料庫結構的應用程式，部署時**不需要任何 migration**；要啟用 PBKDF2 時再依第 3 節手動加寬欄位即可。使用 EF Migrations 的應用程式請見第 3 節最後一段。
 
 ## 2. 事前檢查
 
@@ -43,6 +52,8 @@ FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_NAME = 'FrameworkUsers' AND COLUMN_NAME = 'Password';
 -- 32 表示尚未加寬；-1 表示 MAX（可直接使用）
 ```
+
+沒有明確指定 schema 時，程式查的是連線登入帳號的預設 schema（`SCHEMA_NAME()`）。如果你的資料表在其他 schema，而 Warning 說「找不到 Password 欄位」，請在 `DbContext` 對應中明確指定該 schema（`ToTable("FrameworkUsers", "你的schema")`），或把登入帳號的預設 schema 設成資料表所在的 schema。
 
 MySQL：
 
@@ -80,6 +91,8 @@ ALTER TABLE [FrameworkUsers] ALTER COLUMN [Password] NVARCHAR(128) NOT NULL;
 
 （有自訂 schema 時寫成 `[dbo].[FrameworkUsers]`。把 `nvarchar(32)` 加寬為 `nvarchar(128)` 通常只改中繼資料，很快；仍建議在低峰時段執行。）
 
+注意：SQL Server 的 `ALTER COLUMN` 會把欄位的定序（COLLATE）重設為資料庫預設值。如果原欄位使用非預設的定序，請在型別後面重複指定，例如 `NVARCHAR(128) COLLATE Chinese_Taiwan_Stroke_CI_AS NOT NULL`；原定序可從 `INFORMATION_SCHEMA.COLUMNS.COLLATION_NAME` 查到。
+
 **MySQL**
 
 ```sql
@@ -95,8 +108,13 @@ ALTER TABLE "FrameworkUsers" ALTER COLUMN "Password" TYPE character varying(128)
 
 **Oracle**
 
+先確認現有型別（第 2 節的查詢，看 `DATA_TYPE`）：EF 預設產生的是 `NVARCHAR2(32)`，但你的環境也可能是 `VARCHAR2(32)`。加寬時請**保持同一種型別**，只改長度：
+
 ```sql
+-- 現有型別是 NVARCHAR2
 ALTER TABLE "FrameworkUsers" MODIFY ("Password" NVARCHAR2(128));
+-- 現有型別是 VARCHAR2（依原本的長度語意加上 CHAR 或 BYTE）
+ALTER TABLE "FrameworkUsers" MODIFY ("Password" VARCHAR2(128 CHAR));
 -- MODIFY 不會動到既有的 NOT NULL
 ```
 
@@ -107,7 +125,7 @@ ALTER TABLE "FrameworkUsers" MODIFY ("Password" NVARCHAR2(128));
 ALTER TABLE "FrameworkUsers" MODIFY "Password" VARCHAR(128);
 ```
 
-達夢的語法與欄位長度的判斷，本文件與程式都是依官方文件撰寫，**尚未在真實的達夢資料庫上驗證**；如果程式查不到欄位長度，會退回 MD5 並記錄 Warning（安全的一面）。
+達夢的語法與欄位長度的判斷，本文件與程式都是依官方文件撰寫，**尚未在真實的達夢資料庫上驗證**。**目前在 EF Core 10 上，達夢的 EF provider 套件無法建立模型，所以達夢環境暫時無法啟用 PBKDF2**：欄位檢查會得到「無法確認」，系統一律退回 MD5 並記錄 Warning（安全的一面），登入不受影響。此限制消除之前，請勿在達夢環境依賴本功能。
 
 **SQLite**
 
@@ -122,16 +140,37 @@ ALTER TABLE "FrameworkUsers" MODIFY "Password" VARCHAR(128);
 1. **確認所有執行個體都能認得兩種格式。** 同一個資料庫若有多個應用程式或多個執行個體，全部都要先升級到本版本（或更新版本）。舊版本遇到 PBKDF2 的雜湊會判定密碼錯誤。
 2. **備份 Password 欄位。** 備份表內含密碼雜湊，屬於敏感資料，請限制存取權限並訂好保留期限。
 
+   SQL Server：
+
    ```sql
-   -- SQL Server
-   SELECT ID, Password INTO FrameworkUsers_PasswordBackup_20261019 FROM FrameworkUsers;
-   -- MySQL / SQLite / Oracle / 達夢
-   CREATE TABLE FrameworkUsers_PasswordBackup_20261019 AS SELECT ID, Password FROM FrameworkUsers;
-   -- PostgreSQL
-   CREATE TABLE "FrameworkUsers_PasswordBackup_20261019" AS SELECT "ID", "Password" FROM "FrameworkUsers";
+   SELECT [ID], [ITCode], [Password] INTO [FrameworkUsers_PasswordBackup_20261019] FROM [FrameworkUsers];
    ```
 
-   （日期改成備份當天；Oracle／達夢／PostgreSQL 的識別字請依你資料庫的引號慣例加上雙引號。）
+   MySQL、SQLite：
+
+   ```sql
+   CREATE TABLE FrameworkUsers_PasswordBackup_20261019 AS SELECT ID, ITCode, Password FROM FrameworkUsers;
+   ```
+
+   PostgreSQL（名稱區分大小寫，要加雙引號）：
+
+   ```sql
+   CREATE TABLE "FrameworkUsers_PasswordBackup_20261019" AS SELECT "ID", "ITCode", "Password" FROM "FrameworkUsers";
+   ```
+
+   Oracle（識別字區分大小寫，要加雙引號）：
+
+   ```sql
+   CREATE TABLE "FrameworkUsers_PasswordBackup_20261019" AS SELECT "ID", "ITCode", "Password" FROM "FrameworkUsers";
+   ```
+
+   達夢（識別字區分大小寫，要加雙引號；語法依官方文件，未實測）：
+
+   ```sql
+   CREATE TABLE "FrameworkUsers_PasswordBackup_20261019" AS SELECT "ID", "ITCode", "Password" FROM "FrameworkUsers";
+   ```
+
+   日期改成備份當天。備份裡包含 `ITCode`，是為了回滾時能認出是哪些帳號。如果你的資料表在特定 schema，請加上 schema 名稱。
 3. **加寬欄位**（第 3 節的 SQL）。
 4. **部署本版本。**
 5. **設定組態**（`appsettings.json` 或環境變數 `PasswordOptions__Algorithm`）：
@@ -173,33 +212,46 @@ ALTER TABLE "FrameworkUsers" MODIFY "Password" VARCHAR(128);
 
 | 階段 | 可以怎麼做 | 注意 |
 |---|---|---|
-| (a) **只加寬了欄位，尚未啟用 PBKDF2**（組態仍是 MD5 或沒設定） | 可以縮回 32：`ALTER TABLE ... ALTER COLUMN [Password] NVARCHAR(32) NOT NULL`（其他資料庫類推）。 | 所有值都是 32 字元 MD5，不會截斷。縮回前先確認 `SELECT COUNT(*) FROM FrameworkUsers WHERE LEN(Password) > 32` 為 0（MySQL／PostgreSQL／Oracle 用 `LENGTH`）。 |
+| (a) **只加寬了欄位，尚未啟用 PBKDF2**（組態仍是 MD5 或沒設定） | 可以縮回 32：`ALTER TABLE ... ALTER COLUMN [Password] NVARCHAR(32) NOT NULL`（其他資料庫類推）。 | 所有值都是 32 字元 MD5，不會截斷。縮回前先確認 `SELECT COUNT(*) FROM FrameworkUsers WHERE LEN(Password) > 32` 為 0（MySQL／PostgreSQL／Oracle 用 `LENGTH`）。縮回後請重新啟動應用程式。 |
 | (b) **已啟用，想停止升級更多使用者** | 把 `PasswordOptions:Algorithm` 改回 `Md5`（或移除該設定），重新啟動。 | 已經是 PBKDF2 的使用者**仍然可以登入**（兩種格式都能驗證），只是不再有新的升級；之後建立或修改密碼的使用者會存成 MD5。已存在的 PBKDF2 雜湊不會被降回 MD5。**這不需要動資料庫，是最安全的回頭路。** |
 | (c) **要回到不認得 PBKDF2 的舊版 WTM** | 先停止應用程式，再還原備份（見下方），其餘的人需要重設密碼。 | 見下方說明。**絕對不要在還有 PBKDF2 值的情況下縮小欄位**，會截斷或讓寫入失敗，使用者將無法登入。 |
 
 ### (c) 的做法
 
-PBKDF2 是單向的，無法轉回 MD5，所以唯一的還原來源就是升級前做的備份：
+PBKDF2 是單向的，無法轉回 MD5，所以唯一的還原來源就是升級前做的備份（因此備份要保留到你確定不會回滾為止）。有些帳號無法從備份還原：備份之後才建立的帳號（備份裡沒有他們），以及備份之後自行改過密碼的帳號（還原會把他們退回舊密碼）。這些帳號要改成「暫時無法登入，必須由管理員重設密碼」，這樣最後才不會留下任何 PBKDF2 的值。
+
+下面的 `占位值` 是任何一個不可能是 MD5 的 32 字元字串（含有 `!`，不是 32 個十六進位字元）；沒有任何密碼能與它相符，所以持有它的帳號無法登入。SQL Server 可以每列隨機產生：`LEFT('!' + REPLACE(CAST(NEWID() AS varchar(36)), '-', ''), 32)`；其他資料庫用固定值 `'!reset-required-0000000000000000'`（剛好 32 字元）即可，因為它同樣不可能相符。
 
 1. 停止所有應用程式執行個體（避免還原到一半又有人登入、被重新升級）。
-2. 對仍是 PBKDF2 格式的資料列，用備份表還原 MD5：
+2. 先處理「已知在備份之後改過密碼」的帳號（用你既有的稽核紀錄，例如操作紀錄，找出這些帳號）：設為占位值，**不要還原**，因為還原會讓他們回到可能已忘記的舊密碼。
 
    ```sql
-   -- SQL Server
-   UPDATE u SET u.Password = b.Password
-   FROM FrameworkUsers u JOIN FrameworkUsers_PasswordBackup_20261019 b ON b.ID = u.ID
-   WHERE u.Password LIKE '$pbkdf2-sha256$%';
+   UPDATE FrameworkUsers SET Password = '!reset-required-0000000000000000' WHERE ITCode IN ('帳號1', '帳號2');
+   ```
+3. 其餘仍是 PBKDF2 格式、且備份裡有資料的資料列，用備份還原 MD5（這是標準 SQL；識別字請依你的資料庫加引號，備份表名稱依你建立的為準）：
+
+   ```sql
+   UPDATE FrameworkUsers
+   SET Password = (SELECT b.Password FROM FrameworkUsers_PasswordBackup_20261019 b WHERE b.ID = FrameworkUsers.ID)
+   WHERE Password LIKE '$pbkdf2-sha256$%'
+     AND EXISTS (SELECT 1 FROM FrameworkUsers_PasswordBackup_20261019 b WHERE b.ID = FrameworkUsers.ID);
    ```
 
-   其他資料庫請改寫為等價的 `UPDATE ... WHERE EXISTS (...)` 或 `UPDATE ... FROM`。
-3. **這會把這些使用者的密碼還原成備份當時的密碼。** 在備份之後、回滾之前自行改過密碼（或被管理員重設過密碼）的使用者，會回到舊密碼。備份之後才新建的使用者在備份表中沒有資料，他們的 PBKDF2 雜湊還原不了，必須重設密碼。請用你既有的稽核紀錄（例如操作紀錄）找出這兩類帳號並通知他們；找不到時，保守的做法是對備份後有變動的帳號一律重設密碼。
-4. 還原後，用 `SELECT COUNT(*) FROM FrameworkUsers WHERE Password LIKE '$pbkdf2-sha256$%'` 確認沒有剩餘的 PBKDF2 值，再部署舊版本。
-5. 欄位可以保持 128，不需要縮回。確定不再需要之後才考慮縮回，而且必須先通過 (a) 的檢查。
-6. 備份表確認不再需要時請刪除。
+   這會把這些使用者還原成備份當時的密碼；如果你無法確定哪些帳號在備份之後改過密碼，保守的做法是跳過這一步，對所有帳號走第 4 步並全部重設。
+4. 仍然是 PBKDF2 的資料列，就是備份裡沒有的帳號（備份之後才建立），無法還原，一律設為占位值：
+
+   ```sql
+   UPDATE FrameworkUsers SET Password = '!reset-required-0000000000000000' WHERE Password LIKE '$pbkdf2-sha256$%';
+   ```
+5. 確認已經沒有 PBKDF2 的值：`SELECT COUNT(*) FROM FrameworkUsers WHERE Password LIKE '$pbkdf2-sha256$%'` 必須是 0。
+6. 部署舊版本，並**重新啟動應用程式**。
+7. 由管理員為所有占位值的帳號重設密碼（找出這些帳號：`SELECT ITCode FROM FrameworkUsers WHERE Password LIKE '!%'`），並通知這些使用者。
+8. 欄位可以保持 128，不需要縮回。確定不再需要之後才考慮縮回，而且必須先通過 (a) 的檢查。
+9. 備份表確認不再需要時請刪除。
 
 ## 6. 注意事項
 
 - 沒有雙格式驗證器的 WTM 版本（也就是不含本功能的版本）**不能讓 PBKDF2 的使用者登入**。部署順序請務必是：所有執行個體先升級 → 再啟用。
 - 若使用者類別有自訂（例如隱藏了 `Password` 屬性並自己指定長度），保護機制會同時參考模型與資料庫，取較小者；兩者都夠長才會啟用 PBKDF2。
 - 啟用後，每次登入的密碼驗證需要做 PBKDF2 運算（迭代次數越高越耗 CPU）。對不存在或仍是 MD5 的帳號，系統也會做等量的運算，以免從回應時間看出帳號是否存在。
-- 設定 `Algorithm` 之後如果資料庫暫時連不上，系統會安全地退回 MD5 並記錄 Warning，連線恢復、快取過期後會自動再檢查一次。
+- 設定 `Algorithm` 之後如果資料庫暫時連不上，系統會安全地退回 MD5 並記錄 Warning，連線恢復、快取過期（約 5 分鐘）後會自動再檢查一次。

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -27,18 +29,22 @@ namespace WalkingTec.Mvvm.Core.Test
         /// <summary>An inspector whose catalog rows (or failure) are scripted, so no server is needed.</summary>
         private class ScriptedInspector : PasswordColumnInspector
         {
-            public ScriptedInspector(TimeSpan? retryAfterFailure = null) : base(retryAfterFailure)
+            public ScriptedInspector(TimeSpan? retryAfterFailure = null, TimeSpan? verifiedLifetime = null) : base(retryAfterFailure, verifiedLifetime)
             {
             }
 
-            public int Reads { get; private set; }
+            private int _reads;
+            public int Reads => Volatile.Read(ref _reads);
             public List<(DBTypeEnum Type, string Schema, string Table, string Column)> Requests { get; } = new List<(DBTypeEnum, string, string, string)>();
             public Func<IReadOnlyList<ColumnRow>> Rows { get; set; } = () => new List<ColumnRow>();
 
             protected override IReadOnlyList<ColumnRow> ReadColumnRows(IDataContext dc, DBTypeEnum dbType, string schema, string table, string column)
             {
-                Reads++;
-                Requests.Add((dbType, schema, table, column));
+                Interlocked.Increment(ref _reads);
+                lock (Requests)
+                {
+                    Requests.Add((dbType, schema, table, column));
+                }
                 return Rows();
             }
 
@@ -63,6 +69,11 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.IsTrue(max.IsVerified);
             Assert.IsNull(max.MaxLength, "-1 is MAX");
             Assert.IsFalse(Info(DBTypeEnum.SqlServer, Row("int", null)).IsVerified, "not a character column");
+            Assert.IsFalse(Info(DBTypeEnum.SqlServer, Row("varbinary", 128)).IsVerified, "a length alone does not make it a character column");
+            foreach (var type in new[] { "char", "varchar", "nchar", "nvarchar", "text", "ntext" })
+            {
+                Assert.IsTrue(Info(DBTypeEnum.SqlServer, Row(type, 128)).IsVerified, type);
+            }
         }
 
         [TestMethod]
@@ -72,6 +83,12 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.AreEqual(65535, Info(DBTypeEnum.MySql, Row("text", 65535)).MaxLength);
             Assert.AreEqual(int.MaxValue, Info(DBTypeEnum.MySql, Row("longtext", 4294967295)).MaxLength, "clamped, not overflowed");
             Assert.IsFalse(Info(DBTypeEnum.MySql, Row("int", null)).IsVerified);
+            Assert.IsFalse(Info(DBTypeEnum.MySql, Row("varbinary", 128)).IsVerified);
+            Assert.IsFalse(Info(DBTypeEnum.MySql, Row("blob", 65535)).IsVerified);
+            foreach (var type in new[] { "char", "varchar", "tinytext", "text", "mediumtext", "longtext" })
+            {
+                Assert.IsTrue(Info(DBTypeEnum.MySql, Row(type, 255)).IsVerified, type);
+            }
         }
 
         [TestMethod]
@@ -85,6 +102,8 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.IsTrue(unlimited.IsVerified);
             Assert.IsNull(unlimited.MaxLength);
             Assert.IsFalse(Info(DBTypeEnum.PgSql, Row("integer", null)).IsVerified, "a null length alone does not mean unlimited");
+            Assert.IsFalse(Info(DBTypeEnum.PgSql, Row("bit varying", 128)).IsVerified);
+            Assert.IsFalse(Info(DBTypeEnum.PgSql, Row("bytea", null)).IsVerified);
         }
 
         [TestMethod]
@@ -296,15 +315,18 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
-        public void DaMengModelFailureIsNotVerified()
+        public void DaMengIsNotVerifiedWhileItsProviderCannotBuildTheModel()
         {
-            //whatever goes wrong while the model or catalog is read ends up as "cannot verify", never as an exception
+            //the DaMeng EF provider package targets EF Core 9 and throws while the model is built under EF Core 10: that must end up as
+            //"cannot verify" (MD5), never as an exception. If the provider is ever fixed, this test is expected to be revisited.
             var inspector = new ScriptedInspector { Rows = () => new List<ColumnRow> { Row("VARCHAR", 128, 128) } };
             using (var dc = Context(DBTypeEnum.DaMeng))
             {
                 var info = inspector.Inspect(dc, typeof(LoginTestUser));
-                Assert.IsNotNull(info);
+                Assert.IsFalse(info.IsVerified, info.Description);
+                StringAssert.Contains(info.Description, "failed");
             }
+            Assert.AreEqual(0, inspector.Reads);
         }
 
         [TestMethod]
@@ -318,6 +340,142 @@ namespace WalkingTec.Mvvm.Core.Test
             }
             Assert.IsFalse(inspector.Inspect(null, typeof(LoginTestUser)).IsVerified);
             Assert.IsFalse(inspector.Inspect(new NullContext(), typeof(LoginTestUser)).IsVerified, "never throws");
+        }
+
+        [TestMethod]
+        public void ConcurrentCallersQueryOnceAndNeverWait()
+        {
+            var gate = new ManualResetEventSlim(false);
+            var inspector = new ScriptedInspector
+            {
+                Rows = () =>
+                {
+                    gate.Wait(TimeSpan.FromSeconds(30));
+                    return new List<ColumnRow> { Row("nvarchar", 128) };
+                }
+            };
+            using (var dc = Context(DBTypeEnum.SqlServer))
+            {
+                var first = Task.Run(() => inspector.Inspect(dc, typeof(LoginTestUser)));
+                SpinWait.SpinUntil(() => inspector.Reads == 1, TimeSpan.FromSeconds(10));
+                Assert.AreEqual(1, inspector.Reads);
+                //the first caller is stuck in the (slow) database; everybody else must be answered at once
+                var others = Enumerable.Range(0, 16).Select(i => Task.Run(() => inspector.Inspect(dc, typeof(LoginTestUser)))).ToArray();
+                Assert.IsTrue(Task.WaitAll(others, TimeSpan.FromSeconds(10)), "waiting callers were blocked behind the query");
+                Assert.IsTrue(others.All(x => x.Result.IsVerified == false), "no answer yet means cannot verify (MD5)");
+                gate.Set();
+                Assert.AreEqual(128, first.Result.MaxLength);
+                Assert.AreEqual(1, inspector.Reads, "one query for 17 callers");
+                Assert.AreEqual(128, inspector.Inspect(dc, typeof(LoginTestUser)).MaxLength);
+                Assert.AreEqual(1, inspector.Reads);
+            }
+        }
+
+        [TestMethod]
+        public void ExpiredAnswerIsRefreshedByOneCallerWhileOthersGetThePreviousOne()
+        {
+            var gate = new ManualResetEventSlim(true);
+            var inspector = new ScriptedInspector(verifiedLifetime: TimeSpan.Zero)
+            {
+                Rows = () =>
+                {
+                    gate.Wait(TimeSpan.FromSeconds(30));
+                    return new List<ColumnRow> { Row("nvarchar", 128) };
+                }
+            };
+            using (var dc = Context(DBTypeEnum.SqlServer))
+            {
+                Assert.AreEqual(128, inspector.Inspect(dc, typeof(LoginTestUser)).MaxLength);
+                gate.Reset();
+                var refresh = Task.Run(() => inspector.Inspect(dc, typeof(LoginTestUser)));
+                SpinWait.SpinUntil(() => inspector.Reads == 2, TimeSpan.FromSeconds(10));
+                var meanwhile = Task.Run(() => inspector.Inspect(dc, typeof(LoginTestUser)));
+                Assert.IsTrue(meanwhile.Wait(TimeSpan.FromSeconds(10)), "blocked behind the refresh");
+                Assert.AreEqual(128, meanwhile.Result.MaxLength, "the previous answer is used meanwhile");
+                gate.Set();
+                Assert.AreEqual(128, refresh.Result.MaxLength);
+                Assert.AreEqual(2, inspector.Reads);
+            }
+        }
+
+        [TestMethod]
+        public void VerifiedAnswersExpireAfterTheirLifetime()
+        {
+            var width = 128;
+            var inspector = new ScriptedInspector(verifiedLifetime: TimeSpan.Zero) { Rows = () => new List<ColumnRow> { Row("nvarchar", width) } };
+            using (var dc = Context(DBTypeEnum.SqlServer))
+            {
+                Assert.AreEqual(128, inspector.Inspect(dc, typeof(LoginTestUser)).MaxLength);
+                width = 32;
+                Assert.AreEqual(32, inspector.Inspect(dc, typeof(LoginTestUser)).MaxLength, "a schema change is noticed without a restart");
+            }
+            var longLived = new ScriptedInspector { Rows = () => new List<ColumnRow> { Row("nvarchar", width) } };
+            using (var dc = Context(DBTypeEnum.SqlServer))
+            {
+                Assert.AreEqual(32, longLived.Inspect(dc, typeof(LoginTestUser)).MaxLength);
+                width = 128;
+                Assert.AreEqual(32, longLived.Inspect(dc, typeof(LoginTestUser)).MaxLength, "default lifetime is long");
+            }
+        }
+
+        /// <summary>A context type that remembers the instances created by CreateNew, to check that the inspector cleans up after itself.</summary>
+        public class TrackedContext : ProviderModelContext
+        {
+            public static readonly List<TrackedContext> Created = new List<TrackedContext>();
+
+            public TrackedContext(string cs, DBTypeEnum dbtype, string version = null) : base(cs, dbtype, version)
+            {
+                lock (Created)
+                {
+                    Created.Add(this);
+                }
+            }
+        }
+
+        /// <summary>Runs the real ReadColumnRows against SQLite, which has no catalog views, with a query of its own.</summary>
+        private class SqliteReadingInspector : PasswordColumnInspector
+        {
+            public string Sql = "SELECT 128, 'varchar' WHERE @t = 'FrameworkUsers' AND @c = 'Password'";
+
+            protected override CatalogQuery CreateQuery(DBTypeEnum dbType, string schema, string table, string column)
+            {
+                var query = BuildQuery(DBTypeEnum.SqlServer, null, table, column);
+                query.Sql = Sql;
+                return query;
+            }
+
+            public IReadOnlyList<ColumnRow> Read(IDataContext dc) => ReadColumnRows(dc, DBTypeEnum.SqlServer, null, "FrameworkUsers", "Password");
+        }
+
+        [TestMethod]
+        public void CatalogReadUsesItsOwnConnectionAndCleansUp()
+        {
+            TrackedContext.Created.Clear();
+            var inspector = new SqliteReadingInspector();
+            using (var dc = new TrackedContext("Data Source=:memory:", DBTypeEnum.SQLite))
+            {
+                var request = dc.Database.GetDbConnection();
+                Assert.AreEqual(System.Data.ConnectionState.Closed, request.State);
+                var rows = inspector.Read(dc);
+                Assert.AreEqual(128L, rows.Single().CharLength);
+                Assert.AreEqual("varchar", rows.Single().DataType);
+                Assert.AreEqual(System.Data.ConnectionState.Closed, request.State, "the request connection was never touched");
+                var fresh = TrackedContext.Created.Single(x => x != dc);
+                Assert.ThrowsExactly<ObjectDisposedException>(() => fresh.Database.GetDbConnection(), "the extra context is disposed");
+            }
+        }
+
+        [TestMethod]
+        public void CatalogReadCleansUpWhenTheQueryFails()
+        {
+            TrackedContext.Created.Clear();
+            var inspector = new SqliteReadingInspector { Sql = "SELECT * FROM no_such_catalog WHERE @t = @c" };
+            using (var dc = new TrackedContext("Data Source=:memory:", DBTypeEnum.SQLite))
+            {
+                Assert.ThrowsExactly<SqliteException>(() => inspector.Read(dc));
+                var fresh = TrackedContext.Created.Single(x => x != dc);
+                Assert.ThrowsExactly<ObjectDisposedException>(() => fresh.Database.GetDbConnection());
+            }
         }
 
         #endregion

@@ -7,6 +7,7 @@ using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 
@@ -73,32 +74,49 @@ namespace WalkingTec.Mvvm.Core
     /// <item><description>Oracle, DaMeng: best effort, the same idea against ALL_TAB_COLUMNS (CHAR_LENGTH / DATA_LENGTH, whichever is smaller); any error means "cannot verify".</description></item>
     /// <item><description>SQLite and the EF in-memory provider do not enforce column lengths: reported as not limited without a query.</description></item>
     /// </list>
-    /// A definite answer is cached for the life of the process, per connection and column; widening the column therefore needs an
-    /// application restart (or a deployment) to be noticed. "Cannot verify" is cached for a few minutes only, so a database that was
-    /// unreachable at the first login is looked at again later.
+    /// Answers are cached per connection and column: a definite answer for one hour (so a schema change is noticed without a restart, but
+    /// restart the application after any schema rollback anyway), "cannot verify" for five minutes. Only one caller at a time queries the
+    /// database for a given column; a concurrent caller never waits, it gets the previous answer, or "cannot verify" (which means MD5, the
+    /// safe side) when there is none yet. The query is bounded by a short connect timeout and a command timeout, so an unreachable database
+    /// holds up at most one caller, and only briefly.
     /// </summary>
     public class PasswordColumnInspector : IPasswordColumnInspector
     {
         private const string PasswordPropertyName = "Password";
+
+        private static readonly string[] SqlServerAndMySqlCharacterTypes = { "char", "varchar", "nchar", "nvarchar", "text", "ntext", "tinytext", "mediumtext", "longtext" };
+        private static readonly string[] PgSqlCharacterTypes = { "character varying", "character", "text" };
 
         private static readonly Lazy<PasswordColumnInspector> _default = new Lazy<PasswordColumnInspector>(() => new PasswordColumnInspector());
 
         /// <summary>The shared instance used by <see cref="WTMContext"/> unless it is replaced there.</summary>
         public static PasswordColumnInspector Default => _default.Value;
 
-        private readonly ConcurrentDictionary<string, CacheEntry> _cache = new ConcurrentDictionary<string, CacheEntry>();
+        private readonly ConcurrentDictionary<string, Slot> _cache = new ConcurrentDictionary<string, Slot>();
         private readonly TimeSpan _retryAfterFailure;
+        private readonly TimeSpan _verifiedLifetime;
+        private readonly TimeSpan _connectTimeout;
 
         /// <param name="retryAfterFailure">How long "cannot verify" is remembered; default five minutes.</param>
-        public PasswordColumnInspector(TimeSpan? retryAfterFailure = null)
+        /// <param name="verifiedLifetime">How long a definite answer is remembered; default one hour.</param>
+        /// <param name="connectTimeout">Longest wait for the catalog connection to open; default five seconds.</param>
+        public PasswordColumnInspector(TimeSpan? retryAfterFailure = null, TimeSpan? verifiedLifetime = null, TimeSpan? connectTimeout = null)
         {
             _retryAfterFailure = retryAfterFailure ?? TimeSpan.FromMinutes(5);
+            _verifiedLifetime = verifiedLifetime ?? TimeSpan.FromHours(1);
+            _connectTimeout = connectTimeout ?? TimeSpan.FromSeconds(5);
         }
 
         private sealed class CacheEntry
         {
             public PasswordColumnInfo Info;
-            public DateTime? ExpiresUtc;
+            public DateTime ExpiresUtc;
+        }
+
+        private sealed class Slot
+        {
+            public volatile CacheEntry Entry;
+            public int Refreshing;
         }
 
         /// <summary>One row of the catalog: the type and the lengths it reports (null when the catalog has no value).</summary>
@@ -146,23 +164,37 @@ namespace WalkingTec.Mvvm.Core
                     return PasswordColumnInfo.Unverified("the password property is not mapped to a column");
                 }
                 var key = string.Join("|", dbType, Fingerprint(db.Database.GetConnectionString()), schema, table, column);
-                if (_cache.TryGetValue(key, out var cached) && (cached.ExpiresUtc == null || cached.ExpiresUtc > DateTime.UtcNow))
+                var slot = _cache.GetOrAdd(key, k => new Slot());
+                var entry = slot.Entry;
+                if (entry != null && entry.ExpiresUtc > DateTime.UtcNow)
                 {
-                    return cached.Info;
+                    return entry.Info;
                 }
-                PasswordColumnInfo info;
+                //single flight: one caller refreshes, the others do not wait for it
+                if (Interlocked.CompareExchange(ref slot.Refreshing, 1, 0) != 0)
+                {
+                    return entry?.Info ?? PasswordColumnInfo.Unverified("the password column is being checked by another request");
+                }
                 try
                 {
-                    var rows = ReadColumnRows(dc, dbType, schema, table, column);
-                    info = Interpret(dbType, rows);
+                    PasswordColumnInfo info;
+                    try
+                    {
+                        var rows = ReadColumnRows(dc, dbType, schema, table, column);
+                        info = Interpret(dbType, rows);
+                    }
+                    catch (Exception ex)
+                    {
+                        //only the type: messages of database errors can contain server names and similar details
+                        info = PasswordColumnInfo.Unverified("querying the database catalog failed: " + ex.GetType().Name);
+                    }
+                    slot.Entry = new CacheEntry { Info = info, ExpiresUtc = DateTime.UtcNow + (info.IsVerified ? _verifiedLifetime : _retryAfterFailure) };
+                    return info;
                 }
-                catch (Exception ex)
+                finally
                 {
-                    //only the type: messages of database errors can contain server names and similar details
-                    info = PasswordColumnInfo.Unverified("querying the database catalog failed: " + ex.GetType().Name);
+                    Volatile.Write(ref slot.Refreshing, 0);
                 }
-                _cache[key] = new CacheEntry { Info = info, ExpiresUtc = info.IsVerified ? (DateTime?)null : DateTime.UtcNow + _retryAfterFailure };
-                return info;
             }
             catch (Exception ex)
             {
@@ -182,17 +214,25 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         protected virtual IReadOnlyList<ColumnRow> ReadColumnRows(IDataContext dc, DBTypeEnum dbType, string schema, string table, string column)
         {
-            var query = BuildQuery(dbType, schema, table, column);
+            var query = CreateQuery(dbType, schema, table, column);
             using (var fresh = dc.CreateNew())
             {
                 var connection = ((DbContext)fresh).Database.GetDbConnection();
                 var wasClosed = connection.State != ConnectionState.Open;
-                if (wasClosed)
-                {
-                    connection.Open();
-                }
                 try
                 {
+                    if (wasClosed)
+                    {
+                        using (var cts = new CancellationTokenSource(_connectTimeout))
+                        {
+                            var opening = connection.OpenAsync(cts.Token);
+                            //the wait is a backstop for providers that ignore the token
+                            if (opening.Wait(_connectTimeout + TimeSpan.FromSeconds(2)) == false)
+                            {
+                                throw new TimeoutException("opening the catalog connection timed out");
+                            }
+                        }
+                    }
                     var raw = ExecuteRows(connection, query.Sql, query.Parameters, dbType == DBTypeEnum.Oracle || dbType == DBTypeEnum.DaMeng);
                     return raw.Select(r => ToRow(dbType, r)).ToList();
                 }
@@ -204,6 +244,12 @@ namespace WalkingTec.Mvvm.Core
                     }
                 }
             }
+        }
+
+        /// <summary>The catalog query for a provider. Virtual so that a test can point the read at a database that has no catalog views.</summary>
+        protected virtual CatalogQuery CreateQuery(DBTypeEnum dbType, string schema, string table, string column)
+        {
+            return BuildQuery(dbType, schema, table, column);
         }
 
         /// <summary>A catalog query and its parameters (name without prefix, value).</summary>
@@ -351,30 +397,20 @@ namespace WalkingTec.Mvvm.Core
                 switch (dbType)
                 {
                     case DBTypeEnum.SqlServer:
-                        if (row.CharLength == null)
+                    case DBTypeEnum.MySql:
+                        if (row.CharLength == null || Array.IndexOf(SqlServerAndMySqlCharacterTypes, type) < 0)
                         {
                             return PasswordColumnInfo.Unverified("the password column is not a character column (" + type + ")");
                         }
                         limit = row.CharLength.Value < 0 ? (long?)null : row.CharLength.Value;
                         break;
-                    case DBTypeEnum.MySql:
-                        if (row.CharLength == null)
-                        {
-                            return PasswordColumnInfo.Unverified("the password column is not a character column (" + type + ")");
-                        }
-                        limit = row.CharLength.Value;
-                        break;
                     case DBTypeEnum.PgSql:
-                        if (row.CharLength == null)
+                        if (Array.IndexOf(PgSqlCharacterTypes, type) < 0)
                         {
-                            if (type == "text" || type == "character varying")
-                            {
-                                limit = null;
-                                break;
-                            }
                             return PasswordColumnInfo.Unverified("the password column is not a character column (" + type + ")");
                         }
-                        limit = row.CharLength.Value;
+                        //a null length is unlimited text
+                        limit = row.CharLength;
                         break;
                     case DBTypeEnum.Oracle:
                     case DBTypeEnum.DaMeng:

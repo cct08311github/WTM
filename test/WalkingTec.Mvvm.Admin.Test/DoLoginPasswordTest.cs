@@ -237,6 +237,59 @@ namespace WalkingTec.Mvvm.Admin.Test
         }
 
         [TestMethod]
+        public void UnwidenedColumn_Md5Default_LoginAndStartupUnaffected()
+        {
+            //an existing database as earlier versions created it: Password is a 32 character column, while the model now says 128
+            string ddl;
+            using (var cmd = _keepAlive.CreateCommand())
+            {
+                cmd.CommandText = "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'FrameworkUsers'";
+                ddl = (string)cmd.ExecuteScalar();
+            }
+            var narrow32 = ddl.Replace("\"Password\" TEXT NOT NULL", "\"Password\" VARCHAR(32) NOT NULL");
+            Assert.AreNotEqual(ddl, narrow32, "the generated DDL was not recognised");
+            Execute("DROP TRIGGER LogUserUpdates");
+            Execute("DROP TABLE FrameworkUsers");
+            Execute(narrow32);
+            Execute("CREATE TRIGGER LogUserUpdates AFTER UPDATE ON FrameworkUsers BEGIN INSERT INTO WriteLog VALUES (1); END");
+            var stored = Utils.GetMD5String("000000");
+            AddUser("admin", stored);
+
+            //startup: EnsureCreated on a database that already has tables changes nothing and does not throw
+            using (var dc = NewDc())
+            {
+                Assert.AreEqual(128, dc.Model.FindEntityType(typeof(FrameworkUser)).FindProperty("Password").GetMaxLength());
+                Assert.IsFalse(dc.Database.EnsureCreated());
+                dc.EnsureCreate();
+            }
+            Assert.AreEqual(32, ScalarLong("SELECT LENGTH(Password) FROM FrameworkUsers WHERE ITCode = 'admin'"));
+
+            //default (MD5) configuration: the column inspector is never involved
+            var inspector = new FakePasswordColumnInspector(PasswordColumnInfo.Limited(32));
+            var wtm = CreateContext();
+            wtm.PasswordColumnInspector = inspector;
+            Assert.IsNotNull(wtm.DoLogin("admin", "000000", null));
+            Assert.IsNull(CreateContext().DoLogin("admin", "wrong", null));
+            Assert.AreEqual(Utils.GetMD5String("abc"), wtm.HashPassword("abc"));
+            Assert.AreEqual(0, inspector.Calls);
+            Assert.AreEqual(stored, StoredPassword("admin"));
+            Assert.AreEqual(32, StoredPassword("admin").Length);
+            Assert.AreEqual(0, ScalarLong("SELECT COUNT(*) FROM WriteLog"));
+
+            //PBKDF2 configured, but the real column reports 32: still MD5, nothing is written
+            var configured = CreateContext();
+            configured.ConfigInfo.PasswordOptions = new PasswordOption { Algorithm = PasswordAlgorithm.Pbkdf2Sha256, Pbkdf2Iterations = PasswordHasher.MinIterations };
+            var narrow = new FakePasswordColumnInspector(PasswordColumnInfo.Limited(32));
+            configured.PasswordColumnInspector = narrow;
+            Assert.IsNotNull(configured.DoLogin("admin", "000000", null));
+            Assert.AreEqual(PasswordAlgorithm.Md5, configured.PasswordHasher.Algorithm);
+            Assert.IsNull(configured.DoLogin("admin", "wrong", null));
+            Assert.AreEqual(1, narrow.Calls);
+            Assert.AreEqual(stored, StoredPassword("admin"));
+            Assert.AreEqual(0, ScalarLong("SELECT COUNT(*) FROM WriteLog"), "no write into the narrow column");
+        }
+
+        [TestMethod]
         public void ModelColumnHolds128Characters()
         {
             using (var dc = NewDc())

@@ -640,21 +640,30 @@ namespace WalkingTec.Mvvm.Core
                         var userType = GlobaInfo?.CustomUserType;
                         maxLength = PasswordHasher.GetPasswordMaxLength(userType, _dc);
                         IDataContext dc = null;
+                        string dcError = null;
                         try
                         {
                             dc = DC;
                         }
-                        catch (Exception)
-                        {
-                        }
-                        PasswordColumnInfo column;
-                        try
-                        {
-                            column = PasswordColumnInspector.Inspect(dc, userType);
-                        }
                         catch (Exception ex)
                         {
-                            column = PasswordColumnInfo.Unverified("the column inspector failed: " + ex.GetType().Name);
+                            dcError = ex.GetType().Name;
+                        }
+                        PasswordColumnInfo column;
+                        if (dcError != null)
+                        {
+                            column = PasswordColumnInfo.Unverified("no data context available: " + dcError);
+                        }
+                        else
+                        {
+                            try
+                            {
+                                column = PasswordColumnInspector.Inspect(dc, userType);
+                            }
+                            catch (Exception ex)
+                            {
+                                column = PasswordColumnInfo.Unverified("the column inspector failed: " + ex.GetType().Name);
+                            }
                         }
                         if (column.IsVerified == false)
                         {
