@@ -47,8 +47,80 @@
 - `version.props`、`CHANGELOG.md` **與上游保持逐位元組相同，不在 fork 中修改**
 - fork 修訂號 `ForkRevision` 放在 `fork.props`：每發佈一個 fork 版本就加 1；合併了上游的版號升級後，重設為 1
 - fork 的變更記錄寫在 `CHANGELOG.fork.md`
-- 下游取用 fork 套件時，建議在 `NuGet.Config` 設定 [Package Source Mapping](https://learn.microsoft.com/nuget/consume-packages/package-source-mapping)，讓 `WalkingTec.Mvvm.*` 只從 fork 的 feed 取得
-- 發佈通道：維護者的私有 NuGet feed（不在 nuget.org）。第一個發佈版本是 `10.0.0.4`；發佈流程是在 GitHub 打 `v<版號>` tag，再從該 tag 打包 Core、Mvc、TagHelpers.LayUI 三個套件並上傳（#27）
+
+### 發佈通道：GitHub Packages（#27）
+
+- feed URL：`https://nuget.pkg.github.com/cct08311github/index.json`（不發佈到 nuget.org）
+- 套件：`WalkingTec.Mvvm.Core`、`WalkingTec.Mvvm.Mvc`、`WalkingTec.Mvvm.TagHelpers.LayUI`，三個套件版號相同，彼此的相依也指向同一個版號。第一個發佈版本是 `10.0.0.4`
+
+#### 發佈步驟
+
+1. 發佈準備的 PR（`ForkRevision` 加 1、`CHANGELOG.fork.md` 新增該版號的段落）合併到 `dotnet10`
+2. 維護者在合併後的 commit 打 tag 並 push：
+
+   ```bash
+   git tag v10.0.0.4 <commit>
+   git push origin v10.0.0.4
+   ```
+
+3. `.github/workflows/publish.yml` 由 tag 觸發，依序執行：
+   - 驗證 tag 與 `version.props` + `fork.props` 推算出的版號一致，不一致就失敗
+   - build 與 Core 測試
+   - `dotnet pack -c Release` 打包三個套件
+   - 檢查 nupkg 版號與 nuspec 中彼此相依的版號
+   - 用 workflow 的 `GITHUB_TOKEN` push 到 GitHub Packages
+
+   也可以從 Actions 頁面手動執行（`workflow_dispatch`，指定既有的 tag）重跑；已存在的版號會略過，不會覆蓋
+4. **不手動 push 套件**。已發佈的版號不可重複使用；有問題就發佈下一個修訂號
+
+#### 下游設定（`nuget.config`）
+
+GitHub Packages 的 NuGet feed 即使是 public repo 也需要驗證。取用端需要一個具有 **`read:packages`** 權限的 token（GitHub classic personal access token）。**token 不可寫進 `nuget.config` 或任何版控檔案**，一律從環境變數讀取：本機放在使用者層級的環境變數，CI 放在該平台的 secret。
+
+用 [Package Source Mapping](https://learn.microsoft.com/nuget/consume-packages/package-source-mapping) 讓 `WalkingTec.Mvvm.*` **只**從 GitHub Packages 取得，其他套件走 nuget.org。上游在 nuget.org 上有同名套件，沒有 mapping 時 NuGet 可能從任一個來源取得，造成混用。
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" protocolVersion="3" />
+    <add key="wtm-fork" value="https://nuget.pkg.github.com/cct08311github/index.json" />
+  </packageSources>
+
+  <packageSourceMapping>
+    <packageSource key="wtm-fork">
+      <package pattern="WalkingTec.Mvvm.*" />
+    </packageSource>
+    <packageSource key="nuget.org">
+      <package pattern="*" />
+    </packageSource>
+  </packageSourceMapping>
+
+  <!-- 憑證從環境變數讀取，不要把實際的值寫進這個檔案 -->
+  <packageSourceCredentials>
+    <wtm-fork>
+      <add key="Username" value="%WTM_PACKAGES_USER%" />
+      <add key="ClearTextPassword" value="%WTM_PACKAGES_TOKEN%" />
+    </wtm-fork>
+  </packageSourceCredentials>
+</configuration>
+```
+
+- `WTM_PACKAGES_USER`：GitHub 帳號名稱；`WTM_PACKAGES_TOKEN`：具 `read:packages` 權限的 token
+- 較具體的 pattern 優先，所以 `WalkingTec.Mvvm.*` 只會從 `wtm-fork` 取得，其餘套件比對到 `*`，從 nuget.org 取得
+- 套件版號要寫完整的四段式，例如 `<PackageReference Include="WalkingTec.Mvvm.Mvc" Version="10.0.0.4" />`
+
+#### 第一次 restore 前：清掉 NuGet 快取中的 `walkingtec.*`
+
+舊 fork 或上游的同名套件可能還留在本機快取。NuGet 會優先使用快取中同 ID、同版號的套件，不會再確認來源，所以在每台曾經 restore 過 WTM 套件的開發機與建置機上，第一次改用本 feed 之前先清掉：
+
+```bash
+rm -rf ~/.nuget/packages/walkingtec.*
+dotnet nuget locals http-cache --clear
+```
+
+Windows 的路徑是 `%USERPROFILE%\.nuget\packages\walkingtec.*`；快取位置若有自訂，用 `dotnet nuget locals global-packages --list` 確認。
 
 ## 5. 與上游同步
 
@@ -121,7 +193,7 @@ fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.
 
 ## 7. CI、依賴更新與合併
 
-- **CI**：`.github/workflows/ci.yml`（`build-test`）會 build 整個 solution 並跑 Core 測試；`.github/workflows/clientapp.yml`（`clientapp-build`）只在 Vue3Demo 前端有變動時才建置。上游留下的 `.azure/pipelines/*`（Azure Pipelines，其中有的釘在舊版 SDK，有的引用已刪除的 Dockerfile）**在本 fork 中不使用**。為了降低同步衝突，這些檔案刻意維持與上游相同，不修改也不刪除（#118）
+- **CI**：`.github/workflows/ci.yml`（`build-test`）會 build 整個 solution 並跑 Core 測試；`.github/workflows/clientapp.yml`（`clientapp-build`）只在 Vue3Demo 前端有變動時才建置；`.github/workflows/publish.yml` 只在 push `v*` tag（或手動執行）時發佈套件（見第 4 節）。上游留下的 `.azure/pipelines/*`（Azure Pipelines，其中有的釘在舊版 SDK，有的引用已刪除的 Dockerfile）**在本 fork 中不使用**。為了降低同步衝突，這些檔案刻意維持與上游相同，不修改也不刪除（#118）
 - **分支保護**：`dotnet10` 必須透過 PR 合併，`build-test` 與 `CodeQL`（程式碼掃描的總結 check，NEUTRAL 視為通過）都必須通過。注意：在預設的 CodeQL 設定下，`Analyze (*)` 這幾個 job 不會在 Dependabot 的 PR 上執行，所以不設為必要 check，否則 Dependabot 的 PR 會永遠卡住；禁止 force push 與刪除分支，管理員也一樣。`clientapp-build` 只在前端有變動時執行，所以沒有設為必要 check，改由每日排程在合併 npm PR 前確認
 - **自動合併**：repo 已開啟 GitHub auto-merge。非高風險的 PR 可以設定成「必要 check 全部通過後自動 squash」
 - **Dependabot**：`.github/dependabot.yml`
