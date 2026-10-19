@@ -907,6 +907,9 @@ namespace WalkingTec.Mvvm.Mvc
             //warn (never throw) when workflow is enabled without authentication on its API endpoints
             WorkflowApiSecurity.LogUnprotectedWarning(configs, securityLogger);
 
+            //warn (never throw) when an Oracle connection uses a Version other than 19/21/23 (19 compatibility is applied)
+            WtmEnvironmentHelper.LogOracleVersionWarnings(configs, securityLogger);
+
             var lg = app.ApplicationServices.GetRequiredService<LinkGenerator>();
             var gd = app.ApplicationServices.GetRequiredService<GlobalData>();
             var localfactory = app.ApplicationServices.GetRequiredService<IStringLocalizerFactory>();
