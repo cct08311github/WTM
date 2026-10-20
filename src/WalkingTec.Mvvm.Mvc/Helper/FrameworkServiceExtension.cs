@@ -657,6 +657,9 @@ namespace WalkingTec.Mvvm.Mvc
                 }
                 );
             services.AddElsaApiEndpoints();
+            // HttpClient of the internal /v1/activities call (#208): never follows redirects, so the internal secret and the forwarded
+            // credentials cannot be passed on to another host. A named client only for this call; other CallAPI calls are unaffected.
+            WorkflowActivitiesGuard.AddInternalHttpClient(services);
             if (conf.Domains.ContainsKey("server"))
             {
                 services.AddHttpClient(nameof(SendHttpRequest)).ConfigureHttpClient((s,x) =>
