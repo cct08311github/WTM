@@ -40,7 +40,7 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 if (Wtm.LoginUserInfo.TenantCode != null)
                 {
-                    Response.Cookies.Append("workflowtenant", Wtm.LoginUserInfo.TenantCode);
+                    Response.Cookies.Append("workflowtenant", Wtm.LoginUserInfo.TenantCode, new Microsoft.AspNetCore.Http.CookieOptions { Secure = Request.IsHttps });
                 }
                 else
                 {
