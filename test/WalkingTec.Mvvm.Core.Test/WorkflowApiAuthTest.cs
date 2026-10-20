@@ -91,6 +91,86 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.AreEqual(0, ConventionsFor(true).OfType<WorkflowApiDisabledConvention>().Count());
         }
 
+        private static ApplicationModel ApplyRegisteredConventions(bool enableWorkflow, out ControllerModel other)
+        {
+            var app = new ApplicationModel();
+            app.Controllers.Add(new ControllerModel(typeof(WorkflowApiController).GetTypeInfo(), new object[0]));
+            app.Controllers.Add(new ControllerModel(typeof(WorkflowApiDisabledController).GetTypeInfo(), new object[0]));
+            other = new ControllerModel(typeof(OtherApiController).GetTypeInfo(), new object[0]);
+            app.Controllers.Add(other);
+            foreach (var c in ConventionsFor(enableWorkflow))
+            {
+                c.Apply(app);
+            }
+            return app;
+        }
+
+        [TestMethod]
+        public void WorkflowDisabled_KeepsStub_RemovesController_LeavesOthers()
+        {
+            var app = ApplyRegisteredConventions(false, out var other);
+            Assert.AreEqual(1, app.Controllers.Count(x => x.ControllerType.AsType() == typeof(WorkflowApiDisabledController)));
+            Assert.AreEqual(0, app.Controllers.Count(x => x.ControllerType.AsType() == typeof(WorkflowApiController)));
+            Assert.IsTrue(app.Controllers.Contains(other));
+            Assert.AreEqual(2, app.Controllers.Count);
+        }
+
+        [TestMethod]
+        public void WorkflowEnabled_RemovesStub_KeepsController_LeavesOthers()
+        {
+            var app = ApplyRegisteredConventions(true, out var other);
+            Assert.AreEqual(0, app.Controllers.Count(x => x.ControllerType.AsType() == typeof(WorkflowApiDisabledController)));
+            Assert.AreEqual(1, app.Controllers.Count(x => x.ControllerType.AsType() == typeof(WorkflowApiController)));
+            Assert.IsTrue(app.Controllers.Contains(other));
+            Assert.AreEqual(2, app.Controllers.Count);
+        }
+
+        [TestMethod]
+        public void Registration_AddsStubRemoval_OnlyWhenWorkflowIsEnabled()
+        {
+            Assert.AreEqual(0, ConventionsFor(false).OfType<WorkflowApiStubRemovalConvention>().Count());
+            Assert.AreEqual(1, ConventionsFor(true).OfType<WorkflowApiStubRemovalConvention>().Count());
+        }
+
+        [TestMethod]
+        public void StubRemovalConvention_WithoutStub_ChangesNothing()
+        {
+            var app = new ApplicationModel();
+            app.Controllers.Add(new ControllerModel(typeof(OtherApiController).GetTypeInfo(), new object[0]));
+            new WorkflowApiStubRemovalConvention().Apply(app);
+            Assert.AreEqual(1, app.Controllers.Count);
+        }
+
+        [TestMethod]
+        public void Stub_ReturnsNotFound_IsPublic_NotAuthorized_HiddenFromSwagger()
+        {
+            var t = typeof(WorkflowApiDisabledController);
+            Assert.IsFalse(typeof(IBaseController).IsAssignableFrom(t), "stub must not use WTMContext / data context");
+            Assert.IsNull(t.GetCustomAttribute<AuthorizeJwtWithCookieAttribute>(true));
+            Assert.AreEqual(0, t.GetCustomAttributes(true).OfType<IAuthorizeData>().Count());
+            Assert.IsNotNull(t.GetCustomAttribute<PublicAttribute>(true));
+            var api = t.GetCustomAttribute<ApiExplorerSettingsAttribute>(true);
+            Assert.IsNotNull(api);
+            Assert.IsTrue(api.IgnoreApi);
+
+            var m = t.GetMethod("NotAvailable");
+            Assert.IsNotNull(m);
+            Assert.IsNotNull(m.GetCustomAttribute<PublicAttribute>(true));
+            Assert.IsNotNull(m.GetCustomAttribute<NoLogAttribute>(true));
+            Assert.AreEqual(0, m.GetCustomAttributes(true).OfType<IAuthorizeData>().Count());
+            var routes = m.GetCustomAttributes<RouteAttribute>().Select(x => x.Template).ToList();
+            CollectionAssert.Contains(routes, "_WorkflowApi");
+            CollectionAssert.Contains(routes, "_WorkflowApi/{**path}");
+            var verbs = m.GetCustomAttribute<AcceptVerbsAttribute>().HttpMethods.ToList();
+            foreach (var v in new[] { "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS" })
+            {
+                CollectionAssert.Contains(verbs, v);
+            }
+
+            var result = new WorkflowApiDisabledController().NotAvailable("GetWorkflowUsers");
+            Assert.IsInstanceOfType(result, typeof(NotFoundResult));
+        }
+
         private class OtherApiController : ControllerBase
         {
         }
