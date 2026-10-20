@@ -35,7 +35,7 @@
     <!-- security: pin patched transitive dependency (GHSA-r955-8q5j-3h83, GHSA-w3x6-4m5h-cxqf); pulled in by Elsa.Core -> Microsoft.AspNetCore.DataProtection 9.0.1; 10.0.x because Mvc references DataProtection 10.0.9, which requires Xml >= 10.0.9 -->
     <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.13" />
     <!-- security: pin patched transitive dependency (GHSA-2m69-gcr7-jv3q); pulled in by Microsoft.EntityFrameworkCore.Sqlite -> SQLitePCLRaw.bundle_e_sqlite3 -->
-    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.14" />
   </ItemGroup>
 
   <!-- net10.0 package pruning treats System.Security.Cryptography.Xml as framework-provided (AspNetCore.App) and drops the pin above from the packed nuspec (and warns NU1510), so consumers without the ASP.NET Core shared framework would still restore the vulnerable 9.0.1 from Elsa. Un-prune this one package so the pin is packed. -->
