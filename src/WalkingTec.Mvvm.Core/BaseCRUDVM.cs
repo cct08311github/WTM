@@ -1494,13 +1494,12 @@ namespace WalkingTec.Mvvm.Core
 
         public virtual async Task<List<ApproveTimeLine>> GetWorkflowTimeLineAsync(string flowName = null)
         {
-            var rv = await Wtm.CallAPI<List<ApproveTimeLine>>("", $"{Wtm.HostAddress}/_workflowapi/GetTimeLine?flowname={flowName}&entitytype={typeof(TModel).FullName}&entityid={Entity.GetID()}");
-            return rv.Data;
+            //in-process: the former HTTP self-call only forwarded a remote token (never the sign-in cookie) and failed once it expired; same logic as _WorkflowApi/GetTimeLine
+            return await WorkflowQuery.GetTimeLineAsync(Wtm, flowName, typeof(TModel).FullName, Entity.GetID()?.ToString());
         }
         public virtual async Task<WorkflowInstance> GetWorkflowInstanceAsync(string flowName = null)
         {
-            var rv = await Wtm.CallAPI<WorkflowInstance>("", $"{Wtm.HostAddress}/_workflowapi/GetWorkflow?flowname={flowName}&entitytype={typeof(TModel).FullName}&entityid={Entity.GetID()}");
-            return rv.Data;
+            return await WorkflowQuery.GetWorkflowAsync(Wtm, flowName, typeof(TModel).FullName, Entity.GetID()?.ToString());
         }
 
     }
