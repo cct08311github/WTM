@@ -78,6 +78,25 @@ namespace WalkingTec.Mvvm.Mvc
         }
     }
 
+    /// <summary>
+    /// Removes <see cref="WorkflowApiController"/> (route _WorkflowApi) from the application when workflow is disabled, so none of its
+    /// actions is routable and nothing can be queried through it (#13). Registered by AddWtmContext when EnableWorkflow is false.
+    /// </summary>
+    public class WorkflowApiDisabledConvention : IApplicationModelConvention
+    {
+        public void Apply(ApplicationModel application)
+        {
+            if (application == null)
+            {
+                return;
+            }
+            foreach (var controller in application.Controllers.Where(x => x.ControllerType.AsType() == typeof(WorkflowApiController)).ToList())
+            {
+                application.Controllers.Remove(controller);
+            }
+        }
+    }
+
     public static class WorkflowApiSecurity
     {
         public const string ApiNamespacePrefix = "Elsa.Server.Api.";

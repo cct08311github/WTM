@@ -38,46 +38,27 @@ namespace WalkingTec.Mvvm.Mvc
 
         [HttpGet("[action]")]
         [NoLog]
-        [Public]
         public IActionResult GetWorkflowUsers([FromQuery]string[] itcode)
         {
-
-
-
-                if (ConfigInfo.HasMainHost)
-                {
-                    return Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowUsers").Result;
-                }
-                var tenant = Wtm.LoginUserInfo?.CurrentTenant;
-                var rv = Wtm.BaseUserQuery.IgnoreQueryFilters().CheckContain(itcode.ToList(), x => x.ITCode).Where(x => x.TenantCode == tenant)
-                    .Select(x => new { x.ITCode, x.Name })
-                    .OrderBy(x => x.ITCode)
-                    .ToList().ToListItems(x => x.Name, x => x.ITCode);
-
-                return Ok(rv);
-
+            if (ConfigInfo.HasMainHost)
+            {
+                return Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowUsers").Result;
+            }
+            return Ok(WorkflowLookup.GetUsers(Wtm, itcode));
         }
 
         [HttpGet("[action]")]
-        [Public]
         [NoLog]
         public IActionResult GetWorkflowGroups([FromQuery] string[] ids)
         {
-                if (ConfigInfo.HasMainHost)
-                {
-                    return Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowGroups").Result;
-                }
-                var tenant = Wtm.LoginUserInfo?.CurrentTenant;
-                var rv = Wtm.DC.Set<FrameworkGroup>().CheckIDs(ids.ToList())
-                    .Select(x => new { x.ID, x.GroupName })
-                    .OrderBy(x => x.GroupName)
-                    .ToList().ToListItems(x => x.GroupName, x => x.ID);
-
-                return Ok(rv);
+            if (ConfigInfo.HasMainHost)
+            {
+                return Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowGroups").Result;
+            }
+            return Ok(WorkflowLookup.GetGroups(Wtm, ids));
         }
 
         [HttpGet("[action]")]
-        [Public]
         [NoLog]
         public IActionResult GetWorkflowGroupManagers([FromQuery] string[] ids)
         {
@@ -85,17 +66,10 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 return Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowGroupManagers").Result;
             }
-            var tenant = Wtm.LoginUserInfo?.CurrentTenant;
-            var rv = Wtm.DC.Set<FrameworkGroup>().CheckIDs(ids.ToList())
-                .Select(x => new { x.ID, x.Manager })
-                .OrderBy(x => x.Manager)
-                .ToList().ToListItems(x => x.Manager, x => x.ID);
-
-            return Ok(rv);
+            return Ok(WorkflowLookup.GetGroupManagers(Wtm, ids));
         }
 
         [HttpGet("[action]")]
-        [Public]
         [NoLog]
         public IActionResult GetWorkflowMyGroupManagers([FromQuery] string itcode)
         {
@@ -103,33 +77,18 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 return Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowMyGroupManagers").Result;
             }
-            var tenant = Wtm.LoginUserInfo?.CurrentTenant;
-            var rv = Wtm.DC.Set<FrameworkUserGroup>().Where(x=>x.UserCode == itcode)
-                .Join(DC.Set<FrameworkGroup>(), x => x.GroupCode, y => y.GroupCode, (x, y) => y.Manager)
-                .ToList().ToListItems(x => x, x => x);
-
-            return Ok(rv);
+            return Ok(WorkflowLookup.GetMyGroupManagers(Wtm, itcode));
         }
 
         [HttpGet("[action]")]
-        [Public]
         [NoLog]
         public IActionResult GetWorkflowRoles([FromQuery] string[] ids)
         {
-
-
-                if (ConfigInfo.HasMainHost)
-                {
-                    return Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowRoles").Result;
-                }
-                var tenant = Wtm.LoginUserInfo?.CurrentTenant;
-                var rv = Wtm.DC.Set<FrameworkRole>().CheckIDs(ids.ToList())
-                    .Select(x => new { x.ID, x.RoleName })
-                    .OrderBy(x => x.RoleName)
-                    .ToList().ToListItems(x => x.RoleName, x => x.ID);
-
-                return Ok(rv);
-
+            if (ConfigInfo.HasMainHost)
+            {
+                return Request.RedirectCall(Wtm, "/_WorkflowApi/GetWorkflowRoles").Result;
+            }
+            return Ok(WorkflowLookup.GetRoles(Wtm, ids));
         }
 
 
