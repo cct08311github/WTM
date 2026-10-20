@@ -737,7 +737,17 @@ namespace WalkingTec.Mvvm.Mvc
                 var principal = Wtm.LoginUserInfo.CreatePrincipal();
                 await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, null);
             }
-            return Content($"<script>window.location.href='{HttpUtility.UrlDecode(redirect)}'</script>", "text/html");
+            return Content(BuildRemoteEntryScript(redirect), "text/html");
+        }
+
+        /// <summary>
+        /// Builds the script that navigates to the (URL-decoded) redirect target.
+        /// The decoded value is JS-string-encoded before being placed in the script literal;
+        /// the navigation target itself is unchanged.
+        /// </summary>
+        public static string BuildRemoteEntryScript(string redirect)
+        {
+            return $"<script>window.location.href='{JsStringEncoder.Escape(HttpUtility.UrlDecode(redirect))}'</script>";
         }
 
         [AllRights]
