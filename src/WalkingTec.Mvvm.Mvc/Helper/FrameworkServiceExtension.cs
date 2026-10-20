@@ -534,6 +534,7 @@ namespace WalkingTec.Mvvm.Mvc
             WtmContextOption op = new WtmContextOption();
             options?.Invoke(op);
             services.Configure<Configs>(config);
+            WorkflowApiSecurity.AddWorkflowApiConvention(services, conf);
             var gd = GetGlobalData();
             services.AddHttpContextAccessor();
             services.AddSingleton(gd);

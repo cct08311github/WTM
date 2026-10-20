@@ -9,6 +9,7 @@ using Elsa.Metadata;
 using Elsa.Services.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace WalkingTec.Mvvm.Core.WorkFlow
 {
@@ -87,6 +88,37 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
         }
 
 
+        /// <summary>
+        /// Reads users, groups, group managers or roles for the approve activity. Single host: straight from the local database
+        /// (no HTTP self-call, so it does not depend on the lookup endpoints being reachable or anonymous).
+        /// Multi host (HasMainHost): these tables live on the main host, so the call goes to the main host, carrying the current
+        /// user's remote token (the same hop the _WorkflowApi endpoints made on the caller's behalf before).
+        /// </summary>
+        private List<ComboSelectListItem> Lookup(string action, string query, Func<List<ComboSelectListItem>> local)
+        {
+            //same convention as the other controllers/VMs (e.g. demo AccountController.GetFrameworkRoles, WTMContext.RemoveUserCacheByRole): tenant users read the local database
+            if (_wtm.ConfigInfo.HasMainHost && _wtm.LoginUserInfo?.CurrentTenant == null)
+            {
+                var url = "/_WorkflowApi/" + action + (string.IsNullOrEmpty(query) ? "" : "?" + query);
+                var result = _wtm.CallAPI<List<ComboSelectListItem>>("mainhost", url).Result;
+                var code = (int?)result?.StatusCode;
+                if (code == null || code < 200 || code > 299)
+                {
+                    //never log the token or the query
+                    _wtm.LoggerFactory?.CreateLogger<WtmApproveActivity>().LogWarning(
+                        "Workflow lookup {Action} on the main host failed with status {Status}. In a multi-host deployment a user without a remote token is rejected by the main host, so the approver/role/group resolution is empty.",
+                        action, code);
+                }
+                return result?.Data ?? new List<ComboSelectListItem>();
+            }
+            return local() ?? new List<ComboSelectListItem>();
+        }
+
+        private static string BuildQuery(string key, IEnumerable<string> values)
+        {
+            return string.Join("&", values.Select(x => $"{key}={Uri.EscapeDataString(x ?? "")}"));
+        }
+
         public object GetOptions(PropertyInfo property)
         {
             var rv = new List<ComboSelectListItem>();
@@ -94,11 +126,7 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             {
                 try
                 {
-                    var check = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowRoles").Result;
-                    if (check.Data != null)
-                    {
-                        rv = check.Data;
-                    }
+                    rv = Lookup("GetWorkflowRoles", null, () => WorkflowLookup.GetRoles(_wtm, null));
                 }
                 catch { }
                 return rv;
@@ -107,11 +135,7 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             {
                 try
                 {
-                    var check = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowGroups").Result;
-                    if (check.Data != null)
-                    {
-                        rv = check.Data;
-                    }
+                    rv = Lookup("GetWorkflowGroups", null, () => WorkflowLookup.GetGroups(_wtm, null));
                 }
                 catch { }
                 return rv;
@@ -120,11 +144,7 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             {
                 try
                 {
-                    var check = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowGroups").Result;
-                    if (check.Data != null)
-                    {
-                        rv = check.Data;
-                    }
+                    rv = Lookup("GetWorkflowGroups", null, () => WorkflowLookup.GetGroups(_wtm, null));
                 }
                 catch { }
                 rv.ForEach(x => x.Text += "主管");
@@ -169,10 +189,9 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
                     }
                     else if (item == "2")
                     {
-                        query = $"itcode={submitter}";
+                        query = $"itcode={Uri.EscapeDataString(submitter ?? "")}";
 
-                        var names = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowMyGroupManagers?{query}").Result;
-                        users = names.Data ?? new List<ComboSelectListItem>();
+                        users = Lookup("GetWorkflowMyGroupManagers", query, () => WorkflowLookup.GetMyGroupManagers(_wtm, submitter));
                         if (users.Count > 0)
                         {
                             ApproveUsers.Add(users.FirstOrDefault()?.Text);
@@ -183,14 +202,8 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             //添加部门管理员到ApproveUsers
             if (ApproveManagers?.Count > 0)
             {
-                query = "";
-                foreach (var item in ApproveManagers)
-                {
-                    query += $"ids={item}&";
-                }
-                query += "1=1";
-                var names = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowGroupManagers?{query}").Result;
-                managers = names.Data ?? new List<ComboSelectListItem>();
+                query = BuildQuery("ids", ApproveManagers);
+                managers = Lookup("GetWorkflowGroupManagers", query, () => WorkflowLookup.GetGroupManagers(_wtm, ApproveManagers));
                 foreach (var item in managers)
                 {
                     if (string.IsNullOrEmpty(item.Text) == false)
@@ -202,14 +215,8 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
 
             if (ApproveUsers?.Count > 0)
             {
-                query = "";
-                foreach (var item in ApproveUsers)
-                {
-                    query += $"itcode={item}&";
-                }
-                query += "1=1";
-                var names = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowUsers?{query}").Result;
-                users = names.Data ?? new List<ComboSelectListItem>();
+                query = BuildQuery("itcode", ApproveUsers);
+                users = Lookup("GetWorkflowUsers", query, () => WorkflowLookup.GetUsers(_wtm, ApproveUsers));
                 ApproveUsersFullText.AddRange(users.Select(x => $"{x.Text}({x.Value})").ToList());
                 foreach (var item in ApproveUsers)
                 {
@@ -230,14 +237,8 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             }
             if (ApproveRoles?.Count > 0)
             {
-                query = "";
-                foreach (var item in ApproveRoles)
-                {
-                    query += $"ids={item}&";
-                }
-                query += "1=1";
-                var names = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowRoles?{query}").Result;
-                roles = names.Data ?? new List<ComboSelectListItem>();
+                query = BuildQuery("ids", ApproveRoles);
+                roles = Lookup("GetWorkflowRoles", query, () => WorkflowLookup.GetRoles(_wtm, ApproveRoles));
                 ApproveUsersFullText.AddRange(roles.Select(x => $"{x.Text}").ToList());
                 foreach (var item in ApproveRoles)
                 {
@@ -258,14 +259,8 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
             }
             if (ApproveGroups?.Count > 0)
             {
-                query = "";
-                foreach (var item in ApproveGroups)
-                {
-                    query += $"ids={item}&";
-                }
-                query += "1=1";
-                var names = _wtm.CallAPI<List<ComboSelectListItem>>("", $"{_wtm.HostAddress}/_workflowapi/GetWorkflowGroups?{query}").Result;
-                groups = names.Data ?? new List<ComboSelectListItem>();
+                query = BuildQuery("ids", ApproveGroups);
+                groups = Lookup("GetWorkflowGroups", query, () => WorkflowLookup.GetGroups(_wtm, ApproveGroups));
                 ApproveUsersFullText.AddRange(groups.Select(x => $"{x.Text}").ToList());
                 foreach (var item in ApproveGroups)
                 {
