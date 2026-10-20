@@ -171,10 +171,14 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 return null;
             }
-            var v = value.Trim().TrimEnd('/');
-            if (Uri.TryCreate(v, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+            if (Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri)
+                && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+                && string.IsNullOrEmpty(uri.Host) == false
+                && string.IsNullOrEmpty(uri.UserInfo)
+                && string.IsNullOrEmpty(uri.Query)
+                && string.IsNullOrEmpty(uri.Fragment))
             {
-                return v;
+                return uri.GetLeftPart(UriPartial.Path).TrimEnd('/');
             }
             invalid = true;
             return null;
@@ -269,12 +273,17 @@ namespace WalkingTec.Mvvm.Mvc
                     continue;
                 }
                 if (string.Equals(e, host, StringComparison.OrdinalIgnoreCase)
-                    || (e.Contains(":") == false && string.Equals(e, hostOnly, StringComparison.OrdinalIgnoreCase)))
+                    || (EntryHasPort(e) == false && string.Equals(e, hostOnly, StringComparison.OrdinalIgnoreCase)))
                 {
                     return true;
                 }
             }
             return false;
+        }
+
+        private static bool EntryHasPort(string entry)
+        {
+            return entry.StartsWith("[") ? entry.EndsWith("]") == false : entry.Contains(":");
         }
 
         private static string StripPort(string host)

@@ -248,6 +248,57 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
+        public void Normalize_RejectsUserInfoQueryFragment_KeepsPath()
+        {
+            foreach (var bad in new[] { "https://u:p@h", "https://h?x=1", "https://h#a", "https://h/app?x=1", "ftp://h" })
+            {
+                Assert.IsNull(WorkflowApiSecurity.NormalizeInternalCallBaseAddress(bad, out var invalid), bad);
+                Assert.IsTrue(invalid, bad);
+            }
+            Assert.AreEqual("https://h/app", WorkflowApiSecurity.NormalizeInternalCallBaseAddress("https://h/app/", out var inv1));
+            Assert.IsFalse(inv1);
+            Assert.AreEqual("https://h:5001", WorkflowApiSecurity.NormalizeInternalCallBaseAddress("HTTPS://H:5001/", out var inv2));
+            Assert.IsFalse(inv2);
+            Assert.IsNull(WorkflowApiSecurity.NormalizeInternalCallBaseAddress("  ", out var inv3));
+            Assert.IsFalse(inv3);
+        }
+
+        [TestMethod]
+        public void SelfCall_InternalBaseWithPath_Kept()
+        {
+            var r = WorkflowApiSecurity.ResolveSelfCall(CfgInternal(false, "https://h/app/"), null, "http", "x", null, null);
+            Assert.AreEqual("https://h/app", r.BaseAddress);
+            var bad = WorkflowApiSecurity.ResolveSelfCall(CfgInternal(false, "https://h?x=1"), null, "http", "x", null, null);
+            Assert.AreEqual("http://x", bad.BaseAddress);
+            Assert.IsTrue(bad.InvalidInternalCallBaseAddress);
+        }
+
+        [TestMethod]
+        public void IsAllowedHost_EdgeCases()
+        {
+            Assert.IsTrue(WorkflowApiSecurity.IsAllowedHost("[::1]", "[::1]:5000"));
+            Assert.IsTrue(WorkflowApiSecurity.IsAllowedHost("[::1]:5000", "[::1]:5000"));
+            Assert.IsFalse(WorkflowApiSecurity.IsAllowedHost("[::1]:5000", "[::1]:6000"));
+            Assert.IsFalse(WorkflowApiSecurity.IsAllowedHost("app.example", "app.example."));
+            Assert.IsFalse(WorkflowApiSecurity.IsAllowedHost("app.example", "app.example@evil.com"));
+            Assert.IsFalse(WorkflowApiSecurity.IsAllowedHost("app.example", ""));
+            Assert.IsFalse(WorkflowApiSecurity.IsAllowedHost("app.example", null));
+            Assert.IsTrue(WorkflowApiSecurity.IsAllowedHost("a.example;", "a.example"));
+        }
+
+        [TestMethod]
+        public void SelfCall_ExplicitList_EdgeHosts_Rejected()
+        {
+            foreach (var h in new[] { "app.example.", "app.example@evil.com", "" })
+            {
+                var r = WorkflowApiSecurity.ResolveSelfCall(Cfg(false), "app.example", "http", h, null, null);
+                Assert.IsTrue(r.Rejected, h);
+            }
+            Assert.IsFalse(WorkflowApiSecurity.ResolveSelfCall(Cfg(false), "a.example;", "http", "a.example", null, null).Rejected);
+            Assert.IsFalse(WorkflowApiSecurity.ResolveSelfCall(Cfg(false), "[::1]", "http", "[::1]:5000", null, null).Rejected);
+        }
+
+        [TestMethod]
         public void IsExplicitHostList_Cases()
         {
             Assert.IsFalse(WorkflowApiSecurity.IsExplicitHostList(null));
