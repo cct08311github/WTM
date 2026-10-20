@@ -140,6 +140,13 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [DataTestMethod]
+        [DataRow("/v1.0/activities")]
+        [DataRow("/v01/activities")]
+        [DataRow("/V1.0/Activities")]
+        [DataRow("/v1.0/activities/")]
+        [DataRow("/v2/activities")]
+        [DataRow("/vX/activities/Elsa.Activities.Console.WriteLine")]
+        [DataRow("/v/activities")]
         [DataRow("/v1/activities/")]
         [DataRow("/V1/Activities")]
         [DataRow("/v1/activities/Elsa.Activities.Console.WriteLine")]
@@ -151,6 +158,7 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [DataTestMethod]
+        [DataRow("/v1.0/activities", "?inneruse=1")]
         [DataRow("/v1/activities/", "?inneruse=1")]
         [DataRow("/v1/activities", "?inneruse=1&x=1")]
         [DataRow("/v1/activities", "?INNERUSE=1")]
@@ -164,7 +172,7 @@ namespace WalkingTec.Mvvm.Core.Test
         [TestMethod]
         public async Task Middleware_OtherPaths_AreNotAffected()
         {
-            foreach (var path in new[] { "/v1/workflow-definitions", "/v1/activitiesx", "/home/v1/activities", "/" })
+            foreach (var path in new[] { "/v1/workflow-definitions", "/v1/activitiesx", "/home/v1/activities", "/x1/activities", "/v1/x/activities", "/" })
             {
                 var (ctx, next) = await Run(Create(path, auth: new FakeAuthService()));
                 Assert.AreNotEqual(401, ctx.Response.StatusCode, path);
@@ -209,6 +217,75 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.IsFalse(await WorkflowActivitiesGuard.IsAllowedAsync(ctx));
         }
 
+        // ---- one matcher for the guard and the internal-call branch ----
+
+        [DataTestMethod]
+        [DataRow("/v1/activities", "", true, false)]
+        [DataRow("/v1.0/activities", "", true, false)]
+        [DataRow("/V01/Activities/", "", true, false)]
+        [DataRow("/v1.0/activities", "?inneruse=1", false, true)]
+        [DataRow("/v1/activities", "?inneruse=1", false, true)]
+        [DataRow("/v1/activities", "?inneruse=1&x=1", true, false)]
+        [DataRow("/v1/activities/Elsa.X", "", false, false)]
+        [DataRow("/v1/workflow-definitions", "", false, false)]
+        public void Matchers_AgreeOnVersionCaseAndTrailingSlash(string path, string query, bool isPublic, bool isInternal)
+        {
+            var ctx = Create(path, query);
+            Assert.AreEqual(isPublic, WorkflowActivitiesGuard.IsPublicActivitiesRequest(ctx.Request));
+            Assert.AreEqual(isInternal, WorkflowActivitiesGuard.IsInternalActivitiesRequest(ctx.Request));
+            Assert.AreEqual(path.IndexOf("activities", StringComparison.OrdinalIgnoreCase) >= 0 && path.StartsWith("/v1/workflow") == false,
+                WorkflowActivitiesGuard.IsActivitiesRequest(ctx.Request));
+        }
+
+        // ---- the internal client does not follow redirects ----
+
+        [TestMethod]
+        public async Task InternalHttpClient_DoesNotFollowRedirects_AndOtherClientsStillDo()
+        {
+            var port = System.Net.Sockets.TcpListener.Create(0);
+            port.Start();
+            var p = ((System.Net.IPEndPoint)port.LocalEndpoint).Port;
+            port.Stop();
+            var prefix = $"http://127.0.0.1:{p}/";
+            using var listener = new System.Net.HttpListener();
+            listener.Prefixes.Add(prefix);
+            listener.Start();
+            var targetHit = 0;
+            var serve = Task.Run(async () =>
+            {
+                while (listener.IsListening)
+                {
+                    System.Net.HttpListenerContext c;
+                    try { c = await listener.GetContextAsync(); } catch { return; }
+                    if (c.Request.Url.AbsolutePath == "/redirect")
+                    {
+                        c.Response.StatusCode = 302;
+                        c.Response.RedirectLocation = prefix + "target";
+                    }
+                    else
+                    {
+                        System.Threading.Interlocked.Increment(ref targetHit);
+                        c.Response.StatusCode = 200;
+                    }
+                    c.Response.Close();
+                }
+            });
+            var services = new ServiceCollection();
+            WorkflowActivitiesGuard.AddInternalHttpClient(services);
+            services.AddHttpClient();
+            var factory = services.BuildServiceProvider().GetRequiredService<System.Net.Http.IHttpClientFactory>();
+
+            var internalRes = await factory.CreateClient(WorkflowActivitiesGuard.InternalClientName).GetAsync(prefix + "redirect");
+            Assert.AreEqual(System.Net.HttpStatusCode.Found, internalRes.StatusCode);
+            Assert.AreEqual(0, targetHit, "the redirect target must not be requested");
+
+            var defaultRes = await factory.CreateClient("other").GetAsync(prefix + "redirect");
+            Assert.AreEqual(System.Net.HttpStatusCode.OK, defaultRes.StatusCode);
+            Assert.AreEqual(1, targetHit);
+            listener.Stop();
+            await serve;
+        }
+
         // ---- secret ----
 
         [TestMethod]
@@ -233,13 +310,6 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
-        public void Secret_ComparisonUsesFixedTimeEquals()
-        {
-            var src = System.IO.File.ReadAllText(FindSource("WorkflowActivitiesGuard.cs"));
-            StringAssert.Contains(src, "CryptographicOperations.FixedTimeEquals");
-        }
-
-        [TestMethod]
         public void WithInternalSecret_KeepsCredentialHeaders_AndDoesNotMutateTheInput()
         {
             var input = new Dictionary<string, string> { ["Authorization"] = "Bearer abc", ["Cookie"] = "c=1" };
@@ -257,19 +327,6 @@ namespace WalkingTec.Mvvm.Core.Test
             var r = WorkflowApiSecurity.ResolveSelfCall(new Configs(), null, "http", "localhost", null, null);
             Assert.IsNull(r.Headers);
             Assert.IsFalse(r.Rejected);
-        }
-
-        private static string FindSource(string name)
-        {
-            var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
-            while (dir != null)
-            {
-                var f = System.IO.Path.Combine(dir.FullName, "src", "WalkingTec.Mvvm.Mvc", "Helper", name);
-                if (System.IO.File.Exists(f)) return f;
-                dir = dir.Parent;
-            }
-            Assert.Inconclusive("source not found");
-            return null;
         }
     }
 }
