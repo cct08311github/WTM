@@ -5,6 +5,8 @@ updates:
   # PR so the build check in .github/workflows/clientapp.yml runs once per batch.
   # Major updates stay out of the group and open one PR each, so a single
   # breaking upgrade cannot block the whole batch (see #51 / #101).
+  # The security group follows the same rule: #145 bundled patch fixes with
+  # echarts 6 / vite 8 majors and the failing build blocked all of them (#165).
   - package-ecosystem: npm
     directory: /demo/WalkingTec.Mvvm.Vue3Demo/ClientApp
     schedule:
@@ -21,6 +23,7 @@ updates:
       vue3demo-clientapp-security:
         applies-to: security-updates
         patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: "chore(deps-demo)"
     labels: ["dependencies"]
