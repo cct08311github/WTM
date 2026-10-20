@@ -9,6 +9,7 @@ using Elsa.Metadata;
 using Elsa.Services.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace WalkingTec.Mvvm.Core.WorkFlow
 {
@@ -95,10 +96,20 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
         /// </summary>
         private List<ComboSelectListItem> Lookup(string action, string query, Func<List<ComboSelectListItem>> local)
         {
-            if (_wtm.ConfigInfo.HasMainHost)
+            //same convention as the other controllers/VMs (e.g. demo AccountController.GetFrameworkRoles, WTMContext.RemoveUserCacheByRole): tenant users read the local database
+            if (_wtm.ConfigInfo.HasMainHost && _wtm.LoginUserInfo?.CurrentTenant == null)
             {
                 var url = "/_WorkflowApi/" + action + (string.IsNullOrEmpty(query) ? "" : "?" + query);
-                return _wtm.CallAPI<List<ComboSelectListItem>>("mainhost", url).Result?.Data ?? new List<ComboSelectListItem>();
+                var result = _wtm.CallAPI<List<ComboSelectListItem>>("mainhost", url).Result;
+                var code = (int?)result?.StatusCode;
+                if (code == null || code < 200 || code > 299)
+                {
+                    //never log the token or the query
+                    _wtm.LoggerFactory?.CreateLogger<WtmApproveActivity>().LogWarning(
+                        "Workflow lookup {Action} on the main host failed with status {Status}. In a multi-host deployment a user without a remote token is rejected by the main host, so the approver/role/group resolution is empty.",
+                        action, code);
+                }
+                return result?.Data ?? new List<ComboSelectListItem>();
             }
             return local() ?? new List<ComboSelectListItem>();
         }

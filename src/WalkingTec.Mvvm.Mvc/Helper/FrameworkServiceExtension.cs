@@ -534,11 +534,7 @@ namespace WalkingTec.Mvvm.Mvc
             WtmContextOption op = new WtmContextOption();
             options?.Invoke(op);
             services.Configure<Configs>(config);
-            if (conf.EnableWorkflow == false)
-            {
-                //_WorkflowApi is only part of the application when workflow is enabled (#13)
-                services.Configure<MvcOptions>(mvc => mvc.Conventions.Add(new WorkflowApiDisabledConvention()));
-            }
+            WorkflowApiSecurity.AddWorkflowApiConvention(services, conf);
             var gd = GetGlobalData();
             services.AddHttpContextAccessor();
             services.AddSingleton(gd);

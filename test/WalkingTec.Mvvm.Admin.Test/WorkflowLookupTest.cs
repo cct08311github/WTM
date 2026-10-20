@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core;
+using WalkingTec.Mvvm.Core.ConfigOptions;
 using WalkingTec.Mvvm.Core.WorkFlow;
 using WalkingTec.Mvvm.Test.Mock;
 
@@ -94,6 +96,36 @@ namespace WalkingTec.Mvvm.Admin.Test
 
             Assert.AreEqual("mgr1", WorkflowLookup.GetMyGroupManagers(wtm, "u1")[0].Text);
             Assert.AreEqual(0, WorkflowLookup.GetMyGroupManagers(wtm, "nobody").Count);
+        }
+
+        private static (WTMContext, CapturingLoggerFactory) CreateMultiHost(string tenant)
+        {
+            var wtm = MockWtmContext.CreateWtmContext(null, "user");
+            wtm.ConfigInfo.Domains = new Dictionary<string, Domain> { { "mainhost", new Domain { Address = "http://mainhost.invalid" } } };
+            var lf = new CapturingLoggerFactory();
+            typeof(WTMContext).GetField("_loggerFactory", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(wtm, lf);
+            wtm.LoginUserInfo.CurrentTenant = tenant;
+            return (wtm, lf);
+        }
+
+        [TestMethod]
+        public void MainHostLookup_Failure_LogsWarningAndReturnsEmpty()
+        {
+            var (wtm, lf) = CreateMultiHost(null);
+            var rv = (List<ComboSelectListItem>)GetOptions(wtm, nameof(WtmApproveActivity.ApproveRoles));
+            Assert.AreEqual(0, rv.Count);
+            Assert.AreEqual(1, lf.Entries.Count(x => x.Level == LogLevel.Warning && x.Message.Contains("remote token")));
+        }
+
+        [TestMethod]
+        public void TenantUser_OnMultiHost_ReadsLocalDatabase()
+        {
+            Seed();
+            var (wtm, lf) = CreateMultiHost("t1");
+            wtm.DC = new WalkingTec.Mvvm.Vue3Demo.DataContext(_seed, DBTypeEnum.Memory);
+            var rv = (List<ComboSelectListItem>)GetOptions(wtm, nameof(WtmApproveActivity.ApproveRoles));
+            Assert.AreEqual(0, lf.Entries.Count(x => x.Level == LogLevel.Warning));
+            Assert.IsNotNull(rv);
         }
     }
 }

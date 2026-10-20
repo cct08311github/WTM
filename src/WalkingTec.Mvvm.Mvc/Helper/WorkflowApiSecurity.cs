@@ -99,6 +99,18 @@ namespace WalkingTec.Mvvm.Mvc
 
     public static class WorkflowApiSecurity
     {
+        /// <summary>
+        /// Registers <see cref="WorkflowApiDisabledConvention"/> when workflow is disabled, so _WorkflowApi is only part of the
+        /// application when EnableWorkflow is true (#13). Read at startup: changing EnableWorkflow needs a restart.
+        /// </summary>
+        public static void AddWorkflowApiConvention(Microsoft.Extensions.DependencyInjection.IServiceCollection services, Configs configs)
+        {
+            if (configs == null || configs.EnableWorkflow == false)
+            {
+                services.Configure<Microsoft.AspNetCore.Mvc.MvcOptions>(mvc => mvc.Conventions.Add(new WorkflowApiDisabledConvention()));
+            }
+        }
+
         public const string ApiNamespacePrefix = "Elsa.Server.Api.";
 
         // same admin definition as the workflow management page

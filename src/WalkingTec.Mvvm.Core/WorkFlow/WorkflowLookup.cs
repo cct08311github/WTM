@@ -9,7 +9,8 @@ namespace WalkingTec.Mvvm.Core.WorkFlow
     /// Local database lookups for users, groups, group managers and roles used by the workflow (approve activity and
     /// <c>_WorkflowApi</c>). They read the local database of the given context; multi-host (HasMainHost) forwarding is the caller's concern.
     /// An empty or null id list returns everything, exactly like the original controller queries, so only call these from
-    /// code that has already established who the caller is.
+    /// code that has already established who the caller is (a signed-in user, or trusted server-side code). Never expose these
+    /// methods, or an endpoint built on them, to unauthenticated callers: with no ids they return all users (ITCode, name), groups, managers and roles.
     /// </summary>
     public static class WorkflowLookup
     {

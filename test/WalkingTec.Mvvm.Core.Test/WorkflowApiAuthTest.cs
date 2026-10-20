@@ -1,6 +1,8 @@
 using System;
 using System.Linq;
 using System.Reflection;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ApplicationModels;
@@ -71,6 +73,22 @@ namespace WalkingTec.Mvvm.Core.Test
             new WorkflowApiDisabledConvention().Apply(app);
 
             Assert.AreEqual(1, app.Controllers.Count);
+        }
+
+        private static System.Collections.Generic.IList<IApplicationModelConvention> ConventionsFor(bool enableWorkflow)
+        {
+            var services = new ServiceCollection();
+            services.AddOptions();
+            WorkflowApiSecurity.AddWorkflowApiConvention(services, new Configs { EnableWorkflow = enableWorkflow });
+            using var sp = services.BuildServiceProvider();
+            return sp.GetRequiredService<IOptions<MvcOptions>>().Value.Conventions;
+        }
+
+        [TestMethod]
+        public void Registration_AddsConvention_OnlyWhenWorkflowIsDisabled()
+        {
+            Assert.AreEqual(1, ConventionsFor(false).OfType<WorkflowApiDisabledConvention>().Count());
+            Assert.AreEqual(0, ConventionsFor(true).OfType<WorkflowApiDisabledConvention>().Count());
         }
 
         private class OtherApiController : ControllerBase
