@@ -46,16 +46,6 @@ export const buildConfig = {
 				// 	path: 'dist/echarts.min.js',
 				// },
 				// {
-				// 	name: 'echarts-gl',
-				// 	var: 'echarts-gl',
-				// 	path: 'dist/echarts-gl.min.js',
-				// },
-				// {
-				// 	name: 'echarts-wordcloud',
-				// 	var: 'echarts-wordcloud',
-				// 	path: 'dist/echarts-wordcloud.min.js',
-				// },
-				// {
 				// 	name: 'vue-i18n',
 				// 	var: 'VueI18n',
 				// 	path: 'dist/vue-i18n.global.min.js',
@@ -110,8 +100,6 @@ export const buildConfig = {
 		'element-plus',
 		// '@element-plus/icons-vue',
 		// 'echarts',
-		// 'echarts-gl',
-		// 'echarts-wordcloud',
 		// 'vue-i18n',
 		// 'jsplumb',
 		// 'cropperjs',

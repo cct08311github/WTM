@@ -249,7 +249,7 @@ const initLineChart = () => {
 		},
 		grid: { top: 70, right: 20, bottom: 30, left: 30 },
 		tooltip: { trigger: 'axis' },
-		legend: { data: ['预购队列', '最新成交价'], right: 0 },
+		legend: { data: ['预购队列', '最新成交价'], top: 0, right: 0 },
 		xAxis: {
 			data: ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'],
 		},
@@ -415,7 +415,7 @@ const initBarChart = () => {
 			textStyle: { fontSize: '15', color: state.charts.color },
 		},
 		tooltip: { trigger: 'axis' },
-		legend: { data: ['供温', '回温', '压力值(Mpa)'], right: 0 },
+		legend: { data: ['供温', '回温', '压力值(Mpa)'], top: 0, right: 0 },
 		grid: { top: 70, right: 80, bottom: 30, left: 80 },
 		xAxis: [
 			{
