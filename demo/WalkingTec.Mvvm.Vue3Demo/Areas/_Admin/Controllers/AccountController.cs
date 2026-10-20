@@ -10,6 +10,8 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
@@ -102,12 +104,19 @@ namespace WalkingTec.Mvvm.Admin.Api
         [HttpPost("[action]")]
         public IActionResult Reg(SimpleReg regInfo)
         {
+            // Format errors (required, length) do not depend on which accounts exist, so they keep their specific messages.
+            if (ModelState.IsValid == false)
+            {
+                return BadRequest(ModelState.GetErrorJson());
+            }
+
+            // Anonymous action: an existing ITCode must be indistinguishable from any other account related failure,
+            // otherwise callers can probe which account names exist (#209). See RegFailed.
             var exist = DC.Set<FrameworkUser>().Any(x => x.ITCode.ToLower() == regInfo.ITCode.ToLower());
 
             if (exist == true)
             {
-                ModelState.AddModelError("ITCode", Localizer["Login.ItcodeDuplicate"]);
-                return BadRequest(ModelState.GetErrorJson());
+                return RegFailed();
             }
 
             var hasuserrole = DC.Set<FrameworkRole>().Where(x => x.RoleCode == "002").FirstOrDefault();
@@ -130,8 +139,27 @@ namespace WalkingTec.Mvvm.Admin.Api
                 DC.Set<FrameworkUserRole>().Add(userrole);
             }
             DC.Set<FrameworkUser>().Add(user);
-            DC.SaveChanges();
+            try
+            {
+                DC.SaveChanges();
+            }
+            catch (DbUpdateException) when (DC.Set<FrameworkUser>().AsNoTracking().Any(x => x.ITCode.ToLower() == regInfo.ITCode.ToLower() && x.ID != user.ID))
+            {
+                // lost a race with a concurrent registration of the same ITCode: answer like the duplicate check above
+                return RegFailed();
+            }
             return Ok();
+        }
+
+        /// <summary>
+        /// The one response for every registration failure that is caused by the state of an account (currently: ITCode already in use).
+        /// Same status code, same body, no field name.
+        /// </summary>
+        private IActionResult RegFailed()
+        {
+            var err = new ModelStateDictionary();
+            err.AddModelError("", Localizer["Sys.SubmitFailed"]);
+            return BadRequest(err.GetErrorJson());
         }
 
 
