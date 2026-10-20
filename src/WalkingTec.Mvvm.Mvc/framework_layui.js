@@ -1173,7 +1173,8 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
         }
         if (celltype === 1) {
             loaddata[row][col] = loaddata[row][col].replace(/(<option .*?) selected\s*>/ig, "$1>");
-            var re = new RegExp("(<option\\s*value\\s*=\\s*[\"']" + ele.value + "[\"'])\s*>", "ig");
+            var escapedValue = String(ele.value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            var re = new RegExp("(<option\\s*value\\s*=\\s*[\"']" + escapedValue + "[\"'])\\s*>", "ig");
             loaddata[row][col] = loaddata[row][col].replace(re, "$1 selected>");
         }
 
