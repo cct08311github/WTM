@@ -12,6 +12,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 
 ## 未发布
 
+* **修复（安全）：**   工作流内部调用 `/v1/activities` 的目标不再由未经验证的 Host header 决定（#172）。新增可选设置 `WorkflowOptions:InternalCallBaseAddress`（默认 null）：设置后内部调用一律使用该地址（例如 `https://localhost:5001` 或内网地址），`RequireAuthentication=true` 时它优先于 `Domains:server` 与 AllowedHosts；值不是绝对 http/https URI 时会被忽略并输出 Warning。未设置、`RequireAuthentication` 关闭、且 `AllowedHosts` 是不含通配符的明确清单时，只有 Host 在清单内才发出内部调用，否则返回 400 并输出一次 Warning。未设置新选项且 `AllowedHosts` 为空、`*` 或含通配符的部署，行为与原来完全相同。使用明确 AllowedHosts 的部署，ASP.NET Core 的 host filtering 通常已先拦截不符合的 host，因此实际上几乎不会改变行为。建议正式环境设置 `WorkflowOptions:InternalCallBaseAddress`；回滚方式：移除该设置，或让 AllowedHosts 含 `*`。详见 FORK.md 第 11 节
 * **新增：**   Oracle Database 最低支持版本为 19c（底层 ODP.NET 23；WTM 6.x 可连接 11g）。仍在使用 11g／12c 的应用，需先升级数据库，或改用其他整合方式。`Connections[].Version` 对 Oracle 只识别 19／21／23，其他值（例如 `11`、`12`）会改用 19 兼容模式（行为不变）；现在启动时会为每个这样的连接输出 Warning，说明已套用 19 兼容模式、且 19c 以下不受支持（#158）
 * **文档：**   `docs/migrations/password-hash-upgrade.md` §4 启用 PBKDF2 的步骤新增“检查应用程序自己的密码代码”：直接调用 `Utils.GetMD5String` 比对或写入密码的自定义代码不经过 `PasswordHasher`，启用前须改用 `WTMContext.VerifyPassword`／`HashPassword`，否则已升级为 PBKDF2 的账号在这些路径会比对失败（#162）
 

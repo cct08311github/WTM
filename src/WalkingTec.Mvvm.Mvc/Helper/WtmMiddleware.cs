@@ -23,6 +23,8 @@ namespace WalkingTec.Mvvm.Mvc
     {
         private readonly RequestDelegate _next;
         private static int _withheldWarned;
+        private static int _rejectedWarned;
+        private static int _invalidBaseWarned;
 
         public WtmMiddleware(RequestDelegate next)
         {
@@ -45,10 +47,25 @@ namespace WalkingTec.Mvvm.Mvc
                     context.Request.Host.Value,
                     context.Request.Headers["Authorization"].ToString(),
                     context.Request.Headers["Cookie"].ToString());
+                if (selfCall.InvalidInternalCallBaseAddress && Interlocked.Exchange(ref _invalidBaseWarned, 1) == 0)
+                {
+                    context.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("WalkingTec.Mvvm.Security")
+                        .LogWarning("WorkflowOptions:InternalCallBaseAddress is not an absolute http/https URI and is ignored.");
+                }
+                if (selfCall.Rejected)
+                {
+                    if (Interlocked.Exchange(ref _rejectedWarned, 1) == 0)
+                    {
+                        context.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("WalkingTec.Mvvm.Security")
+                            .LogWarning("The workflow internal call was rejected because the request host is not listed in AllowedHosts. Set WorkflowOptions:InternalCallBaseAddress (recommended) or add the host to AllowedHosts.");
+                    }
+                    context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                    return;
+                }
                 if (selfCall.CredentialsWithheld && Interlocked.Exchange(ref _withheldWarned, 1) == 0)
                 {
                     context.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("WalkingTec.Mvvm.Security")
-                        .LogWarning("WorkflowOptions:RequireAuthentication is enabled but no trusted address is available for the internal workflow call, so the caller's credentials are not forwarded and the call may be rejected. Configure Domains:server (or list the host in AllowedHosts).");
+                        .LogWarning("WorkflowOptions:RequireAuthentication is enabled but no trusted address is available for the internal workflow call, so the caller's credentials are not forwarded and the call may be rejected. Configure WorkflowOptions:InternalCallBaseAddress, Domains:server (or list the host in AllowedHosts).");
                 }
                 var inner = await wtm.CallAPI("", $"{selfCall.BaseAddress}/v1/activities?inneruse=1", headers: selfCall.Headers);
                 if (inner.StatusCode == null || (int)inner.StatusCode.Value < 200 || (int)inner.StatusCode.Value > 299)

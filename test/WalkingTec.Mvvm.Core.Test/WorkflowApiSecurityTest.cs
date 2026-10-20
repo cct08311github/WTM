@@ -148,6 +148,116 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.IsFalse(r.CredentialsWithheld);
         }
 
+        private static Configs CfgInternal(bool requireAuth, string internalBase, string serverAddress = null)
+        {
+            var c = Cfg(requireAuth, serverAddress);
+            c.WorkflowOptions.InternalCallBaseAddress = internalBase;
+            return c;
+        }
+
+        [TestMethod]
+        public void Config_InternalCallBaseAddress_DefaultsToNull()
+        {
+            Assert.IsNull(new Configs().WorkflowOptions.InternalCallBaseAddress);
+        }
+
+        [TestMethod]
+        public void SelfCall_AuthOff_NoSetting_NoExplicitList_UsesRequestHost()
+        {
+            foreach (var allowed in new[] { null, "", "*", "*.example.com;app.example.com" })
+            {
+                var r = WorkflowApiSecurity.ResolveSelfCall(Cfg(false), allowed, "http", "evil.example", "Bearer abc", null);
+                Assert.AreEqual("http://evil.example", r.BaseAddress, allowed);
+                Assert.IsNull(r.Headers, allowed);
+                Assert.IsFalse(r.Rejected, allowed);
+                Assert.IsFalse(r.InvalidInternalCallBaseAddress, allowed);
+            }
+        }
+
+        [TestMethod]
+        public void SelfCall_AuthOff_NoSetting_ExplicitList_Match_UsesRequestHost()
+        {
+            var r = WorkflowApiSecurity.ResolveSelfCall(Cfg(false), "other.example; App.Example", "https", "app.example:8443", null, null);
+            Assert.AreEqual("https://app.example:8443", r.BaseAddress);
+            Assert.IsFalse(r.Rejected);
+            var withPort = WorkflowApiSecurity.ResolveSelfCall(Cfg(false), "app.example:8443", "https", "app.example:8443", null, null);
+            Assert.IsFalse(withPort.Rejected);
+            Assert.AreEqual("https://app.example:8443", withPort.BaseAddress);
+        }
+
+        [TestMethod]
+        public void SelfCall_AuthOff_NoSetting_ExplicitList_Mismatch_Rejected()
+        {
+            var r = WorkflowApiSecurity.ResolveSelfCall(Cfg(false), "app.example;other.example", "http", "attacker.example", "Bearer abc", null);
+            Assert.IsTrue(r.Rejected);
+            Assert.IsNull(r.BaseAddress);
+            Assert.IsNull(r.Headers);
+            var portMismatch = WorkflowApiSecurity.ResolveSelfCall(Cfg(false), "app.example:8443", "https", "app.example:9999", null, null);
+            Assert.IsTrue(portMismatch.Rejected);
+        }
+
+        [TestMethod]
+        public void SelfCall_AuthOff_WithSetting_AlwaysUsesSetting_NoHeaders()
+        {
+            foreach (var allowed in new[] { null, "*", "app.example" })
+            {
+                var r = WorkflowApiSecurity.ResolveSelfCall(CfgInternal(false, " https://localhost:5001/ "), allowed, "http", "anything.example", "Bearer abc", AuthCookie + "=1");
+                Assert.AreEqual("https://localhost:5001", r.BaseAddress, allowed);
+                Assert.IsNull(r.Headers, allowed);
+                Assert.IsFalse(r.Rejected, allowed);
+                Assert.IsFalse(r.CredentialsWithheld, allowed);
+            }
+        }
+
+        [TestMethod]
+        public void SelfCall_AuthOn_WithSetting_PreferredOverServerDomain_ForwardsCredentials()
+        {
+            var r = WorkflowApiSecurity.ResolveSelfCall(CfgInternal(true, "https://internal.example/", "https://srv.example"), "app.example", "https", "attacker.example", "Bearer abc", AuthCookie + "=tok; other=1");
+            Assert.AreEqual("https://internal.example", r.BaseAddress);
+            Assert.AreEqual("Bearer abc", r.Headers["Authorization"]);
+            Assert.AreEqual(AuthCookie + "=tok", r.Headers["Cookie"]);
+            Assert.IsFalse(r.CredentialsWithheld);
+        }
+
+        [TestMethod]
+        public void SelfCall_AuthOn_WithSetting_PlainHttpNonLoopback_WithholdsCredentials()
+        {
+            var r = WorkflowApiSecurity.ResolveSelfCall(CfgInternal(true, "http://wtm-app:8080"), null, "https", "h", "Bearer abc", null);
+            Assert.AreEqual("http://wtm-app:8080", r.BaseAddress);
+            Assert.IsNull(r.Headers);
+            Assert.IsTrue(r.CredentialsWithheld);
+            var loop = WorkflowApiSecurity.ResolveSelfCall(CfgInternal(true, "http://localhost:5000"), null, "https", "h", "Bearer abc", null);
+            Assert.AreEqual("Bearer abc", loop.Headers["Authorization"]);
+        }
+
+        [TestMethod]
+        public void SelfCall_InvalidSetting_TreatedAsNotSet_AndFlagged()
+        {
+            foreach (var bad in new[] { "not-a-url", "ftp://x", "/relative" })
+            {
+                var off = WorkflowApiSecurity.ResolveSelfCall(CfgInternal(false, bad), null, "http", "app.example", null, null);
+                Assert.AreEqual("http://app.example", off.BaseAddress, bad);
+                Assert.IsTrue(off.InvalidInternalCallBaseAddress, bad);
+                var rej = WorkflowApiSecurity.ResolveSelfCall(CfgInternal(false, bad), "other.example", "http", "app.example", null, null);
+                Assert.IsTrue(rej.Rejected, bad);
+                Assert.IsTrue(rej.InvalidInternalCallBaseAddress, bad);
+                var on = WorkflowApiSecurity.ResolveSelfCall(CfgInternal(true, bad, "https://srv.example"), null, "https", "h", "Bearer abc", null);
+                Assert.AreEqual("https://srv.example", on.BaseAddress, bad);
+                Assert.IsTrue(on.InvalidInternalCallBaseAddress, bad);
+            }
+        }
+
+        [TestMethod]
+        public void IsExplicitHostList_Cases()
+        {
+            Assert.IsFalse(WorkflowApiSecurity.IsExplicitHostList(null));
+            Assert.IsFalse(WorkflowApiSecurity.IsExplicitHostList(" "));
+            Assert.IsFalse(WorkflowApiSecurity.IsExplicitHostList("*"));
+            Assert.IsFalse(WorkflowApiSecurity.IsExplicitHostList("*.example.com;app.example.com"));
+            Assert.IsTrue(WorkflowApiSecurity.IsExplicitHostList("app.example.com"));
+            Assert.IsTrue(WorkflowApiSecurity.IsExplicitHostList("a.example;b.example;"));
+        }
+
         [TestMethod]
         public void SelfCall_ServerDomain_UsedAndCredentialsForwarded_AuthorizationAndAuthCookieOnly()
         {

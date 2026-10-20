@@ -151,25 +151,81 @@ namespace WalkingTec.Mvvm.Mvc
 
             /// <summary>True when RequireAuthentication is on but credentials could not be forwarded to a trusted target.</summary>
             public bool CredentialsWithheld { get; set; }
+
+            /// <summary>True when no InternalCallBaseAddress is configured, RequireAuthentication is off, AllowedHosts is an explicit
+            /// (non-wildcard) list and the request host is not on it: the internal call must not be made.</summary>
+            public bool Rejected { get; set; }
+
+            /// <summary>True when WorkflowOptions:InternalCallBaseAddress is set but is not an absolute http/https URI (it is then ignored).</summary>
+            public bool InvalidInternalCallBaseAddress { get; set; }
+        }
+
+        /// <summary>
+        /// Normalizes WorkflowOptions:InternalCallBaseAddress (trim, drop trailing '/'). Returns null when not set;
+        /// <paramref name="invalid"/> is true when it is set but not an absolute http/https URI (treated as not set).
+        /// </summary>
+        public static string NormalizeInternalCallBaseAddress(string value, out bool invalid)
+        {
+            invalid = false;
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return null;
+            }
+            var v = value.Trim().TrimEnd('/');
+            if (Uri.TryCreate(v, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+            {
+                return v;
+            }
+            invalid = true;
+            return null;
+        }
+
+        /// <summary>
+        /// True when AllowedHosts is non-blank and none of its entries contains a wildcard.
+        /// </summary>
+        public static bool IsExplicitHostList(string allowedHosts)
+        {
+            if (string.IsNullOrWhiteSpace(allowedHosts))
+            {
+                return false;
+            }
+            var entries = allowedHosts.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+            return entries.Count > 0 && entries.Any(x => x.Contains("*")) == false;
         }
 
         /// <summary>
         /// Decides where the internal call for the workflow activities goes and which credentials it carries.
-        /// RequireAuthentication off: the request's own address and no extra headers (unchanged behavior).
-        /// RequireAuthentication on: credentials (Authorization header and the WTM auth cookie only) are forwarded only to
+        /// WorkflowOptions:InternalCallBaseAddress set (valid absolute http/https URI): it is always the target, regardless of the Host header;
+        /// with RequireAuthentication off no headers are sent, with it on it takes precedence over Domains:server and AllowedHosts as the trusted target.
+        /// Not set, RequireAuthentication off: the request's own address and no extra headers (unchanged behavior), except that when AllowedHosts
+        /// is an explicit non-wildcard list and the host is not on it, the result is <see cref="SelfCallTarget.Rejected"/>.
+        /// Not set, RequireAuthentication on: credentials (Authorization header and the WTM auth cookie only) are forwarded only to
         /// the configured "server" domain, or, when none is configured, to the request host if it is listed (non-wildcard)
         /// in AllowedHosts. Credentials are never sent over plain http to a non-loopback host.
         /// </summary>
         public static SelfCallTarget ResolveSelfCall(Configs configs, string allowedHosts, string scheme, string host, string authorization, string cookieHeader)
         {
             var requestBase = $"{scheme}://{host}";
+            var internalBase = NormalizeInternalCallBaseAddress(configs?.WorkflowOptions?.InternalCallBaseAddress, out var invalidInternal);
             if (configs?.WorkflowOptions?.RequireAuthentication != true)
             {
-                return new SelfCallTarget { BaseAddress = requestBase };
+                if (internalBase != null)
+                {
+                    return new SelfCallTarget { BaseAddress = internalBase };
+                }
+                if (IsExplicitHostList(allowedHosts) && IsAllowedHost(allowedHosts, host) == false)
+                {
+                    return new SelfCallTarget { Rejected = true, InvalidInternalCallBaseAddress = invalidInternal };
+                }
+                return new SelfCallTarget { BaseAddress = requestBase, InvalidInternalCallBaseAddress = invalidInternal };
             }
 
             string target = null;
-            if (configs.Domains != null && configs.Domains.TryGetValue("server", out var server) && string.IsNullOrWhiteSpace(server?.Address) == false)
+            if (internalBase != null)
+            {
+                target = internalBase;
+            }
+            else if (configs.Domains != null && configs.Domains.TryGetValue("server", out var server) && string.IsNullOrWhiteSpace(server?.Address) == false)
             {
                 target = server.Address.Trim().TrimEnd('/');
             }
@@ -190,9 +246,9 @@ namespace WalkingTec.Mvvm.Mvc
                 {
                     headers["Cookie"] = cookie;
                 }
-                return new SelfCallTarget { BaseAddress = target, Headers = headers.Count == 0 ? null : headers };
+                return new SelfCallTarget { BaseAddress = target, Headers = headers.Count == 0 ? null : headers, InvalidInternalCallBaseAddress = invalidInternal };
             }
-            return new SelfCallTarget { BaseAddress = target ?? requestBase, Headers = null, CredentialsWithheld = true };
+            return new SelfCallTarget { BaseAddress = target ?? requestBase, Headers = null, CredentialsWithheld = true, InvalidInternalCallBaseAddress = invalidInternal };
         }
 
         /// <summary>
