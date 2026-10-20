@@ -142,7 +142,8 @@ ALTER TABLE "FrameworkUsers" MODIFY "Password" VARCHAR(128);
 依序進行，每一步都完成再做下一步：
 
 1. **確認所有執行個體都能認得兩種格式。** 同一個資料庫若有多個應用程式或多個執行個體，全部都要先升級到本版本（或更新版本）。舊版本遇到 PBKDF2 的雜湊會判定密碼錯誤。
-2. **備份 Password 欄位。** 備份表內含密碼雜湊，屬於敏感資料，請限制存取權限並訂好保留期限。
+2. **檢查應用程式自己的密碼程式碼。** 搜尋直接呼叫 `Utils.GetMD5String` 來**比對**或**寫入**密碼的地方（常見於自訂的登入、修改密碼、重設密碼、新增使用者、匯入使用者等 ViewModel 或 Controller）。這些程式碼不經過 `PasswordHasher`：啟用 PBKDF2 後，帳號一旦經框架登入升級為 PBKDF2 格式，自訂的比對就會失敗；自訂的寫入則會繼續寫入 MD5（仍可登入，但不會受到 PBKDF2 保護）。請先改用 `WTMContext.VerifyPassword` 比對、`WTMContext.HashPassword` 產生雜湊，再啟用。
+3. **備份 Password 欄位。** 備份表內含密碼雜湊，屬於敏感資料，請限制存取權限並訂好保留期限。
 
    SQL Server：
 
@@ -175,9 +176,9 @@ ALTER TABLE "FrameworkUsers" MODIFY "Password" VARCHAR(128);
    ```
 
    日期改成備份當天。備份裡包含 `ITCode`，是為了回滾時能認出是哪些帳號。如果你的資料表在特定 schema，請加上 schema 名稱。
-3. **加寬欄位**（第 3 節的 SQL）。
-4. **部署本版本。**
-5. **設定組態**（`appsettings.json` 或環境變數 `PasswordOptions__Algorithm`）：
+4. **加寬欄位**（第 3 節的 SQL）。
+5. **部署本版本。**
+6. **設定組態**（`appsettings.json` 或環境變數 `PasswordOptions__Algorithm`）：
 
    ```json
    {
@@ -189,8 +190,8 @@ ALTER TABLE "FrameworkUsers" MODIFY "Password" VARCHAR(128);
    ```
 
    `Pbkdf2Iterations` 可省略（預設 600000，允許範圍 100000～2000000，超出範圍會被限制並記錄 Warning）。迭代次數越高越安全，但每次登入的 CPU 成本也越高，正式上線前請先壓測。
-6. **重新啟動應用程式，並執行一次登入**（或建立／修改一次密碼）。欄位長度的檢查是在第一次用到密碼雜湊時才進行，不是在啟動的瞬間。
-7. **確認紀錄中沒有退回的 Warning。** 如果欄位沒有加寬、查不到，或其他原因，會看到這樣的 Warning（內含原因與本文件的路徑）：
+7. **重新啟動應用程式，並執行一次登入**（或建立／修改一次密碼）。欄位長度的檢查是在第一次用到密碼雜湊時才進行，不是在啟動的瞬間。
+8. **確認紀錄中沒有退回的 Warning。** 如果欄位沒有加寬、查不到，或其他原因，會看到這樣的 Warning（內含原因與本文件的路徑）：
 
    ```
    PasswordOptions:Algorithm is Pbkdf2Sha256, but the password column allows only 32 characters and the PBKDF2 format needs 91. New passwords keep using MD5 until the column is widened; see docs/migrations/password-hash-upgrade.md.
