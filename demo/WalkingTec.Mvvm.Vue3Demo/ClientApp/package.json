@@ -37,7 +37,7 @@
     "vue-clipboard3": "^2.0.0",
     "vue-demi": "^0.14.10",
     "vue-grid-layout": "^3.0.0-beta1",
-    "vue-i18n": "^9.14.3",
+    "vue-i18n": "^11.4.14",
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
