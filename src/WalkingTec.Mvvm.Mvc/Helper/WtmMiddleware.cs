@@ -38,7 +38,14 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 max.MaxRequestBodySize = wtm.ConfigInfo.FileUploadOptions.UploadLimit;
             }
-            if (context.Request.Path == "/v1/activities" && context.Request.QueryString.Value != "?inneruse=1")
+            if (WorkflowActivitiesGuard.IsActivitiesRequest(context.Request)
+                && await WorkflowActivitiesGuard.IsAllowedAsync(context) == false)
+            {
+                // #208: anonymous callers never reach the engine, whatever WorkflowOptions:RequireAuthentication says
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return;
+            }
+            if (WorkflowActivitiesGuard.IsPublicActivitiesRequest(context.Request))
             {
                 var selfCall = WorkflowApiSecurity.ResolveSelfCall(
                     wtm.ConfigInfo,
@@ -67,7 +74,7 @@ namespace WalkingTec.Mvvm.Mvc
                     context.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("WalkingTec.Mvvm.Security")
                         .LogWarning("WorkflowOptions:RequireAuthentication is enabled but no trusted address is available for the internal workflow call, so the caller's credentials are not forwarded and the call may be rejected. Configure WorkflowOptions:InternalCallBaseAddress, Domains:server (or list the host in AllowedHosts).");
                 }
-                var inner = await wtm.CallAPI("", $"{selfCall.BaseAddress}/v1/activities?inneruse=1", headers: selfCall.Headers);
+                var inner = await wtm.CallAPI("", $"{selfCall.BaseAddress}/v1/activities?inneruse=1", headers: WorkflowActivitiesGuard.WithInternalSecret(selfCall.Headers));
                 if (inner.StatusCode == null || (int)inner.StatusCode.Value < 200 || (int)inner.StatusCode.Value > 299)
                 {
                     context.Response.StatusCode = inner.StatusCode == null ? StatusCodes.Status502BadGateway : (int)inner.StatusCode.Value;
