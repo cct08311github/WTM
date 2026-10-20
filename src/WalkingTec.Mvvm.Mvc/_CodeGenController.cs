@@ -25,7 +25,7 @@ namespace WalkingTec.Mvvm.Mvc
         {
             var vm = Wtm.CreateVM<CodeGenVM>();
             vm.UI = ui;
-            vm.EntryDir = AppDomain.CurrentDomain.BaseDirectory;
+            vm.UseServerDirectories();
             vm.AllModels = GetAllModels().ToListItems(x => x.Name, x => x.AssemblyQualifiedName);
             return View(vm);
         }
@@ -34,13 +34,16 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("配置字段")]
         public IActionResult SetField(CodeGenVM vm)
         {
-            if (vm.SelectedModel != null)
+            // directories are always derived on the server, values posted by the client are not used
+            vm.UseServerDirectories();
+            foreach (var error in vm.GetInputErrors(GetAllModels()))
             {
-                Type modeltype = Type.GetType(vm.SelectedModel);
-                if(modeltype.IsSubclassOf(typeof(TopBasePoco)) == false)
+                // required / regular expression validation may already have reported this field
+                if (ModelState.TryGetValue(error.Key, out var entry) && entry.Errors.Count > 0)
                 {
-                    ModelState.AddModelError("SelectedModel", MvcProgram._localizer["Codegen.SelectedModelMustBeBasePoco"]);
+                    continue;
                 }
+                ModelState.AddModelError(error.Key, MvcProgram._localizer[error.Value]);
             }
             if (!ModelState.IsValid)
             {
@@ -59,13 +62,20 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("生成确认")]
         public IActionResult Gen(CodeGenVM vm)
         {
-            
+            if (PrepareForGeneration(vm) == false)
+            {
+                return BadRequest();
+            }
             return View(vm);
         }
 
         [HttpPost]
         public IActionResult DoGen(CodeGenVM vm)
         {
+            if (PrepareForGeneration(vm) == false)
+            {
+                return BadRequest();
+            }
             vm.DoGen();
             return FFResult().Alert(MvcProgram._localizer["Codegen.Success"]);
         }
@@ -74,6 +84,10 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost]
         public IActionResult Preview(CodeGenVM vm)
         {
+            if (PrepareForGeneration(vm) == false)
+            {
+                return BadRequest();
+            }
             if (vm.PreviewFile == "Controller")
             {
                 ViewData["filename"] = $"{vm.ModelName}{(vm.IsApi == true ? "Api" : "")}Controller.cs";
@@ -124,6 +138,16 @@ namespace WalkingTec.Mvvm.Mvc
                 ViewData["code"] = vm.GenerateView(vm.PreviewFile);
             }
             return PartialView(vm);
+        }
+
+        /// <summary>
+        /// Derives the directories on the server and checks that the names used for output files are valid
+        /// and that the selected model is one of the configured models.
+        /// </summary>
+        private bool PrepareForGeneration(CodeGenVM vm)
+        {
+            vm.UseServerDirectories();
+            return vm.GetInputErrors(GetAllModels()).Count == 0;
         }
 
         private  List<Type> GetAllModels()
