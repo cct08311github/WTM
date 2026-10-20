@@ -97,17 +97,40 @@ namespace WalkingTec.Mvvm.Mvc
         }
     }
 
+    /// <summary>
+    /// Removes <see cref="WorkflowApiDisabledController"/> (the 404 stub for _WorkflowApi) when workflow is enabled, so only
+    /// <see cref="WorkflowApiController"/> owns the route (otherwise AmbiguousMatch) (#210).
+    /// </summary>
+    public class WorkflowApiStubRemovalConvention : IApplicationModelConvention
+    {
+        public void Apply(ApplicationModel application)
+        {
+            if (application == null)
+            {
+                return;
+            }
+            foreach (var controller in application.Controllers.Where(x => x.ControllerType.AsType() == typeof(WorkflowApiDisabledController)).ToList())
+            {
+                application.Controllers.Remove(controller);
+            }
+        }
+    }
+
     public static class WorkflowApiSecurity
     {
         /// <summary>
-        /// Registers <see cref="WorkflowApiDisabledConvention"/> when workflow is disabled, so _WorkflowApi is only part of the
-        /// application when EnableWorkflow is true (#13). Read at startup: changing EnableWorkflow needs a restart.
+        /// Exactly one controller owns _WorkflowApi: <see cref="WorkflowApiController"/> when EnableWorkflow is true, otherwise the
+        /// anonymous 404 stub <see cref="WorkflowApiDisabledController"/> (#13, #210). Read at startup: changing EnableWorkflow needs a restart.
         /// </summary>
         public static void AddWorkflowApiConvention(Microsoft.Extensions.DependencyInjection.IServiceCollection services, Configs configs)
         {
             if (configs == null || configs.EnableWorkflow == false)
             {
                 services.Configure<Microsoft.AspNetCore.Mvc.MvcOptions>(mvc => mvc.Conventions.Add(new WorkflowApiDisabledConvention()));
+            }
+            else
+            {
+                services.Configure<Microsoft.AspNetCore.Mvc.MvcOptions>(mvc => mvc.Conventions.Add(new WorkflowApiStubRemovalConvention()));
             }
         }
 
