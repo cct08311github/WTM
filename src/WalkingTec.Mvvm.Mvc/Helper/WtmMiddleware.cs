@@ -70,8 +70,8 @@ namespace WalkingTec.Mvvm.Mvc
             }
             if (context.Request.Path == "/")
             {
-                context.Response.Cookies.Append("pagemode", wtm.ConfigInfo.PageMode.ToString());
-                context.Response.Cookies.Append("tabmode", wtm.ConfigInfo.TabMode.ToString());
+                context.Response.Cookies.Append("pagemode", wtm.ConfigInfo.PageMode.ToString(), new Microsoft.AspNetCore.Http.CookieOptions { Secure = context.Request.IsHttps });
+                context.Response.Cookies.Append("tabmode", wtm.ConfigInfo.TabMode.ToString(), new Microsoft.AspNetCore.Http.CookieOptions { Secure = context.Request.IsHttps });
             }
             await BufferRequestBodyAsync(context, wtm.ConfigInfo.BufferJsonBodyOnly);
             await _next(context);

@@ -246,7 +246,7 @@ namespace WalkingTec.Mvvm.Mvc
                 listVM.SearcherMode = listVM.Ids != null && listVM.Ids.Count > 0 ? ListVMSearchModeEnum.CheckExport : ListVMSearchModeEnum.Export;
 
                 var data = listVM.GenerateExcel();
-                HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Path = "/", Expires = DateTime.Now.AddDays(2) });
+                HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Path = "/", Expires = DateTime.Now.AddDays(2), Secure = HttpContext.Request.IsHttps });
 
                 return File(data, "application/vnd.ms-excel", $"Export_{instanceType.Name}_{DateTime.Now.ToString("yyyy-MM-dd")}.xls");
             }
@@ -273,7 +273,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
             importVM.SetParms(qs);
             var data = importVM.GenerateTemplate(out string fileName);
-            HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Domain = "/", Expires = DateTime.Now.AddDays(2) });
+            HttpContext.Response.Cookies.Append("DONOTUSEDOWNLOADING", "0", new Microsoft.AspNetCore.Http.CookieOptions() { Domain = "/", Expires = DateTime.Now.AddDays(2), Secure = HttpContext.Request.IsHttps });
             return File(data, "application/vnd.ms-excel", fileName);
         }
 
@@ -679,7 +679,7 @@ namespace WalkingTec.Mvvm.Mvc
             Response.Cookies.Append(
                 CookieRequestCultureProvider.DefaultCookieName,
                 CookieRequestCultureProvider.MakeCookieValue(new RequestCulture(culture)),
-                new CookieOptions { Expires = DateTimeOffset.UtcNow.AddYears(1) }
+                new CookieOptions { Expires = DateTimeOffset.UtcNow.AddYears(1), Secure = Request.IsHttps }
             );
 
             return FFResult().AddCustomScript("location.reload();");
@@ -701,7 +701,7 @@ namespace WalkingTec.Mvvm.Mvc
             Response.Cookies.Append(
                 CookieRequestCultureProvider.DefaultCookieName,
                 CookieRequestCultureProvider.MakeCookieValue(new RequestCulture(culture)),
-                new CookieOptions { Expires = DateTimeOffset.UtcNow.AddYears(1) }
+                new CookieOptions { Expires = DateTimeOffset.UtcNow.AddYears(1), Secure = Request.IsHttps }
             );
 
             return Content(BuildBlazorRedirectScript(redirect), "text/html");

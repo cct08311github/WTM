@@ -321,7 +321,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                     {
                         context.HttpContext.Response.Headers.Append("X-wtm-PageTitle", Convert.ToBase64String(Encoding.UTF8.GetBytes(pagetitle)));
                     }
-                    context.HttpContext.Response.Cookies.Append("divid", model.ViewDivId);
+                    context.HttpContext.Response.Cookies.Append("divid", model.ViewDivId, new Microsoft.AspNetCore.Http.CookieOptions { Secure = context.HttpContext.Request.IsHttps });
                 }
             }
             if (context.Result is ViewResult)
@@ -336,7 +336,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                 if (model != null)
                 {
                     model.CurrentView = viewName;
-                    context.HttpContext.Response.Cookies.Append("divid", model?.ViewDivId);
+                    context.HttpContext.Response.Cookies.Append("divid", model?.ViewDivId, new Microsoft.AspNetCore.Http.CookieOptions { Secure = context.HttpContext.Request.IsHttps });
                 }
             }
             base.OnActionExecuted(context);
