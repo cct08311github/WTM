@@ -704,7 +704,17 @@ namespace WalkingTec.Mvvm.Mvc
                 new CookieOptions { Expires = DateTimeOffset.UtcNow.AddYears(1) }
             );
 
-            return Content($"<script>window.location.href='{HttpUtility.UrlDecode(redirect)}';</script>", "text/html");
+            return Content(BuildBlazorRedirectScript(redirect), "text/html");
+        }
+
+        /// <summary>
+        /// Builds the script that navigates to the (URL-decoded) redirect target.
+        /// The decoded value is JS-string-encoded before being placed in the script literal;
+        /// the navigation target itself is unchanged.
+        /// </summary>
+        public static string BuildBlazorRedirectScript(string redirect)
+        {
+            return $"<script>window.location.href='{JsStringEncoder.Escape(HttpUtility.UrlDecode(redirect))}';</script>";
         }
 
 
