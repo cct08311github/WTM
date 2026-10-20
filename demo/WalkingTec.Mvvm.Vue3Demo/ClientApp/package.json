@@ -57,7 +57,7 @@
     "vite-plugin-cdn-import": "^0.3.5",
     "vite-plugin-compression": "^0.5.1",
     "vite-plugin-vue-setup-extend-plus": "^0.1.0",
-    "vue-eslint-parser": "^9.4.3"
+    "vue-eslint-parser": "^10.4.1"
   },
   "browserslist": [
     "> 1%",
