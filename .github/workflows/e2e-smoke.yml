@@ -1,9 +1,9 @@
 name: e2e-smoke
 
-# Browser based tests of the LayUI front end (Playwright, Chromium) against test/WalkingTec.Mvvm.LayUI.E2EHost.
-# Not a required check (#270). Reports: route coverage baseline (artifact e2e-route-coverage) and JS function coverage of
-# framework_layui.js (artifact e2e-js-coverage, #271), both also in the step summary;
-# on failure also Playwright traces, screenshots and the server log (artifact e2e-failure-artifacts).
+# Browser based end-to-end tests (Playwright, Chromium): the LayUI front end against test/WalkingTec.Mvvm.LayUI.E2EHost (#270, #271)
+# and the Vue3Demo SPA with its API (#272). Not a required check. Reports: route coverage baseline of both sites
+# (artifact e2e-route-coverage) and JS function coverage of framework_layui.js (artifact e2e-js-coverage, #271), both also in the
+# step summary; on failure also Playwright traces, screenshots and the server logs (artifact e2e-failure-artifacts).
 # Tests tagged [TestCategory("nightly")] are left out here (none yet); run them with --filter "TestCategory=nightly".
 
 on:
@@ -38,6 +38,13 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/package-lock.json
+
       - name: Cache NuGet packages
         uses: actions/cache@v6
         with:
@@ -49,7 +56,18 @@ jobs:
       - name: Restore
         run: dotnet restore test/WalkingTec.Mvvm.E2E/WalkingTec.Mvvm.E2E.csproj
 
-      # builds the E2E host (project reference without its assembly) and the tests
+      # The Vue3Demo SPA the tests run against. VITE_API_URL is empty so that the SPA calls the site it was loaded from
+      # (the regular build has the development address http://localhost:8598 compiled in); the output goes to dist-e2e, the
+      # directory the test site serves it from.
+      - name: Build the Vue3Demo SPA
+        working-directory: demo/WalkingTec.Mvvm.Vue3Demo/ClientApp
+        env:
+          VITE_API_URL: ""
+        run: |
+          npm ci
+          npm run build -- --outDir dist-e2e
+
+      # builds both sites under test (project references without their assemblies), the instrumentation library and the tests
       - name: Build
         run: dotnet build test/WalkingTec.Mvvm.E2E/WalkingTec.Mvvm.E2E.csproj -c Release --no-restore
 
