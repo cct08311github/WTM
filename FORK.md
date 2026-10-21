@@ -382,3 +382,19 @@ demo（`demo/WalkingTec.Mvvm.Vue3Demo`）的 `AccountController.Reg` 是匿名�
 - **`framework_layui.js` 沒有修改**：`RefreshChart` 以宿主網站提供的 `JSONfns.parse` 解析 `series`（全 repo 沒有定義 `JSONfns`），Scatter 的 `symbolSize` 是 `ToChartData` 產生的 function 字串，需要它還原，所以不改成 `JSON.parse`
 - **影響範圍**：使用 LayUI `wt:chart` 的網站，包含自行呼叫 `ToChartData` 的資料端點。一般資料的顯示與修改前相同；只有含特殊字元的資料，輸出與 tooltip 被正確編碼
 - **下游提醒**：自行實作圖表資料端點或自行組 echarts 設定的網站，請對放進 JSON、HTML tooltip、`formatter` 的字串做同樣的處理
+
+## 18. LayUI 伺服器指令的單一執行入口 `ff.ExecServerScript`（#25，階段 2）
+
+回應標頭帶 `IsScript: true` 時，伺服器回傳的是由 `FFResult()` 產生的指令文字（`ff.CloseDialog()`、`ff.Alert(...)`、`ff.RefreshGrid(...)`、`layui.index.render()`、`window.location.href=...`、`AddCustomScript` 的自訂內容）。原本 `framework_layui.js` 在 `PostForm`、`BgRequest`、`OpenDialog` 三處，以及 `LayuiUIService.MakeDialogButton`（`showDialog=false`）產生的按鈕程式，各自直接 `eval`。現在全部改為呼叫同一個函式 `ff.ExecServerScript(text)`，為之後的資料驅動指令協定先收斂入口。
+
+| 項目 | 行為 |
+|---|---|
+| `ff.ExecServerScript(text)` | 預設與修改前相同：以 `(0, eval)(text)`（間接 eval）執行指令文字，**預設行為不變** |
+| `ff.StrictScriptChannel` | **選用**，預設 `false`。設為 `true` 時 `ExecServerScript` 不執行任何內容，只呼叫 `console.warn`。供之後階段使用；未設定時沒有任何差異 |
+| 殘留的 `eval` | `framework_layui.js` 內只剩 `ExecServerScript` 一處；一段已註解掉的舊程式（`LoadPage` 舊實作）已移除，行為不變 |
+
+- **區域變數範圍**：原本的 `eval` 為直接 eval，指令文字看得到呼叫函式的區域變數（例如 `PostForm` 的 `formId`、`index`、`layer`）。改用間接 eval 後只能看到全域範圍。`FResultExtension` 產生的標準指令（`CloseDialog`、`Alert`、`Message`、`RefreshGrid`、`RefreshPage`、`RedirectUrl`）只使用全域的 `ff`、`layui`、`window`，不依賴區域變數，行為不變
+- **`AddCustomScript` 的相容性**：自訂指令文字若引用呼叫端的區域變數（例如 `layer.close(index)` 中的 `index`、`formId`），在改版後不再可用；若以 `var` 宣告的名稱，原本只存在於呼叫函式內，現在會成為全域變數。需要這些值的自訂指令，請改為在指令文字中直接帶入值，或改呼叫 `ff.*` 提供的函式
+- **`MakeDialogButton`**：只替換執行函式，沒有加上 `IsScript` 標頭檢查（加上會改變非 `IsScript` 回應的既有行為）
+- **影響範圍**：隨 NuGet 發佈的 `WalkingTec.Mvvm.Mvc`（`framework_layui.js`）與 `WalkingTec.Mvvm.TagHelpers.LayUI`（`LayuiUIService`）。兩者請同版本升級；已快取舊版 `framework_layui.js` 的瀏覽器需要重新載入才會有 `ff.ExecServerScript`
+- **測試**：`test/WalkingTec.Mvvm.Core.Test/JsTests/script-channel.test.js`（node，不需瀏覽器與網路）由 `ServerScriptChannelTests` 呼叫；找不到 `node` 時該測試標示為 Inconclusive
