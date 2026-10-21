@@ -39,7 +39,7 @@
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.5",
+    "@eslint/js": "^10.0.1",
     "@types/node": "^20.17.0",
     "@types/nprogress": "^0.2.3",
     "@types/sortablejs": "^1.15.8",
@@ -47,7 +47,7 @@
     "@typescript-eslint/parser": "^8.72.0",
     "@vitejs/plugin-vue": "^6.0.10",
     "@vue/compiler-sfc": "^3.5.13",
-    "eslint": "^9.39.5",
+    "eslint": "^10.13.0",
     "eslint-plugin-vue": "^10.11.1",
     "globals": "^17.13.0",
     "prettier": "^3.9.10",
