@@ -72,7 +72,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("Pending issue: after layui renders a check box / radio, the item title (attribute value) is inserted as HTML, so markup characters in the text become elements.")]
+        [Ignore("#279: after layui renders a check box / radio, the item title (attribute value) is inserted as HTML, so markup characters in the text become elements.")]
         public async Task CheckBoxAndRadio_ItemText_IsShownAsText()
         {
             await Expect(CheckBoxItem("Flags", "A&B").Locator("span")).ToHaveTextAsync(LabData.SpecialItem);
@@ -174,7 +174,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("Pending issue: xm-select writes the option text into its label as HTML, so markup characters in the text of a combo box item become elements.")]
+        [Ignore("#279: xm-select writes the option text into its label as HTML, so markup characters in the text of a combo box item become elements.")]
         public async Task ComboBox_ItemText_IsShownAsText()
         {
             await Expect(Combo("MultiCombo").Locator(".xm-label-block span")).ToHaveTextAsync(LabData.SpecialItem);
@@ -271,7 +271,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("Pending issue: once any item is moved, the transfer posts only the items moved since the page was shown; the values that were preselected are dropped.")]
+        [Ignore("#280: once any item is moved, the transfer posts only the items moved since the page was shown; the values that were preselected are dropped.")]
         public async Task Transfer_PreselectedValues_AreKeptWhenAnotherItemIsMoved()
         {
             var transfer = Body.Locator("#LabFormVM_Picked");
@@ -294,7 +294,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("Pending issue: layui transfer writes the item title as HTML, so markup characters in the text of an item become elements.")]
+        [Ignore("#279: layui transfer writes the item title as HTML, so markup characters in the text of an item become elements.")]
         public async Task Transfer_ItemText_IsShownAsText()
         {
             var right = Body.Locator("#LabFormVM_Picked .layui-transfer-box").Nth(1);

@@ -193,7 +193,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("Pending issue: the delete button of a multi upload calls /api/_file/DeletedFile/{id}, which no controller of the framework or of the LayUI host provides; the file stays in the list.")]
+        [Ignore("#282: the delete button of a multi upload calls /api/_file/DeletedFile/{id}, which no controller of the framework or of the LayUI host provides; the file stays in the list.")]
         public async Task MultiUpload_Delete_RemovesTheFileFromTheList()
         {
             await ChooseFilesAsync("Files", MakeFile("drop.txt", Encoding.UTF8.GetBytes("x")));

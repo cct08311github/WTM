@@ -77,7 +77,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("Pending issue: UpdateModelProperty answers Success but the value is not saved: the view model loads the record without change tracking and the controller saves its own context.")]
+        [Ignore("#284: UpdateModelProperty answers Success but the value is not saved: the view model loads the record without change tracking and the controller saves its own context.")]
         public async Task UpdateModelProperty_ChangesOneFieldOfARecord()
         {
             var gadget = await CreateGadgetAsync("Q");

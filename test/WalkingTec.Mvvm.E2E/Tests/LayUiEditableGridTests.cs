@@ -76,7 +76,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("Pending issue: the text of a cell that contains a single quote is cut at the quote when the grid is drawn again (a row is added or removed), because the browser keeps the cell as an HTML string and writes the new value into it without encoding.")]
+        [Ignore("#279: the text of a cell that contains a single quote is cut at the quote when the grid is drawn again (a row is added or removed), because the browser keeps the cell as an HTML string and writes the new value into it without encoding.")]
         public async Task EditedText_WithQuotes_SurvivesTheGridBeingDrawnAgain()
         {
             await AddRow.ClickAsync();

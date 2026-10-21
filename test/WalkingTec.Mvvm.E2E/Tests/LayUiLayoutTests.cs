@@ -76,7 +76,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("Pending issue: the title of a panel is written to the page without the HTML encoding the other titles (card, tab, fieldset, button) get, so markup characters in it become elements.")]
+        [Ignore("#279: the title of a panel is written to the page without the HTML encoding the other titles (card, tab, fieldset, button) get, so markup characters in it become elements.")]
         public async Task Panel_TitleWithSpecialCharacters_IsShownAsText()
         {
             await Expect(Body.Locator("#lab-panel-collapse .layui-colla-title")).ToHaveTextAsync(LabData.Special);

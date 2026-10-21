@@ -139,7 +139,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("Pending issue: the slider ignores the value of the bound field when it draws its handle (only default-value is used); the hidden input keeps the value while the handle sits at the minimum.")]
+        [Ignore("#281: the slider ignores the value of the bound field when it draws its handle (only default-value is used); the hidden input keeps the value while the handle sits at the minimum.")]
         public async Task Slider_InitialPosition_ShowsTheBoundValue()
         {
             // Level is 30 on a 0..100 scale; the handle is expected at 30 percent
