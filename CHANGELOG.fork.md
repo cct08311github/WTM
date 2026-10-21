@@ -13,6 +13,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 ## 未发布
 
 * **修改（BREAKING，安全）：**   `/v1/designer/*` 现在一律要求已登录用户（#225）。影响：启用 workflow 且未登录的调用方
+* **修改（BREAKING，安全）：**   Elsa `/v1/*` 端点现在一律要求已登录用户，与 `RequireAuthentication` 无关（#256）。影响：启用 workflow 且未登录的调用方；已登录与 `RequireAdminRole` 行为不变。仅在 `EnableWorkflow=true` 时套用（`/v1/activities` 除外）。回滚：退回上一版本
 
 ## 10.0.0.7(2026-10-21)
 

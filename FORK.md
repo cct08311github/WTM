@@ -174,8 +174,8 @@ git merge --no-ff upstream/dotnet10
 | `src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs` | 啟動時的金鑰、IsQuickDebug、CORS、到期政策檢查、Oracle `Version` 警告；JwtBearer 使用共用驗證參數；CORS policy 改由 `WtmCorsHelper` 建立；熱重載偵測；依 `EnableWorkflow` 註冊 `WorkflowApiDisabledConvention`（false）或 `WorkflowApiStubRemovalConvention`（true） | #2、#3、#12、#21、#26、#158、#13、#210 |
 | `src/WalkingTec.Mvvm.Mvc/_WorkflowApiController.cs` | 5 個查詢 action 移除 `[Public]`（需登入）；查詢改呼叫 `WorkflowLookup`（`HasMainHost` 的 `RedirectCall` 分支不變） | #13 |
 | `src/WalkingTec.Mvvm.Core/WorkFlow/ApproveActivity.cs` | 設計器下拉選項與審批執行時查使用者／群組／主管／角色，改為直接查資料庫（`HasMainHost` 時改直接呼叫 mainhost），不再以無憑證的 HTTP 自我呼叫 `_workflowapi` | #13 |
-| `src/WalkingTec.Mvvm.Mvc/Helper/WtmMiddleware.cs` | 非同步讀取 body、`BufferJsonBodyOnly`；`/v1/activities`、`/v1/designer/*` 要求登入，並在程式內取得 Elsa 的活動描述（不再 HTTP 自我呼叫；10.0.0.6 以前的內部呼叫目標驗證與憑證轉發已移除） | #17、#13、#172、#208、#216、#225 |
-| `src/WalkingTec.Mvvm.Mvc/Helper/WorkflowActivitiesGuard.cs`、`WorkflowActivitiesDescriber.cs` | 新增：`/v1/activities`、`/v1/designer/*` 的登入檢查；複製 Elsa `Activities.List` 的邏輯在程式內產生活動清單 JSON | #208、#216、#225 |
+| `src/WalkingTec.Mvvm.Mvc/Helper/WtmMiddleware.cs` | 非同步讀取 body、`BufferJsonBodyOnly`；Elsa `/v1/*` 端點一律要求登入；`/v1/activities` 在程式內取得 Elsa 的活動描述（不再 HTTP 自我呼叫；10.0.0.6 以前的內部呼叫目標驗證與憑證轉發已移除） | #17、#13、#172、#208、#216、#225、#256 |
+| `src/WalkingTec.Mvvm.Mvc/Helper/WorkflowActivitiesGuard.cs`、`WorkflowActivitiesDescriber.cs` | 新增：Elsa `/v1/*` 端點的登入檢查；複製 Elsa `Activities.List` 的邏輯在程式內產生活動清單 JSON | #208、#216、#225、#256 |
 | `src/WalkingTec.Mvvm.Mvc/Filters/FrameworkFilter.cs` | 依 `ExposeExceptionDetails` 決定是否輸出例外細節 | #26 |
 | `src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/{Upload,MultiUpload,UEditor}TagHelper.cs` | 安全取得表單的 model | #88 |
 | `src/WalkingTec.Mvvm.TagHelpers.LayUI/**`（Form、Tree、LinkButton、DataTable、Chart、`BaseButton`、`BaseFieldTag`、`BaseElementTag`、`LayuiUIService`…） | 嵌入 JS 字串的值改用 `JsStringEncoder` 轉義；HTML 屬性值改用 `HtmlAttributeEncoder` 編碼；選用的 HTML 內容編碼（`UIOptions:EncodeHtmlContent`） | #24、#25 |
@@ -279,7 +279,7 @@ fork 帶入 `Oracle.EntityFrameworkCore` 10.x（底層 ODP.NET 23），**Oracle 
 
 **補充與已知限制**：
 
-- **已知限制**：`/v1/activities` 的匿名存取已在第 15 節（#208）處理：現在一律要求登入。其餘 Elsa `/v1/*` 管理端點仍由 `WorkflowOptions:RequireAuthentication` 控制
+- **已知限制**：Elsa `/v1/*` 的匿名存取已在第 15 節（#208、#256）處理：現在一律要求登入
 - **租戶範圍變更**：租戶使用者在審批人、角色、群組的解析（設計器下拉選項與審批執行時），現在以自己的租戶為範圍；以前因為是匿名的自我呼叫，查到的是主租戶
 - **需要重啟**：`EnableWorkflow` 在啟動時讀取，變更後要重啟才會影響 `_WorkflowApi` 是否存在
 - **多主機（`HasMainHost`）**：沿用既有慣例（例如 demo `AccountController.GetFrameworkRoles`）——沒有租戶的使用者呼叫主站，租戶使用者讀本機資料庫。子站使用者必須有 remote token，否則主站會拒絕，解析結果為空，並記一則 Warning（不含 token 與查詢內容），流程不會中斷
@@ -310,11 +310,15 @@ demo（`demo/WalkingTec.Mvvm.Vue3Demo`）的 `AccountController.Reg` 是匿名�
 - **Elsa 相依**：Core 只引用 `Elsa.Abstractions`（經 `Elsa.Server.Core`），不含 `Elsa.Core`，所以 `EntityIdSpecification` 與 `WorkflowInstanceIdSpecification` 以 `WorkflowQuery` 內兩個等價的小型 specification 取代；沒有新增或升級套件
 - **影響範圍**：只有啟用 workflow 且使用 `wt:flowinfo` 或呼叫這兩個 VM 方法的網站；覆寫這兩個 virtual 方法的子類別不受影響
 
-## 15. `/v1/activities`、`/v1/designer/*` 一律要求登入，並在程式內取得活動描述（#208、#216、#225，Breaking（安全））
+## 15. Elsa `/v1/*` 一律要求登入（#208、#216、#225、#256，Breaking（安全））；`/v1/activities` 在程式內取得活動描述
 
 **問題（#208）**：啟用 `EnableWorkflow` 後，流程設計器用 `/v1/activities` 取得活動清單。`WorkflowOptions:RequireAuthentication` 關閉（預設）時，這個路徑沒有任何驗證，未登入者就能取得清單；其中審批活動（`WtmApproveActivity`）的下拉選項包含全部角色與群組的 ID 與名稱。第 12 節（#13）只處理了 `_WorkflowApi`，這個外洩當時列為已知限制。
 
-**變更**：`WtmMiddleware` 對 `/v1/activities` 一律要求登入，與 `RequireAuthentication`、`RequireAdminRole` 的設定無關：
+**變更（#256 擴大範圍）**：`WtmMiddleware` 對 Elsa 的 `/v1/*` 端點一律要求登入，未登入回 401、不到 Elsa，與 `RequireAuthentication`、`RequireAdminRole` 的設定無關；已登入的請求交給 Elsa 處理，`RequireAuthentication=true` 時 Elsa 原有的 `AuthorizeFilter`（含 `RequireAdminRole`）照常生效，未改動。範圍從 `/v1/activities`（#208）、`/v1/designer/*`（#225）擴大到全部 Elsa 端點。**僅在 `EnableWorkflow=true` 時套用（`/v1/activities` 除外）**：`EnableWorkflow=false` 時，除 `activities` 以外的 segment 一律不攔截、交給下一個中介層，避免誤擋未啟用 workflow 的網站自己的 `/v1/...` 路由；`/v1/activities` 維持 10.0.0.6 以來的行為（不論是否啟用 workflow，未登入都回 401）。
+
+**比對範圍**：只比對 Elsa.Server.Api 2.17.0 實際使用的第二段路徑（`WorkflowActivitiesGuard.ElsaApiSegments`）：`activities`、`designer`、`features`、`scripting`、`signals`、`version`、`workflow-channels`、`workflow-definitions`、`workflow-instances`、`workflow-providers`、`workflow-registry`、`workflow-storage-providers`、`workflows`。正規表達式為 `^/+v[^/]*/+(<上述清單>)(/|$)`（不分大小寫，版本段、結尾斜線、子路徑與開頭多餘的 `/` 都算）。選白名單而不是整個 `/v1/*`，是因為應用程式自己的 `/v1/...` 路由（例如 API 版本化）不應被誤擋；此清單由反組譯 Elsa.Server.Api 2.17.0 的路由取得，**升級 Elsa.Server.Api 時需要重新核對**。本 repo 內沒有其他以 `/v1/` 開頭的路由（Swagger 為 `/swagger/v1/swagger.json`，不受影響）。
+
+**`/v1/activities` 的處理**（#208、#216，維持不變）：
 
 | 請求 | 行為 |
 |---|---|
@@ -333,12 +337,11 @@ demo（`demo/WalkingTec.Mvvm.Vue3Demo`）的 `AccountController.Reg` 是匿名�
 - **JWT 呼叫者的 `HttpContext.User`**：JWT 不是預設 scheme，`UseAuthentication` 不會填 `HttpContext.User`，而 `WTMContext.LoginUserInfo`（含租戶）正是從 `HttpContext.User` 的 claims 載入；登入判斷以 JWT 驗證成功時，會把驗證後的 principal 設到 `HttpContext.User`，管理員角色檢查才讀得到正確的使用者
 - **沒有 workflow 引擎時**：服務沒有註冊（`EnableWorkflow=false`）時，已登入的 `/v1/activities` 交給下一個中介層（一般為 404）；未登入仍是 401
 - **誰會受影響**：只有 `EnableWorkflow=true` 的網站，而且只有未登入的呼叫者。從已登入後台開啟的流程設計器不受影響。沒有啟用 workflow 的網站不受影響
-- **升級方式**：自行呼叫 `/v1/activities` 的整合請改帶登入 cookie 或 `Authorization: Bearer <JWT>`
+- **升級方式**：自行呼叫 Elsa `/v1/*` 端點（含 `/v1/activities`）的整合請改帶登入 cookie 或 `Authorization: Bearer <JWT>`
 - **不再需要的設定與限制**：原本「正式環境必須設定 `WorkflowOptions:InternalCallBaseAddress`」與「密鑰只在單一程序內有效，滾動重啟、多實例或負載平衡器會造成短暫 401、審批下拉選項為空」的限制都已解除，因為不再有內部呼叫。`RequireAuthentication=true` 時，以前沒設定 `InternalCallBaseAddress` 又是 `AllowedHosts: "*"` 的部署，已登入使用者也會得到 502（憑證不轉送到不可信的目標）；現在不會
 - **保留的 public API**：`WorkflowOptions.InternalCallBaseAddress`、`WorkflowApiSecurity.ResolveSelfCall`／`SelfCallTarget`／`IsAllowedHost`／`IsExplicitHostList`／`NormalizeInternalCallBaseAddress`／`IsSafeTarget`／`FilterAuthCookie` 沒有刪除（下游可能引用，刪除是 breaking）。它們標註 `[Obsolete]`（`error: false`，只有編譯警告），設定檔裡的 `InternalCallBaseAddress` 仍可綁定，但不再有作用。10.0.0.6 新增的 `WorkflowActivitiesGuard.InternalSecretHeader`、`InternalClientName`、`AddInternalHttpClient`、`WithInternalSecret`、`IsValidInternalSecret`、`IsInternalActivitiesRequest` 只存在於 10.0.0.6，已隨密鑰機制移除
-- **`/v1/designer/*` 同樣一律要求登入（#225，Breaking（安全））**：Elsa 流程設計器的 `/v1/designer/*` 端點（目前為 `POST /v1/designer/runtime-select-list`）採用與 `/v1/activities` 相同的登入檢查，與 `RequireAuthentication` 的設定無關。路徑比對 `^/+v[^/]*/designer(/|$)`（不分大小寫，版本段、結尾斜線、子路徑與開頭多餘的 `/` 都算）；未登入回 401，已登入交給 Elsa 處理，`RequireAuthentication=true` 時 Elsa 原有的 `AuthorizeFilter`（含 `RequireAdminRole`）照常生效，未改動。只有 `EnableWorkflow=true` 的網站、而且只有未登入的呼叫者受影響；從已登入後台使用流程設計器不受影響。升級方式：自行呼叫這些端點的整合請改帶登入 cookie 或 `Authorization: Bearer <JWT>`。回滾方式同上，退回前一個 fork 版本
 - **回滾方式**：退回前一個 fork 版本（`WalkingTec.Mvvm.Mvc`）。沒有可選開關：匿名取得全部角色與群組是資訊外洩，不提供恢復匿名存取的設定
-- **不在範圍**：其餘 Elsa `/v1/*` 管理端點（例如 `/v1/workflow-definitions`）仍由 `WorkflowOptions:RequireAuthentication` 控制，行為不變；HTTP 活動端點、signal 端點、Swagger 也不在範圍。啟動時的 Warning 仍會提醒 `RequireAuthentication` 沒有開啟
+- **不在範圍**：`WorkflowOptions:RequireAuthentication`／`RequireAdminRole` 的行為不變（仍控制已登入請求的 Elsa 授權）；HTTP 活動（由流程定義產生的自訂路由）與 Swagger 不在範圍。啟動時的 Warning 仍會提醒 `RequireAuthentication` 沒有開啟
 
 ## 16. 移除 `echarts.common.min.js`；LayUI demo 的 echarts 升到 6.1.0，下游須自行更新（#189）
 

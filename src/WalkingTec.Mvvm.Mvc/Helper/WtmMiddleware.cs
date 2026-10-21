@@ -34,10 +34,11 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 max.MaxRequestBodySize = wtm.ConfigInfo.FileUploadOptions.UploadLimit;
             }
-            if ((WorkflowActivitiesGuard.IsActivitiesRequest(context.Request) || WorkflowActivitiesGuard.IsDesignerRequest(context.Request))
+            if (WorkflowActivitiesGuard.IsElsaApiRequest(context.Request)
+                && (wtm.ConfigInfo.EnableWorkflow || WorkflowActivitiesGuard.IsActivitiesRequest(context.Request))
                 && await WorkflowActivitiesGuard.IsAllowedAsync(context) == false)
             {
-                // #208, #225: anonymous callers never reach the engine, whatever WorkflowOptions:RequireAuthentication says
+                // #208, #225, #256: (only when EnableWorkflow is on, except /v1/activities) anonymous callers never reach the engine, whatever WorkflowOptions:RequireAuthentication says
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 return;
             }
