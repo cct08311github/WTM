@@ -14,7 +14,7 @@ using WalkingTec.Mvvm.Mvc;
 namespace WalkingTec.Mvvm.Core.Test
 {
     /// <summary>
-    /// #208 / #216 / #225: /v1/activities and /v1/designer/* require a signed-in user whatever WorkflowOptions:RequireAuthentication says. There is no internal
+    /// #208 / #216 / #225 / #256: every Elsa /v1/* endpoint (activities, designer, workflow-definitions ...) requires a signed-in user whatever WorkflowOptions:RequireAuthentication says. There is no internal
     /// ?inneruse=1 call any more, so that form is guarded exactly like the public one.
     /// </summary>
     [TestClass]
@@ -157,7 +157,7 @@ namespace WalkingTec.Mvvm.Core.Test
         [TestMethod]
         public async Task Middleware_OtherPaths_AreNotAffected()
         {
-            foreach (var path in new[] { "/v1/workflow-definitions", "/v1/activitiesx", "/home/v1/activities", "/x1/activities", "/v1/x/activities", "/" })
+            foreach (var path in new[] { "/v1/activitiesx", "/home/v1/activities", "/x1/activities", "/v1/x/activities", "/" })
             {
                 var (ctx, next) = await Run(Create(path, auth: new FakeAuthService()));
                 Assert.AreNotEqual(401, ctx.Response.StatusCode, path);
@@ -165,58 +165,84 @@ namespace WalkingTec.Mvvm.Core.Test
             }
         }
 
-        // ---- #225: /v1/designer/* requires a signed-in user too ----
+        // ---- #225, #256: every Elsa /v1/* endpoint requires a signed-in user ----
 
-        [DataTestMethod]
-        [DataRow("/v1/designer/runtime-select-list")]
-        [DataRow("/v1.0/designer/runtime-select-list")]
-        [DataRow("/v01/designer/runtime-select-list")]
-        [DataRow("/V1/Designer/Runtime-Select-List")]
-        [DataRow("/v1/designer/runtime-select-list/")]
-        [DataRow("/v1/designer")]
-        [DataRow("/v1/designer/")]
-        [DataRow("/v1/designer/x/y")]
-        [DataRow("//v1/designer/runtime-select-list")]
-        [DataRow("///v1.0/Designer/")]
-        [DataRow("/vX/designer/runtime-select-list")]
-        [DataRow("/v/designer/runtime-select-list")]
-        public async Task Middleware_DesignerPaths_AnonymousGets401(string path)
+        // second path segments of Elsa.Server.Api 2.17.0
+        private static readonly string[] ElsaSegments =
         {
-            foreach (var method in new[] { "POST", "GET", "PUT", "DELETE", "OPTIONS" })
+            "activities", "designer", "features", "scripting", "signals", "version", "workflow-channels", "workflow-definitions",
+            "workflow-instances", "workflow-providers", "workflow-registry", "workflow-storage-providers", "workflows"
+        };
+
+        private static IEnumerable<string> ElsaPathForms(string seg)
+        {
+            yield return "/v1/" + seg;
+            yield return "/v1/" + seg + "/";
+            yield return "/v1/" + seg + "/x/y";
+            yield return "/v1.0/" + seg;
+            yield return "/v01/" + seg + "/x";
+            yield return "/V1/" + seg.ToUpperInvariant() + "/";
+            yield return "//v1/" + seg + "/x";
+            yield return "///v1.0/" + seg + "/";
+            yield return "/vX/" + seg;
+            yield return "/v/" + seg + "/x";
+            yield return "/v1//" + seg;
+        }
+
+        [TestMethod]
+        public async Task Middleware_ElsaPaths_AnonymousGets401_ForEveryMethod()
+        {
+            foreach (var seg in ElsaSegments)
             {
-                var ctx = Create(path, auth: new FakeAuthService());
-                ctx.Request.Method = method;
-                var (res, next) = await Run(ctx);
-                Assert.AreEqual(401, res.Response.StatusCode, path + " " + method);
-                Assert.IsFalse(next, path + " " + method);
+                foreach (var path in ElsaPathForms(seg))
+                {
+                    foreach (var method in new[] { "GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH" })
+                    {
+                        var ctx = Create(path, auth: new FakeAuthService());
+                        ctx.Request.Method = method;
+                        var (res, next) = await Run(ctx);
+                        Assert.AreEqual(401, res.Response.StatusCode, path + " " + method);
+                        Assert.IsFalse(next, path + " " + method);
+                    }
+                }
             }
         }
 
         [TestMethod]
-        public async Task Middleware_DesignerPath_WithoutAuthService_FailsClosed()
+        public async Task Middleware_ElsaPath_WithoutAuthService_FailsClosed()
         {
-            var (ctx, next) = await Run(Create("/v1/designer/runtime-select-list"));
-            Assert.AreEqual(401, ctx.Response.StatusCode);
-            Assert.IsFalse(next);
-        }
-
-        [DataTestMethod]
-        [DataRow("/v1/designer/runtime-select-list")]
-        [DataRow("/v1.0/Designer/runtime-select-list/")]
-        [DataRow("//v1/designer/x")]
-        public async Task Middleware_DesignerPaths_SignedIn_GoToNext(string path)
-        {
-            var ctx = Create(path, userAuthenticated: true);
-            ctx.Request.Method = "POST";
-            var (res, next) = await Run(ctx);
-            Assert.IsTrue(next, path);
-            Assert.AreNotEqual(401, res.Response.StatusCode, path);
+            foreach (var path in new[] { "/v1/designer/runtime-select-list", "/v1/features", "/v1/workflow-definitions", "/v1/signals/x/dispatch" })
+            {
+                var (ctx, next) = await Run(Create(path));
+                Assert.AreEqual(401, ctx.Response.StatusCode, path);
+                Assert.IsFalse(next, path);
+            }
         }
 
         [TestMethod]
-        public async Task Middleware_DesignerPath_SignedInByJwt_GoesToNextAndSetsUser()
+        public async Task Middleware_ElsaPaths_SignedIn_GoToNext()
         {
-            var ctx = Create("/v1/designer/runtime-select-list", auth: new FakeAuthService(JwtBearerDefaults.AuthenticationScheme));
+            foreach (var seg in ElsaSegments)
+            {
+                foreach (var path in ElsaPathForms(seg))
+                {
+                    var ctx = Create(path, userAuthenticated: true);
+                    ctx.Request.Method = "POST";
+                    var (res, next) = await Run(ctx);
+                    // /v1/activities (list, GET/HEAD only) is answered in-process; the other forms and methods go on to Elsa
+                    Assert.IsTrue(next, path);
+                    Assert.AreNotEqual(401, res.Response.StatusCode, path);
+                }
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("/v1/workflow-definitions")]
+        [DataRow("/v1/signals/not-exist/dispatch")]
+        [DataRow("/v1/designer/runtime-select-list")]
+        public async Task Middleware_ElsaPath_SignedInByJwt_GoesToNextAndSetsUser(string path)
+        {
+            var ctx = Create(path, auth: new FakeAuthService(JwtBearerDefaults.AuthenticationScheme));
             ctx.Request.Method = "POST";
             var (res, next) = await Run(ctx);
             Assert.IsTrue(next);
@@ -224,9 +250,19 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
-        public async Task Middleware_NonDesignerPaths_AreNotAffectedByDesignerGuard()
+        public async Task Middleware_NonElsaPaths_AreNotAffected()
         {
-            foreach (var path in new[] { "/v1/designers", "/v1/designer-x", "/v1/designerx/y", "/home/v1/designer", "/x1/designer", "/v1/x/designer", "/v1/workflow-definitions", "/v1/features", "/v1/version", "/designer" })
+            var paths = new[]
+            {
+                // other /v1/... routes of the application are not Elsa's
+                "/v1/users", "/v1/api/x", "/v1/orders/1", "/v1", "/v1/", "/v1/swagger.json", "/v1/Home/Index",
+                // lookalikes
+                "/v1/designers", "/v1/designer-x", "/v1/designerx/y", "/v1/workflow", "/v1/workflowsx", "/v1/workflow-definitionsx", "/v1/versions", "/v1/feature",
+                "/v1/signal/x", "/v1/x/designer", "/v1/x/workflow-definitions",
+                "/home/v1/designer", "/x1/designer", "/designer", "/features", "/workflow-definitions", "/api/v1/features",
+                "/swagger/v1/swagger.json", "/swagger", "/_workflowapi/x", "/", ""
+            };
+            foreach (var path in paths)
             {
                 var (ctx, next) = await Run(Create(path, auth: new FakeAuthService()));
                 Assert.AreNotEqual(401, ctx.Response.StatusCode, path);
@@ -238,12 +274,23 @@ namespace WalkingTec.Mvvm.Core.Test
         [DataRow("/v1/designer/runtime-select-list", true)]
         [DataRow("/V2.0/DESIGNER", true)]
         [DataRow("//v1/designer/", true)]
-        [DataRow("/v1/activities", false)]
+        [DataRow("/v1/activities", true)]
+        [DataRow("/v1/workflow-definitions/abc/latest/export", true)]
+        [DataRow("/v1/Workflow-Instances/bulk/cancel", true)]
+        [DataRow("/v1/users", false)]
         [DataRow("/v1/designers", false)]
+        [DataRow("/v1/workflow", false)]
         [DataRow("/designer", false)]
-        public void IsDesignerRequest_MatchesOnlyDesignerPaths(string path, bool expected)
+        [DataRow("/swagger/v1/swagger.json", false)]
+        public void IsElsaApiRequest_MatchesOnlyElsaPaths(string path, bool expected)
         {
-            Assert.AreEqual(expected, WorkflowActivitiesGuard.IsDesignerRequest(Create(path).Request));
+            Assert.AreEqual(expected, WorkflowActivitiesGuard.IsElsaApiRequest(Create(path).Request));
+        }
+
+        [TestMethod]
+        public void ElsaApiSegments_MatchTheTestList()
+        {
+            CollectionAssert.AreEquivalent(ElsaSegments, System.Linq.Enumerable.ToArray(WorkflowActivitiesGuard.ElsaApiSegments));
         }
 
         // ---- sign-in detection ----

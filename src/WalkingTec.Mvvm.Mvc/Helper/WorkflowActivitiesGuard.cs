@@ -11,8 +11,8 @@ using Microsoft.Extensions.DependencyInjection;
 namespace WalkingTec.Mvvm.Mvc
 {
     /// <summary>
-    /// Guards the workflow designer's activity list (<c>/v1/activities</c>, #208, #216) and the designer endpoints (<c>/v1/designer/*</c>, #225).
-    /// Every form of the endpoint (any API version segment, trailing slash, sub path, and the former <c>?inneruse=1</c> form) requires a
+    /// Guards the Elsa workflow API (<c>/v1/*</c>, #208, #216, #225, #256), including the designer's activity list (<c>/v1/activities</c>).
+    /// Every form of an Elsa endpoint (any API version segment, trailing slash, sub path, and the former <c>?inneruse=1</c> form) requires a
     /// signed-in user whatever WorkflowOptions:RequireAuthentication says. Since 10.0.0.7 WtmMiddleware answers the list in-process
     /// (<see cref="WorkflowActivitiesDescriber"/>), so there is no internal call any more and no internal form that could be let through.
     /// </summary>
@@ -20,7 +20,16 @@ namespace WalkingTec.Mvvm.Mvc
     {
         // Elsa routes v{version:apiVersion}/activities, so the version segment may be v1, v1.0, v01 ... (any case)
         private static readonly Regex ActivitiesPathRegex = new Regex(@"^/+v[^/]*/activities(/|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
-        private static readonly Regex DesignerPathRegex = new Regex(@"^/+v[^/]*/designer(/|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        // Only the first path segment after the version that Elsa.Server.Api 2.17.0 actually routes, so other applications' own /v1/... routes
+        // (and any unknown path) are left alone. Keep in sync when Elsa.Server.Api is upgraded.
+        public static readonly System.Collections.Generic.IReadOnlyList<string> ElsaApiSegments = new[]
+        {
+            "activities", "designer", "features", "scripting", "signals", "version", "workflow-channels", "workflow-definitions",
+            "workflow-instances", "workflow-providers", "workflow-registry", "workflow-storage-providers", "workflows"
+        };
+        private static readonly Regex ElsaApiPathRegex = new Regex(
+            @"^/+v[^/]*/+(" + string.Join("|", System.Linq.Enumerable.Select(ElsaApiSegments, Regex.Escape)) + @")(/|$)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
         private static readonly Regex ActivitiesListPathRegex = new Regex(@"^/+v[^/]*/activities/?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
         /// <summary>
@@ -34,13 +43,14 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         /// <summary>
-        /// True for /v{any}/designer and anything below it (#225), matched the same way as <see cref="IsActivitiesRequest"/>:
-        /// case-insensitive, any version segment, trailing slash, sub path and leading extra slashes.
+        /// True for an Elsa API endpoint (#256): /v{any}/{segment} and anything below it, where segment is one of the routes of Elsa.Server.Api
+        /// (<see cref="ElsaApiSegments"/>, which includes activities and designer). Case-insensitive; any version segment, trailing slash, sub path
+        /// and leading extra slashes count. Other /v1/... paths are not Elsa's and do not match.
         /// </summary>
-        public static bool IsDesignerRequest(HttpRequest request)
+        public static bool IsElsaApiRequest(HttpRequest request)
         {
             var path = request?.Path.Value;
-            return path != null && DesignerPathRegex.IsMatch(path);
+            return path != null && ElsaApiPathRegex.IsMatch(path);
         }
 
         /// <summary>
