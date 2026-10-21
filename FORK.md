@@ -566,7 +566,7 @@ dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build --filter TestCategory
 
 #### 路由覆蓋
 
-排除清單：`test/WalkingTec.Mvvm.E2E/Coverage/vue3demo.route-exclusions.json`（每條都有 `id` 與 `reason`）。排除的是：程式碼產生器（`DebugOnly`）、未啟用的 workflow、呼叫外部網站的 action、需要主站台的 action、LayUI 圖示目錄，以及伺服器端渲染 UI 專用的 `_Framework` 輔助 action（SPA 只呼叫 `/api/*`）。目前基線：共 222 個 action，排除 70，可計入 152，全部命中（100%）。LayUI 目標的數字不變（85 個、排除 43、覆蓋 16）。仍只記錄基線，**不因覆蓋率低而失敗**。
+排除清單：`test/WalkingTec.Mvvm.E2E/Coverage/vue3demo.route-exclusions.json`（每條都有 `id` 與 `reason`）。排除的是：程式碼產生器（`DebugOnly`）、未啟用的 workflow、呼叫外部網站的 action、需要主站台的 action、LayUI 圖示目錄，以及伺服器端渲染 UI 專用的 `_Framework` 輔助 action（SPA 只呼叫 `/api/*`）。目前基線：共 222 個 action，排除 70，可計入 152，全部命中（100%）。LayUI 目標的數字見其自己的報告。仍只記錄基線，**不因覆蓋率低而失敗**。
 
 #### CI 與執行時間
 
