@@ -17,7 +17,7 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
     internal static class Vue3Seed
     {
         private static readonly SemaphoreSlim Gate = new(1, 1);
-        private static bool _done;
+        private static readonly HashSet<string> Done = new();
 
         /// <summary>Module (controller) and route of the demo pages that the tests use. Student and Major have no screen in the SPA.</summary>
         public static readonly (string Page, string Module, string Url)[] Menus =
@@ -34,7 +34,7 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
             await Gate.WaitAsync();
             try
             {
-                if (_done)
+                if (Done.Contains(api.SiteName))
                 {
                     return;
                 }
@@ -53,7 +53,7 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
                 await GrantAllToAdministratorRoleAsync(api);
                 await GrantAllCitiesToAdministratorAsync(api);
                 await api.GetAsync("/api/_FrameworkMenu/RefreshMenu");
-                _done = true;
+                Done.Add(api.SiteName);
             }
             finally
             {

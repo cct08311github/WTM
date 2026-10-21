@@ -30,6 +30,14 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
         public string AdminAccount { get; }
         public string AdminPassword { get; }
 
+        /// <summary>
+        /// Passwords of the accounts of the permission matrix tests (see Security/MatrixAccounts), generated for every run and handed to the site in
+        /// environment variables. The LayUI test host seeds the accounts from them; for the Vue3Demo the tests create the accounts through the API.
+        /// </summary>
+        public string MatrixNoRolePassword { get; }
+        public string MatrixLimitedPassword { get; }
+        public string MatrixAdminPassword { get; }
+
         /// <summary>Throw-away SQLite database file of this run (inside the temporary directory that is deleted on dispose).</summary>
         public string DatabasePath { get; }
         public string LogPath { get; }
@@ -41,6 +49,9 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
             Target = target;
             AdminAccount = target.AdminAccount;
             AdminPassword = RandomToken(18);
+            MatrixNoRolePassword = RandomToken(18);
+            MatrixLimitedPassword = RandomToken(18);
+            MatrixAdminPassword = RandomToken(18);
             _tempDir = Path.Combine(Path.GetTempPath(), "wtm-e2e-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_tempDir);
             DatabasePath = Path.Combine(_tempDir, "e2e.db");
@@ -76,6 +87,9 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
             env["Connections__0__DbType"] = "sqlite";
             env["JwtOptions__SecurityKey"] = RandomToken(48);
             env["E2E__AdminPassword"] = AdminPassword;
+            env["E2E__MatrixNoRolePassword"] = MatrixNoRolePassword;
+            env["E2E__MatrixLimitedPassword"] = MatrixLimitedPassword;
+            env["E2E__MatrixAdminPassword"] = MatrixAdminPassword;
             env["E2E__RouteInventoryPath"] = InventoryPath;
             env["E2E__RouteHitLogPath"] = HitLogPath;
             target.ConfigureEnvironment?.Invoke(this, env);

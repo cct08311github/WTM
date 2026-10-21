@@ -41,6 +41,9 @@ namespace WalkingTec.Mvvm.E2E.Pages
             await search;
         }
 
+        /// <summary>Every button of the grid's toolbar.</summary>
+        public ILocator ToolbarButtons => Body.Locator(".layui-table-tool a.layui-btn");
+
         public ILocator ToolbarButton(string text) => Body.Locator(".layui-table-tool a.layui-btn").Filter(new() { HasTextString = text });
 
         public ILocator RowButton(string name, string text) => Row(name).Locator("a.layui-btn", new() { HasTextString = text });

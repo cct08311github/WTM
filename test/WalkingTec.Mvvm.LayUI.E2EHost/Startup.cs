@@ -26,6 +26,9 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost
         {
             ConfigRoot = config;
             E2ESeed.AdminPassword = config["E2E:AdminPassword"];
+            E2ESeed.NoRolePassword = config["E2E:MatrixNoRolePassword"];
+            E2ESeed.LimitedPassword = config["E2E:MatrixLimitedPassword"];
+            E2ESeed.MatrixAdminPassword = config["E2E:MatrixAdminPassword"];
         }
 
         public void ConfigureServices(IServiceCollection services)

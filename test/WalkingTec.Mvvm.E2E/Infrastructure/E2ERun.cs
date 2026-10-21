@@ -44,6 +44,12 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
             Directory.CreateDirectory(OutputDir);
         }
 
+        /// <summary>The shared Playwright driver (API request contexts of tests that do not need a browser).</summary>
+        public static async Task<IPlaywright> GetPlaywrightAsync()
+        {
+            return _playwright ??= await Playwright.CreateAsync();
+        }
+
         public static Task<SiteProcess> GetSiteAsync(SiteTarget target)
         {
             return Sites.GetOrAdd(target.Name, _ => new Lazy<Task<SiteProcess>>(
@@ -83,6 +89,7 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
         [AssemblyCleanup]
         public static void Cleanup()
         {
+            Security.MatrixReport.WriteAll(Path.Combine(OutputDir, "permission-matrix"));
             foreach (var entry in Sites.Values.Where(x => x.IsValueCreated))
             {
                 SiteProcess site;
@@ -101,6 +108,10 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
                     WriteJsCoverage(site);
                 }
                 site.Dispose();
+                if (target.ReportRouteCoverage == false)
+                {
+                    continue;
+                }
                 var report = RouteCoverageReport.Build(target, site.InventoryPath, site.HitLogPath,
                     Path.Combine(AppContext.BaseDirectory, target.RouteExclusionFile));
                 report.WriteTo(Path.Combine(OutputDir, "route-coverage"), target.Name);

@@ -35,6 +35,12 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
         /// <summary>True when the tests collect Chromium JS coverage of the LayUI framework script (/_js/framework_layui.js) against this site.</summary>
         public bool CollectJsCoverage { get; init; }
 
+        /// <summary>
+        /// False for the extra instances of a site that the permission matrix starts (its own copy of the site, the Vue3Demo with the
+        /// workflow feature enabled): the route coverage baseline is reported for the regular instance only.
+        /// </summary>
+        public bool ReportRouteCoverage { get; init; } = true;
+
         /// <summary>Account the tests sign in with. The password is generated for every run (see <see cref="SiteProcess.AdminPassword"/>).</summary>
         public string AdminAccount { get; init; } = "e2eadmin";
 

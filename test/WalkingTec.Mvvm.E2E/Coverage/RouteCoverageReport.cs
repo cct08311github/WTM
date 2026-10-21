@@ -18,6 +18,17 @@ namespace WalkingTec.Mvvm.E2E.Coverage
         public List<string> HttpMethods { get; set; } = new();
         public string Template { get; set; }
         public List<string> Attributes { get; set; } = new();
+
+        /// <summary>The individual routes behind the key (see the instrumentation library); used by the permission matrix.</summary>
+        public List<RouteVariant> Variants { get; set; } = new();
+    }
+
+    public sealed class RouteVariant
+    {
+        public string Template { get; set; }
+
+        /// <summary>Empty when the action accepts any method.</summary>
+        public List<string> HttpMethods { get; set; } = new();
     }
 
     public sealed class RouteHitRecord
