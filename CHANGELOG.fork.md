@@ -12,6 +12,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 
 ## 未发布
 
+* **修改（LayUI）：**   `framework_layui.js` 处理服务器返回指令（`IsScript`）的入口收敛为单一函数 `ff.ExecServerScript(text)`；`PostForm`、`BgRequest`、`OpenDialog` 与 `LayuiUIService.MakeDialogButton`（`showDialog=false`）都改为调用它，默认行为不变（内部仍以间接 eval 执行，标准指令不依赖调用函数的局部变量；`AddCustomScript` 的自定义内容若引用局部变量需调整，详见 FORK.md 第 18 节）。新增可选开关 `ff.StrictScriptChannel`（默认 `false`），开启后 `ExecServerScript` 只输出 `console.warn` 而不执行。同时删除一段已注释的旧代码，并新增 node 单元测试（#25，阶段 2）
 * **修复（demo）：**   `VITE_OPEN_CDN=true` 打包的 Vue3 demo 在浏览器中白屏，报 `Calling require for "vue" in an environment that doesn't expose the require function`（#258）。原因：vite 8 (Rolldown) 下被转成 CJS 的依赖（`vue-i18n.cjs.js`、`vue-grid-layout`）里的 `require('vue')` 不会被 vite-plugin-cdn-import 改写。现于 CDN 模式在 `index.html` 注入一个极小的 `require`，映射到 CDN 全局变量（Vue / VueRouter / ElementPlus / VueDemi）。默认模式产物不变；仅限 demo
 * **修改（BREAKING，安全）：**   `/v1/designer/*` 现在一律要求已登录用户（#225）。影响：启用 workflow 且未登录的调用方
 * **修改（BREAKING，安全）：**   Elsa `/v1/*` 端点现在一律要求已登录用户，与 `RequireAuthentication` 无关（#256）。影响：启用 workflow 且未登录的调用方；已登录与 `RequireAdminRole` 行为不变。仅在 `EnableWorkflow=true` 时套用（`/v1/activities` 除外）。回滚：退回上一版本

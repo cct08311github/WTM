@@ -42,7 +42,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
             }
             else
             {
-                innerClick = $"$.ajax({{cache: false,type: 'GET',url: '{JsStringEncoder.Escape(url)}',async: true,success: function(data, textStatus, request) {{eval(data);}} }});";
+                innerClick = $"$.ajax({{cache: false,type: 'GET',url: '{JsStringEncoder.Escape(url)}',async: true,success: function(data, textStatus, request) {{ff.ExecServerScript(data);}} }});";
             }
             string funcname = $"x{buttonID.Replace("-", "")}click";
             var click = $"<script>function {funcname}(){{{innerClick};return false;}}</script>";

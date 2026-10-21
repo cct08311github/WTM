@@ -27,6 +27,21 @@ window.ff = {
     DONOTUSE_Text_PleaseSelect: "",
     DONOTUSE_Text_FailedLoadData: "",
 
+    // Opt-in switch (default false). When true, ExecServerScript does not run the
+    // script text returned by the server and only logs a warning.
+    StrictScriptChannel: false,
+
+    // Single entry point for script text returned by the server (IsScript responses).
+    // Uses indirect eval: the script runs in the global scope, so it does not see the
+    // local variables of the calling function. Standard FFResult commands only use globals.
+    ExecServerScript: function (text) {
+        if (ff.StrictScriptChannel === true) {
+            console.warn("ff.StrictScriptChannel is on: server script was not executed.");
+            return;
+        }
+        return (0, eval)(text);
+    },
+
     SetCookie: function (name, value, allwindow) {
         try {
             var cookiePrefix = '', windowGuid = '';
@@ -169,38 +184,6 @@ window.ff = {
                 }, 500);
             });
             layer.close(index);
-        //    $.ajax({
-        //        type: getpost,
-        //        url: url,
-        //        data: para,
-        //        success: function (data, textStatus, request) {
-        //            if (request.getResponseHeader('IsScript') === 'true') {
-        //                eval(data);
-        //            }
-        //            else {
-        //                data = '<div class="layui-card donotuse_pdiv"><div class="layui-card-body donotuse_pdiv" id=\"' + $.cookie("divid") + '\" >' + data + "</div></div>";
-        //                var child = window.open("/Home/PIndex/#/_framework/redirect");
-        //                child.document.close();
-        //                $(child.document).ready(function () {
-        //                    setTimeout(function() {
-        //                        debugger;
-        //                        $('#LAY_app_body', child.document).html(data);
-        //                        $(child.document).attr("title", title);
-        //                    }, 500);
-        //                });
-        //            }
-        //            layer.close(index);
-        //        },
-        //        error: function (a, b, c) {
-        //            layer.close(index);
-        //            if (a.responseText !== undefined && a.responseText !== "") {
-        //                layer.alert(a.responseText);
-        //            }
-        //            else {
-        //                layer.alert(ff.DONOTUSE_Text_LoadFailed);
-        //            }
-        //        }
-        //    });
         }
         else {
             layer.close(index);
@@ -290,7 +273,7 @@ window.ff = {
             },
             success: function (data, textStatus, request) {
                 if (request.getResponseHeader('IsScript') === 'true') {
-                    eval(data);
+                    ff.ExecServerScript(data);
                 }
                 else {
                     var inlayer = $("#" + formId).parents(".layui-layer-content");
@@ -331,7 +314,7 @@ window.ff = {
             success: function (str, textStatus, request) {
                 layer.close(index);
                 if (request.getResponseHeader('IsScript') === 'true') {
-                    eval(str);
+                    ff.ExecServerScript(str);
                 }
                 else {
                     data = "<div id='" + $.cookie("divid") + "' class='layui-card-body donotuse_pdiv'>" + str + "</div>";
@@ -389,7 +372,7 @@ window.ff = {
                 max = true;
                 if (request.getResponseHeader('IsScript') === 'true') {
                     ff.SetCookie("windowids", owid);
-                    eval(str);
+                    ff.ExecServerScript(str);
                 }
                 else {
                     str = "<div  id='" + $.cookie("divid") + "' class='donotuse_pdiv'>" + str + "</div>";
