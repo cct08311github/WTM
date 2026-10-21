@@ -412,3 +412,19 @@ demo（`demo/WalkingTec.Mvvm.Vue3Demo`）的 `AccountController.Reg` 是匿名�
 - **`wt:submitbutton`**：`Click` 仍以既有方式執行，將於後續階段處理
 - **影響範圍**：隨 NuGet 發佈的 `WalkingTec.Mvvm.TagHelpers.LayUI`；一般用法（`ChangeFunc="fn"`）行為不變
 - 驗證：`DirectCallbackInvocationTests`（輸出不含 `eval(`、無連動時輸出不變、script 以 node 解析）
+
+## 20. LayUI checkbox／radio 選項的 HTML 編碼（#262）
+
+`framework_layui.js` 在 `ff.ChainChange` 與 `ff.LoadComboItems` 中，以字串串接為 checkbox、radio 組出選項 HTML，`value`、`title`（來自伺服器回傳的選項 `Value`、`Text`）與 `name` 沒有做 HTML 編碼。現在串接處一律先經新增的 `ff.EncodeHtml(str)`。
+
+| 項目 | 行為 |
+|---|---|
+| `ff.EncodeHtml(str)` | 編碼 `& < > " '`；`null`／`undefined` 回傳空字串，其他型別先轉成字串；中文等非 ASCII 字元維持原樣 |
+| 修改位置 | `ChainChange` 內 checkbox／radio 共 8 處，`LoadComboItems` 內 checkbox／radio 共 3 處，皆為 `target.append("<input ...>")` 的 `name`、`value`、`title` |
+| 輸出 | 一般資料（不含上述五個字元）的 HTML 字串與修改前**逐字相同**：元素、屬性與屬性順序都不變，`form.render()` 看到的 DOM 與修改前一致 |
+| 做法 | 維持字串串接並加上編碼，不改用 DOM API，以免改變屬性順序與輸出字串 |
+
+- **未處理（不屬於選項輸出）**：`combo`、`tree`、`transfer` 的選項以資料物件交給 xm-select、tree、transfer 元件，由元件自行輸出，不在本節範圍；`Download`／`PostForm` 之類組隱藏欄位的程式、頁面片段載入（`LoadPage` 等以 `.html(data)` 放入伺服器回傳的頁面內容，屬設計用途）另案評估
+- **影響範圍**：隨 NuGet 發佈的 `WalkingTec.Mvvm.Mvc`（`framework_layui.js`）；使用 LayUI checkbox／radio 連動與 `LoadComboItems` 的頁面。已快取舊版 `framework_layui.js` 的瀏覽器需要重新載入
+- **下游提醒**：自行用 JavaScript 串接選項 HTML 的頁面，請對 `value`、`title` 與文字內容使用 `ff.EncodeHtml`
+- **測試**：`test/WalkingTec.Mvvm.Core.Test/JsTests/option-encoding.test.js`（node，不需瀏覽器與網路）由 `OptionEncodingTests` 呼叫；找不到 `node` 時該測試標示為 Inconclusive

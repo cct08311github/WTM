@@ -670,18 +670,18 @@ window.ff = {
                                 var df = [];
                                 df = window[comboid + "defaultvalues"]; 
                                 if (df.indexOf(item.Value) > -1) {
-                                    target.append("<input type='checkbox'  name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "' checked />");
+                                    target.append("<input type='checkbox'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "' checked />");
                                 }
                                 else {
-                                    target.append("<input type='checkbox' name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "'  />");
+                                    target.append("<input type='checkbox' name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "'  />");
                                 }
                            }
                             else {
                                 if (item.Selected === true) {
-                                    target.append("<input type='checkbox'  name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "' checked />");
+                                    target.append("<input type='checkbox'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "' checked />");
                                 }
                                 else {
-                                    target.append("<input type='checkbox' name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "'  />");
+                                    target.append("<input type='checkbox' name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "'  />");
                                 }
                             }
                         }
@@ -694,18 +694,18 @@ window.ff = {
                                 var df = [];
                                 df = window[comboid + "defaultvalues"];
                                 if (df.indexOf(item.Value) > -1) {
-                                    target.append("<input type='radio'  name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "' checked />");
+                                    target.append("<input type='radio'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "' checked />");
                                 }
                                 else {
-                                    target.append("<input type='radio' name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "'  />");
+                                    target.append("<input type='radio' name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "'  />");
                                 }
                            }
                             else {
                                 if (item.Selected === true) {
-                                    target.append("<input type='radio'  name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "' checked />");
+                                    target.append("<input type='radio'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "' checked />");
                                 }
                                 else {
-                                    target.append("<input type='radio' name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "'  />");
+                                    target.append("<input type='radio' name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "'  />");
                                 }
                             }
                         }
@@ -761,7 +761,7 @@ window.ff = {
                        if (disabled==true) {
                            dis = " disabled ";
                        }
-                       target.append("<input type='checkbox'  name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "'" + che + dis+"/>");
+                       target.append("<input type='checkbox'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "'" + che + dis+"/>");
 
                    }
                    layui.form.render('checkbox', targetfilter + "div");
@@ -770,10 +770,10 @@ window.ff = {
                    for (i = 0; i < data.Data.length; i++) {
                        item = data.Data[i];
                        if (item.Selected === true || svals.indexOf(item.Value) > -1) {
-                           target.append("<input type='radio'  name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "' checked />");
+                           target.append("<input type='radio'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "' checked />");
                        }
                        else {
-                           target.append("<input type='radio' name = '" + targetname + "' value = '" + item.Value + "' title = '" + item.Text + "'  />");
+                           target.append("<input type='radio' name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "'  />");
                        }
                    }
                    layui.form.render('radio', targetfilter + "div");
@@ -1225,6 +1225,17 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
             }
         }
         return rv;
+    },
+
+    // HTML-encodes a value before it is concatenated into markup (attribute values and text).
+    // null/undefined become an empty string; other types are converted to string first.
+    EncodeHtml: function (str) {
+        if (str === null || str === undefined) {
+            return '';
+        }
+        return String(str).replace(/[&<>"']/g, function (c) {
+            return c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;';
+        });
     },
 
     getTreeItems: function (data,svals) {
