@@ -101,11 +101,16 @@ formatter: function (params) {{
     var yl = '{(NameY == "" ? "" : JsStringEncoder.Escape(NameY) + ":")}';
     var al = '{(NameAddition == "" ? "" : JsStringEncoder.Escape(NameAddition) + ":")}';
     var cl = '{(NameCategory == "" ? "" : JsStringEncoder.Escape(NameCategory) + ":")}';
-    return params.seriesName + ' <br/>'
-                + xl + params.value[0] + ' <br/>'
-                + yl + params.value[1] + ' <br/>'
-                + al + params.value[2] + ' <br/>'
-                + cl + params.value[3] + ' <br/>';
+    // series / category values come from data and the tooltip is rendered as HTML, so encode them
+    // (self-contained helper so it behaves the same on every echarts version)
+    var enc = function (v) {{
+        return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/""/g, '&quot;').replace(/'/g, '&#39;');
+    }};
+    return enc(params.seriesName) + ' <br/>'
+                + xl + enc(params.value[0]) + ' <br/>'
+                + yl + enc(params.value[1]) + ' <br/>'
+                + al + enc(params.value[2]) + ' <br/>'
+                + cl + enc(params.value[3]) + ' <br/>';
     }},
 }},";
                 }

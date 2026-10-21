@@ -363,3 +363,18 @@ demo（`demo/WalkingTec.Mvvm.Vue3Demo`）的 `AccountController.Reg` 是匿名�
 - 想維持 5.x 的外觀：載入 npm 套件裡的 `echarts/theme/v5.js`，並用 `echarts.init(dom, 'v5')` 或 `registerTheme` 套用；demo 不預設套用，維持 6 的新外觀
 
 `echartsTheme.js`（layuiadmin 的 4.x 風格主題，只匯出主題物件）不需要修改：用 echarts 6 的 `registerTheme('echartsTheme', layui.echartsTheme)` 註冊並套用，可以正常渲染、沒有錯誤。
+
+## 17. LayUI `wt:chart` 的資料輸出編碼（#221）
+
+`ListExtension.ToChartData`（`wt:chart` 的資料端點使用）原本以字串串接組出 JSON，Scatter 的 tooltip formatter 也把圖表資料直接當 HTML 回傳，圖表資料含特殊字元時缺少適當的編碼。現在：
+
+| 項目 | 行為 |
+|---|---|
+| `ToChartData` | 放進 JSON 的字串一律經 `System.Text.Json` 轉義；數字固定使用 invariant culture（非有限值以 0 輸出）。非 ASCII 文字（例如中文）維持原樣，不轉成 `\uXXXX` |
+| `ToChartData` 的輸出 | 一般資料與修改前**逐字相同**：欄位名稱、型別、順序、空白、數字格式都不變，`ChartData` 與 `wt:chart` 的屬性也不變 |
+| Scatter tooltip | `seriesName` 與 `value[0..3]` 先經 formatter 內自帶的小型 HTML 轉義函式再組成字串（不依賴 `echarts.format.encodeHTML`，4.x、5.x、6.x 行為一致）。一般資料的 tooltip 內容不變；`NameX` 等標籤屬性仍由 view 端提供，維持原狀 |
+| `Series` 名稱 | 少數特殊開頭的名稱前面補一個空白，避免名稱被宿主網站的 `JSONfns` 解析為函式；其他名稱不變，圖例、dataset 與 series 使用同一個名稱 |
+
+- **`framework_layui.js` 沒有修改**：`RefreshChart` 以宿主網站提供的 `JSONfns.parse` 解析 `series`（全 repo 沒有定義 `JSONfns`），Scatter 的 `symbolSize` 是 `ToChartData` 產生的 function 字串，需要它還原，所以不改成 `JSON.parse`
+- **影響範圍**：使用 LayUI `wt:chart` 的網站，包含自行呼叫 `ToChartData` 的資料端點。一般資料的顯示與修改前相同；只有含特殊字元的資料，輸出與 tooltip 被正確編碼
+- **下游提醒**：自行實作圖表資料端點或自行組 echarts 設定的網站，請對放進 JSON、HTML tooltip、`formatter` 的字串做同樣的處理
