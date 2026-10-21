@@ -18,6 +18,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * **修改（BREAKING，安全）：**   Elsa `/v1/*` 端点现在一律要求已登录用户，与 `RequireAuthentication` 无关（#256）。影响：启用 workflow 且未登录的调用方；已登录与 `RequireAdminRole` 行为不变。仅在 `EnableWorkflow=true` 时套用（`/v1/activities` 除外）。回滚：退回上一版本
 * **修复（安全，demo）：**   Vue3 demo 的图表元件（`src/components/echart/index.vue`）不再以动态代码执行处理响应与属性（#227）。响应改以 `JSON.parse` 解析，series 的类型、`radius`、`smooth` 与 base option 由前端直接组成对象，scatter 的 `symbolSize` 只按固定格式取出数字后在前端还原成固定函数，tooltip 对数据值做 HTML 转义。同时修复 Scatter 图不显示数据点、PieHollow 图无法渲染、Line 图数据点标记不显示的问题。仅限 demo，不影响 NuGet 包；自行复制该元件的下游请一并更新
 * **修改（安全）：**   LayUI `wt:tree`、`wt:combobox` 的 `ChangeFunc`（连动前的回调）不再以字符串方式执行，改为在生成的 script 中直接调用用户设置的函数（#25，阶段 1）。未设置 `ChangeFunc` 或没有连动时输出与修改前逐字相同，一般用法（`ChangeFunc="fn"`）行为不变；`ChangeFunc` 不是合法标识符时视为未设置。`wt:submitbutton` 的 `Click` 仍以既有方式执行，将于后续阶段处理。影响：使用上述 TagHelper 的网站（随 NuGet 发布的 TagHelpers.LayUI）。详见 FORK.md 第 19 节
+* **修复（安全）：**   `framework_layui.js` 组装 checkbox／radio 选项 HTML 时（`ff.ChainChange`、`ff.LoadComboItems`），`value`、`title`、`name` 补上 HTML 编码；新增 `ff.EncodeHtml(str)`。一般数据（不含 `& < > " '`）的输出 HTML 与修改前逐字相同，DOM 结构与行为不变。新增 node 测试（#262）
 
 ## 10.0.0.7(2026-10-21)
 
