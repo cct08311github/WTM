@@ -580,3 +580,89 @@ dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build --filter TestCategory
 - #290：使用者管理頁呼叫 `/api/_Admin/FrameworkUser/*`（與實際路由 `/api/_FrameworkUser/*` 不符）；`City`／`SchoolVue3` 頁的匯出按鈕與資料權限列表的詳細按鈕檢查了不存在的權限鍵而不顯示；學校頁匯出勾選列不會下載；租戶列表的名稱欄為空
 - #291：只符合子群組的搜尋回傳空列表（這個 Issue 也包含群組列表的備註欄一律為空，該項沒有對應的測試）
 - 沒有對應測試的觀察：缺漏的 i18n 鍵、`FrameworkMenu/GetIcons` 回 400、刪除選單後選單快取未更新 → #292；匯出時以 `SetFormat` 格式化的欄位輸出型別名稱 → #289
+
+### 權限矩陣（#273）
+
+把「誰能呼叫哪個 action」寫成一張進版控的期望表，每次 E2E 都用純 HTTP 實際打一遍，確認框架的授權行為沒有悄悄改變。它不用瀏覽器（`HttpClient`），所以很快：三組矩陣合計約 15 秒。
+
+**身分**（每次執行隨機產生密碼，只存在行程環境與記憶體）：
+
+| 身分 | 說明 |
+|---|---|
+| `anonymous` | 沒有任何憑證 |
+| `norole` | 已登入、有效，但沒有任何角色或群組 |
+| `limited` | 角色只授權少數動作：LayUI 為 Gadget 的列表頁、`Search`、`Details`、`ExportExcel`；Vue3Demo 為 City 與角色管理的列表頁、`Search`、`Get`，以及 School 的列表頁與 `Search` |
+| `admin` | 系統管理員角色（001）。是第二個管理員帳號，不影響瀏覽器測試用的管理員 session |
+| `admin-cookie` | 只有 Vue3Demo：同一個管理員改用 cookie 登入（其他身分用 Bearer token）。MVC controller（`_Framework`）只認 cookie |
+
+**被測的站台**：矩陣各自啟動獨立的站台行程（`layui-e2ehost-matrix`、`vue3demo-matrix`、`vue3demo-matrix-workflow`），不與瀏覽器測試共用。原因是矩陣會用管理員身分送出真的（但是空的）新增、刪除、登出請求，也會觸發一個會改 host 設定的測試 action；獨立站台讓瀏覽器測試的資料、路由覆蓋基線都不受影響。這三個站台不產生路由覆蓋報告。
+
+#### 結果類型與偵測方式
+
+每個請求依狀態碼、轉址目標與（只有框架固定訊息時）回應開頭分類。回應內容只讀來分類，不儲存也不輸出。
+
+| 類型 | 偵測方式 | 出現在 |
+|---|---|---|
+| `ok` | 狀態 2xx | 通過驗證與授權，action 有回應 |
+| `redirect-login` | 轉址（3xx）到登入頁或 cookie scheme 的 access-denied 路徑，或狀態 200 且內容是框架寫的 `window.location.href='<登入頁>'` 導向 script | 未登入的 MVC 請求（200 + script）；已登入但被 `Forbid()` 的 MVC 請求（轉址） |
+| `401` | 狀態 401 | 未登入的 API；帶 Bearer token 打只認 cookie 的 MVC controller |
+| `403` | 狀態 403 | 已登入但沒有該動作的權限（API） |
+| `200-no-privilege-page` | 狀態 200，內容就是「沒有權限」訊息 | 沒有權限的 MVC 頁面與動作 |
+| `200-tenant-not-allowed-page` | 狀態 200，內容就是「僅主租戶可用」訊息 | 租戶使用者打標 `MainTenantOnly` 的 MVC 動作（目前沒有租戶身分，保留類型） |
+| `200-debug-only-page` | 狀態 200，內容就是「只能在調試模式使用」訊息 | 標 `DebugOnly` 的 MVC 動作 |
+| `400-debug-only` | 狀態 400，內容是同一則訊息 | 標 `DebugOnly` 的 API 動作 |
+| `404` | 狀態 404 | 功能未啟用的 stub 路由；不存在的紀錄 |
+| `200-json-401`／`200-json-403` | 帶標頭 `layuisearch` 的 LayUI 表格查詢：狀態 200，JSON 的 `Code` 為 401／403 | 表格查詢被拒（讓前端能解析） |
+| 其他狀態 | 以狀態碼本身為類型（`302`、`400`、`415`、`500`…） | action 自己的回應；`5xx` 永遠不是預期值 |
+| `allowed` | 只用在期望表：任何「不是拒絕、也不是伺服器錯誤」的結果 | action 對空請求的回應（400、404、415…）不重要時 |
+
+「拒絕」依框架實際行為分成多種：MVC 頁面沒有權限時回 200 加訊息（`200-no-privilege-page`），API 回 403；未登入的 MVC 頁面回 200 加導向 script，API 回 401。LayUI 按鈕沒有權限時根本不輸出（見下）。
+
+#### 期望表
+
+`test/WalkingTec.Mvvm.E2E/Security/<target>.permission-matrix.json`（`layui-e2ehost`、`vue3demo`）。一個 action 與 HTTP method 一列，key 是路由清單的 key 加 method（`gadget/create GET`；同名 controller 的路由用 `[路由樣板]` 區分）。路由清單的每個 action 都要有一列，每列都要對每個身分寫期望結果。
+
+```json
+{ "key": "gadget/create GET", "expect": { "anonymous": "redirect-login", "norole": "200-no-privilege-page", "limited": "200-no-privilege-page", "admin": "ok" } }
+```
+
+其他欄位：`exempt`（宣告屬性推導的規則不適用，必須寫原因）、`note`、`skip`（不送出請求，例如會呼叫外部網站）、`knownDeviation`（見下）。`variants` 是帶額外標頭的同一批 action（LayUI 表格查詢）。`configurations` 放其他設定與預設的差異（見下）。
+
+表格記的是**預期的行為**，不是現況快照。測試另外用 action 宣告的屬性檢查表格是否自相矛盾（`DebugOnly`、`Public`／`AllowAnonymous`、`AllRights`、沒有屬性的需要選單權限、`limited` 只能通過它的角色被授權的動作），所以不能只把觀察結果照抄進去。
+
+#### 失敗條件
+
+- 實際結果與表格不同
+- 路由清單有 action 但表格沒有（新 endpoint 必須宣告預期行為）
+- 表格有列但沒有對應的 action（已移除的 endpoint 不留殘骸）
+- 表格與宣告的規則矛盾，卻沒有 `exempt` 或 `knownDeviation`
+- 已知偏差已經消失（實際結果等於預期）：請把 `knownDeviation` 移除
+
+#### 新增或修改 endpoint 時怎麼更新
+
+1. 執行 `dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build --filter TestCategory=permission-matrix`（Vue3Demo 需先 build SPA，見上一節）
+2. 失敗訊息會列出缺少的列。`TestResults/e2e/permission-matrix/<site>.observed-entries.txt` 有每個請求的觀察結果，格式與表格相同，可以複製整列
+3. **逐項對照這個 action 應該有的行為再貼**：`[Public]`／`[AllRights]`／選單權限。觀察結果與預期不同時，期望欄寫預期，另加 `knownDeviation` 記錄現況
+4. 授權規則改變（例如移除 `[AllRights]`）時，改對應的列；`limited` 角色的授權清單在 `Security/MatrixSetups.cs`（`LimitedGrants`）與它的建立處（`DataContext.cs` 的 `E2ESeed.LimitedRoleActions`、`Security/MatrixAccounts.cs` 的 `LimitedRoleUrls`）
+
+#### 已知偏差
+
+觀察到的行為與預期不同、但本 Issue 不修改 `src`／`demo` 的項目，用 `knownDeviation` 標記（短而中性的描述加上各身分目前的結果）：測試照常通過並在報告中列出，修好後測試會要求移除標記。目前共 4 類，見追蹤 Issue。
+
+#### 設定切換：`EnableWorkflow`
+
+Vue3Demo 的矩陣跑兩次：預設（`EnableWorkflow=false`）與 `EnableWorkflow=true`（環境變數，demo 會註冊 Elsa）。表格的 `configurations.workflow-enabled` 只記差異：會出現的工作流程 endpoint（`_WorkflowApi` 查詢端點、Elsa REST API 的不同路由）、會消失的 stub（`_WorkflowApi` 在關閉時一律 404）、結果改變的 Elsa 路由（未登入 401；已登入者進入引擎，規則見第 15 節）。LayUI 測試 host 沒有註冊 workflow，所以只跑預設設定。
+
+#### LayUI 按鈕
+
+`ButtonPrivilegeTests`（瀏覽器）：`limited` 登入後 Gadget 列表的工具列只有「Export Excel」、列只有「Details」，沒有 Create／Batch edit／Batch delete／Import、也沒有列上的 Edit／Delete；管理員五個工具列按鈕與三個列按鈕都在；沒有角色的帳號看不到 Inventory 選單。伺服器端對同一批網址的回應由矩陣檢查。
+
+#### 報告
+
+`TestResults/e2e/permission-matrix/`：`summary.md`（各站台總數、各身分的結果分佈、偏差摘要；CI 放進 step summary）、`<site>.matrix.md`（完整矩陣，每個 action 一列）、`<site>.matrix.json`、`<site>.observed-entries.txt`。CI（`e2e-smoke`）把 `summary.md` 放進 step summary，整個目錄上傳為 artifact `e2e-permission-matrix`。
+
+#### 範圍與限制
+
+- 請求是無害的：id 不存在、空 body，且只看結果類型。因此看不到依參數內容才決定的授權（例如以名稱指定資料型別的輔助 action），也看不到資料權限（`DataPrivilege`）
+- 沒有租戶身分，`MainTenantOnly` 只驗證主租戶管理員可用
+- 路由清單的 key 可能因設定而不同，所以每組設定各用自己的路由清單比對
