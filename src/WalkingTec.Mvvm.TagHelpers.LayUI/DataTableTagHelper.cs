@@ -332,8 +332,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
         }
 
+        private string _genericEndpointReference;
+
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
+            _genericEndpointReference = null;
             if (Loading == null)
             {
                 Loading = true;
@@ -410,6 +413,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 if (Filter == null) Filter = new Dictionary<string, object>();
                 Filter.Add("_DONOT_USE_VMNAME", vmQualifiedName);
                 Filter.Add("_DONOT_USE_CS", ListVM.CurrentCS);
+                // the generic data endpoints serve this view model only to a request that carries this reference
+                _genericEndpointReference = (Vm.Model as BaseVM)?.Wtm?.CreateGenericEndpointReference(Vm.Model.GetType(), GenericEndpointPurpose.List | GenericEndpointPurpose.Export, ListVM.CurrentCS);
+                if (_genericEndpointReference != null)
+                {
+                    Filter[GenericEndpointGuard.ReferenceParameter] = _genericEndpointReference;
+                }
                 Filter.Add("SearcherMode", ListVM.SearcherMode);
                 Filter.Add("SelectorValueField", ListVM.SelectorValueField);
                 Filter.Add("ViewDivId", ListVM.ViewDivId);
@@ -850,6 +859,10 @@ setTimeout(function(){{
                 if (item.ControllerName == "_Framework" && item.ActionName == "GetExportExcel") // 导出按钮 接口地址
                 {
                     url = $"{url}&_DONOT_USE_VMNAME={vmQualifiedName}";
+                    if (_genericEndpointReference != null)
+                    {
+                        url = $"{url}&{GenericEndpointGuard.ReferenceParameter}={Uri.EscapeDataString(_genericEndpointReference)}";
+                    }
                 }
                 var script = new StringBuilder($"var tempUrl = '{JsStringEncoder.Escape(url)}',whereStr={JsonSerializer.Serialize(item.whereStr)};");
 

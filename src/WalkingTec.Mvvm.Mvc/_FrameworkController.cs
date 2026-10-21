@@ -39,6 +39,61 @@ namespace WalkingTec.Mvvm.Mvc
         /// </summary>
         private readonly ISecurityCodeHelper _securityCode = securityCode;
 
+        #region check of the view model a request names
+
+        private string GenericEndpointReferenceValue()
+        {
+            string rv = Request.Query[GenericEndpointGuard.ReferenceParameter];
+            if (string.IsNullOrEmpty(rv) && Request.HasFormContentType)
+            {
+                rv = Request.Form[GenericEndpointGuard.ReferenceParameter];
+            }
+            return rv;
+        }
+
+        /// <summary>
+        /// The generic data endpoints build a view model from a name in the request. Before they do, the request must be one the page that
+        /// shows the view model has prepared (see <see cref="GenericEndpointGuard"/>), and the connection key must be a configured one.
+        /// Returns null when the request may be served, otherwise the answer to send.
+        /// </summary>
+        private IActionResult CheckGenericEndpoint(string vmName, GenericEndpointPurpose purpose, bool checkConnection = false, string connectionKey = null, string field = null, bool propagatePrivilege = false)
+        {
+            GenericEndpointRefusal refusal;
+            if (string.IsNullOrEmpty(connectionKey) == false
+                && ConfigInfo.Connections.Any(x => string.Equals(x.Key, connectionKey, StringComparison.OrdinalIgnoreCase)) == false)
+            {
+                refusal = GenericEndpointRefusal.UnknownConnection;
+            }
+            else
+            {
+                var decision = Wtm.AuthorizeGenericEndpoint(vmName, GenericEndpointReferenceValue(), purpose, checkConnection, connectionKey, field);
+                if (decision.Allowed)
+                {
+                    if (propagatePrivilege)
+                    {
+                        // views produced for the request (the grid inside the selector) write references with the privilege of the original page
+                        Wtm.PagePrivilegeUrl = decision.PrivilegeUrl;
+                    }
+                    return null;
+                }
+                refusal = decision.Refusal;
+            }
+            HttpContext.RequestServices.GetService<ILoggerFactory>()?.CreateLogger<_FrameworkController>()
+                .LogWarning("Generic data endpoint {Action} refused a request: {Reason} (user {User})", ControllerContext.ActionDescriptor.ActionName, refusal, Wtm.LoginUserInfo?.ITCode);
+            if (Request.Headers.ContainsKey("layuisearch"))
+            {
+                return new ContentResult()
+                {
+                    Content = "{\"Data\":[],\"Count\":0,\"Page\":1,\"PageCount\":0,\"Msg\":" + JsonSerializer.Serialize((string)MvcProgram._localizer["Sys.NoPrivilege"]) + ",\"Code\":403}",
+                    ContentType = "application/json",
+                    StatusCode = 200
+                };
+            }
+            return new ContentResult() { Content = MvcProgram._localizer["Sys.NoPrivilege"], ContentType = "text/html", StatusCode = 200 };
+        }
+
+        #endregion
+
 
 
 
@@ -58,6 +113,11 @@ namespace WalkingTec.Mvvm.Mvc
         )
         {
             string cs =_DONOT_USE_CURRENTCS;
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.Selector, true, cs, propagatePrivilege: true);
+            if (refused != null)
+            {
+                return refused;
+            }
             Wtm.CurrentCS = cs;
             var listVM = Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true) as IBasePagedListVM<TopBasePoco, ISearcher>;
 
@@ -108,6 +168,11 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("GetEmptyData")]
         public IActionResult GetEmptyData(string _DONOT_USE_VMNAME)
         {
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.List);
+            if (refused != null)
+            {
+                return refused;
+            }
             var listVM = Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true) as IBasePagedListVM<TopBasePoco, BaseSearcher>;
             string data = listVM.GetSingleDataJson(null, false);
             var rv = new ContentResult
@@ -129,6 +194,11 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("GetPagingData")]
         public IActionResult GetPagingData(string _DONOT_USE_VMNAME, string _DONOT_USE_CS)
         {
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.List, true, _DONOT_USE_CS);
+            if (refused != null)
+            {
+                return refused;
+            }
             var qs = new Dictionary<string, object>();
             foreach (var item in Request.Form.Keys)
             {
@@ -199,6 +269,11 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost]
         public IActionResult UpdateModelProperty(string _DONOT_USE_VMNAME, Guid id, string field, string value)
         {
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.Update, field: field);
+            if (refused != null)
+            {
+                return refused;
+            }
             if (value == null && Microsoft.Extensions.Primitives.StringValues.IsNullOrEmpty(Request.Form[nameof(value)]))
             {
                 value = string.Empty;
@@ -221,6 +296,11 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("Export")]
         public IActionResult GetExportExcel(string _DONOT_USE_VMNAME, string _DONOT_USE_CS)
         {
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.Export, true, _DONOT_USE_CS);
+            if (refused != null)
+            {
+                return refused;
+            }
             var qs = new Dictionary<string, object>();
             foreach (var item in Request.Query.Keys)
             {
@@ -264,6 +344,11 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("DownloadTemplate")]
         public IActionResult GetExcelTemplate(string _DONOT_USE_VMNAME, string _DONOT_USE_CS)
         {
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.Template);
+            if (refused != null)
+            {
+                return refused;
+            }
             //Wtm.CurrentCS = _DONOT_USE_CS ?? "default";
             var importVM = Wtm.CreateVM(_DONOT_USE_VMNAME) as IBaseImport<BaseTemplateVM>;
             var qs = new Dictionary<string, string>();
