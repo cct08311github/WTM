@@ -314,7 +314,7 @@ demo（`demo/WalkingTec.Mvvm.Vue3Demo`）的 `AccountController.Reg` 是匿名�
 
 **問題（#208）**：啟用 `EnableWorkflow` 後，流程設計器用 `/v1/activities` 取得活動清單。`WorkflowOptions:RequireAuthentication` 關閉（預設）時，這個路徑沒有任何驗證，未登入者就能取得清單；其中審批活動（`WtmApproveActivity`）的下拉選項包含全部角色與群組的 ID 與名稱。第 12 節（#13）只處理了 `_WorkflowApi`，這個外洩當時列為已知限制。
 
-**變更（#256 擴大範圍）**：`WtmMiddleware` 對 Elsa 的 `/v1/*` 端點一律要求登入，未登入回 401、不到 Elsa，與 `RequireAuthentication`、`RequireAdminRole` 的設定無關；已登入的請求交給 Elsa 處理，`RequireAuthentication=true` 時 Elsa 原有的 `AuthorizeFilter`（含 `RequireAdminRole`）照常生效，未改動。範圍從 `/v1/activities`（#208）、`/v1/designer/*`（#225）擴大到全部 Elsa 端點。
+**變更（#256 擴大範圍）**：`WtmMiddleware` 對 Elsa 的 `/v1/*` 端點一律要求登入，未登入回 401、不到 Elsa，與 `RequireAuthentication`、`RequireAdminRole` 的設定無關；已登入的請求交給 Elsa 處理，`RequireAuthentication=true` 時 Elsa 原有的 `AuthorizeFilter`（含 `RequireAdminRole`）照常生效，未改動。範圍從 `/v1/activities`（#208）、`/v1/designer/*`（#225）擴大到全部 Elsa 端點。**僅在 `EnableWorkflow=true` 時套用（`/v1/activities` 除外）**：`EnableWorkflow=false` 時，除 `activities` 以外的 segment 一律不攔截、交給下一個中介層，避免誤擋未啟用 workflow 的網站自己的 `/v1/...` 路由；`/v1/activities` 維持 10.0.0.6 以來的行為（不論是否啟用 workflow，未登入都回 401）。
 
 **比對範圍**：只比對 Elsa.Server.Api 2.17.0 實際使用的第二段路徑（`WorkflowActivitiesGuard.ElsaApiSegments`）：`activities`、`designer`、`features`、`scripting`、`signals`、`version`、`workflow-channels`、`workflow-definitions`、`workflow-instances`、`workflow-providers`、`workflow-registry`、`workflow-storage-providers`、`workflows`。正規表達式為 `^/+v[^/]*/+(<上述清單>)(/|$)`（不分大小寫，版本段、結尾斜線、子路徑與開頭多餘的 `/` 都算）。選白名單而不是整個 `/v1/*`，是因為應用程式自己的 `/v1/...` 路由（例如 API 版本化）不應被誤擋；此清單由反組譯 Elsa.Server.Api 2.17.0 的路由取得，**升級 Elsa.Server.Api 時需要重新核對**。本 repo 內沒有其他以 `/v1/` 開頭的路由（Swagger 為 `/swagger/v1/swagger.json`，不受影響）。
 

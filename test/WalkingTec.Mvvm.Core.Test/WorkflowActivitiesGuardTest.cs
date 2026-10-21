@@ -68,11 +68,13 @@ namespace WalkingTec.Mvvm.Core.Test
             return ctx;
         }
 
-        private static async Task<(DefaultHttpContext Ctx, bool NextCalled)> Run(DefaultHttpContext ctx)
+        private static async Task<(DefaultHttpContext Ctx, bool NextCalled)> Run(DefaultHttpContext ctx, bool enableWorkflow = true)
         {
             var called = false;
             var middleware = new WtmMiddleware(_ => { called = true; return Task.CompletedTask; });
-            await middleware.InvokeAsync(ctx, new WTMContext(null));
+            var monitor = new Moq.Mock<Microsoft.Extensions.Options.IOptionsMonitor<Configs>>();
+            monitor.Setup(x => x.CurrentValue).Returns(new Configs { EnableWorkflow = enableWorkflow });
+            await middleware.InvokeAsync(ctx, new WTMContext(monitor.Object));
             return (ctx, called);
         }
 
@@ -267,6 +269,33 @@ namespace WalkingTec.Mvvm.Core.Test
                 var (ctx, next) = await Run(Create(path, auth: new FakeAuthService()));
                 Assert.AreNotEqual(401, ctx.Response.StatusCode, path);
                 Assert.IsTrue(next, path);
+            }
+        }
+
+        [TestMethod]
+        public async Task Middleware_EnableWorkflowFalse_ElsaPathsExceptActivities_AreNotIntercepted()
+        {
+            foreach (var path in new[] { "/v1/features", "/v1/version", "/v1/designer/runtime-select-list", "/v1/workflows/x/dispatch", "/v1/workflow-definitions", "/v1/signals/x/dispatch", "//v1.0/Version/" })
+            {
+                foreach (var method in new[] { "GET", "POST" })
+                {
+                    var ctx = Create(path, auth: new FakeAuthService());
+                    ctx.Request.Method = method;
+                    var (res, next) = await Run(ctx, enableWorkflow: false);
+                    Assert.AreNotEqual(401, res.Response.StatusCode, path);
+                    Assert.IsTrue(next, path);
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task Middleware_EnableWorkflowFalse_Activities_StillRequireSignIn()
+        {
+            foreach (var path in new[] { "/v1/activities", "/v1.0/Activities/", "//v1/activities/x" })
+            {
+                var (res, next) = await Run(Create(path, auth: new FakeAuthService()), enableWorkflow: false);
+                Assert.AreEqual(401, res.Response.StatusCode, path);
+                Assert.IsFalse(next, path);
             }
         }
 
