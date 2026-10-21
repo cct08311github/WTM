@@ -282,6 +282,18 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.Controllers
             return Content(ConfigInfo.UIOptions.EncodeHtmlContent.ToString().ToLowerInvariant(), "text/plain");
         }
 
+        /// <summary>
+        /// Test helper: the reference a page of an application would write for a view model when it calls the generic data endpoints from
+        /// its own script (Wtm.CreateGenericEndpointReference). Fixture pages are open to every signed in user, so is this.
+        /// </summary>
+        [AllRights]
+        [ActionDescription("GenericReference")]
+        public ActionResult GenericReference(string vm, string purposes, string fields)
+        {
+            var reference = Wtm.CreateGenericEndpointReference(Type.GetType(vm), Enum.Parse<GenericEndpointPurpose>(purposes), null, string.IsNullOrEmpty(fields) ? null : fields.Split(','));
+            return Content(reference ?? "", "text/plain");
+        }
+
         [AllRights]
         [ActionDescription("Ping")]
         public ActionResult Ping()

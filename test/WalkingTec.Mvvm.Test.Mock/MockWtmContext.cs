@@ -16,7 +16,7 @@ namespace WalkingTec.Mvvm.Test.Mock
 {
     public static class MockWtmContext
     {
-        public static WTMContext CreateWtmContext(IDataContext dataContext= null, string usercode = null, string remoteToken = null)
+        public static WTMContext CreateWtmContext(IDataContext dataContext= null, string usercode = null, string remoteToken = null, Microsoft.AspNetCore.DataProtection.IDataProtectionProvider dataProtection = null)
         {
             GlobalData gd = new GlobalData();
             gd.AllAccessUrls = new List<string>();
@@ -35,6 +35,10 @@ namespace WalkingTec.Mvvm.Test.Mock
             var cache = new MemoryDistributedCache(Options.Create<MemoryDistributedCacheOptions>(new MemoryDistributedCacheOptions()));
             var res = new ResourceManagerStringLocalizerFactory(Options.Create<LocalizationOptions>(new LocalizationOptions { ResourcesPath = "Resources" }), new Microsoft.Extensions.Logging.LoggerFactory());
             mockService.Setup(x => x.GetService(typeof(IDistributedCache))).Returns(cache);
+            if (dataProtection != null)
+            {
+                mockService.Setup(x => x.GetService(typeof(Microsoft.AspNetCore.DataProtection.IDataProtectionProvider))).Returns(dataProtection);
+            }
             mockHttpContext.Setup(x => x.Request).Returns(mockHttpRequest.Object);
             mockHttpContext.Setup(x => x.RequestServices).Returns(mockService.Object);
             var httpa = new HttpContextAccessor();

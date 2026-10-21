@@ -97,6 +97,29 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost
                     }
                 }
 
+                // the Report page: a menu entry that only the administrator role gets
+                var report = modules.FirstOrDefault(x => x.ClassName == "Report" && x.Area == null);
+                if (report != null)
+                {
+                    var reportFolder = new FrameworkMenu
+                    {
+                        PageName = "Reports",
+                        Children = new List<FrameworkMenu>(),
+                        ShowOnMenu = true,
+                        IsInside = true,
+                        FolderOnly = true,
+                        IsPublic = false,
+                        TenantAllowed = true,
+                        DisplayOrder = 3,
+                        Icon = "layui-icon layui-icon-chart"
+                    };
+                    var reportPage = MakeMenu(report.Actions.First(x => x.MethodName == "Index"), true, 1);
+                    reportPage.PageName = "Gadget report";
+                    reportFolder.Children.Add(reportPage);
+                    Set<FrameworkMenu>().Add(reportFolder);
+                    Set<FunctionPrivilege>().AddRange(reportFolder.FlatTree().Select(x => new FunctionPrivilege { RoleCode = "001", MenuItemId = x.ID, Allowed = true }));
+                }
+
                 SeedMatrixAccounts();
 
                 // menu for the Lab fixture pages (/Lab/*): a folder with one entry per page. The actions are AllRights, so
