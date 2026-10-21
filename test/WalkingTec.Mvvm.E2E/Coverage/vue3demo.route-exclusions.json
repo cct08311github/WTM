@@ -1,0 +1,69 @@
+{
+  "rules": [
+    {
+      "id": "code-generator",
+      "reason": "Code generator (_CodeGen). Marked DebugOnly: it refuses requests unless IsQuickDebug is on, and the test site runs with it off. Its output is checked by the LayUI E2E host, which is generated from the same templates.",
+      "match": { "attribute": "DebugOnly" }
+    },
+    {
+      "id": "workflow-rest-api",
+      "reason": "Elsa workflow REST API controllers. The workflow feature (EnableWorkflow) is off in the Vue3Demo configuration, so these endpoints are not part of the running site.",
+      "match": { "controllerTypePrefix": "Elsa." }
+    },
+    {
+      "id": "workflow-pages",
+      "reason": "Workflow designer pages. Disabled feature, see workflow-rest-api.",
+      "match": { "controller": "_Workflow" }
+    },
+    {
+      "id": "workflow-api-disabled-stub",
+      "reason": "Stub that answers 404 for /_WorkflowApi/* when the workflow feature is disabled; nothing to cover in the browser.",
+      "match": { "controller": "WorkflowApiDisabled" }
+    },
+    {
+      "id": "external-github-lookup",
+      "reason": "Calls api.github.com on behalf of the demo front page. Tests must not depend on the network.",
+      "match": { "key": "_framework/getgithubinfo" }
+    },
+    {
+      "id": "external-github-lookup-stars",
+      "reason": "Calls api.github.com on behalf of the demo front page. Tests must not depend on the network.",
+      "match": { "key": "_framework/getgithubstarts" }
+    },
+    {
+      "id": "multi-site-main-host",
+      "reason": "Needs a configured main host (HasMainHost): cross-site user cache removal and remote entry. The test site is a single site.",
+      "match": { "key": "_framework/remoteentry" }
+    },
+    {
+      "id": "multi-site-cache-removal-account",
+      "reason": "Cross-site user cache removal, see multi-site-main-host.",
+      "match": { "key": "_framework/removeusercachebyaccount" }
+    },
+    {
+      "id": "multi-site-cache-removal-role",
+      "reason": "Cross-site user cache removal, see multi-site-main-host.",
+      "match": { "key": "_framework/removeusercachebyrole" }
+    },
+    {
+      "id": "multi-site-cache-removal-group",
+      "reason": "Cross-site user cache removal, see multi-site-main-host.",
+      "match": { "key": "_framework/removeusercachebygroup" }
+    },
+    {
+      "id": "icon-font-catalog",
+      "reason": "Icon font catalog for the LayUI menu page. The SPA has its own icon selector and never calls it; the catalog is only filled by the LayUI front end, so here the call answers 400.",
+      "match": { "key": "frameworkmenu/geticons" }
+    },
+    {
+      "id": "icon-font-catalog-items",
+      "reason": "Items of the icon font catalog, see icon-font-catalog.",
+      "match": { "key": "frameworkmenu/geticonitems" }
+    },
+    {
+      "id": "server-rendered-ui-helpers",
+      "reason": "Helper endpoints of the shared server rendered UI (_Framework controller: LayUI grid paging and selectors, editor uploads, script language, view file, Blazor language) and the MVC error page. The Vue3 SPA talks to the /api/* controllers only and never calls them; they are covered by the LayUI E2E target.",
+      "match": { "controller": "_Framework" }
+    }
+  ]
+}

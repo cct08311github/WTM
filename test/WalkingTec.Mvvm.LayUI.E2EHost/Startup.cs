@@ -13,7 +13,7 @@ using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
-using WalkingTec.Mvvm.LayUI.E2EHost.Instrumentation;
+using WalkingTec.Mvvm.E2E.Instrumentation;
 using WalkingTec.Mvvm.Mvc;
 
 namespace WalkingTec.Mvvm.LayUI.E2EHost

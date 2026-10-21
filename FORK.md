@@ -159,7 +159,7 @@ git merge --no-ff upstream/dotnet10
 | 檔案 | 修改內容 | Issue |
 |---|---|---|
 | `common.props` | 新增 1 行 `<Import Project=".\fork.props" />` | #30 |
-| `WalkingTec.Mvvm.sln` | 加回 `test/WalkingTec.Mvvm.Admin.Test`；新增 `test/WalkingTec.Mvvm.LayUI.E2EHost`、`test/WalkingTec.Mvvm.E2E` | #18、#270 |
+| `WalkingTec.Mvvm.sln` | 加回 `test/WalkingTec.Mvvm.Admin.Test`；新增 `test/WalkingTec.Mvvm.LayUI.E2EHost`、`test/WalkingTec.Mvvm.E2E`、`test/WalkingTec.Mvvm.E2E.Instrumentation` | #18、#270、#272 |
 | `src/WalkingTec.Mvvm.Core/WTMContext.cs` | remote token 在使用前完整驗證 | #1 |
 | `src/WalkingTec.Mvvm.Core/ConfigOptions/JwtOptions.cs` | `CreateValidationParameters()`／`CreateBearerValidationParameters()`、不安全金鑰檢查、`AllowInsecureKey`、`AllowTokensWithoutExpiry`、熱重載偵測 | #1、#2、#3、#15、#21、#33 |
 | `src/WalkingTec.Mvvm.Core/ConfigOptions/Configs.cs` | `ExposeExceptionDetails`、`BufferJsonBodyOnly`、`WorkflowOptions` | #26、#17、#13 |
@@ -192,7 +192,7 @@ git merge --no-ff upstream/dotnet10
 | `README.md`、`README.zh-CN.md` | 開頭多一段 fork 說明（其餘內容不動，降低同步衝突） | #19 |
 | Dependabot 的依賴升級 | 各 csproj／`package-lock.json` 的版本號 | 見各 `dependencies` PR |
 
-fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder}.cs`、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270）。
+fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder}.cs`、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270、#272）、`test/WalkingTec.Mvvm.E2E.Instrumentation/`（E2E 的路由覆蓋與 hosting startup，#272）。
 
 ## 7. CI、依賴更新與合併
 
@@ -475,7 +475,7 @@ HEADED=1 dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build   # 顯示�
 
 ### 擴充
 
-- 新增被測網站：在 `Infrastructure/Targets/SiteTargets.cs` 新增一個 `SiteTarget`、加一份排除清單；行程啟動、命中紀錄與報告的程式共用。Vue3Demo 要加入時，需要網站端提供同樣的 `E2E:*` 設定（或另做 hosting startup 組件，這樣不必改 `demo/**`）
+- 新增被測網站：在 `Infrastructure/Targets/SiteTargets.cs` 新增一個 `SiteTarget`、加一份排除清單；行程啟動、命中紀錄與報告的程式共用。沒有 E2E 程式碼的網站（Vue3Demo）用 hosting startup 組件取得同樣的路由覆蓋，不必改網站本身，見下一小節
 - 新的 LayUI 頁面測試放在 `Pages/`（page object）與 `Tests/`
 
 ### LayUI 元件測試（#271）
@@ -520,3 +520,63 @@ HEADED=1 dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build   # 顯示�
 **執行時間與 nightly**：目前整套（158 個測試，其中 14 個 `[Ignore]`）約 2 分鐘（本機）。若之後變長，在測試加上 `[TestCategory("nightly")]`；`e2e-smoke` 已用 `--filter "TestCategory!=nightly"` 排除它們，要跑時：`dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build --filter "TestCategory=nightly"`（本 Issue 沒有新增排程 workflow）。
 
 **測試 host 的自備項目**：`_Layout.cshtml` 內有測試用的 `JSONfns`（`RefreshChart` 解析 series 時使用，框架腳本與共用靜態檔沒有提供，下游頁面自行引入），`Views/Home/Index.cshtml` 在 `index` 載入後再載入 `echarts` extension（圖表 TagHelper 使用全域 `echarts`）。
+
+### Vue3Demo（#272）
+
+第二個被測網站是 `demo/WalkingTec.Mvvm.Vue3Demo`（Element Plus SPA 加 ASP.NET Core API），這是唯一的 SPA 參考應用。**不修改 `demo/**` 與 `src/**`**，所有設定都來自行程啟動時的環境變數。
+
+| 專案 | 內容 |
+|---|---|
+| `test/WalkingTec.Mvvm.E2E.Instrumentation` | 測試專用的小型函式庫，只依賴 ASP.NET Core 共用框架。路由清單與命中紀錄的程式從 LayUI E2EHost 原樣搬到這裡（LayUI E2EHost 改為參考它，行為不變）；另含 `IHostingStartup`（`E2EHostingStartup`）與 runtime startup hook。`IsPackable=false` |
+| `test/WalkingTec.Mvvm.E2E`（新增） | `Infrastructure/Targets/Vue3DemoSetup.cs`（目標設定）、`Infrastructure/Vue3Seed.cs`（每次執行一次的種子資料）、`Pages/Vue3/`（page object 與 API 用戶端）、`Support/ExcelTemplate.cs`、`Tests/Vue3/` |
+
+#### 如何不改 demo 就能量測與驅動
+
+- **路由覆蓋**：測試以 `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES=WalkingTec.Mvvm.E2E.Instrumentation` 啟動 Vue3Demo。demo 並不參考這個組件，所以同時設定 `DOTNET_STARTUP_HOOKS=<組件完整路徑>`，由 runtime 先載入該組件，ASP.NET Core 才找得到它。組件加入的服務與 `E2E:RouteInventoryPath`／`E2E:RouteHitLogPath` 的行為，與 LayUI E2EHost 相同
+- **前端**：同一個組件依 `E2E:SpaRoot` 在 demo 的管線最前面加上靜態檔，服務 build 後的 SPA（`ClientApp/dist-e2e`），不複製進 demo 的 `wwwroot`。SPA 用 hash 路由，不需要 SPA fallback
+- **資料庫與金鑰**：`Connections__0__*` 指向每次執行獨立的 SQLite 檔（暫存目錄，結束時刪除）、`JwtOptions__SecurityKey` 每次隨機、`IsQuickDebug=false`、`CorsOptions__EnableAll=false`、`ASPNETCORE_ENVIRONMENT=Production`
+- **管理員密碼**：demo 在 `DataContext.DataInit` 種入固定密碼的 `admin`。網站啟動後，測試對暫存 SQLite 把該帳號的密碼雜湊（demo 預設的 MD5 格式）換成每次隨機產生的密碼，之後第一個登入的測試即驗證格式正確。密碼只存在行程環境與記憶體
+- **種子資料**：demo 只種 `_Admin` 的選單，`SchoolData`／`testvue` 的頁面沒有選單，連管理員呼叫它們的 API 也會得到 403；而 `City` 宣告了資料權限，沒有資料權限的使用者在下拉選單看不到任何城市。`Vue3Seed` 在第一個登入前，用選單管理與資料權限頁面所呼叫的同一組 API 建立這些選單、授予管理員角色（001）所有動作、授予管理員 `City` 的「全部」資料權限，再重新整理選單快取
+
+#### 在本機執行
+
+```bash
+cd demo/WalkingTec.Mvvm.Vue3Demo/ClientApp
+npm ci
+VITE_API_URL= npm run build -- --outDir dist-e2e      # PowerShell：$env:VITE_API_URL=""; npm run build -- --outDir dist-e2e
+cd -
+dotnet build test/WalkingTec.Mvvm.E2E -c Release
+dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build --filter TestCategory=vue3demo
+```
+
+**`VITE_API_URL` 必須是空的**：一般 build 把開發位址 `http://localhost:8598` 編進去，SPA 會呼叫那個位址而不是載入它的網站。輸出放在 `dist-e2e`（已加入 `.gitignore`），不覆蓋 Docker／正式用的 `dist`。測試啟動前會檢查 SPA 是否已 build、是否用了開發位址，不符時直接顯示上面的指令。可用環境變數 `E2E_SPA_ROOT` 指定其他目錄。不加 `--filter` 會同時跑 LayUI 與 Vue3Demo 兩個目標。
+
+#### 測試內容
+
+測試語言為英文（SPA 預設中文；啟動時把 localStorage 的語言設定改為英文並重新載入，語系切換另有測試）。Vue3Demo 的使用者管理、學校與測試頁面有些標籤沒有做在地化，測試用其原有的中文。每個測試用唯一名稱建立資料、結束時刪除。
+
+| 檔案 | 內容 |
+|---|---|
+| `Vue3AuthTests` | 登入（成功、錯誤密碼、不存在的租戶代碼）、未登入的路由導向登入、登出、語系切換（保留於重新載入後）、由標頭變更密碼 |
+| `Vue3AdminTests` | 群組（新增、修改、詳細、刪除、子群組、欄位驗證、批次刪除、匯出、匯入）、角色（含動作權限對話框、匯入）、選單（外部網址選單的新增、修改、詳細、重新整理、刪除）、資料權限（群組與使用者）、租戶（新增、修改、詳細、刪除、由標頭切換）、操作日誌（搜尋與詳細）、使用者列表（角色、群組、照片）、四個列表的匯出 |
+| `Vue3SchoolDataTests` | `City`、`School`、`SchoolVue3` 的新增、修改、詳細、刪除、批次刪除、匯入、匯出；`SchoolVue3` 含照片與附件上傳、附件下載 |
+| `Vue3ApiTests` | 沒有畫面（或畫面無法到達）的 API：cookie 登入、換發 token、註冊、下拉選單、使用者 API 的完整流程（含密碼）、各模組匯出、檔案 API、`Major`／`Student` 的新增、關聯、搜尋、匯出、匯入、刪除 |
+
+匯入檔以網站自己提供的 Excel 範本加上資料列產生（`ExcelTemplate`，不需要試算表函式庫），所以範本改了、欄位順序變了，測試會先發現。
+
+#### 路由覆蓋
+
+排除清單：`test/WalkingTec.Mvvm.E2E/Coverage/vue3demo.route-exclusions.json`（每條都有 `id` 與 `reason`）。排除的是：程式碼產生器（`DebugOnly`）、未啟用的 workflow、呼叫外部網站的 action、需要主站台的 action、LayUI 圖示目錄，以及伺服器端渲染 UI 專用的 `_Framework` 輔助 action（SPA 只呼叫 `/api/*`）。目前基線：共 222 個 action，排除 70，可計入 152，全部命中（100%）。LayUI 目標的數字見其自己的報告。仍只記錄基線，**不因覆蓋率低而失敗**。
+
+#### CI 與執行時間
+
+`e2e-smoke` 在安裝 Node（npm 快取以 `package-lock.json` 為 key）後執行 `npm ci` 與 SPA build，再 build 與執行兩個目標；報告 artifact `e2e-route-coverage` 內含兩個目標的報告。兩個目標合計約 1.5 分鐘（Vue3Demo 有 40 個執行中的測試，另有 8 個 `Ignore`），遠低於 12 分鐘，所以不另設 `nightly` 分類；之後若有長時間測試，用 `[TestCategory("nightly")]` 標記並以 `--filter TestCategory!=nightly` 排除。
+
+#### 已知問題（`[Ignore("#N: ...")]`）
+
+測試發現的產品問題不在這個 PR 修，對應的測試以 `[Ignore("#N: ...")]` 保留預期行為（修好後移除 `Ignore` 即可）。列出方式：`grep -rn 'Ignore("#' test/WalkingTec.Mvvm.E2E/Tests`。
+
+- #288：匯入檔含無效資料列時，回應是「Memory stream is not expandable.」，而不是列出錯誤並提供錯誤檔
+- #290：使用者管理頁呼叫 `/api/_Admin/FrameworkUser/*`（與實際路由 `/api/_FrameworkUser/*` 不符）；`City`／`SchoolVue3` 頁的匯出按鈕與資料權限列表的詳細按鈕檢查了不存在的權限鍵而不顯示；學校頁匯出勾選列不會下載；租戶列表的名稱欄為空
+- #291：只符合子群組的搜尋回傳空列表（這個 Issue 也包含群組列表的備註欄一律為空，該項沒有對應的測試）
+- 沒有對應測試的觀察：缺漏的 i18n 鍵、`FrameworkMenu/GetIcons` 回 400、刪除選單後選單快取未更新 → #292；匯出時以 `SetFormat` 格式化的欄位輸出型別名稱 → #289

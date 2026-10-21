@@ -3,7 +3,7 @@
   <!--
     Browser based end-to-end tests (Playwright for .NET, MSTest, Chromium).
     The site under test is started as a separate process on a random port, see Infrastructure/SiteProcess.cs.
-    Targets: LayUI.E2EHost today; Vue3Demo can be added as a second SiteTarget (Infrastructure/Targets).
+    Targets (Infrastructure/Targets): LayUI.E2EHost (#270) and Vue3Demo (#272).
     Run locally: see the "E2E tests" section of FORK.md.
   -->
   <PropertyGroup>
@@ -19,6 +19,8 @@
     <PackageReference Include="MSTest.TestAdapter" Version="3.11.1" />
     <PackageReference Include="MSTest.TestFramework" Version="3.11.1" />
     <PackageReference Include="Microsoft.Playwright.MSTest" Version="1.63.0" />
+    <!-- installs the generated administrator password into the throw-away SQLite database of the Vue3Demo target -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.13" />
   </ItemGroup>
 
   <ItemGroup>
@@ -27,6 +29,9 @@
       they run in their own process (WTM keeps static state and scans assemblies at startup).
     -->
     <ProjectReference Include="..\WalkingTec.Mvvm.LayUI.E2EHost\WalkingTec.Mvvm.LayUI.E2EHost.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\demo\WalkingTec.Mvvm.Vue3Demo\WalkingTec.Mvvm.Vue3Demo.csproj" ReferenceOutputAssembly="false" />
+    <!-- hosting startup assembly that instruments the Vue3Demo (loaded by path, see Vue3DemoSetup) -->
+    <ProjectReference Include="..\WalkingTec.Mvvm.E2E.Instrumentation\WalkingTec.Mvvm.E2E.Instrumentation.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
