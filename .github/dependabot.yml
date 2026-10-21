@@ -16,6 +16,20 @@ updates:
       timezone: Asia/Taipei
     open-pull-requests-limit: 5
     groups:
+      # TypeScript, typescript-eslint, ESLint and its Vue parser/plugin constrain
+      # each other's versions (peer ranges), so a single one cannot be bumped
+      # alone (#164: #109 / #106 / #181 / #183). Group them including majors.
+      # Must stay above vue3demo-clientapp: a dependency goes to the first
+      # group it matches.
+      vue3demo-lint-toolchain:
+        applies-to: version-updates
+        patterns:
+          - "typescript"
+          - "@typescript-eslint/*"
+          - "eslint"
+          - "eslint-plugin-*"
+          - "@eslint/*"
+          - "vue-eslint-parser"
       vue3demo-clientapp:
         applies-to: version-updates
         patterns: ["*"]
