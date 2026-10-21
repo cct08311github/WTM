@@ -338,3 +338,28 @@ demo（`demo/WalkingTec.Mvvm.Vue3Demo`）的 `AccountController.Reg` 是匿名�
 - **保留的 public API**：`WorkflowOptions.InternalCallBaseAddress`、`WorkflowApiSecurity.ResolveSelfCall`／`SelfCallTarget`／`IsAllowedHost`／`IsExplicitHostList`／`NormalizeInternalCallBaseAddress`／`IsSafeTarget`／`FilterAuthCookie` 沒有刪除（下游可能引用，刪除是 breaking）。它們標註 `[Obsolete]`（`error: false`，只有編譯警告），設定檔裡的 `InternalCallBaseAddress` 仍可綁定，但不再有作用。10.0.0.6 新增的 `WorkflowActivitiesGuard.InternalSecretHeader`、`InternalClientName`、`AddInternalHttpClient`、`WithInternalSecret`、`IsValidInternalSecret`、`IsInternalActivitiesRequest` 只存在於 10.0.0.6，已隨密鑰機制移除
 - **回滾方式**：退回前一個 fork 版本（`WalkingTec.Mvvm.Mvc`）。沒有可選開關：匿名取得全部角色與群組是資訊外洩，不提供恢復匿名存取的設定
 - **不在範圍**：其餘 Elsa `/v1/*` 管理端點（例如 `/v1/workflow-definitions`）仍由 `WorkflowOptions:RequireAuthentication` 控制，行為不變；HTTP 活動端點、signal 端點、Swagger 也不在範圍。啟動時的 Warning 仍會提醒 `RequireAuthentication` 沒有開啟
+
+## 16. 移除 `echarts.common.min.js`；LayUI demo 的 echarts 升到 6.1.0，下游須自行更新（#189）
+
+**移除**：`src/WalkingTec.Mvvm.Mvc/echarts.common.min.js`（echarts 4.0.4 common build）沒有被 csproj 列入、也沒有任何程式碼或 view 引用，`dotnet pack` 的 nupkg 本來就不含它。移除後 nupkg 內容不變，不是 breaking。
+
+**LayUI demo 升級**：`demo/WalkingTec.Mvvm.Vue3Demo/wwwroot/layuiadmin/lib/extend/echarts.js` 由 4.x 升到官方 echarts 6.1.0（`dist/echarts.min.js`，維持 layuiadmin 原本的 `layui.define('echartsTheme', …)` 外殼，`config.js` 的 `extend` 設定不用改）。原因：
+
+- 升級以修補已知漏洞：GHSA-fgmj-fm8m-jvvx（echarts，修補版本 6.1.0）與 GHSA-fhv8-fx5f-7fxf（echarts 內建的 zrender，4.x 線沒有修補版）。細節請見各 advisory
+- `ChartTagHelper`／`framework_layui.js` 的圖表程式碼本來就是照 echarts 5 的 API 寫的（`RefreshChart` 的 `setOption(…, {replaceMerge:'series'})`、散點圖的 dataset `filter` transform），4.x 沒有這些 API
+
+**下游須知**：
+
+- `layuiadmin/lib/extend/echarts.js` 是 demo 的範本檔，**不會隨 NuGet 套件發佈**，也沒有任何機制會把它帶到下游。自行複製 layuiadmin 的網站請**自行更新網站上的 echarts**（建議 ≥ 6.1.0，至少 ≥ 5.2.1 才修掉 zrender 那筆）
+- `framework_layui.js` 的圖表程式碼**需要 echarts ≥ 5.0**。網站仍是 4.x 時，`wt:chart` 的散點圖不會畫出任何資料（`t.count is not a function`），查詢後刷新也不會替換掉舊的 series（4.x 忽略 `replaceMerge`）。這是升級前就存在的問題，不是這次引入的
+- `framework_layui.js` 的 `RefreshChart` 使用的 `JSONfns` 不在本 repo 內，需由宿主網站提供
+
+**echarts 6 的外觀變化**（升級 demo 後可見，`wt:chart` 的資料與互動行為相同）：
+
+- 預設色盤換新（4.x 的 `#c23531`／`#2f4554`… 改為 `#5470c6`／`#91cc75`…）
+- 標題預設置中；圖例（legend）預設移到圖表底部；tooltip 為白底圓角（原本半透明深色）
+- 座標軸名稱與標籤預設避免溢出與重疊
+- **內建 `'light'` 主題已移除**（改為 `echarts/theme/rainbow.js`），`ChartTagHelper` 的 `Theme=light` 會被當成未註冊主題而用預設主題（不報錯）。6.x 內建的只有 `default` 與 `dark`；`vintage`、`macarons`、`roma` 等要自行載入 `echarts/theme/*.js`（`chalk`、`essos`、`walden`、`westeros`、`wonderland` 連 npm 套件裡都沒有）
+- 想維持 5.x 的外觀：載入 npm 套件裡的 `echarts/theme/v5.js`，並用 `echarts.init(dom, 'v5')` 或 `registerTheme` 套用；demo 不預設套用，維持 6 的新外觀
+
+`echartsTheme.js`（layuiadmin 的 4.x 風格主題，只匯出主題物件）不需要修改：用 echarts 6 的 `registerTheme('echartsTheme', layui.echartsTheme)` 註冊並套用，可以正常渲染、沒有錯誤。
