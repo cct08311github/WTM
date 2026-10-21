@@ -1,0 +1,3 @@
+# runtime database of a manual run (the E2E tests use a temporary file)
+*.db
+*.db-*

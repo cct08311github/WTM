@@ -1,0 +1,18 @@
+﻿@model WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.GadgetVMs.GadgetVM
+@inject IStringLocalizer<Program> Localizer;
+
+<wt:form vm="@Model">
+<wt:row items-per-row="ItemsPerRowEnum.Two">
+<wt:textbox field="Entity.Name" />
+<wt:textbox field="Entity.Code" />
+<wt:combobox field="Entity.Category" />
+<wt:textbox field="Entity.Price" />
+<wt:datetime field="Entity.LaunchDate" />
+<wt:combobox field="Entity.InStock" />
+</wt:row>
+    <wt:hidden field="Entity.ID" />
+    <wt:row align="AlignEnum.Right">
+        <wt:submitbutton />
+        <wt:closebutton />
+    </wt:row>
+</wt:form>
