@@ -10,6 +10,10 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
+## 未发布
+
+* **修改（BREAKING，安全）：**   `/v1/designer/*` 现在一律要求已登录用户（#225）。影响：启用 workflow 且未登录的调用方
+
 ## 10.0.0.7(2026-10-21)
 
 * **修改（BREAKING，小）：**   10.0.0.6 新增的 `WorkflowActivitiesGuard` 内部调用相关成员随 #216 移除：`IsPublicActivitiesRequest`、`IsInternalActivitiesRequest`、`AddInternalHttpClient`、`InternalClientName` 及内部密钥的验证方法（改用 `IsActivitiesListRequest`）。它们只存在于 10.0.0.6，仅供框架内部使用；若下游直接引用，编译时会出错，请改为不引用（`/v1/activities` 的处理由 `WtmMiddleware` 自动完成）

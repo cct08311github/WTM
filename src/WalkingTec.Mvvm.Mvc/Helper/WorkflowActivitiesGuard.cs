@@ -11,7 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace WalkingTec.Mvvm.Mvc
 {
     /// <summary>
-    /// Guards the workflow designer's activity list (<c>/v1/activities</c>, #208, #216).
+    /// Guards the workflow designer's activity list (<c>/v1/activities</c>, #208, #216) and the designer endpoints (<c>/v1/designer/*</c>, #225).
     /// Every form of the endpoint (any API version segment, trailing slash, sub path, and the former <c>?inneruse=1</c> form) requires a
     /// signed-in user whatever WorkflowOptions:RequireAuthentication says. Since 10.0.0.7 WtmMiddleware answers the list in-process
     /// (<see cref="WorkflowActivitiesDescriber"/>), so there is no internal call any more and no internal form that could be let through.
@@ -20,6 +20,7 @@ namespace WalkingTec.Mvvm.Mvc
     {
         // Elsa routes v{version:apiVersion}/activities, so the version segment may be v1, v1.0, v01 ... (any case)
         private static readonly Regex ActivitiesPathRegex = new Regex(@"^/+v[^/]*/activities(/|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        private static readonly Regex DesignerPathRegex = new Regex(@"^/+v[^/]*/designer(/|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
         private static readonly Regex ActivitiesListPathRegex = new Regex(@"^/+v[^/]*/activities/?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
         /// <summary>
@@ -30,6 +31,16 @@ namespace WalkingTec.Mvvm.Mvc
         {
             var path = request?.Path.Value;
             return path != null && ActivitiesPathRegex.IsMatch(path);
+        }
+
+        /// <summary>
+        /// True for /v{any}/designer and anything below it (#225), matched the same way as <see cref="IsActivitiesRequest"/>:
+        /// case-insensitive, any version segment, trailing slash, sub path and leading extra slashes.
+        /// </summary>
+        public static bool IsDesignerRequest(HttpRequest request)
+        {
+            var path = request?.Path.Value;
+            return path != null && DesignerPathRegex.IsMatch(path);
         }
 
         /// <summary>
