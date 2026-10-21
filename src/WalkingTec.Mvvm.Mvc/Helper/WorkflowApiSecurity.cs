@@ -195,6 +195,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// <summary>
         /// Result of <see cref="ResolveSelfCall"/>.
         /// </summary>
+        [Obsolete("Since 10.0.0.7 /v1/activities is answered in-process and no longer makes an internal HTTP call; this member is no longer used by the framework and will be removed in a future major version.", false)]
         public class SelfCallTarget
         {
             /// <summary>Base address (scheme://host) used for the internal call.</summary>
@@ -218,6 +219,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// Normalizes WorkflowOptions:InternalCallBaseAddress (trim, drop trailing '/'). Returns null when not set;
         /// <paramref name="invalid"/> is true when it is set but not an absolute http/https URI (treated as not set).
         /// </summary>
+        [Obsolete("Since 10.0.0.7 /v1/activities is answered in-process and no longer makes an internal HTTP call; this member is no longer used by the framework and will be removed in a future major version.", false)]
         public static string NormalizeInternalCallBaseAddress(string value, out bool invalid)
         {
             invalid = false;
@@ -241,6 +243,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// <summary>
         /// True when AllowedHosts is non-blank and none of its entries contains a wildcard.
         /// </summary>
+        [Obsolete("Since 10.0.0.7 /v1/activities is answered in-process and no longer makes an internal HTTP call; this member is no longer used by the framework and will be removed in a future major version.", false)]
         public static bool IsExplicitHostList(string allowedHosts)
         {
             if (string.IsNullOrWhiteSpace(allowedHosts))
@@ -252,6 +255,7 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         /// <summary>
+        /// Obsolete since 10.0.0.7: /v1/activities no longer uses this (#216), nothing in the framework calls it.
         /// Decides where the internal call for the workflow activities goes and which credentials it carries.
         /// WorkflowOptions:InternalCallBaseAddress set (valid absolute http/https URI): it is always the target, regardless of the Host header;
         /// with RequireAuthentication off no headers are sent, with it on it takes precedence over Domains:server and AllowedHosts as the trusted target.
@@ -261,6 +265,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// the configured "server" domain, or, when none is configured, to the request host if it is listed (non-wildcard)
         /// in AllowedHosts. Credentials are never sent over plain http to a non-loopback host.
         /// </summary>
+        [Obsolete("Since 10.0.0.7 /v1/activities is answered in-process and no longer makes an internal HTTP call; this member is no longer used by the framework and will be removed in a future major version.", false)]
         public static SelfCallTarget ResolveSelfCall(Configs configs, string allowedHosts, string scheme, string host, string authorization, string cookieHeader)
         {
             var requestBase = $"{scheme}://{host}";
@@ -312,6 +317,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// <summary>
         /// True when the host (with or without port) equals a non-wildcard entry of the semicolon separated AllowedHosts value.
         /// </summary>
+        [Obsolete("Since 10.0.0.7 /v1/activities is answered in-process and no longer makes an internal HTTP call; this member is no longer used by the framework and will be removed in a future major version.", false)]
         public static bool IsAllowedHost(string allowedHosts, string host)
         {
             if (string.IsNullOrWhiteSpace(allowedHosts) || string.IsNullOrWhiteSpace(host))
@@ -354,6 +360,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// <summary>
         /// https is always acceptable; plain http only for loopback hosts.
         /// </summary>
+        [Obsolete("Since 10.0.0.7 /v1/activities is answered in-process and no longer makes an internal HTTP call; this member is no longer used by the framework and will be removed in a future major version.", false)]
         public static bool IsSafeTarget(string address)
         {
             if (Uri.TryCreate(address, UriKind.Absolute, out var uri) == false)
@@ -374,6 +381,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// <summary>
         /// Keeps only the WTM auth cookie (including its chunks, named {name}C1, {name}C2, ...) from a raw Cookie header.
         /// </summary>
+        [Obsolete("Since 10.0.0.7 /v1/activities is answered in-process and no longer makes an internal HTTP call; this member is no longer used by the framework and will be removed in a future major version.", false)]
         public static string FilterAuthCookie(string cookieHeader, string authCookieName)
         {
             if (string.IsNullOrEmpty(cookieHeader) || string.IsNullOrEmpty(authCookieName))
