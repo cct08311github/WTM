@@ -134,7 +134,6 @@
     import fileapi from '/@/api/file'
     import '/@/theme/tableTool.scss';
     import { AxiosResponse } from 'axios';
-    import { VueDevToolsIDs } from '@intlify/vue-devtools';
     import printJs from 'print-js';
     import other from '/@/utils/other';
 
