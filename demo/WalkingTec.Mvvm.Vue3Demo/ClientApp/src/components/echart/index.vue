@@ -58,11 +58,39 @@ const props = defineProps({
 });
    
     let chart = null as any;
-    let repStr = '';
-    let replace = {} as any;
     let baseOption = {} as any;
-    let requestOption = {} as any;
 
+// 后端 ToChartData 以字符串形式返回 scatter 系列的 symbolSize（形如
+// "function(data) {return data[2] / (max / radius)}"）。这里只按固定格式取出两个数字，
+// 在前端还原成固定的函数，不执行响应中的任何内容；格式不符则忽略该字段。
+const SYMBOL_SIZE_PATTERN = /^function\(data\)\s*\{return data\[2\]\s*\/\s*\(\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*\)\s*\}$/;
+const restoreSymbolSize = (raw: any) => {
+    if (typeof raw === 'number') {
+        return raw;
+    }
+    const m = typeof raw === 'string' ? SYMBOL_SIZE_PATTERN.exec(raw.trim()) : null;
+    if (!m) {
+        return undefined;
+    }
+    const max = Number(m[1]);
+    const radius = Number(m[2]);
+    return (data: any) => data[2] / (max / radius);
+};
+
+// 按 type 属性为 series 中占位的 charttype 填入实际图表类型
+const seriesTypeOption = () => {
+    const op = {} as any;
+    if (props.type == 'piehollow') {
+        op.type = 'pie';
+        op.radius = ['40%', '70%'];
+    } else {
+        op.type = props.type;
+    }
+    if (props.type == 'line') {
+        op.smooth = props.opensmooth;
+    }
+    return op;
+};
 
 const doSearch = (api: any = null, para: any = null) => {
     loading.value = true;
@@ -77,91 +105,72 @@ const doSearch = (api: any = null, para: any = null) => {
         method: 'post',
         data: para,
     }).then((res: any) => {
-        let resString = JSON.stringify(res);        
-        for (let key in replace) {
-            const reg = new RegExp(key, "g");
-            resString = resString.replace(reg, replace[key]);
-        }
-        requestOption = JSON.parse(resString);
+        const requestOption = Object.assign({}, res) as any;
         requestOption.dataset = JSON.parse(requestOption.dataset);
         requestOption.series = JSON.parse(requestOption.series);
         requestOption.legend = JSON.parse(requestOption.legend);
-        if(requestOption.series){
-            for(let i=0;i<requestOption.series.length;i++){
-                requestOption.series[i].symbolSize = new Function('return '+requestOption.series[i].symbolSize);
-            }
+        if (Array.isArray(requestOption.series)) {
+            const typeOption = seriesTypeOption();
+            requestOption.series = requestOption.series.map((item: any) => {
+                const s = Object.assign({}, item);
+                if (s.type === 'charttype') {
+                    Object.assign(s, typeOption);
+                }
+                const symbolSize = restoreSymbolSize(s.symbolSize);
+                if (symbolSize === undefined) {
+                    delete s.symbolSize;
+                } else {
+                    s.symbolSize = symbolSize;
+                }
+                return s;
+            });
         }
-        const op = Object.assign({}, requestOption, baseOption);        
+        const op = Object.assign({}, requestOption, baseOption);
         chart.setOption(op);
         loading.value = false;
         return true;
     })
 }
 const setBase = () => {
-    var tooltip = "";
-    if (props.showtooltip == true) {
-        tooltip = "tooltip: {},";
-        if (props.type == "scatter") {
-            tooltip = `tooltip:{
-                    formatter: function (params) {
-                            var xl = '${props.namex}';
-                            var yl = '${props.namey}';
-                            var al = '${props.nameaddition}';
-                            var cl = '${props.namecategory}';
-                            return params.seriesName + ' <br/>'
-                                + xl + params.value[0] + ' <br/>'
-                                + yl + params.value[1] + ' <br/>'
-                                + al + params.value[2] + ' <br/>'
-                                + cl + params.value[3] + ' <br/>';
-                        },}, `;
-        }
-        if (props.type == "line") {
-            tooltip = "tooltip: {trigger: 'axis'},";
-        }
-    }
-    var legend = "";
-    if (props.showlegent == false) {
-        legend = `legend: {show: false},`;
-    }
-    repStr = '';
-    if (props.type == 'piehollow')
-        repStr = `\\\"type\\\":\\\"pie\\\",\\\"radius\\\": ["40%", "70%"]`;
-    else
-        repStr = `\\\"type\\\":\\\"${props.type}\\\"`;
-    if (props.type == 'line')
-        repStr += `,\\\"smooth\\\": ${props.opensmooth}`;
-    replace = { '\\\\\\\"type\\\\\\\":\\\\\\\"charttype\\\\\\\"': repStr }
-
-    var xAxis = "";
-    var yAxis = "";
-    if (props.type != "pie" && props.type != "piehollow") {
-        if (props.ishorizontal == false) {
-            xAxis = `xAxis: {name:'${props.namex}',type: 'category'},`;
-            yAxis = `yAxis: {name:'${props.namey}'},`;
-        }
-        else {
-            xAxis = `xAxis: {name:'${props.namey}'},`;
-            yAxis = `yAxis: {name:'${props.namex}',type: 'category'},`;
-        }
-
-        if (props.type == "scatter") {
-            xAxis = `xAxis: { name:'${props.namex}',type: 'value',splitLine: { lineStyle: { type: 'dashed'} } },`;
-            yAxis = `yAxis:{name:'${props.namey}',splitLine:{lineStyle:{type: 'dashed'} },scale: true},`;
-        }
-    }
-
-    var opTitle = '';
+    const op = {} as any;
     if (props.title != undefined) {
-        opTitle = `title:{text: '${props.title}'},`
+        op.title = { text: props.title };
     }
-    var str = `{
-    ${opTitle}
-    ${legend}
-    ${tooltip}
-    ${xAxis}
-    ${yAxis}
-                }`;
-    baseOption = eval("(" + str + ")");
+    if (props.showlegent == false) {
+        op.legend = { show: false };
+    }
+    if (props.showtooltip == true) {
+        if (props.type == "scatter") {
+            op.tooltip = {
+                formatter: (params: any) => {
+                    // 数据来自后端，输出前做 HTML 转义
+                    const enc = (v: any) => echarts.format.encodeHTML(String(v));
+                    return enc(params.seriesName) + ' <br/>'
+                        + props.namex + enc(params.value[0]) + ' <br/>'
+                        + props.namey + enc(params.value[1]) + ' <br/>'
+                        + props.nameaddition + enc(params.value[2]) + ' <br/>'
+                        + props.namecategory + enc(params.value[3]) + ' <br/>';
+                },
+            };
+        } else if (props.type == "line") {
+            op.tooltip = { trigger: 'axis' };
+        } else {
+            op.tooltip = {};
+        }
+    }
+    if (props.type != "pie" && props.type != "piehollow") {
+        if (props.type == "scatter") {
+            op.xAxis = { name: props.namex, type: 'value', splitLine: { lineStyle: { type: 'dashed' } } };
+            op.yAxis = { name: props.namey, splitLine: { lineStyle: { type: 'dashed' } }, scale: true };
+        } else if (props.ishorizontal == false) {
+            op.xAxis = { name: props.namex, type: 'category' };
+            op.yAxis = { name: props.namey };
+        } else {
+            op.xAxis = { name: props.namey };
+            op.yAxis = { name: props.namex, type: 'category' };
+        }
+    }
+    baseOption = op;
 }
 onMounted(() => {
     const c = markRaw(echarts.init(chartRef.value));
