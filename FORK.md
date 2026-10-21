@@ -477,3 +477,46 @@ HEADED=1 dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build   # 顯示�
 
 - 新增被測網站：在 `Infrastructure/Targets/SiteTargets.cs` 新增一個 `SiteTarget`、加一份排除清單；行程啟動、命中紀錄與報告的程式共用。Vue3Demo 要加入時，需要網站端提供同樣的 `E2E:*` 設定（或另做 hosting startup 組件，這樣不必改 `demo/**`）
 - 新的 LayUI 頁面測試放在 `Pages/`（page object）與 `Tests/`
+
+### LayUI 元件測試（#271）
+
+在 E2EHost 加上 `Lab` 系列測試頁（只供測試，資料全為合成），用 Playwright 逐一操作 `src/WalkingTec.Mvvm.TagHelpers.LayUI` 的 TagHelper，並量測 `framework_layui.js` 的 JS 覆蓋率。
+
+**Lab 頁面**（`Controllers/LabController.cs`、`Views/Lab/*`；側邊選單的「Lab」資料夾，`[AllRights]`，不需另外授權）：
+
+| 頁面 | 涵蓋的 TagHelper |
+|---|---|
+| `Inputs` | `wt:form`、`wt:fieldset`、`wt:textbox`（含密碼）、`wt:textarea`、`wt:richtextbox`、`wt:hidden`、`wt:display`、`wt:slider`（單值與範圍）、`wt:colorpicker`、`wt:submitbutton`、`wt:resetbutton`、`wt:linkbutton`（`post-current-form`） |
+| `Choices` | `wt:checkbox`、`wt:radio`、`wt:switch`、`wt:combobox`（列舉、清單、連動、`item-url`）、`wt:datetime`（日期、日期時間、區間）、`wt:transfer`；`checkbox`／`radio` 也測 `item-url`（`ff.LoadComboItems`） |
+| `Pickers` | `wt:selector`（單選、多選、帶參數）、`wt:upload`（一般檔案、圖片）、`wt:multiupload` |
+| `Grid` | `wt:searchpanel`、`wt:grid`（分頁、排序、搜尋、列按鈕、欄內連結、匯出、工具列下載、欄位篩選） |
+| `Detail` | 可編輯的 `wt:grid`（`use-local-data`、`AddRow`／`RemoveRow`、文字、下拉、日期儲存格） |
+| `Layout` | `wt:container`、`wt:row`、`wt:card`、`wt:panel`、`wt:quote`、`wt:code`、`wt:image`、`wt:tab` 與四個子標籤、`wt:button`、`wt:linkbutton`、`wt:flowinfo` |
+| `Charts` | `wt:chart`（長條、折線、圓餅、散點） |
+| `Trees` | `wt:tree`（單選、多選、`item-url`）、`wt:treecontainer`（點擊、展開、載入頁面） |
+
+另有 Gadget 模組的批次修改、Excel 匯入與範本下載，以及 `/_Framework/*` 端點（`FrameworkEndpointTests`：沒有按鈕入口的端點用已登入或匿名的 HTTP 請求測）。`wt:ueditor` 只檢查伺服器輸出（UEditor 的 script 不在共用靜態檔內）。`wt:flowinfo` 在沒有 workflow 的 host 只能測到空的時間軸。
+
+**特殊字元**：Lab 的測試資料含需要 HTML／JS 編碼的字元（角括號、`&`、單雙引號、反斜線、`</script>`、樣板分隔符與非 ASCII 文字），每個「看起來像標籤」的片段都帶 `id="e2e-probe…"`。測試檢查：文字原樣顯示、原樣送回伺服器（`/Lab/LastPost` 回傳瀏覽器實際送出的表單），而且沒有任何元素是由這些文字產生的。
+
+**`UIOptions:EncodeHtmlContent`**：測試 host 預設開（`appsettings.json`），Lab 的顯示與編碼測試都以開啟為前提；預設值（關）下，標題、標籤、按鈕文字與表格儲存格會原樣輸出，另有測試固定這個相容行為（`LayUiHtmlEncodingOptionTests`）。測試要暫時切換時用 `SetHtmlContentEncodingAsync(bool)`（呼叫 host 的 `/Lab/HtmlEncoding`，測試結束自動還原）。另外要留意：框架在綁定請求時，預設會把字串先做 HTML 編碼（`StringIgnoreLTGTBinder`），所以經表單存進資料庫的值本來就是編碼過的；`Gadget` 這類資料用預設設定（關）顯示才正確，Lab 的種子資料則是未編碼的原始文字。
+
+**待處理（`[Ignore("#N: …")]`）**：下列測試寫的是「應有的行為」，目前因產品行為不符而略過，修正後移除 `[Ignore]` 即可。清單與原因都在各測試的 `Ignore` 訊息：
+- `checkbox`／`radio`／`combobox`／`transfer`／`tree`／`treecontainer` 的選項文字含標記字元時，由元件寫入為 HTML（元素被建立）（#279）
+- `wt:panel` 的標題沒有經過其他標題（card、tab、fieldset、button）使用的 HTML 編碼（#279）
+- 可編輯表格的儲存格文字含單引號，在表格重繪（新增、刪除列）後被截斷（#279）
+- `wt:transfer` 移動任一項目後，只送出自頁面顯示後移動的項目，原本已選的值遺失（#280）
+- `wt:slider` 不依綁定欄位的值設定把手位置（只看 `default-value`）（#281）
+- `wt:multiupload` 的刪除鈕呼叫的 `/api/_file/DeletedFile/{id}` 沒有任何 controller 提供（#282）
+- `ff.clearSelector` 找不到 selector 的隱藏 id 欄位（容器名稱寫成 `id_Container`）（#283）
+- `_Framework/UpdateModelProperty` 回傳 Success，但資料沒有存入（#284）
+- 匯出 Excel 會移除儲存格中看起來像 HTML 標籤的文字（#285）
+- `EncodeHtmlContent` 開啟時，經表單存入（已被框架編碼）的值在表格會被再編碼一次（#286）
+
+**JS 覆蓋率**（`framework_layui.js`，`/_js/framework_layui.js`）：Playwright for .NET 沒有 `page.Coverage`，所以測試經 CDP session 呼叫 `Profiler.startPreciseCoverage`／`takePreciseCoverage`（呼叫次數＋區塊範圍），在每個測試結束時收集，整個 run 彙總。函式只要有任何一個測試呼叫過就算涵蓋。輸出 `TestResults/e2e/js-coverage/framework_layui.report.md|json`（函式、具名函式、字元範圍三種數字，與未被呼叫的函式清單），CI 放進 step summary 與 artifact `e2e-js-coverage`。**只記錄基線，不因數字低而失敗。** 會整頁重新載入的測試（例如切換語言）要在重新載入前呼叫 `FlushJsCoverageAsync()`，否則舊文件的資料會遺失。目前基線：函式 86／95（90.5%），具名函式 65／69（94.2%），字元範圍 72.6%。沒有被呼叫的 9 個：舊瀏覽器用的 `String.startsWith` 補丁、`LoadPage` 開新視窗的分支、`OpenDialog2` 的失敗回呼、對話框內圖表縮放的三個回呼，以及舊的 `changeComboIcon`、`refreshcombobox`（後者依賴不在靜態檔內的 `layui.formSelects`）。
+
+**路由覆蓋**：所有 `_Framework` 端點與 Gadget 動作都有測試命中；排除清單沒有新增項目（沒有「不可達」的端點，需要外部網路、多站台或 `DebugOnly` 的維持原排除）。`SiteProcess.AssertRouteHitAsync` 讓測試可以直接檢查命中紀錄（批次刪除的測試用它確認 `gadget/batchdelete`、`gadget/dobatchdelete` 都被記錄）。基線 16／42 個可測動作，現在 70／70（含 28 個 Lab 測試用動作；原本的 42 個全部命中）。
+
+**執行時間與 nightly**：目前整套（158 個測試，其中 14 個 `[Ignore]`）約 2 分鐘（本機）。若之後變長，在測試加上 `[TestCategory("nightly")]`；`e2e-smoke` 已用 `--filter "TestCategory!=nightly"` 排除它們，要跑時：`dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build --filter "TestCategory=nightly"`（本 Issue 沒有新增排程 workflow）。
+
+**測試 host 的自備項目**：`_Layout.cshtml` 內有測試用的 `JSONfns`（`RefreshChart` 解析 series 時使用，框架腳本與共用靜態檔沒有提供，下游頁面自行引入），`Views/Home/Index.cshtml` 在 `index` 載入後再載入 `echarts` extension（圖表 TagHelper 使用全域 `echarts`）。

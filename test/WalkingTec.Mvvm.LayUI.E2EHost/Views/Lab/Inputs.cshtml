@@ -1,0 +1,29 @@
+@model WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs.LabFormVM
+@inject IStringLocalizer<Program> Localizer;
+
+<div id="lab-inputs">
+<wt:form vm="@Model" url="/Lab/Save?page=Inputs" label-width="120">
+  <wt:fieldset title="@Model.SpecialText" field-set-style="Simple">
+    <wt:textbox field="Title" empty-text="Type a title" required="true" />
+    <wt:textbox field="Secret" is-password="true" padding-text="@Model.SpecialText" />
+    <wt:textarea field="Memo" empty-text="Type a memo" />
+    <wt:richtextbox field="Rich" height="120" />
+    <wt:hidden field="Keep" />
+    <wt:display field="Shown" label-text="Shown" />
+    <wt:display field="ShownAmount" label-text="Amount" format="0.00" />
+  </wt:fieldset>
+  <wt:fieldset title="Slider and colour">
+    <wt:slider field="Level" min="0" max="100" step="5" show-step="true" input="true" />
+    <wt:slider field="Low" field1="High" range="true" min="0" max="100" />
+    <wt:colorpicker field="Color" />
+  </wt:fieldset>
+  <wt:row align="AlignEnum.Right">
+    <wt:submitbutton text="Save" />
+    <wt:submitbutton text="Reflect" submit-url="/Lab/Reflect?page=Inputs" />
+    <wt:submitbutton text="Fail" submit-url="/Lab/Fail" />
+    <wt:linkbutton text="Post form to dialog" id="lab-post-form" url="/Lab/Echo" window-title="Echo" window-width="600" post-current-form="true" />
+    <wt:resetbutton />
+    <wt:closebutton />
+  </wt:row>
+</wt:form>
+</div>

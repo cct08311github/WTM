@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Support.Json;
+using WalkingTec.Mvvm.LayUI.E2EHost.Fixtures;
 using WalkingTec.Mvvm.LayUI.E2EHost.Models;
 
 namespace WalkingTec.Mvvm.LayUI.E2EHost
@@ -14,6 +15,7 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost
     {
         public DbSet<FrameworkUser> FrameworkUsers { get; set; }
         public DbSet<Gadget> Gadgets { get; set; }
+        public DbSet<LabItem> LabItems { get; set; }
 
         public DataContext(CS cs) : base(cs)
         {
@@ -85,6 +87,72 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost
                     folder.Children.Add(page);
                     Set<FrameworkMenu>().Add(folder);
                     Set<FunctionPrivilege>().AddRange(folder.FlatTree().Select(x => new FunctionPrivilege { RoleCode = "001", MenuItemId = x.ID, Allowed = true }));
+                }
+
+                // menu for the Lab fixture pages (/Lab/*): a folder with one entry per page. The actions are AllRights, so
+                // only the menu entry is needed; the role gets the privilege rows like for any other menu entry.
+                var labFolder = new FrameworkMenu
+                {
+                    PageName = "Lab",
+                    Children = new List<FrameworkMenu>(),
+                    ShowOnMenu = true,
+                    IsInside = true,
+                    FolderOnly = true,
+                    IsPublic = false,
+                    TenantAllowed = true,
+                    DisplayOrder = 2,
+                    Icon = "layui-icon layui-icon-component"
+                };
+                var labOrder = 1;
+                foreach (var labPage in new[] { "Inputs", "Choices", "Pickers", "Grid", "Detail", "Layout", "Charts", "Trees" })
+                {
+                    labFolder.Children.Add(new FrameworkMenu
+                    {
+                        PageName = "Lab " + labPage,
+                        Url = "/Lab/" + labPage,
+                        ModuleName = "Lab",
+                        ActionName = labPage,
+                        ShowOnMenu = true,
+                        FolderOnly = false,
+                        IsPublic = false,
+                        IsInside = true,
+                        TenantAllowed = true,
+                        DisplayOrder = labOrder++,
+                        Children = new List<FrameworkMenu>(),
+                        Icon = "layui-icon layui-icon-file"
+                    });
+                }
+                // the export button of the Lab grid posts to /_Framework/GetExportExcel; like every action behind a button it needs a menu
+                // entry (not shown in the menu) so that the grid shows the button for this user
+                labFolder.Children.Add(new FrameworkMenu
+                {
+                    PageName = "Lab export",
+                    Url = "/_Framework/GetExportExcel",
+                    ModuleName = "Lab",
+                    ActionName = "Export",
+                    ShowOnMenu = false,
+                    FolderOnly = false,
+                    IsPublic = false,
+                    IsInside = true,
+                    TenantAllowed = true,
+                    DisplayOrder = labOrder++,
+                    Children = new List<FrameworkMenu>()
+                });
+                Set<FrameworkMenu>().Add(labFolder);
+                Set<FunctionPrivilege>().AddRange(labFolder.FlatTree().Select(x => new FunctionPrivilege { RoleCode = "001", MenuItemId = x.ID, Allowed = true }));
+
+                // rows for the data table fixture: several pages, a sortable number, some names that need encoding
+                var cats = new[] { GadgetCategory.Tool, GadgetCategory.Toy, GadgetCategory.Appliance };
+                for (var i = 1; i <= 35; i++)
+                {
+                    Set<LabItem>().Add(new LabItem
+                    {
+                        Name = i % 5 == 0 ? $"Special {i:00} {LabText.SpecialItem}" : $"Lab item {i:00}",
+                        Category = cats[i % cats.Length],
+                        Score = (i * 7) % 31,
+                        Active = i % 3 != 0,
+                        Created = new DateTime(2024, 1, 1).AddDays(i)
+                    });
                 }
 
                 // synthetic rows so that the list page has something to show on first load

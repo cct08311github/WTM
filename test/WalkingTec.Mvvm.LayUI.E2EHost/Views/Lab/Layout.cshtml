@@ -1,0 +1,44 @@
+@model WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs.LabFormVM
+@inject IStringLocalizer<Program> Localizer;
+
+<div id="lab-layout">
+<wt:container align="AlignEnum.Left" id="lab-container">
+  <wt:row space="10" items-per-row="ItemsPerRowEnum.Two" id="lab-row">
+    <wt:card title="@Model.SpecialText" card-theme="White" id="lab-card-white">white card body</wt:card>
+    <wt:card title="Dark card" card-theme="Dark" id="lab-card-dark">dark card body</wt:card>
+  </wt:row>
+  <wt:panel title="@Model.SpecialText" panel-type="Collapse" id="lab-panel-collapse">collapse panel body</wt:panel>
+  <wt:panel title="Collapsed panel" panel-type="Collapse" collapsed="true" id="lab-panel-closed">closed panel body</wt:panel>
+  <wt:panel title="Card panel" panel-type="Card" id="lab-panel-card">card panel body</wt:panel>
+  <wt:quote id="lab-quote">@Model.SpecialText</wt:quote>
+  <wt:quote quote-style="Simple" id="lab-quote-simple">simple quote</wt:quote>
+  <wt:code title="code title" height="80" id="lab-code">@Model.SpecialText</wt:code>
+  <wt:image field="PictureId" url="/images/logo.png" id="lab-image" width="64" />
+  <wt:tab id="lab-tab" selected-index="0">
+    <wt:tabheaders>
+      <wt:tabheader title="First tab" />
+      <wt:tabheader title="@Model.SpecialText" />
+      <wt:tabheader title="Third tab" />
+    </wt:tabheaders>
+    <wt:tabcontents>
+      <wt:tabcontent id="lab-tab-1">first content</wt:tabcontent>
+      <wt:tabcontent id="lab-tab-2">second content</wt:tabcontent>
+      <wt:tabcontent id="lab-tab-3">third content</wt:tabcontent>
+    </wt:tabcontents>
+  </wt:tab>
+  <wt:fieldset title="Buttons">
+    <wt:button text="Plain" id="lab-btn-plain" click="window.labClicks = (window.labClicks||0)+1" />
+    <wt:button text="@Model.SpecialText" id="lab-btn-special" theme="ButtonThemeEnum.Warm" size="ButtonSizeEnum.Small" icon="layui-icon layui-icon-ok" />
+    <wt:button text="Round" id="lab-btn-round" is-round="true" theme="ButtonThemeEnum.Danger" size="ButtonSizeEnum.Mini" />
+    <wt:button text="Disabled" id="lab-btn-disabled" disabled="true" />
+    <wt:button text="Confirm" id="lab-btn-confirm" confirm-txt="Run it?" click="window.labConfirmed = true" />
+    <wt:linkbutton text="Open dialog" id="lab-link-dialog" url="/Lab/Popup" window-title="Popup title" window-width="500" window-height="300" />
+    <wt:linkbutton text="Background call" id="lab-link-self" url="/Lab/Ping" target="ButtonTargetEnum.self" />
+    <wt:linkbutton text="Message" id="lab-link-message" url="/Lab/Notify" target="ButtonTargetEnum.self" />
+    <wt:linkbutton text="Fail in background" id="lab-link-fail" url="/Lab/Fail" target="ButtonTargetEnum.self" />
+    <wt:linkbutton text="Fail in dialog" id="lab-link-faildialog" url="/Lab/Fail" window-title="Failing" window-width="400" window-height="200" />
+    <wt:linkbutton text="Open as page" id="lab-link-page" url="/Lab/Popup" window-title="Popup page" target="ButtonTargetEnum.currentwindow" is-link="true" />
+  </wt:fieldset>
+  <wt:flowinfo vm="@Model" id="lab-flow" />
+</wt:container>
+</div>

@@ -1,0 +1,12 @@
+@model WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs.LabFormVM
+@inject IStringLocalizer<Program> Localizer;
+
+<div id="lab-detail">
+<wt:form vm="@Model" url="/Lab/Save?page=Detail" label-width="120">
+  <wt:textbox field="Title" empty-text="Master title" />
+  <wt:grid vm="DetailGrid" id="LabDetailGrid" use-local-data="true" hidden-panel="true" hidden-checkbox="true" height="260" />
+  <wt:row align="AlignEnum.Right">
+    <wt:submitbutton text="Save" />
+  </wt:row>
+</wt:form>
+</div>

@@ -1,0 +1,9 @@
+@using WalkingTec.Mvvm.TagHelpers.LayUI.Chart
+@model WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs.LabFormVM
+
+<div id="lab-charts" style="padding:10px">
+  <wt:chart id="labchartbar" type="Bar" title="@Model.SpecialText" trigger-url="/Lab/ChartData" name-x="Day" name-y="Count" height="260" width="560" />
+  <wt:chart id="labchartline" type="Line" open-smooth="true" trigger-url="/Lab/ChartData" height="260" width="560" />
+  <wt:chart id="labchartpie" type="Pie" trigger-url="/Lab/ChartData" height="260" width="560" theme="ChartThemeEnum.macarons" />
+  <wt:chart id="labchartscatter" type="Scatter" trigger-url="/Lab/ScatterData" name-x="X" name-y="Y" name-addition="Size" name-category="Label" height="260" width="560" />
+</div>

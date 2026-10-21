@@ -1,8 +1,10 @@
 name: e2e-smoke
 
-# Browser based smoke tests of the LayUI front end (Playwright, Chromium) against test/WalkingTec.Mvvm.LayUI.E2EHost.
-# Not a required check (#270). Reports: route coverage baseline (artifact e2e-route-coverage);
+# Browser based tests of the LayUI front end (Playwright, Chromium) against test/WalkingTec.Mvvm.LayUI.E2EHost.
+# Not a required check (#270). Reports: route coverage baseline (artifact e2e-route-coverage) and JS function coverage of
+# framework_layui.js (artifact e2e-js-coverage, #271), both also in the step summary;
 # on failure also Playwright traces, screenshots and the server log (artifact e2e-failure-artifacts).
+# Tests tagged [TestCategory("nightly")] are left out here (none yet); run them with --filter "TestCategory=nightly".
 
 on:
   pull_request:
@@ -64,14 +66,15 @@ jobs:
         run: >
           dotnet test test/WalkingTec.Mvvm.E2E/WalkingTec.Mvvm.E2E.csproj
           -c Release --no-build
+          --filter "TestCategory!=nightly"
           --logger "trx;LogFileName=e2e-tests.trx"
           --results-directory TestResults/trx
 
-      - name: Route coverage summary
+      - name: Coverage summary
         if: always()
         run: |
           shopt -s nullglob
-          for f in TestResults/e2e/route-coverage/*.report.md; do
+          for f in TestResults/e2e/route-coverage/*.report.md TestResults/e2e/js-coverage/*.report.md; do
             cat "$f" >> "$GITHUB_STEP_SUMMARY"
           done
 
@@ -81,6 +84,15 @@ jobs:
         with:
           name: e2e-route-coverage
           path: TestResults/e2e/route-coverage/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload JS coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-js-coverage
+          path: TestResults/e2e/js-coverage/
           if-no-files-found: warn
           retention-days: 14
 

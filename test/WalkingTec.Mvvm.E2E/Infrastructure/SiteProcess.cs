@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
@@ -145,6 +146,36 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
                 cts.Token.ThrowIfCancellationRequested();
                 await Task.Delay(100, cts.Token);
             }
+        }
+
+        /// <summary>
+        /// Reads the route hit log of this run (written by the host's recording filter) and fails when a route is missing from it.
+        /// The coverage report is built from this file, so a hit that was executed but not recorded would show up as a gap there.
+        /// </summary>
+        public async System.Threading.Tasks.Task AssertRouteHitAsync(params string[] keys)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            string[] missing;
+            do
+            {
+                var text = string.Empty;
+                using (var stream = new FileStream(HitLogPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var reader = new StreamReader(stream))
+                {
+                    text = await reader.ReadToEndAsync();
+                }
+                var recorded = text.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(line => System.Text.Json.JsonDocument.Parse(line).RootElement.GetProperty("key").GetString())
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                missing = keys.Where(k => recorded.Contains(k) == false).ToArray();
+                if (missing.Length == 0)
+                {
+                    return;
+                }
+                await System.Threading.Tasks.Task.Delay(100);
+            }
+            while (DateTime.UtcNow < deadline);
+            throw new InvalidOperationException("The route hit log does not contain: " + string.Join(", ", missing));
         }
 
         public void Dispose()

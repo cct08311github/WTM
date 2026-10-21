@@ -1,0 +1,27 @@
+@model WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs.LabFormVM
+@inject IStringLocalizer<Program> Localizer;
+
+<div id="lab-choices">
+<wt:form vm="@Model" url="/Lab/Save?page=Choices" label-width="120">
+  <wt:checkbox field="Flags" items="TextItems" />
+  <wt:radio field="Kind" />
+  <wt:radio field="Choice" items="TextItems" />
+  <wt:switch field="Enabled" lay-text="On|Off" />
+  <wt:combobox field="Combo" empty-text="Pick one" />
+  <wt:combobox field="MultiCombo" items="TextItems" enable-search="true" />
+  <wt:combobox field="Region" items="RegionItems" trigger-url="/Lab/Cities" link-field="City" />
+  <wt:combobox field="City" />
+  <wt:combobox field="Remote" item-url="/Lab/Remote" />
+  <wt:radio field="RemoteRadio" item-url="/Lab/Remote" />
+  <wt:checkbox field="RemoteCheck" item-url="/Lab/Remote" />
+  <wt:datetime field="Day" type="Date" />
+  <wt:datetime field="Moment" type="DateTime" />
+  <wt:datetime field="Period" range="true" type="Date" />
+  <wt:transfer field="Picked" items="PlainValueItems" enable-search="true" left-title="Left" right-title="Right" />
+  <wt:row align="AlignEnum.Right">
+    <wt:submitbutton text="Save" />
+    <wt:submitbutton text="Reflect" submit-url="/Lab/Reflect?page=Choices" />
+    <wt:resetbutton />
+  </wt:row>
+</wt:form>
+</div>
