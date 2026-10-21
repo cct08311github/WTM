@@ -19,6 +19,21 @@
   <script src="/jquery.cookie.js"></script>
   <script src="/layui/layui.js"></script>
   <script src="/layui/xm-select.js"></script>
+  <script>
+    // The chart refresh in framework_layui.js parses the series with a global JSONfns (the host page provides it, the framework
+    // script does not). Same contract as the json-fns helper downstream pages use: strings that start with "function" become functions.
+    var JSONfns = {
+      parse: function (str) {
+        return JSON.parse(str, function (key, value) {
+          if (typeof value === 'string' && value.indexOf('function') === 0) { return eval('(' + value + ')'); }
+          return value;
+        });
+      },
+      stringify: function (obj) {
+        return JSON.stringify(obj, function (key, value) { return typeof value === 'function' ? value.toString() : value; });
+      }
+    };
+  </script>
   <script src="/_js/framework_layui.js?time=@DateTime.Now.Ticks"></script>
   <script>
     var DONOTUSE_IGNOREHASH = false;

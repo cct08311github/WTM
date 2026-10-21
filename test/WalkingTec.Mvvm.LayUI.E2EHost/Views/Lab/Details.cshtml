@@ -1,0 +1,15 @@
+@model WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs.LabItemVM
+@inject IStringLocalizer<Program> Localizer;
+
+<wt:form vm="@Model">
+  <wt:row items-per-row="ItemsPerRowEnum.Two">
+    <wt:display field="Entity.Name" />
+    <wt:display field="Entity.Category" />
+    <wt:display field="Entity.Score" />
+    <wt:display field="Entity.Active" />
+    <wt:display field="Entity.Created" />
+  </wt:row>
+  <wt:row align="AlignEnum.Right">
+    <wt:closebutton />
+  </wt:row>
+</wt:form>

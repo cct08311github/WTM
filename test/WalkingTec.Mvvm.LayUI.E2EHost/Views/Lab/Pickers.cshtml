@@ -1,0 +1,16 @@
+@model WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs.LabFormVM
+@inject IStringLocalizer<Program> Localizer;
+
+<div id="lab-pickers">
+<wt:form vm="@Model" url="/Lab/Save?page=Pickers" label-width="120">
+  <wt:selector field="GadgetId" list-vm="AllGadgets" text-bind="AllGadgets.Searcher.Name" window-title="Pick a gadget" window-width="900" window-height="600" />
+  <wt:selector field="GadgetIds" list-vm="AllGadgets" text-bind="AllGadgets.Searcher.Name" multi-select="true" window-title="Pick gadgets" window-width="900" window-height="600" />
+  <wt:upload field="AttachmentId" upload-type="AllFiles" show-progress="true" />
+  <wt:upload field="PictureId" upload-type="ImageFile" thumb-width="64" thumb-height="64" />
+  <wt:multiupload field="Files" upload-type="AllFiles" />
+  <wt:row align="AlignEnum.Right">
+    <wt:submitbutton text="Save" />
+    <wt:submitbutton text="Reflect" submit-url="/Lab/Reflect?page=Pickers" />
+  </wt:row>
+</wt:form>
+</div>

@@ -1,0 +1,13 @@
+@model WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs.LabItemListVM
+@inject IStringLocalizer<Program> Localizer;
+
+<div id="lab-grid">
+<wt:searchpanel vm="@Model" reset-btn="true">
+  <wt:row items-per-row="ItemsPerRowEnum.Three">
+    <wt:textbox field="Searcher.Name" />
+    <wt:combobox field="Searcher.Category" empty-text="@Localizer["Sys.All"]" />
+    <wt:combobox field="Searcher.Active" empty-text="@Localizer["Sys.All"]" />
+  </wt:row>
+</wt:searchpanel>
+<wt:grid vm="@Model" url="/Lab/Search" limit="10" />
+</div>

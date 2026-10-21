@@ -1,0 +1,28 @@
+@model WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs.LabFormVM
+@inject IStringLocalizer<Program> Localizer;
+
+<div id="lab-trees">
+<wt:form vm="@Model" url="/Lab/Save?page=Trees" label-width="120">
+  <wt:tree field="Branch" items="TreeItems" enable-search="true" />
+  <wt:tree field="Branches" items="TreeItems" />
+  <wt:tree field="RemoteBranch" item-url="/Lab/RemoteTree" />
+  <wt:row align="AlignEnum.Right">
+    <wt:submitbutton text="Save" />
+  </wt:row>
+</wt:form>
+<div style="height:360px;display:flex;flex-direction:column" id="lab-treecontainer-host">
+<wt:treecontainer items="TreeItems" click-func="labTreeClicked">
+  <div id="lab-treecontainer-content">content area</div>
+</wt:treecontainer>
+</div>
+<div style="height:200px;display:flex;flex-direction:column" id="lab-pagetree-host">
+<wt:treecontainer items="PageTreeItems" auto-load="true" />
+</div>
+</div>
+<script>
+  window.labTreeClickedIds = [];
+  function labTreeClicked(data) {
+    window.labTreeClickedIds.push(data.data.id);
+    $('#lab-treecontainer-content').text('clicked ' + data.data.id);
+  }
+</script>

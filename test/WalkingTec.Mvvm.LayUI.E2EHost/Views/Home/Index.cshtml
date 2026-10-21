@@ -1,1 +1,4 @@
-<script>layui.use('index')</script>
+<script>
+  // 'index' registers the layuiadmin extension modules; echarts is loaded afterwards (the chart tag helper uses the global echarts)
+  layui.use('index', function () { layui.use('echarts'); });
+</script>
