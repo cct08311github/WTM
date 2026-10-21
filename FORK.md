@@ -572,6 +572,11 @@ dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build --filter TestCategory
 
 `e2e-smoke` 在安裝 Node（npm 快取以 `package-lock.json` 為 key）後執行 `npm ci` 與 SPA build，再 build 與執行兩個目標；報告 artifact `e2e-route-coverage` 內含兩個目標的報告。兩個目標合計約 1.5 分鐘（Vue3Demo 有 40 個執行中的測試，另有 8 個 `Ignore`），遠低於 12 分鐘，所以不另設 `nightly` 分類；之後若有長時間測試，用 `[TestCategory("nightly")]` 標記並以 `--filter TestCategory!=nightly` 排除。
 
-#### 已知問題（`[Ignore("pending issue: ...")]`）
+#### 已知問題（`[Ignore("#N: ...")]`）
 
-測試發現的產品問題不在這裡修，對應的測試以 `[Ignore("pending issue: ...")]` 保留預期行為（修好後移除 `Ignore` 即可）。列出方式：`grep -rn "pending issue" test/WalkingTec.Mvvm.E2E/Tests`。
+測試發現的產品問題不在這個 PR 修，對應的測試以 `[Ignore("#N: ...")]` 保留預期行為（修好後移除 `Ignore` 即可）。列出方式：`grep -rn 'Ignore("#' test/WalkingTec.Mvvm.E2E/Tests`。
+
+- #288：匯入檔含無效資料列時，回應是「Memory stream is not expandable.」，而不是列出錯誤並提供錯誤檔
+- #290：使用者管理頁呼叫 `/api/_Admin/FrameworkUser/*`（與實際路由 `/api/_FrameworkUser/*` 不符）；`City`／`SchoolVue3` 頁的匯出按鈕與資料權限列表的詳細按鈕檢查了不存在的權限鍵而不顯示；學校頁匯出勾選列不會下載；租戶列表的名稱欄為空
+- #291：只符合子群組的搜尋回傳空列表（這個 Issue 也包含群組列表的備註欄一律為空，該項沒有對應的測試）
+- 沒有對應測試的觀察：缺漏的 i18n 鍵、`FrameworkMenu/GetIcons` 回 400、刪除選單後選單快取未更新 → #292；匯出時以 `SetFormat` 格式化的欄位輸出型別名稱 → #289

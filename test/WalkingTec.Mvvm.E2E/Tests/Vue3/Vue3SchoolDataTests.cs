@@ -88,7 +88,7 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
         }
 
         [TestMethod]
-        [Ignore("pending issue: the export button of the generated city page checks a permission key that no action has, so it is never shown")]
+        [Ignore("#290: the export button of the generated city page checks a permission key that no action has, so it is never shown")]
         public async Task City_Export_ButtonIsShown()
         {
             await SignInAsync();
@@ -162,7 +162,7 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
         }
 
         [TestMethod]
-        [Ignore("pending issue: exporting the selected rows on the school page does not download a file (the request for the selected rows does not ask for a binary response, so the page cannot read the file name)")]
+        [Ignore("#290: exporting the selected rows on the school page does not download a file (the request for the selected rows does not ask for a binary response, so the page cannot read the file name)")]
         public async Task School_ExportSelectedRows_DownloadsAFile()
         {
             await SignInAsync();
@@ -237,7 +237,7 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
         }
 
         [TestMethod]
-        [Ignore("pending issue: the export button of the generated SchoolVue3 page checks a permission key that no action has, so it is never shown")]
+        [Ignore("#290: the export button of the generated SchoolVue3 page checks a permission key that no action has, so it is never shown")]
         public async Task SchoolVue3_Export_ButtonIsShown()
         {
             await SignInAsync();

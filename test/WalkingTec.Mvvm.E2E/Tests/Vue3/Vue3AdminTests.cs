@@ -118,7 +118,7 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
         }
 
         [TestMethod]
-        [Ignore("pending issue: the user management page calls /api/_Admin/FrameworkUser/*, which is not the route of the user API (/api/_FrameworkUser/*), so create, edit, delete, export and import fail from the page")]
+        [Ignore("#290: the user management page calls /api/_Admin/FrameworkUser/*, which is not the route of the user API (/api/_FrameworkUser/*), so create, edit, delete, export and import fail from the page")]
         public async Task User_CreateWithPhotoEditDelete_RoundTrip()
         {
             await SignInAsync();
@@ -216,7 +216,7 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
         }
 
         [TestMethod]
-        [Ignore("pending issue: a search that matches only a child group returns an empty list, the tree is built from the matching rows only")]
+        [Ignore("#291: a search that matches only a child group returns an empty list, the tree is built from the matching rows only")]
         public async Task Group_SearchByChildCode_FindsTheChild()
         {
             await SignInAsync();
@@ -283,7 +283,7 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
         }
 
         [TestMethod]
-        [Ignore("pending issue: importing a file that has an invalid row fails with the message 'Memory stream is not expandable.' instead of reporting the row errors and offering the error file")]
+        [Ignore("#288: importing a file that has an invalid row fails with the message 'Memory stream is not expandable.' instead of reporting the row errors and offering the error file")]
         public async Task Group_Import_WithInvalidRow_ReportsErrors()
         {
             await SignInAsync();
@@ -395,7 +395,7 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
         }
 
         [TestMethod]
-        [Ignore("pending issue: the tenant list reads the name from a property the list does not return, so its name column is empty")]
+        [Ignore("#290: the tenant list reads the name from a property the list does not return, so its name column is empty")]
         public async Task Tenant_List_ShowsTenantName()
         {
             await SignInAsync();
@@ -472,7 +472,7 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
         }
 
         [TestMethod]
-        [Ignore("pending issue: the detail button of the data privilege list checks a permission key that no action has, so it is never shown")]
+        [Ignore("#290: the detail button of the data privilege list checks a permission key that no action has, so it is never shown")]
         public async Task DataPrivilege_Detail_IsReachableFromList()
         {
             await SignInAsync();
