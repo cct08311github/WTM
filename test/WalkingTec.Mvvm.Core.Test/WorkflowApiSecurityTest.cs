@@ -1,3 +1,4 @@
+#pragma warning disable CS0618 // the obsolete self-call helpers stay public API (10.0.0.7, #216) and keep their tests
 using System;
 using System.Collections.Generic;
 using System.Linq;

@@ -14,8 +14,8 @@ using WalkingTec.Mvvm.Mvc;
 namespace WalkingTec.Mvvm.Core.Test
 {
     /// <summary>
-    /// #208: /v1/activities requires a signed-in user whatever WorkflowOptions:RequireAuthentication says, and the internal
-    /// ?inneruse=1 form cannot be used by an external caller to bypass that.
+    /// #208 / #216: /v1/activities requires a signed-in user whatever WorkflowOptions:RequireAuthentication says. There is no internal
+    /// ?inneruse=1 call any more, so that form is guarded exactly like the public one.
     /// </summary>
     [TestClass]
     public class WorkflowActivitiesGuardTest
@@ -48,7 +48,7 @@ namespace WalkingTec.Mvvm.Core.Test
             public Task SignOutAsync(HttpContext context, string scheme, AuthenticationProperties properties) => Task.CompletedTask;
         }
 
-        private static DefaultHttpContext Create(string path, string query = "", FakeAuthService auth = null, bool userAuthenticated = false, string secret = null)
+        private static DefaultHttpContext Create(string path, string query = "", FakeAuthService auth = null, bool userAuthenticated = false)
         {
             var services = new ServiceCollection();
             if (auth != null)
@@ -65,16 +65,7 @@ namespace WalkingTec.Mvvm.Core.Test
             {
                 ctx.User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("sub", "u") }, "cookie"));
             }
-            if (secret != null)
-            {
-                ctx.Request.Headers[WorkflowActivitiesGuard.InternalSecretHeader] = secret;
-            }
             return ctx;
-        }
-
-        private static string RealSecret()
-        {
-            return WorkflowActivitiesGuard.WithInternalSecret(null)[WorkflowActivitiesGuard.InternalSecretHeader];
         }
 
         private static async Task<(DefaultHttpContext Ctx, bool NextCalled)> Run(DefaultHttpContext ctx)
@@ -107,33 +98,27 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
-        public async Task Middleware_InnerUseWithoutSecret_Returns401_AndDoesNotReachEngine()
+        public async Task Middleware_AnonymousInnerUse_Returns401_AndDoesNotReachEngine()
         {
+            // #216: there is no internal call any more, so ?inneruse=1 gets no special treatment: anonymous callers get 401 like on the public form
             var (ctx, next) = await Run(Create("/v1/activities", "?inneruse=1", new FakeAuthService()));
             Assert.AreEqual(401, ctx.Response.StatusCode);
             Assert.IsFalse(next);
         }
 
         [TestMethod]
-        public async Task Middleware_InnerUseWithWrongSecret_Returns401()
+        public async Task Middleware_InnerUseWithAnOldSecretHeader_StillReturns401()
         {
-            var (ctx, next) = await Run(Create("/v1/activities", "?inneruse=1", new FakeAuthService(), secret: "not-the-secret"));
-            Assert.AreEqual(401, ctx.Response.StatusCode);
+            var ctx = Create("/v1/activities", "?inneruse=1", new FakeAuthService());
+            ctx.Request.Headers["X-Wtm-Internal-Call"] = "anything";
+            var (res, next) = await Run(ctx);
+            Assert.AreEqual(401, res.Response.StatusCode);
             Assert.IsFalse(next);
         }
 
         [TestMethod]
-        public async Task Middleware_InnerUseWithCorrectSecret_PassesToEngine()
+        public async Task Middleware_InnerUse_SignedIn_PassesToEngine()
         {
-            var (ctx, next) = await Run(Create("/v1/activities", "?inneruse=1", new FakeAuthService(), secret: RealSecret()));
-            Assert.AreNotEqual(401, ctx.Response.StatusCode);
-            Assert.IsTrue(next);
-        }
-
-        [TestMethod]
-        public async Task Middleware_InnerUse_SignedInWithoutSecret_PassesToEngine()
-        {
-            // credentials forwarded by the internal call (RequireAuthentication on) keep working across several instances
             var (ctx, next) = await Run(Create("/v1/activities", "?inneruse=1", userAuthenticated: true));
             Assert.IsTrue(next);
             Assert.AreNotEqual(401, ctx.Response.StatusCode);
@@ -210,123 +195,23 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.IsFalse(await WorkflowActivitiesGuard.IsSignedInAsync(anonymous));
         }
 
-        [TestMethod]
-        public async Task Allowed_SecretDoesNotHelpThePublicForm()
-        {
-            var ctx = Create("/v1/activities", auth: new FakeAuthService(), secret: RealSecret());
-            Assert.IsFalse(await WorkflowActivitiesGuard.IsAllowedAsync(ctx));
-        }
-
         // ---- one matcher for the guard and the internal-call branch ----
 
         [DataTestMethod]
-        [DataRow("/v1/activities", "", true, false)]
-        [DataRow("/v1.0/activities", "", true, false)]
-        [DataRow("/V01/Activities/", "", true, false)]
-        [DataRow("/v1.0/activities", "?inneruse=1", false, true)]
-        [DataRow("/v1/activities", "?inneruse=1", false, true)]
-        [DataRow("/v1/activities", "?inneruse=1&x=1", true, false)]
-        [DataRow("/v1/activities/Elsa.X", "", false, false)]
-        [DataRow("/v1/workflow-definitions", "", false, false)]
-        public void Matchers_AgreeOnVersionCaseAndTrailingSlash(string path, string query, bool isPublic, bool isInternal)
+        [DataRow("/v1/activities", "", true)]
+        [DataRow("/v1.0/activities", "", true)]
+        [DataRow("/V01/Activities/", "", true)]
+        [DataRow("/v1.0/activities", "?inneruse=1", false)]
+        [DataRow("/v1/activities", "?inneruse=1", false)]
+        [DataRow("/v1/activities", "?inneruse=1&x=1", true)]
+        [DataRow("/v1/activities/Elsa.X", "", false)]
+        [DataRow("/v1/workflow-definitions", "", false)]
+        public void Matchers_AgreeOnVersionCaseAndTrailingSlash(string path, string query, bool isPublic)
         {
             var ctx = Create(path, query);
             Assert.AreEqual(isPublic, WorkflowActivitiesGuard.IsPublicActivitiesRequest(ctx.Request));
-            Assert.AreEqual(isInternal, WorkflowActivitiesGuard.IsInternalActivitiesRequest(ctx.Request));
             Assert.AreEqual(path.IndexOf("activities", StringComparison.OrdinalIgnoreCase) >= 0 && path.StartsWith("/v1/workflow") == false,
                 WorkflowActivitiesGuard.IsActivitiesRequest(ctx.Request));
-        }
-
-        // ---- the internal client does not follow redirects ----
-
-        [TestMethod]
-        public async Task InternalHttpClient_DoesNotFollowRedirects_AndOtherClientsStillDo()
-        {
-            var port = System.Net.Sockets.TcpListener.Create(0);
-            port.Start();
-            var p = ((System.Net.IPEndPoint)port.LocalEndpoint).Port;
-            port.Stop();
-            var prefix = $"http://127.0.0.1:{p}/";
-            using var listener = new System.Net.HttpListener();
-            listener.Prefixes.Add(prefix);
-            listener.Start();
-            var targetHit = 0;
-            var serve = Task.Run(async () =>
-            {
-                while (listener.IsListening)
-                {
-                    System.Net.HttpListenerContext c;
-                    try { c = await listener.GetContextAsync(); } catch { return; }
-                    if (c.Request.Url.AbsolutePath == "/redirect")
-                    {
-                        c.Response.StatusCode = 302;
-                        c.Response.RedirectLocation = prefix + "target";
-                    }
-                    else
-                    {
-                        System.Threading.Interlocked.Increment(ref targetHit);
-                        c.Response.StatusCode = 200;
-                    }
-                    c.Response.Close();
-                }
-            });
-            var services = new ServiceCollection();
-            WorkflowActivitiesGuard.AddInternalHttpClient(services);
-            services.AddHttpClient();
-            var factory = services.BuildServiceProvider().GetRequiredService<System.Net.Http.IHttpClientFactory>();
-
-            var internalRes = await factory.CreateClient(WorkflowActivitiesGuard.InternalClientName).GetAsync(prefix + "redirect");
-            Assert.AreEqual(System.Net.HttpStatusCode.Found, internalRes.StatusCode);
-            Assert.AreEqual(0, targetHit, "the redirect target must not be requested");
-
-            var defaultRes = await factory.CreateClient("other").GetAsync(prefix + "redirect");
-            Assert.AreEqual(System.Net.HttpStatusCode.OK, defaultRes.StatusCode);
-            Assert.AreEqual(1, targetHit);
-            listener.Stop();
-            await serve;
-        }
-
-        // ---- secret ----
-
-        [TestMethod]
-        public void Secret_IsRandomLongAndStablePerProcess()
-        {
-            var a = RealSecret();
-            Assert.IsTrue(a.Length >= 64);
-            Assert.AreEqual(a, RealSecret());
-            Assert.IsTrue(WorkflowActivitiesGuard.IsValidInternalSecret(a));
-        }
-
-        [TestMethod]
-        public void Secret_RejectsMissingWrongAndTruncatedValues()
-        {
-            var a = RealSecret();
-            Assert.IsFalse(WorkflowActivitiesGuard.IsValidInternalSecret(null));
-            Assert.IsFalse(WorkflowActivitiesGuard.IsValidInternalSecret(""));
-            Assert.IsFalse(WorkflowActivitiesGuard.IsValidInternalSecret("x"));
-            Assert.IsFalse(WorkflowActivitiesGuard.IsValidInternalSecret(a.Substring(1)));
-            Assert.IsFalse(WorkflowActivitiesGuard.IsValidInternalSecret(a + "0"));
-            Assert.IsFalse(WorkflowActivitiesGuard.IsValidInternalSecret(a.ToLowerInvariant() == a ? a.ToUpperInvariant() : a.ToLowerInvariant()));
-        }
-
-        [TestMethod]
-        public void WithInternalSecret_KeepsCredentialHeaders_AndDoesNotMutateTheInput()
-        {
-            var input = new Dictionary<string, string> { ["Authorization"] = "Bearer abc", ["Cookie"] = "c=1" };
-            var rv = WorkflowActivitiesGuard.WithInternalSecret(input);
-            Assert.AreEqual("Bearer abc", rv["Authorization"]);
-            Assert.AreEqual("c=1", rv["Cookie"]);
-            Assert.IsTrue(rv.ContainsKey(WorkflowActivitiesGuard.InternalSecretHeader));
-            Assert.AreEqual(2, input.Count);
-            Assert.IsNotNull(WorkflowActivitiesGuard.WithInternalSecret(null)[WorkflowActivitiesGuard.InternalSecretHeader]);
-        }
-
-        [TestMethod]
-        public void ExistingResolveSelfCall_IsUnchanged_SecretIsAddedByTheCaller()
-        {
-            var r = WorkflowApiSecurity.ResolveSelfCall(new Configs(), null, "http", "localhost", null, null);
-            Assert.IsNull(r.Headers);
-            Assert.IsFalse(r.Rejected);
         }
     }
 }
