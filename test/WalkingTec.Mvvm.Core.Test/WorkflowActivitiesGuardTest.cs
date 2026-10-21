@@ -14,7 +14,7 @@ using WalkingTec.Mvvm.Mvc;
 namespace WalkingTec.Mvvm.Core.Test
 {
     /// <summary>
-    /// #208 / #216: /v1/activities requires a signed-in user whatever WorkflowOptions:RequireAuthentication says. There is no internal
+    /// #208 / #216 / #225: /v1/activities and /v1/designer/* require a signed-in user whatever WorkflowOptions:RequireAuthentication says. There is no internal
     /// ?inneruse=1 call any more, so that form is guarded exactly like the public one.
     /// </summary>
     [TestClass]
@@ -163,6 +163,87 @@ namespace WalkingTec.Mvvm.Core.Test
                 Assert.AreNotEqual(401, ctx.Response.StatusCode, path);
                 Assert.IsTrue(next, path);
             }
+        }
+
+        // ---- #225: /v1/designer/* requires a signed-in user too ----
+
+        [DataTestMethod]
+        [DataRow("/v1/designer/runtime-select-list")]
+        [DataRow("/v1.0/designer/runtime-select-list")]
+        [DataRow("/v01/designer/runtime-select-list")]
+        [DataRow("/V1/Designer/Runtime-Select-List")]
+        [DataRow("/v1/designer/runtime-select-list/")]
+        [DataRow("/v1/designer")]
+        [DataRow("/v1/designer/")]
+        [DataRow("/v1/designer/x/y")]
+        [DataRow("//v1/designer/runtime-select-list")]
+        [DataRow("///v1.0/Designer/")]
+        [DataRow("/vX/designer/runtime-select-list")]
+        [DataRow("/v/designer/runtime-select-list")]
+        public async Task Middleware_DesignerPaths_AnonymousGets401(string path)
+        {
+            foreach (var method in new[] { "POST", "GET", "PUT", "DELETE", "OPTIONS" })
+            {
+                var ctx = Create(path, auth: new FakeAuthService());
+                ctx.Request.Method = method;
+                var (res, next) = await Run(ctx);
+                Assert.AreEqual(401, res.Response.StatusCode, path + " " + method);
+                Assert.IsFalse(next, path + " " + method);
+            }
+        }
+
+        [TestMethod]
+        public async Task Middleware_DesignerPath_WithoutAuthService_FailsClosed()
+        {
+            var (ctx, next) = await Run(Create("/v1/designer/runtime-select-list"));
+            Assert.AreEqual(401, ctx.Response.StatusCode);
+            Assert.IsFalse(next);
+        }
+
+        [DataTestMethod]
+        [DataRow("/v1/designer/runtime-select-list")]
+        [DataRow("/v1.0/Designer/runtime-select-list/")]
+        [DataRow("//v1/designer/x")]
+        public async Task Middleware_DesignerPaths_SignedIn_GoToNext(string path)
+        {
+            var ctx = Create(path, userAuthenticated: true);
+            ctx.Request.Method = "POST";
+            var (res, next) = await Run(ctx);
+            Assert.IsTrue(next, path);
+            Assert.AreNotEqual(401, res.Response.StatusCode, path);
+        }
+
+        [TestMethod]
+        public async Task Middleware_DesignerPath_SignedInByJwt_GoesToNextAndSetsUser()
+        {
+            var ctx = Create("/v1/designer/runtime-select-list", auth: new FakeAuthService(JwtBearerDefaults.AuthenticationScheme));
+            ctx.Request.Method = "POST";
+            var (res, next) = await Run(ctx);
+            Assert.IsTrue(next);
+            Assert.IsTrue(res.User.Identity.IsAuthenticated);
+        }
+
+        [TestMethod]
+        public async Task Middleware_NonDesignerPaths_AreNotAffectedByDesignerGuard()
+        {
+            foreach (var path in new[] { "/v1/designers", "/v1/designer-x", "/v1/designerx/y", "/home/v1/designer", "/x1/designer", "/v1/x/designer", "/v1/workflow-definitions", "/v1/features", "/v1/version", "/designer" })
+            {
+                var (ctx, next) = await Run(Create(path, auth: new FakeAuthService()));
+                Assert.AreNotEqual(401, ctx.Response.StatusCode, path);
+                Assert.IsTrue(next, path);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("/v1/designer/runtime-select-list", true)]
+        [DataRow("/V2.0/DESIGNER", true)]
+        [DataRow("//v1/designer/", true)]
+        [DataRow("/v1/activities", false)]
+        [DataRow("/v1/designers", false)]
+        [DataRow("/designer", false)]
+        public void IsDesignerRequest_MatchesOnlyDesignerPaths(string path, bool expected)
+        {
+            Assert.AreEqual(expected, WorkflowActivitiesGuard.IsDesignerRequest(Create(path).Request));
         }
 
         // ---- sign-in detection ----
