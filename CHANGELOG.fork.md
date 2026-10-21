@@ -10,7 +10,10 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
-## 未发布
+## 10.0.0.8(2026-10-21)
+
+* **修改：**   升级依赖（均在同一主版本内）：`Swashbuckle.AspNetCore.Swagger`／`SwaggerGen` 10.3.0 → 10.3.1、`Swashbuckle.AspNetCore.SwaggerUI` 10.1.7 → 10.3.1（与前两者版本一致）、`Microsoft.OpenApi` 2.12.2 → 2.13.0、`Microsoft.EntityFrameworkCore.Sqlite` 10.0.9 → 10.0.13（与其他 EF 包一致）、`Oracle.EntityFrameworkCore` 10.23.26301 → 10.23.26400（同一 10.23 线；最低仍为 Oracle 19c）（#241、#242、#239、#235、#237）
+* **修改（demo）：**   Vue3 demo 前端：vue-router 4 → 5.4、pinia 2 → 3.0（#257，无需修改源码）；eslint 9 → 10（#232）；vite-plugin-cdn-import 0.3.5 → 1.0.1（#236）；vue-i18n 11.4.15。仅限 demo，不影响 NuGet 包
 
 * **修改（LayUI）：**   `framework_layui.js` 处理服务器返回指令（`IsScript`）的入口收敛为单一函数 `ff.ExecServerScript(text)`；`PostForm`、`BgRequest`、`OpenDialog` 与 `LayuiUIService.MakeDialogButton`（`showDialog=false`）都改为调用它，默认行为不变（内部仍以间接 eval 执行，标准指令不依赖调用函数的局部变量；`AddCustomScript` 的自定义内容若引用局部变量需调整，详见 FORK.md 第 18 节）。新增可选开关 `ff.StrictScriptChannel`（默认 `false`），开启后 `ExecServerScript` 只输出 `console.warn` 而不执行。同时删除一段已注释的旧代码，并新增 node 单元测试（#25，阶段 2）
 * **修复（demo）：**   `VITE_OPEN_CDN=true` 打包的 Vue3 demo 在浏览器中白屏，报 `Calling require for "vue" in an environment that doesn't expose the require function`（#258）。原因：vite 8 (Rolldown) 下被转成 CJS 的依赖（`vue-i18n.cjs.js`、`vue-grid-layout`）里的 `require('vue')` 不会被 vite-plugin-cdn-import 改写。现于 CDN 模式在 `index.html` 注入一个极小的 `require`，映射到 CDN 全局变量（Vue / VueRouter / ElementPlus / VueDemi）。默认模式产物不变；仅限 demo
