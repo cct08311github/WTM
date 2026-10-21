@@ -10,7 +10,10 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
-## 未发布
+## 10.0.0.7(2026-10-21)
+
+* **修改（BREAKING，小）：**   10.0.0.6 新增的 `WorkflowActivitiesGuard` 内部调用相关成员随 #216 移除：`IsPublicActivitiesRequest`、`IsInternalActivitiesRequest`、`AddInternalHttpClient`、`InternalClientName` 及内部密钥的验证方法（改用 `IsActivitiesListRequest`）。它们只存在于 10.0.0.6，仅供框架内部使用；若下游直接引用，编译时会出错，请改为不引用（`/v1/activities` 的处理由 `WtmMiddleware` 自动完成）
+* **修改（demo）：**   Vue3 demo 前端：vite 4.5 → 8.3、@vitejs/plugin-vue 4.6 → 6.0（#165）；typescript 5.9 → 6.0、eslint 8 → 9（改用 flat config `eslint.config.js`）、@typescript-eslint 7 → 8、eslint-plugin-vue 9 → 10、vue-eslint-parser 9 → 10（#164）；移除未使用的 `@intlify/vue-devtools`（#203）；follow-redirects 1.16.1（#220）；brace-expansion、postcss-selector-parser 安全修补。`engines.node` 改为 `^20.19.0 || >=22.12.0`。仅限 demo，不影响 NuGet 包
 
 * **修复（安全）：**   `/v1/activities`（流程设计器的活动清单）改为在程序内取得 Elsa 的 activity 描述（复制 Elsa.Server.Api 2.17.0 `Activities.List` 的逻辑，并使用 Elsa 的 endpoint 序列化设置，输出与 Elsa 自己的端点逐字节相同），`WtmMiddleware` 不再对 `/v1/activities?inneruse=1` 发出 HTTP 内部调用（#216）。10.0.0.6 中该内部调用的目标在默认设置（`AllowedHosts` 为 `*` 且未设置 `InternalCallBaseAddress`）下由 Host header 决定，内部密钥也会被送到那里，已登录用户可借此取得密钥并匿名读取全部角色与群组名称。现在没有内部调用、密钥 header（`X-Wtm-Internal-Call`）和专用的不跟随重定向的 `WtmWorkflowInternal` HttpClient；匿名的 `?inneruse=1` 请求与公开形式一样返回 401。“正式环境必须设置 `InternalCallBaseAddress`”以及多实例／滚动重启时的短暂 401 都不再适用。`WorkflowOptions:InternalCallBaseAddress`、`WorkflowApiSecurity.ResolveSelfCall`、`IsAllowedHost` 等 public API 为兼容下游而保留，标注为 `[Obsolete]`（仅编译警告，不再有作用）。仅在 `EnableWorkflow=true` 时相关。程序内应答与原来一样遵守 `WorkflowOptions:RequireAuthentication`／`RequireAdminRole`（改为程序内调用后不再经过 Elsa controller 的授权过滤器，因此在中介层以同一个 policy 检查：未登录 401、权限不足 403）；已登录的 `?inneruse=1` 与其他形式走同一条路径；只应答 GET 与 HEAD（未登录时任何方法仍先返回 401）；响应带 `application/json; charset=utf-8`、`X-Content-Type-Options: nosniff`、`Cache-Control: no-store`；生成过程出错时返回空 body 的 500（只记录异常类型与消息）；JWT 调用者验证通过后设置 `HttpContext.User`；路径比对接受开头的多余斜线（`//v1/activities`）
 * **修改：**   移除未使用的 `src/WalkingTec.Mvvm.Mvc/echarts.common.min.js`（echarts 4.0.4）。它没有列入 csproj、没有被引用，也不在 NuGet 包内，不影响下游（#189）
