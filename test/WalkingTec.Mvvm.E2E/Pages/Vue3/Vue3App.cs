@@ -38,13 +38,17 @@ namespace WalkingTec.Mvvm.E2E.Pages.Vue3
         /// </summary>
         public async Task OpenLoginAsync()
         {
+            // Runs before the app on every load of this tab, but only switches the stored language once (the marker lives in
+            // sessionStorage, which survives reloads), so that a language chosen later in the test is kept.
             await _page.AddInitScriptAsync($@"(() => {{
                 try {{
                     const key = '{ThemeConfigKey}';
                     const raw = localStorage.getItem(key);
-                    if (raw) {{
+                    if (raw && sessionStorage.getItem('e2e-language-set') === null) {{
                         const cfg = JSON.parse(raw);
-                        if (cfg.globalI18n !== 'en') {{ cfg.globalI18n = 'en'; localStorage.setItem(key, JSON.stringify(cfg)); }}
+                        cfg.globalI18n = 'en';
+                        localStorage.setItem(key, JSON.stringify(cfg));
+                        sessionStorage.setItem('e2e-language-set', '1');
                     }}
                 }} catch (e) {{ }}
             }})();");
