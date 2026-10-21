@@ -135,6 +135,8 @@ namespace WalkingTec.Mvvm.E2E.Tests
 
             await list.AcceptAlertAsync("2 rows have been deleted");
             await Expect(list.Dialog).ToHaveCountAsync(0);
+            // both requests of the batch delete (the dialog and its confirmation) must show up in the route hit log that feeds the coverage report
+            await Site.AssertRouteHitAsync("gadget/batchdelete", "gadget/dobatchdelete");
             await list.SearchByNameAsync(prefix);
             await Expect(list.Rows).ToHaveCountAsync(0);
         }

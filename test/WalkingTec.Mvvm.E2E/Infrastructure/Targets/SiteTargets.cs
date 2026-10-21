@@ -11,7 +11,8 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
             ProjectDir = "test/WalkingTec.Mvvm.LayUI.E2EHost",
             AssemblyName = "WalkingTec.Mvvm.LayUI.E2EHost",
             RouteExclusionFile = "layui-e2ehost.route-exclusions.json",
-            ReadyPath = "/Login/Login"
+            ReadyPath = "/Login/Login",
+            CollectJsCoverage = true
         };
 
         // Future: public static readonly SiteTarget Vue3Demo = ... (needs the demo to expose the same E2E:* settings,

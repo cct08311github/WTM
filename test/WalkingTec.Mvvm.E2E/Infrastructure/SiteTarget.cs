@@ -29,6 +29,9 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
         /// <summary>Path of the page that must answer 200 before the tests start.</summary>
         public string ReadyPath { get; init; } = "/";
 
+        /// <summary>True when the tests collect Chromium JS coverage of the LayUI framework script (/_js/framework_layui.js) against this site.</summary>
+        public bool CollectJsCoverage { get; init; }
+
         public string RepoRoot => AssemblyMetadata("E2E.RepoRoot") ?? FindRepoRoot();
 
         public string Configuration => AssemblyMetadata("E2E.Configuration") ?? "Debug";
