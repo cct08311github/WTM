@@ -37,6 +37,8 @@
   <ItemGroup>
     <!-- route exclusion lists (one per target) are read at run time from the output directory -->
     <Content Include="Coverage\*.route-exclusions.json" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- permission matrix expectations (#273), one per target -->
+    <Content Include="Security\*.permission-matrix.json" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

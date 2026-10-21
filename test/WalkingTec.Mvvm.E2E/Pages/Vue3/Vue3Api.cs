@@ -16,11 +16,15 @@ namespace WalkingTec.Mvvm.E2E.Pages.Vue3
         private readonly IAPIRequestContext _context;
         private readonly IPlaywright _playwright;
 
-        private Vue3Api(IPlaywright playwright, IAPIRequestContext context)
+        private Vue3Api(IPlaywright playwright, IAPIRequestContext context, string siteName)
         {
             _playwright = playwright;
             _context = context;
+            SiteName = siteName;
         }
+
+        /// <summary>Name of the site this client talks to (see SiteTarget.Name); the run wide seed data is kept per site.</summary>
+        public string SiteName { get; }
 
         public IAPIRequestContext Context => _context;
 
@@ -35,7 +39,7 @@ namespace WalkingTec.Mvvm.E2E.Pages.Vue3
                 // the SPA sends its language with every request; the tests run in English
                 ExtraHTTPHeaders = new Dictionary<string, string> { ["Authorization"] = "Bearer " + token, ["Accept-Language"] = "en" }
             });
-            return new Vue3Api(playwright, context);
+            return new Vue3Api(playwright, context, site.Target.Name);
         }
 
         public static async Task<string> LoginAsync(IAPIRequestContext anonymous, string account, string password)

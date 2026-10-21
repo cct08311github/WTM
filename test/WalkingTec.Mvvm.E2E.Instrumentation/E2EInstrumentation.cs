@@ -129,12 +129,27 @@ namespace WalkingTec.Mvvm.E2E.Instrumentation
         public List<string> HttpMethods { get; set; }
         public string Template { get; set; }
         public List<string> Attributes { get; set; }
+
+        /// <summary>
+        /// Every action descriptor behind this key with its own template and HTTP methods. The fields above merge them (overloads such as
+        /// Create GET / Create POST, and controllers of different namespaces with the same name); the permission matrix needs the
+        /// individual routes.
+        /// </summary>
+        public List<RouteVariant> Variants { get; set; }
+    }
+
+    public sealed class RouteVariant
+    {
+        public string Template { get; set; }
+
+        /// <summary>Empty when the action accepts any method.</summary>
+        public List<string> HttpMethods { get; set; }
     }
 
     public static class RouteInventory
     {
         // attributes that explain why an action may not be reachable in a normal run; the exclusion file can match on them
-        private static readonly string[] MarkerAttributes = { "DebugOnly", "Public", "AllRights", "AllowAnonymous", "MainTenantOnly", "ApiController" };
+        private static readonly string[] MarkerAttributes = { "DebugOnly", "Public", "AllRights", "AllowAnonymous", "MainTenantOnly", "ApiController", "AuthorizeJwtWithCookie" };
 
         public static string KeyOf(ControllerActionDescriptor cad)
         {
@@ -165,8 +180,13 @@ namespace WalkingTec.Mvvm.E2E.Instrumentation
                         attrs.Add(name);
                     }
                 }
+                var variant = new RouteVariant { Template = cad.AttributeRouteInfo?.Template, HttpMethods = methods };
                 if (items.TryGetValue(key, out var existing))
                 {
+                    if (existing.Variants.Any(v => v.Template == variant.Template && v.HttpMethods.SequenceEqual(variant.HttpMethods)) == false)
+                    {
+                        existing.Variants.Add(variant);
+                    }
                     // overloads (for example Create GET and Create POST) share one key; merge them
                     existing.HttpMethods = existing.HttpMethods.Concat(methods).Distinct().OrderBy(x => x).ToList();
                     existing.Attributes = existing.Attributes.Concat(attrs).Distinct().OrderBy(x => x).ToList();
@@ -182,7 +202,8 @@ namespace WalkingTec.Mvvm.E2E.Instrumentation
                         Action = cad.ActionName,
                         HttpMethods = methods,
                         Template = cad.AttributeRouteInfo?.Template,
-                        Attributes = attrs.Distinct().OrderBy(x => x).ToList()
+                        Attributes = attrs.Distinct().OrderBy(x => x).ToList(),
+                        Variants = new List<RouteVariant> { variant }
                     };
                 }
             }

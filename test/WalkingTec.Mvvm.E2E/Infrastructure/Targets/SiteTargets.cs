@@ -30,5 +30,57 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
             ConfigureEnvironment = (site, env) => Vue3DemoSetup.ConfigureEnvironment(Vue3Demo, site, env),
             AfterStartAsync = Vue3DemoSetup.InstallAdminPasswordAsync
         };
+
+        // ---- instances for the permission matrix (#273) ------------------------------------------------------------------------------
+        // The matrix calls every action of a site with harmless but real requests (an administrator's empty create request creates an empty
+        // row, a logout ends a session, one test fixture action switches a host option). It therefore runs against sites of its own: the
+        // browser tests keep their data, the route coverage baseline stays what the tests of the feature reach, and the matrix instances
+        // are started only when a matrix test runs.
+
+        /// <summary>A second instance of the LayUI test host for the permission matrix.</summary>
+        public static readonly SiteTarget LayUIMatrix = new SiteTarget
+        {
+            Name = "layui-e2ehost-matrix",
+            ProjectDir = LayUI.ProjectDir,
+            AssemblyName = LayUI.AssemblyName,
+            RouteExclusionFile = LayUI.RouteExclusionFile,
+            ReadyPath = LayUI.ReadyPath,
+            ReportRouteCoverage = false
+        };
+
+        /// <summary>A second instance of the Vue3Demo for the permission matrix (workflow feature off, the default).</summary>
+        public static readonly SiteTarget Vue3DemoMatrix = new SiteTarget
+        {
+            Name = "vue3demo-matrix",
+            ProjectDir = Vue3Demo.ProjectDir,
+            AssemblyName = Vue3Demo.AssemblyName,
+            RouteExclusionFile = Vue3Demo.RouteExclusionFile,
+            ReadyPath = Vue3Demo.ReadyPath,
+            AdminAccount = Vue3Demo.AdminAccount,
+            ReportRouteCoverage = false,
+            ConfigureEnvironment = (site, env) => Vue3DemoSetup.ConfigureEnvironment(Vue3DemoMatrix, site, env),
+            AfterStartAsync = Vue3DemoSetup.InstallAdminPasswordAsync
+        };
+
+        /// <summary>
+        /// The Vue3Demo started with EnableWorkflow=true (the demo registers the Elsa workflow engine when the setting is on), for the
+        /// permission matrix: which endpoints appear, disappear or change their outcome with the feature on.
+        /// </summary>
+        public static readonly SiteTarget Vue3DemoMatrixWithWorkflow = new SiteTarget
+        {
+            Name = "vue3demo-matrix-workflow",
+            ProjectDir = Vue3Demo.ProjectDir,
+            AssemblyName = Vue3Demo.AssemblyName,
+            RouteExclusionFile = Vue3Demo.RouteExclusionFile,
+            ReadyPath = Vue3Demo.ReadyPath,
+            AdminAccount = Vue3Demo.AdminAccount,
+            ReportRouteCoverage = false,
+            ConfigureEnvironment = (site, env) =>
+            {
+                Vue3DemoSetup.ConfigureEnvironment(Vue3DemoMatrixWithWorkflow, site, env);
+                env["EnableWorkflow"] = "true";
+            },
+            AfterStartAsync = Vue3DemoSetup.InstallAdminPasswordAsync
+        };
     }
 }

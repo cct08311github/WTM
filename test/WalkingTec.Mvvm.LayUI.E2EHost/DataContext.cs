@@ -87,7 +87,17 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost
                     folder.Children.Add(page);
                     Set<FrameworkMenu>().Add(folder);
                     Set<FunctionPrivilege>().AddRange(folder.FlatTree().Select(x => new FunctionPrivilege { RoleCode = "001", MenuItemId = x.ID, Allowed = true }));
+
+                    // role of the permission matrix tests (#273): the list page and read-only actions of Gadget, nothing else
+                    if (string.IsNullOrEmpty(E2ESeed.LimitedPassword) == false)
+                    {
+                        Set<FunctionPrivilege>().AddRange(folder.FlatTree()
+                            .Where(x => x == folder || x == page || E2ESeed.LimitedRoleActions.Contains(x.MethodName))
+                            .Select(x => new FunctionPrivilege { RoleCode = E2ESeed.LimitedRoleCode, MenuItemId = x.ID, Allowed = true }));
+                    }
                 }
+
+                SeedMatrixAccounts();
 
                 // menu for the Lab fixture pages (/Lab/*): a folder with one entry per page. The actions are AllRights, so
                 // only the menu entry is needed; the role gets the privilege rows like for any other menu entry.
@@ -175,6 +185,30 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost
             return state;
         }
 
+        /// <summary>
+        /// Accounts of the permission matrix tests (#273), only seeded when the test run supplies their passwords: a signed-in user with no
+        /// role, a user whose role has a few Gadget privileges (see E2ESeed.LimitedRoleActions), and a second administrator, so that the
+        /// matrix requests never touch the session of the administrator the browser tests use.
+        /// </summary>
+        private void SeedMatrixAccounts()
+        {
+            if (string.IsNullOrEmpty(E2ESeed.NoRolePassword) == false)
+            {
+                Set<FrameworkUser>().Add(new FrameworkUser { ITCode = E2ESeed.NoRoleAccount, Password = PasswordHasher.Default.Hash(E2ESeed.NoRolePassword), IsValid = true, Name = "E2E No Role" });
+            }
+            if (string.IsNullOrEmpty(E2ESeed.LimitedPassword) == false)
+            {
+                Set<FrameworkRole>().Add(new FrameworkRole { RoleCode = E2ESeed.LimitedRoleCode, RoleName = "E2E Limited" });
+                Set<FrameworkUser>().Add(new FrameworkUser { ITCode = E2ESeed.LimitedAccount, Password = PasswordHasher.Default.Hash(E2ESeed.LimitedPassword), IsValid = true, Name = "E2E Limited" });
+                Set<FrameworkUserRole>().Add(new FrameworkUserRole { UserCode = E2ESeed.LimitedAccount, RoleCode = E2ESeed.LimitedRoleCode });
+            }
+            if (string.IsNullOrEmpty(E2ESeed.MatrixAdminPassword) == false)
+            {
+                Set<FrameworkUser>().Add(new FrameworkUser { ITCode = E2ESeed.MatrixAdminAccount, Password = PasswordHasher.Default.Hash(E2ESeed.MatrixAdminPassword), IsValid = true, Name = "E2E Matrix Admin" });
+                Set<FrameworkUserRole>().Add(new FrameworkUserRole { UserCode = E2ESeed.MatrixAdminAccount, RoleCode = "001" });
+            }
+        }
+
         private static FrameworkMenu MakeMenu(SimpleAction act, bool isMainLink, int order)
         {
             var menu = new FrameworkMenu
@@ -212,5 +246,20 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost
         /// Set by Startup from configuration (E2E:AdminPassword) before the database is initialised.
         /// </summary>
         public static string AdminPassword { get; set; }
+
+        // permission matrix accounts (#273); the passwords come from E2E:Matrix*Password and are generated for every run
+        public const string NoRoleAccount = "e2enorole";
+        public const string LimitedAccount = "e2elimited";
+        public const string MatrixAdminAccount = "e2ematrixadmin";
+
+        /// <summary>Role code of the limited role (the code must be digits).</summary>
+        public const string LimitedRoleCode = "900";
+
+        /// <summary>Gadget actions the limited role may use besides the list page itself: read-only ones.</summary>
+        public static readonly string[] LimitedRoleActions = { "Search", "Details", "ExportExcel" };
+
+        public static string NoRolePassword { get; set; }
+        public static string LimitedPassword { get; set; }
+        public static string MatrixAdminPassword { get; set; }
     }
 }
