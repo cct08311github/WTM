@@ -4,6 +4,9 @@ name: e2e-smoke
 # and the Vue3Demo SPA with its API (#272). Not a required check. Reports: route coverage baseline of both sites
 # (artifact e2e-route-coverage) and JS function coverage of framework_layui.js (artifact e2e-js-coverage, #271), both also in the
 # step summary; on failure also Playwright traces, screenshots and the server logs (artifact e2e-failure-artifacts).
+# Permission matrix (#273): every action of the route inventory called by anonymous / no-role / limited-role / administrator identities with plain
+# HTTP and compared with the checked-in expectations (test/WalkingTec.Mvvm.E2E/Security); report in the step summary and the artifact
+# e2e-permission-matrix.
 # Tests tagged [TestCategory("nightly")] are left out here (none yet); run them with --filter "TestCategory=nightly".
 
 on:
@@ -92,7 +95,7 @@ jobs:
         if: always()
         run: |
           shopt -s nullglob
-          for f in TestResults/e2e/route-coverage/*.report.md TestResults/e2e/js-coverage/*.report.md; do
+          for f in TestResults/e2e/route-coverage/*.report.md TestResults/e2e/js-coverage/*.report.md TestResults/e2e/permission-matrix/summary.md; do
             cat "$f" >> "$GITHUB_STEP_SUMMARY"
           done
 
@@ -111,6 +114,15 @@ jobs:
         with:
           name: e2e-js-coverage
           path: TestResults/e2e/js-coverage/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload permission matrix report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-permission-matrix
+          path: TestResults/e2e/permission-matrix/
           if-no-files-found: warn
           retention-days: 14
 
