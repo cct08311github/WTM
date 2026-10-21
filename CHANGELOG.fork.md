@@ -10,6 +10,10 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
+## 未发布
+
+* **修改（BREAKING，安全）：**   `/_Framework` 的通用资料端点（`GetPagingData`、`GetEmptyData`、`Selector`、`GetExportExcel`、`GetExcelTemplate`、`UpdateModelProperty`）现在会检查所请求的 view model：请求需带有渲染该 view model 的页面写入的受保护参考（`_DONOT_USE_VMREF`），参考绑定使用者、租户、view model、用途与连线 key，会到期，且只在使用者仍能打开该页面时有效，语义与功能页的权限相同。`Selector` 仍为 `[Public]`，但同样需要参考；连线 key 必须与页面一致，`UpdateModelProperty` 只能修改页面列出的属性。LayUI 的 `wt:grid`、`wt:selector`、`wt:downloadTemplateButton` 自动写入参考，TagHelper 与范本产生的页面不需修改；升级当下已经打开的页面需重新整理。新增设定 `GenericEndpoints`（`Mode`=`Enforce`|`Legacy`、`ExemptViewModels`、`ReferenceLifetimeMinutes`），预设安全；新增 `Wtm.CreateGenericEndpointReference(...)` 供自行用 script 呼叫这些端点的页面使用。影响：自行用 script 呼叫上述端点的网站（需取得参考，或列入 `ExemptViewModels`，或暂时设 `Mode=Legacy`）。回滚：`GenericEndpoints:Mode=Legacy` 或退回上一版本。详见 FORK.md 第 23 节
+
 ## 10.0.0.9(2026-10-22)
 
 * **修复（安全）：**   API 响应不再包含用户的 `Password` 字段（#287）。框架的默认 JSON 设置（`UseWtmJsonOptions`）在**输出**时排除 `FrameworkUserBase.Password`（含其子类，例如各项目的 `FrameworkUser`）；读取输入不受影响，新增用户、修改密码照常。做法是在 `System.Text.Json` 的 type info resolver 上加一个只针对该属性的 modifier（`UserPasswordOutputExclusion`），不在模型上使用 `[JsonIgnore]`；`PocoConverter` 复制选项时保留 resolver，使经由它输出的实体同样适用。其他类型上的同名 `Password` 属性不受影响；框架发给其他服务的请求（`DefaultPostJsonOption`）不变。升级说明：修复在框架内，由范本产生的 `_Admin` controller 副本（`Get`、`Add`、`Edit`、`Password`）升级框架后即套用，**不需要修改**；响应中不再有该字段，下游若有读取响应中 `Password` 的脚本或客户端请改为不依赖它。仅在应用通过 `AddJsonOptions(o => o.UseWtmJsonOptions())` 套用框架的 JSON 设置时生效；自行配置 JSON 的应用可调用 `JsonSerializerOptions.ExcludeUserPasswordFromOutput()`。经 `CoreProgram.DefaultJsonOption`（与响应共用）写入分布式缓存的用户实体不会带出 `Password`，框架自身只缓存 `LoginUserInfo`，不受影响。LayUI 不读取 JSON 响应中的 `Password`，不受影响
