@@ -1,4 +1,33 @@
 import importToCDN from 'vite-plugin-cdn-import';
+import type { Plugin } from 'vite';
+
+/**
+ * CDN 模式下对应 external 模块的全局变量名（需与 cdn() 的 modules 保持一致）
+ */
+const cdnGlobals: Record<string, string> = {
+	vue: 'Vue',
+	'vue-demi': 'VueDemi',
+	'vue-router': 'VueRouter',
+	'element-plus': 'ElementPlus',
+};
+
+/**
+ * vite 8 (Rolldown) 对 external 的处理：ESM import 会被 vite-plugin-cdn-import 改写成全局变量，
+ * 但被转成 CJS 的依赖（如 vue-i18n.cjs.js、vue-grid-layout）里的 require('vue') 会原样留在产物中，
+ * 浏览器没有 require，运行时报 "Calling require for "vue" in an environment that doesn't expose the require function"。
+ * 这里在 index.html 里注入一个极小的 require，把 external 模块映射到 CDN 全局变量。
+ */
+const cdnRequireShim = (): Plugin => ({
+	name: 'wtm:cdn-require-shim',
+	apply: 'build',
+	transformIndexHtml() {
+		const code =
+			`(function(){var g=${JSON.stringify(cdnGlobals)};` +
+			`window.require=function(n){var v=g[n];if(v&&window[v])return window[v];` +
+			`throw new Error('Cannot require "'+n+'" in CDN mode: '+(v||'no global')+' is not available');};})();`;
+		return [{ tag: 'script', children: code, injectTo: 'head-prepend' }];
+	},
+});
 
 /**
  * 打包相关
@@ -10,7 +39,7 @@ import importToCDN from 'vite-plugin-cdn-import';
  */
 export const buildConfig = {
 	cdn() {
-		return importToCDN({
+		return [cdnRequireShim(), importToCDN({
 			prodUrl: 'https://unpkg.com/{name}@{version}/{path}',
 			modules: [
 				// autoComplete('vue'),
@@ -91,7 +120,7 @@ export const buildConfig = {
 				// 	path: 'https://cdn.jsdelivr.net/npm/vue-grid-layout@3.0.0-beta1/dist/vue-grid-layout.umd.min.js',
 				// },
 			],
-		});
+		})];
 	},
 	external: [
 		'vue',
