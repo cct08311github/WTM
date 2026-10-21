@@ -15,7 +15,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
-namespace WalkingTec.Mvvm.LayUI.E2EHost.Instrumentation
+namespace WalkingTec.Mvvm.E2E.Instrumentation
 {
     /// <summary>
     /// Test-only instrumentation for the route coverage report of the E2E tests.

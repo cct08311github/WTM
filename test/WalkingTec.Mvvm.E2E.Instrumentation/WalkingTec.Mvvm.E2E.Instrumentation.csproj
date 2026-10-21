@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Test-only support library for the E2E tests (#272). Never packed or published.
+    Contains
+      - the route coverage instrumentation (route inventory + request recording) shared by the LayUI E2E host,
+        which calls it from its Startup, and
+      - a hosting startup assembly (E2EHostingStartup) that adds the same instrumentation, and optionally serves a
+        prebuilt single page app, to a site that has no E2E code of its own (the Vue3Demo), so that demo/** stays untouched.
+        It is only active when a process lists it in ASPNETCORE_HOSTINGSTARTUPASSEMBLIES.
+    It deliberately references no WTM project: it only depends on the ASP.NET Core shared framework.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>WalkingTec.Mvvm.E2E.Instrumentation</RootNamespace>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+</Project>
