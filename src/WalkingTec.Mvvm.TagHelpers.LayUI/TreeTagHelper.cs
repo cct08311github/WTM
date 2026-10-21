@@ -32,6 +32,24 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// </para>
         /// </summary>
         public string ChangeFunc { get; set; }
+
+        private static readonly System.Text.RegularExpressions.Regex ChangeCallPattern = new System.Text.RegularExpressions.Regex(
+            @"^[\p{L}_$][\p{L}\p{N}_$]*(\.[\p{L}_$][\p{L}\p{N}_$]*)*\(data\)$");
+
+        /// <summary>
+        /// JS expression that calls the user-configured change callback directly. When no callback is
+        /// configured (or the name is not a plain, optionally dotted, JS identifier) the condition
+        /// does not restrict the linkage.
+        /// </summary>
+        private string ChangeCallExpression()
+        {
+            if (string.IsNullOrEmpty(ChangeFunc))
+            {
+                return "1==1";
+            }
+            var call = FormatFuncName(ChangeFunc);
+            return ChangeCallPattern.IsMatch(call) ? call : "1==1";
+        }
         public bool AutoRow { get; set; }
         public bool? EnableSearch { get; set; }
         public bool? ShowToolbar { get; set; } = true;
@@ -195,7 +213,7 @@ var {Id} = xmSelect.render({{
 	height: '400px',
     on:function(data){{
         {((LinkField != null || string.IsNullOrEmpty(LinkId) == false) ? @$"
-            if (eval(""{(string.IsNullOrEmpty(ChangeFunc) ? "1==1" : FormatFuncName(ChangeFunc))}"") != false) {{
+            if (({ChangeCallExpression()}) != false) {{
                 var u = ""{JsStringEncoder.Escape(TriggerUrl ?? "")}"";
                 if (u.indexOf(""?"") == -1) {{
                     u += ""?t="" + new Date().getTime();

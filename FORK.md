@@ -398,3 +398,17 @@ demo（`demo/WalkingTec.Mvvm.Vue3Demo`）的 `AccountController.Reg` 是匿名�
 - **`MakeDialogButton`**：只替換執行函式，沒有加上 `IsScript` 標頭檢查（加上會改變非 `IsScript` 回應的既有行為）
 - **影響範圍**：隨 NuGet 發佈的 `WalkingTec.Mvvm.Mvc`（`framework_layui.js`）與 `WalkingTec.Mvvm.TagHelpers.LayUI`（`LayuiUIService`）。兩者請同版本升級；已快取舊版 `framework_layui.js` 的瀏覽器需要重新載入才會有 `ff.ExecServerScript`
 - **測試**：`test/WalkingTec.Mvvm.Core.Test/JsTests/script-channel.test.js`（node，不需瀏覽器與網路）由 `ServerScriptChannelTests` 呼叫；找不到 `node` 時該測試標示為 Inconclusive
+
+## 19. LayUI `wt:tree`、`wt:combobox` 直接呼叫 `ChangeFunc`（#25，階段 1）
+
+`TreeTagHelper`、`ComboBoxTagHelper` 的 `ChangeFunc` 原本是把設定值放進字串後交給 `eval` 執行。現在改為產生直接呼叫的 script：
+
+| 項目 | 行為 |
+|---|---|
+| 有連動（`link-id` 或 `LinkField`） | 條件改為 `if ((<函式名稱>(data)) != false)`。函式名稱取 `ChangeFunc` 中 `(` 之前的部分（`FormatFuncName` 沿用）；未設定 `ChangeFunc` 時為 `(1==1)`，連動行為不變 |
+| `ChangeFunc` 的名稱 | 只接受一般的 JS 識別字，可用 `.` 連接（例如 `app.handlers.onPick`）；其他內容視為沒有設定，不輸出到 script（修改前原樣交給 `eval`） |
+| 沒有連動時 | 輸出與修改前逐字相同（`on:function(data){ <ChangeFunc>(data) }`） |
+
+- **`wt:submitbutton`**：`Click` 仍以既有方式執行，將於後續階段處理
+- **影響範圍**：隨 NuGet 發佈的 `WalkingTec.Mvvm.TagHelpers.LayUI`；一般用法（`ChangeFunc="fn"`）行為不變
+- 驗證：`DirectCallbackInvocationTests`（輸出不含 `eval(`、無連動時輸出不變、script 以 node 解析）
