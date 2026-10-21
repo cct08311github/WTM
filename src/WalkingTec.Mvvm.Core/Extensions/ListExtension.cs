@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Globalization;
 using System.Linq.Expressions;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 
 namespace WalkingTec.Mvvm.Core.Extensions
 {
@@ -49,9 +52,43 @@ namespace WalkingTec.Mvvm.Core.Extensions
             return rv;
         }
 
+        // Chart data is delivered as JSON text and parsed in the browser. Every user supplied string is written
+        // through System.Text.Json so quotes, backslashes, control characters and markup cannot break the JSON.
+        // UnsafeRelaxedJsonEscaping keeps non-ASCII text (for example Chinese) as is, so ordinary data produces
+        // exactly the same text as before; the result is never embedded in HTML directly.
+        private static readonly JsonSerializerOptions _chartJsonOptions = new JsonSerializerOptions
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        };
+
+        private static string JsonStr(string value)
+        {
+            return JsonSerializer.Serialize(value ?? string.Empty, _chartJsonOptions);
+        }
+
+        private static string JsonNum(double value)
+        {
+            // NaN / Infinity are not valid JSON numbers
+            return double.IsFinite(value) ? value.ToString(CultureInfo.InvariantCulture) : "0";
+        }
+
+        // Keeps a series name from being parsed as a function by the host's JSONfns.
+        private static readonly string[] _reviveUnsafePrefixes = { "function", "_PxEgEr_", "_NuFrRa_" };
+
+        private static string SafeSeriesName(string series)
+        {
+            foreach (var prefix in _reviveUnsafePrefixes)
+            {
+                if (series.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    return " " + series;
+                }
+            }
+            return series;
+        }
+
         public static object ToChartData<T>(this List<T> self, int radius = 100, string seriesname = "Info")
         {
-            //var data = string.Empty;
             if (self != null && self.Count > 0)
             {
                 var cd = self as List<ChartData>;
@@ -63,7 +100,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                         cd[i].Series = "Data";
                     }
                 }
-                string[] series = cd.Select(x => x.Series).Distinct().ToArray();
+                string[] series = cd.Select(x => SafeSeriesName(x.Series)).Distinct().ToArray();
 
 
                 var yCount = cd.GroupBy(x => x.Category).ToList();
@@ -76,7 +113,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                     foreach (var item in cd)
                     {
 
-                        dataset += $"[{item.ValueX},{item.Value},{item.Addition},\"{item.Category}\",\"{item.Series}\"]";
+                        dataset += $"[{JsonNum(item.ValueX)},{JsonNum(item.Value)},{JsonNum(item.Addition)},{JsonStr(item.Category)},{JsonStr(SafeSeriesName(item.Series))}]";
 
                         if (i < cd.Count - 1)
                         {
@@ -87,7 +124,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                     dataset += "]},";
                     for (i = 0; i < series.Length; i++)
                     {
-                        dataset += $"{{\"transform\": {{\"type\": \"filter\",\"config\": {{\"dimension\": 4,\"value\": \"{series[i]}\"}}}}}}";
+                        dataset += $"{{\"transform\": {{\"type\": \"filter\",\"config\": {{\"dimension\": 4,\"value\": {JsonStr(series[i])}}}}}}}";
                         if (i < series.Length - 1)
                         {
                             dataset += ",";
@@ -97,7 +134,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                 }
                 else
                 {
-                    object[,] rtc = new object[yCount.Count + 1, series.Length + 1];
+                    string[,] rtc = new string[yCount.Count + 1, series.Length + 1];
                     rtc[0, 0] = $"{seriesname}";
 
                     for (i = 0; i < series.Length; i++)
@@ -110,14 +147,14 @@ namespace WalkingTec.Mvvm.Core.Extensions
                         rtc[i + 1, 0] = item.Key;
                         for (int j = 0; j < series.Length; j++)
                         {
-                            var ser = item.Where(x => x.Series == series[j])?.FirstOrDefault();
+                            var ser = item.Where(x => SafeSeriesName(x.Series) == series[j])?.FirstOrDefault();
                             if (ser != null)
                             {
-                                rtc[i + 1, j + 1] = ser.Value;
+                                rtc[i + 1, j + 1] = ser.Value.ToString(CultureInfo.InvariantCulture);
                             }
                             else
                             {
-                                rtc[i + 1, j + 1] = 0;
+                                rtc[i + 1, j + 1] = "0";
                             }
                         }
 
@@ -128,7 +165,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                         dataset += "[";
                         for (int j = 0; j <= series.Length; j++)
                         {
-                            dataset += $"\"{rtc[i, j]}\"";
+                            dataset += JsonStr(rtc[i, j]);
                             if (j < series.Length)
                             {
                                 dataset += ",";
@@ -150,11 +187,11 @@ namespace WalkingTec.Mvvm.Core.Extensions
                     seriesStr += $"{{\"type\":\"charttype\"";
                     if (isScatter)
                     {
-                        seriesStr += $",\"encode\":{{\"x\":0,\"y\":1,\"tooltip\":[2,3]}},\"name\": \"{series[i]}\",\"datasetIndex\": {i + 1}";
-                        seriesStr += $",\"symbolSize\": \"function(data) {{return data[2] / ({max} / {radius})}}\"";
+                        seriesStr += $",\"encode\":{{\"x\":0,\"y\":1,\"tooltip\":[2,3]}},\"name\": {JsonStr(series[i])},\"datasetIndex\": {i + 1}";
+                        seriesStr += $",\"symbolSize\": \"function(data) {{return data[2] / ({JsonNum(max)} / {radius})}}\"";
                     }
                     seriesStr += "}";
-                    legend += $"\"{series[i]}\"";
+                    legend += JsonStr(series[i]);
                     if (i < series.Length - 1)
                     {
                         seriesStr += ",";

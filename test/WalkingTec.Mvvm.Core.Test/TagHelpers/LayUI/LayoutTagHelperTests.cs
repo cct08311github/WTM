@@ -139,6 +139,25 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
         }
 
         [TestMethod]
+        public void Chart_Scatter_TooltipEncodesDataValuesBeforeBuildingHtml()
+        {
+            var html = Render(new ChartTagHelper { Id = "sc1", Type = ChartTypeEnum.Scatter, NameX = "X", NameCategory = "Cat" }, "wt:chart");
+
+            AssertContains(html, "formatter: function (params)",
+                "var enc = function (v)", ".replace(/&/g, '&amp;')", ".replace(/</g, '&lt;')", ".replace(/>/g, '&gt;')", ".replace(/\"/g, '&quot;')", ".replace(/'/g, '&#39;')",
+                "return enc(params.seriesName) + ' <br/>'",
+                "+ xl + enc(params.value[0])", "+ yl + enc(params.value[1])", "+ al + enc(params.value[2])", "+ cl + enc(params.value[3])");
+            AssertNotContains(html, "return params.seriesName", "+ params.value[", "echarts.format.encodeHTML");
+        }
+
+        [TestMethod]
+        public void Chart_NonScatter_KeepsDefaultTooltip()
+        {
+            AssertContains(Render(new ChartTagHelper { Id = "b1", Type = ChartTypeEnum.Bar }, "wt:chart"), "tooltip: {},");
+            AssertContains(Render(new ChartTagHelper { Id = "l1", Type = ChartTypeEnum.Line }, "wt:chart"), "tooltip: {trigger: 'axis'},");
+        }
+
+        [TestMethod]
         public void TreeContainer_RendersTreeAndContentPane()
         {
             var vm = new LayuiTestVM
