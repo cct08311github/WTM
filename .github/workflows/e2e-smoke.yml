@@ -1,0 +1,97 @@
+name: e2e-smoke
+
+# Browser based smoke tests of the LayUI front end (Playwright, Chromium) against test/WalkingTec.Mvvm.LayUI.E2EHost.
+# Not a required check (#270). Reports: route coverage baseline (artifact e2e-route-coverage);
+# on failure also Playwright traces, screenshots and the server log (artifact e2e-failure-artifacts).
+
+on:
+  pull_request:
+    branches: [dotnet10]
+  push:
+    branches: [dotnet10]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  e2e-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', 'common.props', 'version.props', 'NuGet.Config') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore
+        run: dotnet restore test/WalkingTec.Mvvm.E2E/WalkingTec.Mvvm.E2E.csproj
+
+      # builds the E2E host (project reference without its assembly) and the tests
+      - name: Build
+        run: dotnet build test/WalkingTec.Mvvm.E2E/WalkingTec.Mvvm.E2E.csproj -c Release --no-restore
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('test/WalkingTec.Mvvm.E2E/WalkingTec.Mvvm.E2E.csproj') }}
+
+      - name: Install Playwright Chromium
+        run: pwsh test/WalkingTec.Mvvm.E2E/bin/Release/net10.0/playwright.ps1 install --with-deps chromium
+
+      - name: Run E2E tests
+        run: >
+          dotnet test test/WalkingTec.Mvvm.E2E/WalkingTec.Mvvm.E2E.csproj
+          -c Release --no-build
+          --logger "trx;LogFileName=e2e-tests.trx"
+          --results-directory TestResults/trx
+
+      - name: Route coverage summary
+        if: always()
+        run: |
+          shopt -s nullglob
+          for f in TestResults/e2e/route-coverage/*.report.md; do
+            cat "$f" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload route coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-route-coverage
+          path: TestResults/e2e/route-coverage/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-failure-artifacts
+          path: |
+            TestResults/e2e/failures/
+            TestResults/e2e/server/
+            TestResults/trx/
+          if-no-files-found: warn
+          retention-days: 14

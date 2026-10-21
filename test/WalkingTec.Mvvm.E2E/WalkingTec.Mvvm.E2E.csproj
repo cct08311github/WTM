@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Browser based end-to-end tests (Playwright for .NET, MSTest, Chromium).
+    The site under test is started as a separate process on a random port, see Infrastructure/SiteProcess.cs.
+    Targets: LayUI.E2EHost today; Vue3Demo can be added as a second SiteTarget (Infrastructure/Targets).
+    Run locally: see the "E2E tests" section of FORK.md.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>WalkingTec.Mvvm.E2E</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.6.0" />
+    <PackageReference Include="MSTest.TestAdapter" Version="3.11.1" />
+    <PackageReference Include="MSTest.TestFramework" Version="3.11.1" />
+    <PackageReference Include="Microsoft.Playwright.MSTest" Version="1.63.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Build the sites under test before the tests run, but do not reference their assemblies:
+      they run in their own process (WTM keeps static state and scans assemblies at startup).
+    -->
+    <ProjectReference Include="..\WalkingTec.Mvvm.LayUI.E2EHost\WalkingTec.Mvvm.LayUI.E2EHost.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- route exclusion lists (one per target) are read at run time from the output directory -->
+    <Content Include="Coverage\*.route-exclusions.json" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- where the host binaries are, resolved by SiteTarget without hard coded paths -->
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>E2E.Configuration</_Parameter1>
+      <_Parameter2>$(Configuration)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>E2E.RepoRoot</_Parameter1>
+      <_Parameter2>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '..', '..'))</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

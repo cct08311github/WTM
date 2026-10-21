@@ -159,7 +159,7 @@ git merge --no-ff upstream/dotnet10
 | 檔案 | 修改內容 | Issue |
 |---|---|---|
 | `common.props` | 新增 1 行 `<Import Project=".\fork.props" />` | #30 |
-| `WalkingTec.Mvvm.sln` | 加回 `test/WalkingTec.Mvvm.Admin.Test` | #18 |
+| `WalkingTec.Mvvm.sln` | 加回 `test/WalkingTec.Mvvm.Admin.Test`；新增 `test/WalkingTec.Mvvm.LayUI.E2EHost`、`test/WalkingTec.Mvvm.E2E` | #18、#270 |
 | `src/WalkingTec.Mvvm.Core/WTMContext.cs` | remote token 在使用前完整驗證 | #1 |
 | `src/WalkingTec.Mvvm.Core/ConfigOptions/JwtOptions.cs` | `CreateValidationParameters()`／`CreateBearerValidationParameters()`、不安全金鑰檢查、`AllowInsecureKey`、`AllowTokensWithoutExpiry`、熱重載偵測 | #1、#2、#3、#15、#21、#33 |
 | `src/WalkingTec.Mvvm.Core/ConfigOptions/Configs.cs` | `ExposeExceptionDetails`、`BufferJsonBodyOnly`、`WorkflowOptions` | #26、#17、#13 |
@@ -192,7 +192,7 @@ git merge --no-ff upstream/dotnet10
 | `README.md`、`README.zh-CN.md` | 開頭多一段 fork 說明（其餘內容不動，降低同步衝突） | #19 |
 | Dependabot 的依賴升級 | 各 csproj／`package-lock.json` 的版本號 | 見各 `dependencies` PR |
 
-fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder}.cs`、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`。
+fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder}.cs`、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270）。
 
 ## 7. CI、依賴更新與合併
 
@@ -428,3 +428,52 @@ demo（`demo/WalkingTec.Mvvm.Vue3Demo`）的 `AccountController.Reg` 是匿名�
 - **影響範圍**：隨 NuGet 發佈的 `WalkingTec.Mvvm.Mvc`（`framework_layui.js`）；使用 LayUI checkbox／radio 連動與 `LoadComboItems` 的頁面。已快取舊版 `framework_layui.js` 的瀏覽器需要重新載入
 - **下游提醒**：自行用 JavaScript 串接選項 HTML 的頁面，請對 `value`、`title` 與文字內容使用 `ff.EncodeHtml`
 - **測試**：`test/WalkingTec.Mvvm.Core.Test/JsTests/option-encoding.test.js`（node，不需瀏覽器與網路）由 `OptionEncodingTests` 呼叫；找不到 `node` 時該測試標示為 Inconclusive
+
+## 21. E2E 測試（#270）
+
+fork 承諾 LayUI 持續可用（第 3 節），所以用真的瀏覽器測 LayUI 前端。兩個專案都只供測試，`IsPackable=false`，不會被打包或發佈，也不影響下游。
+
+| 專案 | 內容 |
+|---|---|
+| `test/WalkingTec.Mvvm.LayUI.E2EHost` | 最小的 LayUI MVC 測試網站：登入頁、layuiadmin 首頁框架與選單、一個 CRUD 模組 `Gadget`（Index／Create／Edit／Details／Delete／BatchEdit／BatchDelete／Import／Export）。SQLite，資料全為合成 |
+| `test/WalkingTec.Mvvm.E2E` | MSTest + Playwright for .NET（Chromium）的冒煙測試，加上路由覆蓋報告 |
+
+**`Gadget` 模組是用 `src/WalkingTec.Mvvm.Mvc/GeneratorFiles/Mvc` 的範本產生的**（controller、ViewModels、Views 原樣保留）。所以範本改壞、產生出來的程式碼編譯不過或畫面壞掉時，這組測試會先發現。要重新產生：以 `IsQuickDebug=true` 啟動 E2EHost，對 `/_CodeGen/DoGen` 送出 `Gadget` 的設定；產生器同時會在 `test/WalkingTec.Mvvm.Admin.Test` 寫一個 `GadgetControllerTest.cs`，請刪掉。
+
+**LayUI 靜態檔不複製**：E2EHost 直接服務 `demo/WalkingTec.Mvvm.Vue3Demo/wwwroot` 的 `layui`、`layuiadmin`、`jquery`、`sitecss` 等（啟動時從 repo 目錄往上找；也可用設定 `E2E:StaticAssetsRoot` 指定）。`framework_layui.js` 則是 Mvc 的嵌入式資源，由框架在 `/_js` 提供。UI 字串共用 Vue3Demo 的 `Resources/Program.*.resx`（csproj 連結，不複製）。
+
+### 在本機執行
+
+```bash
+dotnet build test/WalkingTec.Mvvm.E2E -c Release          # 同時會建置 E2EHost
+# 只需做一次：安裝 Chromium（有 pwsh 時）
+pwsh test/WalkingTec.Mvvm.E2E/bin/Release/net10.0/playwright.ps1 install chromium
+# 沒有 pwsh 時，用輸出目錄內附的 node 驅動程式
+cd test/WalkingTec.Mvvm.E2E/bin/Release/net10.0 && .playwright/node/<平台>/node .playwright/package/cli.js install chromium && cd -
+
+dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build
+HEADED=1 dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build   # 顯示瀏覽器視窗
+```
+
+手動看站台：`cd test/WalkingTec.Mvvm.LayUI.E2EHost && dotnet run`，開 `http://127.0.0.1:8599`，帳號 `e2eadmin`，密碼在 `appsettings.json` 的 `E2E:AdminPassword`（僅限本機手動執行的暫用值）。
+
+### 運作方式與輸出
+
+- 測試啟動時以獨立行程啟動 E2EHost（真的 Kestrel，隨機 port，暫存目錄內的 SQLite）。不使用 in-process 的 `WebApplicationFactory`，因為 WTM 有靜態狀態並在啟動時掃描組件，獨立行程更接近實際執行，也讓之後加入 Vue3Demo 時互不干擾
+- 管理員密碼與簽章金鑰每次執行隨機產生，只放在行程的環境變數，不寫入任何檔案
+- 輸出在 `TestResults/e2e/`（可用環境變數 `E2E_OUTPUT_DIR` 改）：
+  - `route-coverage/<target>.report.md|json`：路由覆蓋報告；`<target>.inventory.json`：所有 action 清單；`<target>.hits.jsonl`：實際執行的 action
+  - `server/<target>.log`：伺服器 log
+  - `failures/<測試名>/`：失敗測試的 Playwright trace（`trace.zip`）、截圖、瀏覽器 console
+- 路由清單由 E2EHost 啟動後以 `IActionDescriptorCollectionProvider` 列出所有 controller action（含 `_Framework` 等框架 controller）；執行紀錄由 E2EHost 內的測試專用 action filter 寫入。兩者只在設定 `E2E:RouteInventoryPath`／`E2E:RouteHitLogPath` 時啟用
+- 排除清單：`test/WalkingTec.Mvvm.E2E/Coverage/layui-e2ehost.route-exclusions.json`。每一條都要有 `id` 與 `reason`；比對欄位可用 `key`、`controller`、`area`、`attribute`（如 `DebugOnly`）、`controllerTypePrefix`。沒有任何 action 符合的規則會在報告中列為「未使用」
+- 目前只記錄基線，**不因覆蓋率低而失敗**；門檻在後續 Issue 逐步提高
+
+### CI
+
+`.github/workflows/e2e-smoke.yml`（job `e2e-smoke`）在 PR 與 push 到 `dotnet10` 時於 ubuntu 執行，上傳 `e2e-route-coverage`（覆蓋報告）；失敗時另外上傳 `e2e-failure-artifacts`。**目前不是 required check**。
+
+### 擴充
+
+- 新增被測網站：在 `Infrastructure/Targets/SiteTargets.cs` 新增一個 `SiteTarget`、加一份排除清單；行程啟動、命中紀錄與報告的程式共用。Vue3Demo 要加入時，需要網站端提供同樣的 `E2E:*` 設定（或另做 hosting startup 組件，這樣不必改 `demo/**`）
+- 新的 LayUI 頁面測試放在 `Pages/`（page object）與 `Tests/`

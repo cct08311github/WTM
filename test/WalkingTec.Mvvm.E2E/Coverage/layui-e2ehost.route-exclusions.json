@@ -1,0 +1,54 @@
+{
+  "rules": [
+    {
+      "id": "code-generator",
+      "reason": "Code generator (_CodeGen). Marked DebugOnly: it refuses requests unless IsQuickDebug is on, and the host runs with it off. The generator output is exercised when the host's CRUD module is regenerated, not in the browser tests.",
+      "match": { "attribute": "DebugOnly" }
+    },
+    {
+      "id": "workflow-rest-api",
+      "reason": "Elsa workflow REST API controllers. The workflow feature (EnableWorkflow) is not enabled in the E2E host, so these endpoints are not part of the site.",
+      "match": { "controllerTypePrefix": "Elsa." }
+    },
+    {
+      "id": "workflow-pages",
+      "reason": "Workflow designer pages. Disabled feature, see workflow-rest-api.",
+      "match": { "controller": "_Workflow" }
+    },
+    {
+      "id": "workflow-api-disabled-stub",
+      "reason": "Stub that answers 404 for /_WorkflowApi/* when the workflow feature is disabled; nothing to cover in the browser.",
+      "match": { "controller": "WorkflowApiDisabled" }
+    },
+    {
+      "id": "external-github-lookup",
+      "reason": "Calls api.github.com on behalf of the demo front page. Tests must not depend on the network.",
+      "match": { "key": "_framework/getgithubinfo" }
+    },
+    {
+      "id": "external-github-lookup-stars",
+      "reason": "Calls api.github.com on behalf of the demo front page. Tests must not depend on the network.",
+      "match": { "key": "_framework/getgithubstarts" }
+    },
+    {
+      "id": "multi-site-main-host",
+      "reason": "Endpoints that only make sense with a configured main host (HasMainHost, cross-site user cache removal and remote entry). The E2E host is a single site.",
+      "match": { "key": "_framework/remoteentry" }
+    },
+    {
+      "id": "multi-site-cache-removal-account",
+      "reason": "Cross-site user cache removal, see multi-site-main-host.",
+      "match": { "key": "_framework/removeusercachebyaccount" }
+    },
+    {
+      "id": "multi-site-cache-removal-role",
+      "reason": "Cross-site user cache removal, see multi-site-main-host.",
+      "match": { "key": "_framework/removeusercachebyrole" }
+    },
+    {
+      "id": "multi-site-cache-removal-group",
+      "reason": "Cross-site user cache removal, see multi-site-main-host.",
+      "match": { "key": "_framework/removeusercachebygroup" }
+    }
+  ]
+}
