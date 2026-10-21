@@ -15,6 +15,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * **修复（demo）：**   `VITE_OPEN_CDN=true` 打包的 Vue3 demo 在浏览器中白屏，报 `Calling require for "vue" in an environment that doesn't expose the require function`（#258）。原因：vite 8 (Rolldown) 下被转成 CJS 的依赖（`vue-i18n.cjs.js`、`vue-grid-layout`）里的 `require('vue')` 不会被 vite-plugin-cdn-import 改写。现于 CDN 模式在 `index.html` 注入一个极小的 `require`，映射到 CDN 全局变量（Vue / VueRouter / ElementPlus / VueDemi）。默认模式产物不变；仅限 demo
 * **修改（BREAKING，安全）：**   `/v1/designer/*` 现在一律要求已登录用户（#225）。影响：启用 workflow 且未登录的调用方
 * **修改（BREAKING，安全）：**   Elsa `/v1/*` 端点现在一律要求已登录用户，与 `RequireAuthentication` 无关（#256）。影响：启用 workflow 且未登录的调用方；已登录与 `RequireAdminRole` 行为不变。仅在 `EnableWorkflow=true` 时套用（`/v1/activities` 除外）。回滚：退回上一版本
+* **修复（安全，demo）：**   Vue3 demo 的图表元件（`src/components/echart/index.vue`）不再以动态代码执行处理响应与属性（#227）。响应改以 `JSON.parse` 解析，series 的类型、`radius`、`smooth` 与 base option 由前端直接组成对象，scatter 的 `symbolSize` 只按固定格式取出数字后在前端还原成固定函数，tooltip 对数据值做 HTML 转义。同时修复 Scatter 图不显示数据点、PieHollow 图无法渲染、Line 图数据点标记不显示的问题。仅限 demo，不影响 NuGet 包；自行复制该元件的下游请一并更新
 
 ## 10.0.0.7(2026-10-21)
 
