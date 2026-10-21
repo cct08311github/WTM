@@ -9,7 +9,6 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -42,10 +41,33 @@ namespace WalkingTec.Mvvm.Mvc
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 return;
             }
-            if (WorkflowActivitiesGuard.IsPublicActivitiesRequest(context.Request))
+            if (WorkflowActivitiesGuard.IsActivitiesListRequest(context.Request) && WorkflowActivitiesGuard.IsReadMethod(context.Request))
             {
                 // #216: describe the activities in-process (no HTTP self-call, no secret header, no call target that follows the Host header)
-                var txt = await WorkflowActivitiesDescriber.DescribeAsync(context.RequestServices, context.RequestAborted);
+                string txt;
+                try
+                {
+                    // the Elsa controller's AuthorizeFilter is no longer in the way, so apply the same policy here
+                    var status = await WorkflowActivitiesGuard.AuthorizeAsync(context, wtm.ConfigInfo);
+                    if (status != StatusCodes.Status200OK)
+                    {
+                        context.Response.StatusCode = status;
+                        return;
+                    }
+                    txt = await WorkflowActivitiesDescriber.DescribeAsync(context.RequestServices, context.RequestAborted);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    // nothing has been written yet; log the type and message only (no request content)
+                    context.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("WalkingTec.Mvvm.Workflow")
+                        .LogError("Describing the workflow activities failed: {ExceptionType}: {ExceptionMessage}", ex.GetType().FullName, ex.Message);
+                    context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+                    return;
+                }
                 if (txt == null)
                 {
                     // workflow engine not registered: behave as if this middleware did not handle the path
@@ -55,9 +77,12 @@ namespace WalkingTec.Mvvm.Mvc
                 var cul = Thread.CurrentThread.CurrentCulture;
                 if (cul.Name?.ToLower() == "zh" || cul.Name?.ToLower() == "zh-cn")
                 {
-                    await context.Response.WriteAsync(this.TranslateWorkflow(txt));
+                    txt = this.TranslateWorkflow(txt);
                 }
-                else
+                context.Response.ContentType = "application/json; charset=utf-8";
+                context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+                context.Response.Headers["Cache-Control"] = "no-store";
+                if (HttpMethods.IsHead(context.Request.Method) == false)
                 {
                     await context.Response.WriteAsync(txt);
                 }

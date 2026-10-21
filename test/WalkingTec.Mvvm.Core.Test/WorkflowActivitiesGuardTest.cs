@@ -117,7 +117,7 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
-        public async Task Middleware_InnerUse_SignedIn_PassesToEngine()
+        public async Task Middleware_InnerUse_SignedIn_WithoutEngine_FallsThrough()
         {
             var (ctx, next) = await Run(Create("/v1/activities", "?inneruse=1", userAuthenticated: true));
             Assert.IsTrue(next);
@@ -201,17 +201,53 @@ namespace WalkingTec.Mvvm.Core.Test
         [DataRow("/v1/activities", "", true)]
         [DataRow("/v1.0/activities", "", true)]
         [DataRow("/V01/Activities/", "", true)]
-        [DataRow("/v1.0/activities", "?inneruse=1", false)]
-        [DataRow("/v1/activities", "?inneruse=1", false)]
+        [DataRow("/v1.0/activities", "?inneruse=1", true)]
+        [DataRow("/v1/activities", "?inneruse=1", true)]
         [DataRow("/v1/activities", "?inneruse=1&x=1", true)]
+        [DataRow("//v1/activities", "", true)]
+        [DataRow("///v1/activities/", "?inneruse=1", true)]
         [DataRow("/v1/activities/Elsa.X", "", false)]
         [DataRow("/v1/workflow-definitions", "", false)]
-        public void Matchers_AgreeOnVersionCaseAndTrailingSlash(string path, string query, bool isPublic)
+        public void Matchers_AgreeOnVersionCaseAndTrailingSlash(string path, string query, bool isList)
         {
             var ctx = Create(path, query);
-            Assert.AreEqual(isPublic, WorkflowActivitiesGuard.IsPublicActivitiesRequest(ctx.Request));
+            Assert.AreEqual(isList, WorkflowActivitiesGuard.IsActivitiesListRequest(ctx.Request));
             Assert.AreEqual(path.IndexOf("activities", StringComparison.OrdinalIgnoreCase) >= 0 && path.StartsWith("/v1/workflow") == false,
                 WorkflowActivitiesGuard.IsActivitiesRequest(ctx.Request));
+        }
+
+        [TestMethod]
+        public async Task Middleware_LeadingDoubleSlash_IsGuardedToo()
+        {
+            foreach (var path in new[] { "//v1/activities", "///v1.0/Activities/", "//v1/activities/Elsa.X" })
+            {
+                var (ctx, next) = await Run(Create(path, auth: new FakeAuthService()));
+                Assert.AreEqual(401, ctx.Response.StatusCode, path);
+                Assert.IsFalse(next, path);
+            }
+        }
+
+        [TestMethod]
+        public async Task Middleware_AnonymousNonGet_StillGets401()
+        {
+            foreach (var method in new[] { "POST", "PUT", "DELETE", "PATCH", "OPTIONS" })
+            {
+                var ctx = Create("/v1/activities", auth: new FakeAuthService());
+                ctx.Request.Method = method;
+                var (res, next) = await Run(ctx);
+                Assert.AreEqual(401, res.Response.StatusCode, method);
+                Assert.IsFalse(next, method);
+            }
+        }
+
+        [TestMethod]
+        public async Task SignedIn_ByJwtOnly_SetsHttpContextUser()
+        {
+            var ctx = Create("/v1/activities", auth: new FakeAuthService(JwtBearerDefaults.AuthenticationScheme));
+            Assert.IsFalse(ctx.User.Identity.IsAuthenticated);
+            Assert.IsTrue(await WorkflowActivitiesGuard.IsSignedInAsync(ctx));
+            Assert.IsTrue(ctx.User.Identity.IsAuthenticated, "WTMContext.LoginUserInfo reads HttpContext.User");
+            Assert.AreEqual(JwtBearerDefaults.AuthenticationScheme, ctx.User.Identity.AuthenticationType);
         }
     }
 }

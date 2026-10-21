@@ -320,12 +320,17 @@ demo（`demo/WalkingTec.Mvvm.Vue3Demo`）的 `AccountController.Reg` 是匿名�
 |---|---|
 | `/v1/activities`，已登入（cookie 或 JWT） | 中介層**在程式內**取得活動描述（`WorkflowActivitiesDescriber`），結果與 Elsa 自己的 `/v1/activities` 逐位元組相同；`zh`／`zh-cn` 的翻譯照舊 |
 | `/v1/activities`，未登入 | 直接回 401，不到 Elsa |
-| `/v1/activities?inneruse=1`，未登入 | 回 401（與公開形式相同；已沒有合法的內部呼叫）。已登入時照舊交給 Elsa，回傳未經翻譯的原始結果 |
-| `/v1.0/activities`、`/v01/activities`、`/V1/Activities/`、`/v1/activities/...` | 與上面相同的檢查。Elsa 的路由是 `v{version:apiVersion}/activities`，版本段可以是 `v1`、`v1.0`、`v01` 等，所以比對的是 `^/v[^/]*/activities(/\|$)`（不分大小寫，結尾斜線與子路徑都算） |
+| `/v1/activities?inneruse=1` | 與其他形式完全相同（已沒有合法的內部呼叫，也沒有例外）：未登入回 401；已登入走同一條程式內路徑，權限檢查與翻譯都一致 |
+| `/v1.0/activities`、`/v01/activities`、`/V1/Activities/`、`/v1/activities/...` | 與上面相同的檢查。Elsa 的路由是 `v{version:apiVersion}/activities`，版本段可以是 `v1`、`v1.0`、`v01` 等，所以比對的是 `^/+v[^/]*/activities(/\|$)`（不分大小寫，結尾斜線、子路徑與開頭多餘的 `/`（`//v1/activities`）都算） |
 
 - **登入判斷**：中介層順序是 `UseAuthentication` → `UseAuthorization` → `UseSession` → `UseWtm`，執行到 `WtmMiddleware` 時 WTM cookie（預設 scheme）已驗證、`HttpContext.User` 已填好。JWT Bearer 不是預設 scheme，`UseAuthentication` 不會驗證它，所以另外呼叫 `AuthenticateAsync`（cookie、JWT 各一次）。任何例外都視為未登入（fail closed）。應用程式必須把 `UseAuthentication` 放在 `UseWtm` 之前（`WTMContext.LoginUserInfo` 本來就需要）
 - **在程式內取得活動描述（#216）**：10.0.0.6 的做法是中介層對自己發出 HTTP 呼叫 `/v1/activities?inneruse=1`，用程序內的隨機密鑰 header 放行；在預設的 `AllowedHosts: "*"` 且沒設 `InternalCallBaseAddress` 時，呼叫目標（連同密鑰）由 Host header 決定，已登入者可以偽造 Host 取得密鑰。現在改成 `WorkflowActivitiesDescriber.DescribeAsync` 直接呼叫 Elsa 的服務，**不再有內部 HTTP 呼叫、密鑰 header（`X-Wtm-Internal-Call`）、專用的 no-redirect client（`WtmWorkflowInternal`），也不再用 `ResolveSelfCall`**
 - **與 Elsa 一致**：實作複製 Elsa.Server.Api 2.17.0 的 `Elsa.Server.Api.Endpoints.Activities.List`：`IActivityTypeService.GetActivityTypesAsync` 取得所有 activity type，逐一 `DescribeActivityType`，並移除 `IsBrowsable == false` 的輸入與輸出屬性（`GetOptions` 下拉選項在 describe 時產生，維持原樣）；序列化用 Elsa 註冊的 `IEndpointContentSerializerSettingsProvider`（Newtonsoft.Json，camelCase、NodaTime、flag enum、忽略 null）。單元測試把輸出與「Elsa 的 `List` controller 經 MVC Newtonsoft executor 實際寫出的內容」逐字串比對；實測（Vue3Demo）修改前後的回應逐位元組相同
+- **`RequireAuthentication` / `RequireAdminRole` 照樣生效（review 補強）**：以前自我呼叫會經過 Elsa controller 上的 `AuthorizeFilter(BuildPolicy(requireAdminRole))`，改成程式內呼叫後這個檢查不會自動發生，所以 `WtmMiddleware` 在 `RequireAuthentication=true` 時先用同一個 policy（cookie 或 JWT，`RequireAdminRole=true` 時再加流程管理員角色）透過 `IPolicyEvaluator` 檢查：未登入 401、已登入但權限不足 403，通過才描述活動。`RequireAuthentication=false` 時維持「只要登入即可」。授權服務缺少或檢查過程發生例外時 fail closed（500，空 body）
+- **只處理 GET 與 HEAD**：其他 HTTP 方法交給下一個中介層；但未登入時不論什麼方法都先回 401（判斷順序：路徑符合 → 是否登入 → 方法 → policy → 描述）。HEAD 只回 header，不回 body
+- **回應 header**：`Content-Type: application/json; charset=utf-8`、`X-Content-Type-Options: nosniff`、`Cache-Control: no-store`（只在成功時設定）
+- **失敗處理**：描述過程發生例外時回 500、body 為空，只以 Error 等級記錄例外型別與訊息（不記 request 內容）；`OperationCanceledException`（請求中止）照原樣往外丟
+- **JWT 呼叫者的 `HttpContext.User`**：JWT 不是預設 scheme，`UseAuthentication` 不會填 `HttpContext.User`，而 `WTMContext.LoginUserInfo`（含租戶）正是從 `HttpContext.User` 的 claims 載入；登入判斷以 JWT 驗證成功時，會把驗證後的 principal 設到 `HttpContext.User`，管理員角色檢查才讀得到正確的使用者
 - **沒有 workflow 引擎時**：服務沒有註冊（`EnableWorkflow=false`）時，已登入的 `/v1/activities` 交給下一個中介層（一般為 404）；未登入仍是 401
 - **誰會受影響**：只有 `EnableWorkflow=true` 的網站，而且只有未登入的呼叫者。從已登入後台開啟的流程設計器不受影響。沒有啟用 workflow 的網站不受影響
 - **升級方式**：自行呼叫 `/v1/activities` 的整合請改帶登入 cookie 或 `Authorization: Bearer <JWT>`
