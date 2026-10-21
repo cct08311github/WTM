@@ -29,6 +29,9 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
         public Uri BaseUri { get; private set; }
         public string AdminAccount { get; }
         public string AdminPassword { get; }
+
+        /// <summary>Throw-away SQLite database file of this run (inside the temporary directory that is deleted on dispose).</summary>
+        public string DatabasePath { get; }
         public string LogPath { get; }
         public string InventoryPath { get; }
         public string HitLogPath { get; }
@@ -36,10 +39,11 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
         private SiteProcess(SiteTarget target, string outputDir)
         {
             Target = target;
-            AdminAccount = "e2eadmin";
+            AdminAccount = target.AdminAccount;
             AdminPassword = RandomToken(18);
             _tempDir = Path.Combine(Path.GetTempPath(), "wtm-e2e-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_tempDir);
+            DatabasePath = Path.Combine(_tempDir, "e2e.db");
 
             var serverDir = Path.Combine(outputDir, "server");
             var coverageDir = Path.Combine(outputDir, "route-coverage");
@@ -68,11 +72,13 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
             env["ASPNETCORE_ENVIRONMENT"] = "Production";
             env["DOTNET_NOLOGO"] = "1";
             env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
-            env["Connections__0__Value"] = "Data Source=" + Path.Combine(_tempDir, "e2e.db");
+            env["Connections__0__Value"] = "Data Source=" + DatabasePath;
+            env["Connections__0__DbType"] = "sqlite";
             env["JwtOptions__SecurityKey"] = RandomToken(48);
             env["E2E__AdminPassword"] = AdminPassword;
             env["E2E__RouteInventoryPath"] = InventoryPath;
             env["E2E__RouteHitLogPath"] = HitLogPath;
+            target.ConfigureEnvironment?.Invoke(this, env);
 
             _process = new Process { StartInfo = psi };
         }
@@ -146,6 +152,10 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
                 cts.Token.ThrowIfCancellationRequested();
                 await Task.Delay(100, cts.Token);
             }
+            if (Target.AfterStartAsync != null)
+            {
+                await Target.AfterStartAsync(this);
+            }
         }
 
         /// <summary>
@@ -205,7 +215,7 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
             }
         }
 
-        private static string RandomToken(int bytes)
+        public static string RandomToken(int bytes)
         {
             return Convert.ToBase64String(RandomNumberGenerator.GetBytes(bytes)).Replace('+', 'a').Replace('/', 'b').TrimEnd('=');
         }

@@ -282,6 +282,7 @@ __pycache__/
 /demo/WalkingTec.Mvvm.VueDemo/ClientApp/yarn.lock
 *.lock
 /demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/dist
+/demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/dist-e2e
 /.reasonix
 /demo/WalkingTec.Mvvm.Demo/wwwroot/upload
 /BaseImportVM_old_top_part.cs

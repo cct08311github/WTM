@@ -1,14 +1,17 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 
 namespace WalkingTec.Mvvm.E2E.Infrastructure
 {
     /// <summary>
-    /// Describes a web site the E2E tests can run against. Adding a second target (for example the Vue3Demo)
-    /// means adding another static instance in <see cref="SiteTargets"/> plus its route exclusion file; the
-    /// process start, hit recording and report code is shared.
+    /// Describes a web site the E2E tests can run against. A new target is another static instance in
+    /// <see cref="SiteTargets"/> plus its route exclusion file; the process start, hit recording and report code is shared.
+    /// A site that has no E2E code of its own (the Vue3Demo) gets the route instrumentation through a hosting startup
+    /// assembly, which <see cref="ConfigureEnvironment"/> activates by environment variables.
     /// </summary>
     public sealed class SiteTarget
     {
@@ -31,6 +34,15 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
 
         /// <summary>True when the tests collect Chromium JS coverage of the LayUI framework script (/_js/framework_layui.js) against this site.</summary>
         public bool CollectJsCoverage { get; init; }
+
+        /// <summary>Account the tests sign in with. The password is generated for every run (see <see cref="SiteProcess.AdminPassword"/>).</summary>
+        public string AdminAccount { get; init; } = "e2eadmin";
+
+        /// <summary>Adds target specific environment variables for the site process (called before it starts).</summary>
+        public Action<SiteProcess, IDictionary<string, string>> ConfigureEnvironment { get; init; }
+
+        /// <summary>Runs once the site answers, before the first test; used to install the generated admin password.</summary>
+        public Func<SiteProcess, Task> AfterStartAsync { get; init; }
 
         public string RepoRoot => AssemblyMetadata("E2E.RepoRoot") ?? FindRepoRoot();
 

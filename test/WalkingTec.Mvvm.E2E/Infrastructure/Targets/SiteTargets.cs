@@ -15,7 +15,20 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
             CollectJsCoverage = true
         };
 
-        // Future: public static readonly SiteTarget Vue3Demo = ... (needs the demo to expose the same E2E:* settings,
-        // or a hosting startup assembly that adds the instrumentation without touching demo/**).
+        /// <summary>
+        /// demo/WalkingTec.Mvvm.Vue3Demo: Element Plus SPA (ClientApp built with Vite) plus the ASP.NET Core API. The demo is not
+        /// changed; see <see cref="Vue3DemoSetup"/> for how it is configured and instrumented.
+        /// </summary>
+        public static readonly SiteTarget Vue3Demo = new SiteTarget
+        {
+            Name = "vue3demo",
+            ProjectDir = "demo/WalkingTec.Mvvm.Vue3Demo",
+            AssemblyName = "WalkingTec.Mvvm.Vue3Demo",
+            RouteExclusionFile = "vue3demo.route-exclusions.json",
+            ReadyPath = "/",
+            AdminAccount = "admin",
+            ConfigureEnvironment = (site, env) => Vue3DemoSetup.ConfigureEnvironment(Vue3Demo, site, env),
+            AfterStartAsync = Vue3DemoSetup.InstallAdminPasswordAsync
+        };
     }
 }
