@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Net;
 using System.Text;
 
 namespace WalkingTec.Mvvm.Core
@@ -43,6 +44,24 @@ namespace WalkingTec.Mvvm.Core
                 sb.Append(rep);
             }
             return sb == null ? value : sb.ToString();
+        }
+
+        /// <summary>
+        /// Encodes <paramref name="value"/> exactly once, for text that may already be HTML-encoded (for example a
+        /// value the model binder encoded when it was saved, <c>UIOptions.EncodeHtmlContent</c>): the text is
+        /// HTML-decoded one level first and then encoded with <see cref="Encode(string)"/>, so an already-encoded
+        /// value is not encoded a second time, while the output is always the result of <see cref="Encode(string)"/>
+        /// and therefore never contains a raw <c>&lt; &gt; " '</c> or an entity the encoder did not write itself,
+        /// whatever the input mixes. The decode is a single level, so text that was typed as an entity
+        /// (stored as <c>&amp;amp;lt;</c>) still displays as typed.
+        /// </summary>
+        public static string EncodeOnce(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return string.Empty;
+            }
+            return Encode(WebUtility.HtmlDecode(value));
         }
 
         /// <summary>

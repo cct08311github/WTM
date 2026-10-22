@@ -65,7 +65,6 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("#286: with UIOptions:EncodeHtmlContent on, a value saved through a form (already HTML-encoded by the framework when it was bound) is encoded again, so the grid shows the entities themselves.")]
         public async Task Grid_WithEncodeHtmlContentOn_ShowsTheSavedTextAsTyped()
         {
             await SetHtmlContentEncodingAsync(true);
