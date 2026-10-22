@@ -49,6 +49,21 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
         }
 
         [TestMethod]
+        public void FrameworkLayuiJs_ClearSelector_LooksUpTheContainerOfTheGivenSelector()
+        {
+            // wt:selector renders its hidden ids inside "<id>_Container"; clearSelector must use the id it is given
+            var js = ReadResource(ResourceName);
+            var start = js.IndexOf("clearSelector: function (id)", StringComparison.Ordinal);
+            Assert.IsTrue(start >= 0, "ff.clearSelector is not defined");
+            var end = js.IndexOf("setSelectorPara:", start, StringComparison.Ordinal);
+            Assert.IsTrue(end > start, "could not delimit ff.clearSelector");
+            var body = js.Substring(start, end - start);
+
+            StringAssert.Contains(body, "$('#' + id + '_Container input[type=hidden]')");
+            Assert.IsFalse(body.Contains("\"id\""), "ff.clearSelector must not look up a container named literally id_Container");
+        }
+
+        [TestMethod]
         public void FrameworkLayuiJs_IsServedByTheEmbeddedFileProviderUsedForSlashJs()
         {
             // UseWtmStaticFiles maps /_js to EmbeddedFileProvider(Mvc assembly, "WalkingTec.Mvvm.Mvc")
