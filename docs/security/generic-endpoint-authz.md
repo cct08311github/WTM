@@ -1,21 +1,21 @@
 # `_Framework` 通用資料端點的授權設計
 
-> 狀態：實作於 `security/ghsa-mwxh-generic-endpoint-authz`（私有 fork，GHSA-mwxh-vh26-ph3h）。本文件在公開前須先經維護者審閱，並依 FORK.md 第 8 節改為中性措辭。
+> 本文件說明通用資料端點如何檢查所請求的 view model、升級時需要注意的事項與相容設定。措辭依 FORK.md 第 8 節，只描述檢查的內容。
 
-## 1. 要強化的是什麼
+## 1. 檢查的範圍
 
 `src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs` 的類別層級是 `[AllRights]`（任何已登入的使用者）。其中六個 action 依請求帶來的 `_DONOT_USE_VMNAME` 建立 view model：
 
-| action | 用途 | 原本的授權 |
+| action | 用途 | 參考的目的 |
 |---|---|---|
-| `GetPagingData` | LayUI 表格取得分頁資料（Selector 內的表格走這一條） | 已登入即可 |
-| `GetEmptyData` | 取得一列空資料 | 已登入即可 |
-| `GetExportExcel` | 匯出 Excel | 已登入即可 |
-| `GetExcelTemplate` | 下載匯入範本 | 已登入即可 |
-| `UpdateModelProperty` | 修改單一屬性 | 已登入即可 |
-| `Selector` | 選擇器彈窗（含 `Ids` 對應的已選資料） | `[Public]` |
+| `GetPagingData` | LayUI 表格取得分頁資料（Selector 內的表格走這一條） | `List` |
+| `GetEmptyData` | 取得一列空資料 | `List` |
+| `GetExportExcel` | 匯出 Excel | `Export` |
+| `GetExcelTemplate` | 下載匯入範本 | `Template` |
+| `UpdateModelProperty` | 修改單一屬性 | `Update` |
+| `Selector` | 選擇器彈窗（含 `Ids` 對應的已選資料），維持 `[Public]` | `Selector` |
 
-這些端點沒有檢查「呼叫者是否有擁有該 view model 的功能（選單／action）的權限」。資料權限（`DPWhere`）仍然生效，但選單權限是下游最主要的保護，所以這些端點必須提供和功能頁相同的語意：`PrivilegeFilter`、`WTMContext.IsAccessable`、管理員角色、`[Public]`／`[AllRights]`、租戶。
+這些端點現在會檢查所請求的 view model 對呼叫者是否可用，語意和功能頁相同：`PrivilegeFilter`、`WTMContext.IsAccessable`、管理員角色、`[Public]`／`[AllRights]`、租戶。資料權限（`DPWhere`）照常生效。
 
 ## 2. 限制條件
 
@@ -33,7 +33,7 @@
   - 授權的依據是「使用者能打開渲染這個 view model 的頁面」。頁面本身在渲染前已經過 `PrivilegeFilter`（選單權限、`[Public]`／`[AllRights]`、租戶、管理員角色），所以語意和功能頁**完全相同**，不需要猜 view model 屬於哪個功能。
   - 一個 view model 被多個功能頁使用、Selector 在 A 功能的表單裡列出 B 實體的資料，這兩種合法用法自然成立；不需要在 view model 上宣告任何東西。
   - 現有的 LayUI 頁面和範本產生的頁面不用改：參考由 TagHelper 在渲染時加入，並隨 `where`／ffilter／連結一起送出。
-  - 綁定使用者、租戶、連線與目的，且會到期，取得別人的參考也不能使用。
+  - 綁定使用者、租戶、連線與目的，且會到期，只有被簽發的使用者能使用。
   - 不需要掃描 assembly 或反組譯。
 - 缺點
   - 需要 Data Protection 金鑰（cookie 驗證本來就需要；多實例部署本來就要共用金鑰）。
@@ -68,9 +68,9 @@
 | 欄位 | 內容 |
 |---|---|
 | `t` | view model，寫法與 `_DONOT_USE_VMNAME` 相同（assembly-qualified name 去掉版本部分） |
-| `p` | 目的（可組合）：`List`（GetPagingData、GetEmptyData）、`Selector`、`Export`、`Template`、`Update` |
+| `p` | 目的（可組合）：`List`（GetPagingData、GetEmptyData）、`Selector`、`Export`、`Template`、`Update`。表格的參考包含 `List`；只有表格有匯出按鈕（`_Framework/GetExportExcel` 或標記為匯出的動作）且不在 Selector 彈窗內時才加上 `Export`。Selector 的參考只有 `Selector`，彈窗內的表格只有 `List` |
 | `u`／`n` | 使用者 ITCode／租戶（`CurrentTenant`）；匿名為空字串 |
-| `c` | 頁面使用的連線 key |
+| `c` | 頁面使用的連線 key（由伺服器決定，見 5.7） |
 | `o` | 頁面的選單權限 url；頁面是 `[Public]`、`[AllRights]` 或選單公開時為空 |
 | `f` | 只用於 `Update`：頁面允許編輯的屬性 |
 | `e` | 到期時間 |
@@ -83,7 +83,7 @@
 
 1. `GenericEndpoints:Mode = Legacy`：放行（舊行為）。
 2. 沒有 view model 名稱：拒絕。
-3. 有參考：依序檢查格式與版本、到期、使用者與租戶、view model 名稱（逐字比對，不對來路不明的字串做 `Type.GetType`）、目的、連線 key（只有帶 `_DONOT_USE_CS`／`_DONOT_USE_CURRENTCS` 的端點）、頁面權限、`Update` 的欄位清單。全部通過才放行。
+3. 有參考：依序檢查格式與版本、到期、使用者與租戶、view model 名稱（逐字比對，不對來路不明的字串做 `Type.GetType`）、目的、連線 key、頁面權限、`Update` 的欄位清單。全部通過才放行。連線 key 的比對：`GetPagingData`、`GetExportExcel` 與 `Selector` 比對請求帶的 `_DONOT_USE_CS`／`_DONOT_USE_CURRENTCS`；`GetEmptyData`、`UpdateModelProperty`、`GetExcelTemplate` 比對伺服器為該請求決定的連線（`WTMContext.CurrentCS`）。
 4. 沒有有效參考時：view model 在 `ExemptViewModels` 內、呼叫者已登入、不是 `Update` 且型別確實是 `BaseVM` → 放行；否則拒絕。
 
 額外：連線 key 若不在 `Connections` 內，一律拒絕（所有模式）。
@@ -99,6 +99,14 @@
 ### 5.6 沒有 Data Protection 時
 
 TagHelper 取不到 `IDataProtectionProvider` 時不寫參考（頁面仍可正常顯示），端點則一律拒絕沒有有效參考的請求。也就是 fail closed。
+
+### 5.7 連線由伺服器決定
+
+動作的資料庫連線由伺服器決定：`[FixConnection]`、連線函式（`DataContextFilter._csfunc`）、預設連線。查詢字串的 `DONOTUSECSName` 預設**不再**影響連線，因此頁面參考記錄的連線 key 就是伺服器為該頁面選定的連線。需要保留舊行為的應用程式可設定 `GenericEndpoints:AllowRequestConnectionKey = true`（見第 7 節）。`GetEmptyData`、`UpdateModelProperty`、`GetExcelTemplate` 不接受請求指定的連線 key，所以比對伺服器為該請求決定的連線（`WTMContext.CurrentCS`）。
+
+### 5.8 同一個 `_Framework` controller 的管理端點
+
+`RemoveUserCacheByAccount`、`RemoveUserCacheByRole`、`RemoveUserCacheByGroup`（清除其他帳號的快取）現在要求呼叫者具有管理員角色（角色代碼 `001`，與框架其他僅限管理員的功能相同）；其他已登入者得到「沒有權限」的回應（帶 `Authorization` 標頭者得到 403）。框架與 `_Admin` 範本自己清除快取時是在伺服器端直接呼叫 `WTMContext.RemoveUserCache*`，不經過這些 HTTP 端點。
 
 ## 6. 下游自行呼叫端點的頁面
 
@@ -121,16 +129,18 @@ var editRef = Wtm.CreateGenericEndpointReference(typeof(MyVM), GenericEndpointPu
 | `Mode` | `Enforce` | `Legacy` 恢復舊行為（不檢查），啟動時輸出 Warning。只建議作為升級期間的暫時措施 |
 | `ExemptViewModels` | 空 | 在 `Enforce` 下，列出的 view model（完整型別名稱，或以 `*` 結尾的前綴）可由**已登入**的使用者在不帶參考時使用（舊行為，只限這些 view model）。不適用於 `Update`，匿名者不適用。啟動時輸出 Warning |
 | `ReferenceLifetimeMinutes` | `480` | 參考的有效分鐘數 |
+| `AllowRequestConnectionKey` | `false` | `true`：允許查詢字串 `DONOTUSECSName` 為沒有 `[FixConnection]`、連線函式也沒有回傳的動作指定連線（舊行為）。預設由伺服器決定連線 |
 
 ## 8. 剩餘風險與不在範圍的項目
 
 - 資料權限（`DPWhere`）不變；本修正不處理列級權限。`UpdateModelProperty` 依 id 載入的紀錄、以及它不儲存變更的問題（#284）都不在範圍。
 - 在 `[AllRights]` 頁面上顯示的 view model，授權就是「任何已登入者」，與該頁相同。
-- 其他 `_Framework` action 的授權不在本次範圍（已另行記錄在維護者的追蹤項目中）。
-- 範本產生的 `_Admin` controller 的 `[AllRights]` 輔助 action 另有追蹤的公告；範本修正後，下游已複製的 `_Admin` 需要套用同樣的修改。
+- 本文件未列出的其他 `_Framework` action 的授權不在本次範圍。
+- 由範本產生、已複製到下游專案的 `_Admin` controller 不在本次範圍；範本更新後，下游的複本可能需要套用相同的修改。
 
 ## 9. 測試
 
 - `test/WalkingTec.Mvvm.Core.Test/GenericEndpointGuardTest.cs`：判斷邏輯（使用者、租戶、view model、目的、連線、到期、頁面權限、欄位清單、豁免、Legacy、竄改）。
 - `test/WalkingTec.Mvvm.Core.Test/TagHelpers/LayUI/GenericEndpointReferenceTagHelperTests.cs`：TagHelper 寫入的參考能通過對應請求，且綁定使用者。
-- `test/WalkingTec.Mvvm.E2E/Tests/Security/GenericEndpointAuthorizationTests.cs`：用匿名／無角色／受限角色／管理員的真實請求驗證六個端點；既有的 LayUI E2E（表格、Selector、匯出、範本）維持通過；權限矩陣的期望表已更新。
+- `test/WalkingTec.Mvvm.Core.Test/RequestConnectionKeyTest.cs`、`FrameworkCacheEndpointAdministratorTest.cs`：連線 key 的選項與管理員判斷。
+- `test/WalkingTec.Mvvm.E2E/Tests/Security/GenericEndpointAuthorizationTests.cs`：用匿名／無角色／受限角色／管理員的真實請求驗證六個端點、連線由伺服器決定、Selector 彈窗的參考只能分頁，以及一般角色（受限角色、無角色）的表格與 Selector 照常可用；既有的 LayUI E2E（表格、Selector、匯出、範本）維持通過；權限矩陣的期望表已更新（含 `RemoveUserCacheBy*`）。
