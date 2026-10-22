@@ -254,6 +254,83 @@ namespace WalkingTec.Mvvm.Core
         }
 
         /// <summary>
+        /// 判断单元格套用的数字格式是否为日期／时间格式。
+        /// 内置格式按 ID 判断（14–22、27–36、45–47、50–58，含东亚语系的内置日期格式），
+        /// 自定义格式（ID &gt;= 164）按 FormatCode 判断。找不到样式时返回 false。
+        /// </summary>
+        public static bool IsDateFormattedCell(Cell cell, WorkbookPart workbookPart)
+        {
+            if (cell == null || workbookPart == null) return false;
+            var stylesheet = workbookPart.WorkbookStylesPart?.Stylesheet;
+            var cellFormats = stylesheet?.CellFormats;
+            if (cellFormats == null) return false;
+
+            int styleIndex = (int)(cell.StyleIndex?.Value ?? 0u);
+            var format = cellFormats.Elements<CellFormat>().ElementAtOrDefault(styleIndex);
+            if (format == null) return false;
+
+            uint formatId = format.NumberFormatId?.Value ?? 0u;
+            if (IsBuiltInDateFormatId(formatId)) return true;
+            if (formatId < 164) return false;
+
+            var numberingFormat = stylesheet.NumberingFormats?.Elements<NumberingFormat>()
+                .FirstOrDefault(n => n.NumberFormatId?.Value == formatId);
+            return IsDateFormatCode(numberingFormat?.FormatCode?.Value);
+        }
+
+        private static bool IsBuiltInDateFormatId(uint id)
+        {
+            return (id >= 14 && id <= 22) || (id >= 27 && id <= 36) || (id >= 45 && id <= 47) || (id >= 50 && id <= 58);
+        }
+
+        /// <summary>
+/// 自定义格式代码是否表示日期／时间：先去掉 "..." 文字、[...] 条件与颜色（[h]、[mm]、[ss] 时间经过格式保留）
+        /// 以及反斜杠转义字符，剩余部分含 y、d、h、s、m 之一即视为日期／时间（数字格式如 0.00 不含这些字母）。
+        /// </summary>
+        private static bool IsDateFormatCode(string formatCode)
+        {
+            if (string.IsNullOrEmpty(formatCode)) return false;
+
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < formatCode.Length; i++)
+            {
+                char c = formatCode[i];
+                if (c == '"')
+                {
+                    int end = formatCode.IndexOf('"', i + 1);
+                    i = end < 0 ? formatCode.Length : end;
+                }
+                else if (c == '[')
+                {
+                    int end = formatCode.IndexOf(']', i + 1);
+                    if (end < 0)
+                    {
+                        i = formatCode.Length;
+                    }
+                    else
+                    {
+                        // [h]、[mm]、[ss] 是时间经过格式，属于时间；[Red]、[$-409]、[>100] 等不是
+                        string inner = formatCode.Substring(i + 1, end - i - 1).ToLowerInvariant();
+                        if (inner.Length > 0 && inner.All(ch => ch == 'h' || ch == 'm' || ch == 's'))
+                        {
+                            sb.Append(inner);
+                        }
+                        i = end;
+                    }
+                }
+                else if (c == '\\')
+                {
+                    i++;
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+            return sb.ToString().IndexOfAny(new[] { 'y', 'Y', 'd', 'D', 'h', 'H', 's', 'S', 'm', 'M' }) >= 0;
+        }
+
+        /// <summary>
         /// 从内存流创建 SpreadsheetDocument 用于读取
         /// </summary>
         public static SpreadsheetDocument OpenForReading(Stream stream)
