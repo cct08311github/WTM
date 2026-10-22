@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -37,6 +38,20 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
         }
 
         protected ILocator Body => Lab.Body;
+
+        /// <summary>The reference the file endpoints check for a file and the signed-in test user (what a page of an application writes into its links).</summary>
+        protected async Task<string> FileRefAsync(string id, string purposes = null, string cs = null)
+        {
+            var response = await Page.Context.APIRequest.GetAsync($"/Lab/FileRef?id={Uri.EscapeDataString(id)}&purposes={purposes}&cs={cs}");
+            Microsoft.VisualStudio.TestTools.UnitTesting.Assert.AreEqual(200, response.Status);
+            return Uri.EscapeDataString(await response.TextAsync());
+        }
+
+        /// <summary>The same file url the Lab pages write: <paramref name="url"/> plus the reference.</summary>
+        protected async Task<string> WithRefAsync(string url, string id)
+        {
+            return url + (url.Contains('?') ? "&" : "?") + "_DONOT_USE_FREF=" + await FileRefAsync(id);
+        }
 
         /// <summary>The xm-select based combo box / tree of a Lab form field.</summary>
         protected ILocator Combo(string property) => Body.Locator($"#LabFormVM_{property} xm-select");

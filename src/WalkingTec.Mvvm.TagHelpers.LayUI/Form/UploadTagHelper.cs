@@ -153,6 +153,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             {
                 url = url.AppendQuery($"_DONOT_USE_CS={ConnectionString}");
             }
+            // the connection of the page travels with a reference the server can verify (a request cannot choose a connection by itself)
+            var uploadReference = UploadReferenceQuery(vm, string.IsNullOrEmpty(ConnectionString) ? vm?.CurrentCS : ConnectionString);
+            if (uploadReference != null)
+            {
+                url = url.AppendQuery(uploadReference);
+            }
             if (string.IsNullOrEmpty(UploadGroupName) == false)
             {
                 url = url.AppendQuery($"groupName={UploadGroupName}");
@@ -201,11 +207,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     $('#{Id}').val('');
     $('.layui-progress .layui-progress-bar').css('width', '0%');
   }}
+var {Id}PreviewUrls = {{}};
 function {Id}DoPreview(fileid){{
 		layui.layer.photos({{
 			photos: {{
 				data: [{{
-					src: '/_Framework/GetFile/'+ fileid+'?_DONOT_USE_CS={JsStringEncoder.Escape(vm != null ? vm.CurrentCS : "")}'
+					src: {Id}PreviewUrls[fileid] || ('/_Framework/GetFile/'+ fileid+'?_DONOT_USE_CS={JsStringEncoder.Escape(vm != null ? vm.CurrentCS : "")}')
 				}}]
 			}},
 			anim: 5
@@ -242,6 +249,7 @@ layui.use(['upload'],function(){{
       else{{
             $('#{Id}label').html('');
         $('#{Id}').val(res.Data.Id);
+        if (res.Data.Url) {{ {Id}PreviewUrls[res.Data.Id] = res.Data.Url; }}
       {(ShowPreview == true ? $@"
        {Id}preview.preview(function(index, file, result){{
             $('#{Id}label').append('<img src=""'+ {Id}HtmlEnc(result) +'"" alt=""'+ {Id}HtmlEnc(file.name) +'"" class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64} id=""{Id}preview"" style=""cursor:pointer""/>');
@@ -287,6 +295,7 @@ layui.use(['upload'],function(){{
             if (Field.Model != null && Field.Model.ToString() != Guid.Empty.ToString())
             {
                 var geturl = $"/_Framework/GetFileName/{Field.Model}";
+                var fileConnection = vm?.CurrentCS;
                 // downloadurl / picurl are placed in HTML attributes of markup that is itself built inside a
                 // JavaScript string literal: encode for the attribute first, then escape for the literal.
                 var modelId = Field.Model?.ToString();
@@ -297,13 +306,26 @@ layui.use(['upload'],function(){{
                     geturl += $"?_DONOT_USE_CS={vm.CurrentCS}";
                     downloadurl += $"?_DONOT_USE_CS={JsAttr(vm.CurrentCS)}";
                 }
+                // the links of a file this page shows carry a reference the file endpoints check
+                geturl = WithFileReference(geturl, vm, modelId, fileConnection, FilePurpose.Name);
+                var fileReferenceQuery = FileReferenceQuery(vm, modelId, fileConnection, FilePurpose.Read);
+                if (fileReferenceQuery != null)
+                {
+                    downloadurl += (downloadurl.Contains('?') ? "&" : "?") + JsAttr(fileReferenceQuery);
+                }
+                var previewUrl = GetWtm(vm)?.GetFileUrl(modelId, FilePurpose.Download, fileConnection) ?? string.Empty;
                 var picurl = $"/_Framework/GetFile?id={JsAttr(modelId)}&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}";
                 if (vm != null)
                 {
                     picurl += $"&_DONOT_USE_CS={JsAttr(vm.CurrentCS)}";
                 }
+                if (fileReferenceQuery != null)
+                {
+                    picurl += "&" + JsAttr(fileReferenceQuery);
+                }
                 output.PostElement.AppendHtml($@"
 <script>
+{(string.IsNullOrEmpty(previewUrl) ? "" : $"{Id}PreviewUrls['{modelIdJs}'] = '{JsStringEncoder.Escape(previewUrl)}';")}
 $.ajax({{
   cache: false,
   type: 'GET',

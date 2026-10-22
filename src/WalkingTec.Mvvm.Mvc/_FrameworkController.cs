@@ -440,21 +440,78 @@ namespace WalkingTec.Mvvm.Mvc
 
         [HttpPost]
         [ActionDescription("UploadFileRoute")]
-        public IActionResult Upload([FromServices] WtmFileProvider fp, string sm = null, string groupName = null, string subdir = null, string extra = null, bool IsTemprory = true, string _DONOT_USE_CS=null)
+        public IActionResult Upload([FromServices] WtmFileProvider fp, string sm = null, string groupName = null, string subdir = null, string extra = null, bool IsTemprory = true, string _DONOT_USE_CS=null, string _DONOT_USE_FREF = null)
         {
+            var connection = Wtm.ResolveFileConnection(_DONOT_USE_CS, null, FilePurpose.Upload, _DONOT_USE_FREF);
+            if (connection.Allowed == false)
+            {
+                return RefuseFileRequest("Upload", "the connection is not allowed");
+            }
             var FileData = Request.Form.Files[0];
-            var file = fp.Upload(FileData.FileName, FileData.Length, FileData.OpenReadStream(), groupName, subdir, extra, sm, Wtm.CreateDC(cskey: _DONOT_USE_CS));
-            return JsonMore(new { Id = file.GetID(), Name = file.FileName });
+            // the marker of files embedded by a rich text editor is the server's to set
+            extra = FileEndpointGuard.StripEmbeddedMarker(extra);
+            var file = fp.Upload(FileData.FileName, FileData.Length, FileData.OpenReadStream(), groupName, subdir, extra, sm, Wtm.CreateDC(cskey: connection.Key));
+            return JsonMore(UploadResult(file, connection.Key));
+        }
+
+        /// <summary>The answer to an upload: the id and name, and (additionally) the url and the reference for the file that was just stored.</summary>
+        private object UploadResult(IWtmFile file, string connectionKey)
+        {
+            var id = file.GetID();
+            return new
+            {
+                Id = id,
+                Name = file.FileName,
+                Url = Wtm.GetFileUrl(id, FilePurpose.Download, connectionKey),
+                Ref = Wtm.CreateFileReference(id, FilePurpose.Read, connectionKey)
+            };
+        }
+
+        /// <summary>The framework's refusal for the file endpoints: the same answer as the generic data endpoints give, 200 with the no-privilege message.</summary>
+        private IActionResult RefuseFileRequest(string endpoint, string reason)
+        {
+            HttpContext.RequestServices.GetService<ILoggerFactory>()?.CreateLogger<_FrameworkController>()
+                .LogWarning("File endpoint {Endpoint} refused a request: {Reason} (user {User})", endpoint, reason, Wtm.LoginUserInfo?.ITCode);
+            return new ContentResult() { Content = MvcProgram._localizer["Sys.NoPrivilege"], ContentType = "text/html", StatusCode = 200 };
+        }
+
+        /// <summary>
+        /// Chooses the connection of a file request, reads nothing yet. Returns null and the data context to use, or the refusal to send.
+        /// </summary>
+        private IActionResult CreateFileDc(string endpoint, string fileId, FilePurpose purpose, string requestKey, string reference, out IDataContext dc)
+        {
+            dc = null;
+            var connection = Wtm.ResolveFileConnection(requestKey, fileId, purpose, reference);
+            if (connection.Allowed == false)
+            {
+                return RefuseFileRequest(endpoint, "the connection is not allowed");
+            }
+            dc = Wtm.CreateDC(cskey: connection.Key);
+            return null;
+        }
+
+        /// <summary>Decides whether the file may be served (reference, mode, access policy). Returns null when it may, otherwise the refusal to send.</summary>
+        private IActionResult AuthorizeFile(string endpoint, string fileId, FilePurpose purpose, string reference, IDataContext dc)
+        {
+            var decision = Wtm.AuthorizeFileRequest(endpoint, fileId, purpose, reference, () =>
+                dc.Set<FileAttachment>().CheckID(fileId).Select(x => new FileEndpointFileInfo { ExtraInfo = x.ExtraInfo, UploadTime = x.UploadTime }).FirstOrDefault());
+            return decision.Allowed ? null : new ContentResult() { Content = MvcProgram._localizer["Sys.NoPrivilege"], ContentType = "text/html", StatusCode = 200 };
         }
 
         [HttpPost]
         [ActionDescription("UploadFileRoute")]
-        public IActionResult UploadImage([FromServices] WtmFileProvider fp, string sm = null, string groupName = null, string subdir = null, string extra = null, bool IsTemprory = true, string _DONOT_USE_CS = null, int? width = null, int? height = null)
+        public IActionResult UploadImage([FromServices] WtmFileProvider fp, string sm = null, string groupName = null, string subdir = null, string extra = null, bool IsTemprory = true, string _DONOT_USE_CS = null, int? width = null, int? height = null, string _DONOT_USE_FREF = null)
         {
             if (width == null && height == null)
             {
-                return Upload(fp, sm, groupName, subdir, extra, IsTemprory, _DONOT_USE_CS);
+                return Upload(fp, sm, groupName, subdir, extra, IsTemprory, _DONOT_USE_CS, _DONOT_USE_FREF);
             }
+            var connection = Wtm.ResolveFileConnection(_DONOT_USE_CS, null, FilePurpose.Upload, _DONOT_USE_FREF);
+            if (connection.Allowed == false)
+            {
+                return RefuseFileRequest("UploadImage", "the connection is not allowed");
+            }
+            extra = FileEndpointGuard.StripEmbeddedMarker(extra);
             var FileData = Request.Form.Files[0];
 
             Image oimage = Image.Load(FileData.OpenReadStream());
@@ -475,21 +532,27 @@ namespace WalkingTec.Mvvm.Mvc
             oimage.SaveAsJpeg(ms);
             ms.Position = 0;
 
-            var file = fp.Upload(FileData.FileName, ms.Length, ms, groupName, subdir, extra, sm, Wtm.CreateDC(cskey: _DONOT_USE_CS));
+            var file = fp.Upload(FileData.FileName, ms.Length, ms, groupName, subdir, extra, sm, Wtm.CreateDC(cskey: connection.Key));
             oimage.Dispose();
             ms.Dispose();
-            return JsonMore(new { Id = file.GetID(), Name = file.FileName });
+            return JsonMore(UploadResult(file, connection.Key));
         }
 
         [HttpPost]
         [ActionDescription("UploadForLayUIRichTextBox")]
-        public IActionResult UploadForLayUIRichTextBox([FromServices] WtmFileProvider fp, string _DONOT_USE_CS = null, string groupName = null, string subdir = null)
+        public IActionResult UploadForLayUIRichTextBox([FromServices] WtmFileProvider fp, string _DONOT_USE_CS = null, string groupName = null, string subdir = null, string _DONOT_USE_FREF = null)
         {
+            var connection = Wtm.ResolveFileConnection(_DONOT_USE_CS, null, FilePurpose.Upload, _DONOT_USE_FREF);
+            if (connection.Allowed == false)
+            {
+                return RefuseFileRequest("UploadForLayUIRichTextBox", "the connection is not allowed");
+            }
             var FileData = Request.Form.Files[0];
-            var file = fp.Upload(FileData.FileName, FileData.Length, FileData.OpenReadStream(), groupName, subdir, dc: Wtm.CreateDC(cskey: _DONOT_USE_CS));
+            // the file is embedded in the content of an editor: the server marks it, so that it stays reachable by its id
+            var file = fp.Upload(FileData.FileName, FileData.Length, FileData.OpenReadStream(), groupName, subdir, FileEndpointGuard.MarkEmbedded(null), dc: Wtm.CreateDC(cskey: connection.Key));
             if (file != null)
             {
-                string url = $"/_Framework/GetFile?id={file.GetID()}&stream=true&_DONOT_USE_CS={CurrentCS}";
+                string url = EmbeddedFileUrl(file, connection.Key);
                 return Content($"{{\"code\": 0 , \"msg\": \"\", \"data\": {{\"src\": \"{url}\"}}}}");
 
             }
@@ -501,16 +564,36 @@ namespace WalkingTec.Mvvm.Mvc
 
         }
 
-        [ActionDescription("GetFileName")]
-        public IActionResult GetFileName([FromServices] WtmFileProvider fp, Guid id, string _DONOT_USE_CS)
+        /// <summary>The address of a file that an editor embeds in its content: by id (the content outlives any reference), with the connection the file was stored on.</summary>
+        private static string EmbeddedFileUrl(IWtmFile file, string connectionKey)
         {
-            return Ok(fp.GetFileName(id.ToString(), Wtm.CreateDC(cskey: _DONOT_USE_CS)));
+            var url = $"/_Framework/GetFile?id={file.GetID()}&stream=true";
+            return string.IsNullOrEmpty(connectionKey) ? url : url + "&_DONOT_USE_CS=" + Uri.EscapeDataString(connectionKey);
+        }
+
+        [ActionDescription("GetFileName")]
+        public IActionResult GetFileName([FromServices] WtmFileProvider fp, Guid id, string _DONOT_USE_CS, string _DONOT_USE_FREF = null)
+        {
+            var refused = CreateFileDc("GetFileName", id.ToString(), FilePurpose.Name, _DONOT_USE_CS, _DONOT_USE_FREF, out var dc);
+            refused ??= AuthorizeFile("GetFileName", id.ToString(), FilePurpose.Name, _DONOT_USE_FREF, dc);
+            if (refused != null)
+            {
+                return refused;
+            }
+            return Ok(fp.GetFileName(id.ToString(), dc));
         }
 
         [ActionDescription("GetFile")]
-        public async Task<IActionResult> GetFile([FromServices] WtmFileProvider fp, string id, bool stream = false, string _DONOT_USE_CS = null, int? width = null, int? height = null)
+        public async Task<IActionResult> GetFile([FromServices] WtmFileProvider fp, string id, bool stream = false, string _DONOT_USE_CS = null, int? width = null, int? height = null, string _DONOT_USE_FREF = null)
         {
-            var file = fp.GetFile(id, true, Wtm.CreateDC(cskey: _DONOT_USE_CS));
+            var purpose = stream ? FilePurpose.View : FilePurpose.Download;
+            var refused = CreateFileDc("GetFile", id, purpose, _DONOT_USE_CS, _DONOT_USE_FREF, out var dc);
+            refused ??= AuthorizeFile("GetFile", id, purpose, _DONOT_USE_FREF, dc);
+            if (refused != null)
+            {
+                return refused;
+            }
+            var file = fp.GetFile(id, true, dc);
             if (file == null)
             {
                 return new EmptyResult();
@@ -578,24 +661,42 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         [ActionDescription("ViewFile")]
-        public IActionResult ViewFile([FromServices] WtmFileProvider fp, string id, string width, string _DONOT_USE_CS = null)
+        public IActionResult ViewFile([FromServices] WtmFileProvider fp, string id, string width, string _DONOT_USE_CS = null, string _DONOT_USE_FREF = null)
         {
-            var file = fp.GetFile(id, false, Wtm.CreateDC(cskey: _DONOT_USE_CS));
+            var connection = Wtm.ResolveFileConnection(_DONOT_USE_CS, id, FilePurpose.View, _DONOT_USE_FREF);
+            if (connection.Allowed == false)
+            {
+                return RefuseFileRequest("ViewFile", "the connection is not allowed");
+            }
+            var dc = Wtm.CreateDC(cskey: connection.Key);
+            var refused = AuthorizeFile("ViewFile", id, FilePurpose.View, _DONOT_USE_FREF, dc);
+            if (refused != null)
+            {
+                return refused;
+            }
+            var file = fp.GetFile(id, false, dc);
+            if (file == null)
+            {
+                return new EmptyResult();
+            }
+            // the file is shown through GetFile: the link the page gets carries a reference of its own
+            var src = HtmlAttributeEncoder.Encode(Wtm.GetFileUrl(file.GetID(), FilePurpose.View, connection.Key));
+            var widthStyle = string.IsNullOrEmpty(width) ? "" : $"width:{HtmlAttributeEncoder.Encode(width)}px";
             string html = string.Empty;
             var ext = file.FileExt.ToLower();
             if (ext == "pdf")
             {
                 html = $@"
-<embed src=""/_Framework/GetFile?id={id}&stream=true"" width=""100%"" height=""100%"" type=""application/pdf"" ></embed>
+<embed src=""{src}"" width=""100%"" height=""100%"" type=""application/pdf"" ></embed>
             ";
             }
             else if (ext == "mp4")
             {
-                html = $@"<video id='FileObject' controls='controls' style='{(string.IsNullOrEmpty(width) ? "" : $"width:{width}px")}'  border=0 src='/_Framework/GetFile?id={id}&stream=true&_DONOT_USE_CS={_DONOT_USE_CS}'></video>";
+                html = $@"<video id='FileObject' controls='controls' style='{widthStyle}'  border=0 src='{src}'></video>";
             }
             else
             {
-                html = $@"<img id='FileObject' style='flex:auto;{(string.IsNullOrEmpty(width) ? "" : $"width:{width}px")}'  border=0 src='/_Framework/GetFile?id={id}&stream=true&_DONOT_USE_CS={_DONOT_USE_CS}'/>";
+                html = $@"<img id='FileObject' style='flex:auto;{widthStyle}'  border=0 src='{src}'/>";
             }
             return Content(html);
 
@@ -733,21 +834,26 @@ namespace WalkingTec.Mvvm.Mvc
         [AllRights]
         [HttpPost]
         [ActionDescription("UploadForLayUIUEditor")]
-        public IActionResult UploadForLayUIUEditor([FromServices] WtmFileProvider fp, string _DONOT_USE_CS = "default", string groupName = null, string subdir = null)
+        public IActionResult UploadForLayUIUEditor([FromServices] WtmFileProvider fp, string _DONOT_USE_CS = "default", string groupName = null, string subdir = null, string _DONOT_USE_FREF = null)
         {
+            var connection = Wtm.ResolveFileConnection(_DONOT_USE_CS, null, FilePurpose.Upload, _DONOT_USE_FREF);
+            if (connection.Allowed == false)
+            {
+                return RefuseFileRequest("UploadForLayUIUEditor", "the connection is not allowed");
+            }
             IWtmFile file = null;
             if (Request.Form.Files != null && Request.Form.Files.Count() > 0)
             {
                 //通过文件流方式上传附�?
                 var FileData = Request.Form.Files[0];
-                file = fp.Upload(FileData.FileName, FileData.Length, FileData.OpenReadStream(), groupName, subdir, dc: Wtm.CreateDC(cskey: _DONOT_USE_CS));
+                file = fp.Upload(FileData.FileName, FileData.Length, FileData.OpenReadStream(), groupName, subdir, FileEndpointGuard.MarkEmbedded(null), dc: Wtm.CreateDC(cskey: connection.Key));
             }
             else if (Request.Form.Keys != null && Request.Form.ContainsKey("FileID"))
             {
                 //通过Base64方式上传附件
                 var FileData = Convert.FromBase64String(Request.Form["FileID"]);
                 MemoryStream MS = new MemoryStream(FileData);
-                file = fp.Upload("SCRAWL_" + DateTime.Now.ToString("yyyyMMddHHmmssttt") + ".jpg", FileData.Length, MS, groupName, subdir, dc: Wtm.CreateDC(cskey: _DONOT_USE_CS));
+                file = fp.Upload("SCRAWL_" + DateTime.Now.ToString("yyyyMMddHHmmssttt") + ".jpg", FileData.Length, MS, groupName, subdir, FileEndpointGuard.MarkEmbedded(null), dc: Wtm.CreateDC(cskey: connection.Key));
                 MS.Dispose();
             }
 
@@ -755,7 +861,7 @@ namespace WalkingTec.Mvvm.Mvc
 
             if (file != null)
             {
-                string url = $"/_Framework/GetFile?id={file.GetID()}&stream=true&_DONOT_USE_CS={CurrentCS}";
+                string url = EmbeddedFileUrl(file, connection.Key);
                 return Content($"{{\"Code\": 200 , \"Msg\": \"success\", \"Data\": {{\"src\": \"{url}\",\"FileName\":\"{file.FileName}\"}}}}");
 
             }

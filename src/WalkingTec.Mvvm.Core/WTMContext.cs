@@ -1150,6 +1150,152 @@ params string[] groupcode)
 
         #endregion
 
+        #region File references
+
+        private IDataProtector FileEndpointProtector()
+        {
+            return FileEndpointGuard.CreateProtector(ServiceProvider?.GetService<IDataProtectionProvider>());
+        }
+
+        /// <summary>
+        /// Creates the reference that lets the file endpoints (<c>/_Framework/GetFile</c>, <c>ViewFile</c>, <c>GetFileName</c>) serve one file to the
+        /// current user (see <see cref="FileEndpointGuard"/>). The framework's LayUI TagHelpers and file buttons call it for the links they render;
+        /// code that writes its own link to a file calls it too (or uses <see cref="GetFileUrl"/>) and sends the result as
+        /// <see cref="FileEndpointGuard.ReferenceParameter"/>.
+        /// </summary>
+        /// <param name="fileId">id of the file</param>
+        /// <param name="purposes">what the reference allows (default: view, download and name)</param>
+        /// <param name="connectionKey">connection key of the page (default: <see cref="CurrentCS"/>)</param>
+        /// <returns>the reference, or null when none can be created (then the link works only where the endpoints do not require one)</returns>
+        public string CreateFileReference(string fileId, FilePurpose purposes = FilePurpose.Read, string connectionKey = null)
+        {
+            try
+            {
+                return FileEndpointGuard.Issue(FileEndpointProtector(), ConfigInfo?.FileEndpoints, fileId, purposes,
+                    connectionKey ?? CurrentCS, LoginUserInfo?.ITCode, LoginUserInfo?.CurrentTenant, DateTimeOffset.UtcNow);
+            }
+            catch (Exception ex)
+            {
+                _loggerFactory?.CreateLogger<WTMContext>().LogWarning("A file reference could not be created: {ExceptionType}", ex.GetType().Name);
+                return null;
+            }
+        }
+
+        /// <summary>Same as <see cref="CreateFileReference(string, FilePurpose, string)"/> for a guid id.</summary>
+        public string CreateFileReference(Guid fileId, FilePurpose purposes = FilePurpose.Read, string connectionKey = null)
+        {
+            return CreateFileReference(fileId.ToString(), purposes, connectionKey);
+        }
+
+        /// <summary>
+        /// The url of the file endpoint for one purpose, with a reference for the current user:
+        /// <see cref="FilePurpose.View"/> shows the file (<c>GetFile</c> with <c>stream=true</c>), <see cref="FilePurpose.Download"/> downloads it,
+        /// <see cref="FilePurpose.Name"/> returns its name (<c>GetFileName</c>).
+        /// </summary>
+        public string GetFileUrl(string fileId, FilePurpose purpose = FilePurpose.Download, string connectionKey = null)
+        {
+            var key = connectionKey ?? CurrentCS;
+            var url = purpose == FilePurpose.Name ? $"/_Framework/GetFileName/{Uri.EscapeDataString(fileId ?? string.Empty)}?1=1" : $"/_Framework/GetFile/{Uri.EscapeDataString(fileId ?? string.Empty)}?1=1";
+            if (purpose == FilePurpose.View)
+            {
+                url += "&stream=true";
+            }
+            if (string.IsNullOrEmpty(key) == false)
+            {
+                url += "&_DONOT_USE_CS=" + Uri.EscapeDataString(key);
+            }
+            var reference = CreateFileReference(fileId, purpose == FilePurpose.None ? FilePurpose.Read : purpose, key);
+            if (reference != null)
+            {
+                url += "&" + FileEndpointGuard.ReferenceParameter + "=" + Uri.EscapeDataString(reference);
+            }
+            return url;
+        }
+
+        /// <summary>Same as <see cref="GetFileUrl(string, FilePurpose, string)"/> for a guid id.</summary>
+        public string GetFileUrl(Guid fileId, FilePurpose purpose = FilePurpose.Download, string connectionKey = null)
+        {
+            return GetFileUrl(fileId.ToString(), purpose, connectionKey);
+        }
+
+        private FileEndpointRequestContext CreateFileRequest(string fileId, FilePurpose purpose, string reference, Func<FileEndpointFileInfo> getFileInfo)
+        {
+            var protector = FileEndpointProtector();
+            return new FileEndpointRequestContext
+            {
+                Options = ConfigInfo?.FileEndpoints,
+                FileId = fileId,
+                Purpose = purpose,
+                Reference = reference,
+                User = LoginUserInfo?.ITCode,
+                Tenant = LoginUserInfo?.CurrentTenant,
+                Now = DateTimeOffset.UtcNow,
+                OpenReference = r => FileEndpointGuard.Unprotect(protector, r),
+                GetFileInfo = getFileInfo
+            };
+        }
+
+        /// <summary>
+        /// Decides which database connection a file endpoint runs on. See <see cref="FileEndpointGuard.ResolveConnection"/>: a valid reference
+        /// (for the file and purpose, or an upload reference) decides, otherwise only the keys the application lists in
+        /// <c>FileEndpoints:RequestConnectionKeys</c> may be chosen by the request.
+        /// </summary>
+        public FileConnectionDecision ResolveFileConnection(string requestKey, string fileId, FilePurpose purpose, string reference)
+        {
+            FileEndpointReference valid = null;
+            if (string.IsNullOrEmpty(reference) == false)
+            {
+                FileEndpointGuard.CheckReference(CreateFileRequest(fileId, purpose, reference, null), out valid);
+            }
+            return FileEndpointGuard.ResolveConnection(requestKey, valid, ConfigInfo, CurrentCS);
+        }
+
+        /// <summary>
+        /// Decides whether a file endpoint may serve the file, and asks the application's <see cref="IFileAccessPolicy"/>. In
+        /// <see cref="FileEndpointMode.Audit"/> a request that has no valid reference is served and a warning is logged.
+        /// </summary>
+        /// <param name="endpoint">name of the endpoint (for the warning)</param>
+        /// <param name="getFileInfo">reads the file's data on the connection of the request (null result: there is no such file)</param>
+        public FileEndpointDecision AuthorizeFileRequest(string endpoint, string fileId, FilePurpose purpose, string reference, Func<FileEndpointFileInfo> getFileInfo)
+        {
+            var decision = FileEndpointGuard.Authorize(CreateFileRequest(fileId, purpose, reference, getFileInfo));
+            string Referer()
+            {
+                try { return HttpContext?.Request?.Headers?["Referer"].ToString(); } catch { return null; }
+            }
+            if (decision.Allowed == false)
+            {
+                _loggerFactory?.CreateLogger<WTMContext>().LogWarning("File endpoint {Endpoint} refused a request: {Reason} (user {User}, referer {Referer})",
+                    endpoint, decision.Refusal, LoginUserInfo?.ITCode, Referer());
+                return decision;
+            }
+            if (decision.Admission == FileEndpointAdmission.Audited)
+            {
+                _loggerFactory?.CreateLogger<WTMContext>().LogWarning("File endpoint {Endpoint} served a request without a valid file reference: {Reason} (user {User}, referer {Referer}). It is refused when FileEndpoints:Mode is Enforce.",
+                    endpoint, decision.Refusal, LoginUserInfo?.ITCode, Referer());
+            }
+            if (decision.Admission != FileEndpointAdmission.Legacy && decision.Admission != FileEndpointAdmission.FileMissing)
+            {
+                var policy = ServiceProvider?.GetService<IFileAccessPolicy>();
+                if (policy != null && policy.IsAllowed(new FileAccessRequest
+                {
+                    FileId = fileId,
+                    Purpose = purpose,
+                    Admission = decision.Admission,
+                    User = LoginUserInfo?.ITCode,
+                    Tenant = LoginUserInfo?.CurrentTenant,
+                    Wtm = this
+                }) == false)
+                {
+                    _loggerFactory?.CreateLogger<WTMContext>().LogWarning("File endpoint {Endpoint} refused a request: the file access policy denied it (user {User})", endpoint, LoginUserInfo?.ITCode);
+                    return FileEndpointDecision.Refuse(FileEndpointRefusal.PolicyDenied);
+                }
+            }
+            return decision;
+        }
+
+        #endregion
+
         public bool IsUrlPublic(string url)
         {
             var isPublic = false;

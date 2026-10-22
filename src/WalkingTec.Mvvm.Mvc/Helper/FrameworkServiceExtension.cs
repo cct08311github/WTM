@@ -546,6 +546,8 @@ namespace WalkingTec.Mvvm.Mvc
             services.TryAddScoped<IDataContext, NullContext>();
             services.AddScoped<WTMContext>();
             services.AddScoped<WtmFileProvider>();
+            // the rule applications may add after the file endpoints have admitted a request; replace it by registering your own first
+            services.TryAddSingleton<IFileAccessPolicy, AllowAllFileAccessPolicy>();
             services.Configure<FormOptions>(y =>
             {
                 y.ValueCountLimit = 5000;
@@ -913,6 +915,7 @@ namespace WalkingTec.Mvvm.Mvc
 
             //warn (never throw) when the check of the generic data endpoints is relaxed
             GenericEndpointGuard.LogRelaxedWarning(configs, securityLogger);
+            FileEndpointGuard.LogRelaxedWarning(configs, securityLogger);
 
             var lg = app.ApplicationServices.GetRequiredService<LinkGenerator>();
             var gd = app.ApplicationServices.GetRequiredService<GlobalData>();

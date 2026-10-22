@@ -385,9 +385,9 @@ namespace WalkingTec.Mvvm.E2E.Tests
             var image = await UploadAsync("view.png", Png);
             var pdf = await UploadAsync("view.pdf", Encoding.ASCII.GetBytes("%PDF-1.4 test"));
 
-            var imageHtml = await (await Api.GetAsync("/_Framework/ViewFile/" + image)).TextAsync();
+            var imageHtml = await (await Api.GetAsync(await WithRefAsync("/_Framework/ViewFile/" + image, image))).TextAsync();
             StringAssert.Contains(imageHtml, "<img id='FileObject'");
-            var pdfHtml = await (await Api.GetAsync("/_Framework/ViewFile/" + pdf)).TextAsync();
+            var pdfHtml = await (await Api.GetAsync(await WithRefAsync("/_Framework/ViewFile/" + pdf, pdf))).TextAsync();
             StringAssert.Contains(pdfHtml, "<embed");
             StringAssert.Contains(pdfHtml, "application/pdf");
         }
@@ -397,7 +397,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         {
             var id = await UploadAsync("download me.pdf", Encoding.ASCII.GetBytes("%PDF-1.4 test"));
 
-            var response = await Api.GetAsync("/_Framework/GetFile/" + id);
+            var response = await Api.GetAsync(await WithRefAsync("/_Framework/GetFile/" + id, id));
 
             Assert.AreEqual(200, response.Status);
             Assert.AreEqual("application/pdf", response.Headers["content-type"]);

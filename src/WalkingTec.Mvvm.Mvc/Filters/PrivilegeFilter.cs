@@ -83,6 +83,10 @@ namespace WalkingTec.Mvvm.Mvc.Filters
             var isHostOnly = ad.MethodInfo.IsDefined(typeof(MainTenantOnlyAttribute), false) || ad.ControllerTypeInfo.IsDefined(typeof(MainTenantOnlyAttribute), false);
             if (controller.Wtm.ConfigInfo.IsFilePublic == true)
             {
+                // With IsFilePublic the file endpoints are open to callers who are not signed in, and the endpoints themselves decide which requests they
+                // serve (FileEndpoints:Mode): a link the server rendered carries a reference that works anonymously until it expires, a request that only
+                // knows the id is served in Audit mode (and logged), and refused in Enforce mode unless the file is embedded in editor content or
+                // was uploaded before FileEndpoints:LegacyUploadedBefore.
                 if (ad.ControllerName == "_Framework" && (ad.MethodInfo.Name == "GetFile" || ad.MethodInfo.Name == "ViewFile"))
                 {
                     isPublic = true;

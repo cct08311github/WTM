@@ -154,6 +154,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             {
                 url = url.AppendQuery($"_DONOT_USE_CS={ConnectionString}");
             }
+            // the connection of the page travels with a reference the server can verify (a request cannot choose a connection by itself)
+            var uploadReference = UploadReferenceQuery(vm, string.IsNullOrEmpty(ConnectionString) ? vm?.CurrentCS : ConnectionString);
+            if (uploadReference != null)
+            {
+                url = url.AppendQuery(uploadReference);
+            }
             if (string.IsNullOrEmpty(UploadGroupName) == false)
             {
                 url = url.AppendQuery($"groupName={UploadGroupName}");
@@ -190,6 +196,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 <script>
   function {Id}HtmlEnc(s){{
     return String(s == null ? '' : s).replace(/[&<>""']/g, function(c){{ return '&#' + c.charCodeAt(0) + ';'; }});
+  }}
+  /* the links of a file that was just uploaded carry the reference the server returned with it */
+  function {Id}AddReference(selector, res){{
+    if (!res || !res.Data || !res.Data.Ref) {{ return; }}
+    var q = '&{FileEndpointGuard.ReferenceParameter}=' + encodeURIComponent(res.Data.Ref);
+    var img = $(selector);
+    img.attr('src', img.attr('src') + q);
+    img.attr('layer-src', (img.attr('layer-src') || '') + q);
   }}
   var {Id}selected = {initselected};
 {Id}SetValues();
@@ -257,6 +271,7 @@ layui.use(['upload'],function(){{
         {Id}SetValues();
         {(ShowPreview == true ? $@"
             $('#{Id}label').append('<label id=""label'+{Id}HtmlEnc(res.Data.Id)+'""><img alt=""'+{Id}HtmlEnc(res.Data.Name)+'"" layer-src=""/_Framework/GetFile?id='+ {Id}HtmlEnc(res.Data.Id)+'&_DONOT_USE_CS={JsAttr(vm != null ? vm.CurrentCS : "")}"" src=""/_Framework/GetFile?id='+ {Id}HtmlEnc(res.Data.Id)+'&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}&_DONOT_USE_CS={JsAttr(vm!=null?vm.CurrentCS:"")}""  class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64} id=""preview'+{Id}HtmlEnc(res.Data.Id)+'"" style=""cursor:pointer;margin-bottom:5px"" /><i class=""layui-icon layui-icon-close"" style=""font-size: 20px;position:relative;left:-10px;top:-27px;color: #ff0000;cursor: pointer;"" id=""del'+{Id}HtmlEnc(res.Data.Id)+'""></i></label> ');
+            {Id}AddReference('#preview'+res.Data.Id, res);
             $('#preview'+res.Data.Id).on('click',function(){{
               {Id}DoPreview(res.Data.Id);
             }});
@@ -303,6 +318,16 @@ layui.use(['upload'],function(){{
                     if (vm != null)
                     {
                         picurl += $"&_DONOT_USE_CS={JsAttr(vm.CurrentCS)}";
+                    }
+                    // the links of a file this page shows carry a reference the file endpoints check
+                    var fileReferenceQuery = FileReferenceQuery(vm, rawFileId, vm?.CurrentCS, FilePurpose.Read);
+                    if (fileReferenceQuery != null)
+                    {
+                        var referenceJs = JsAttr(fileReferenceQuery);
+                        geturl += (geturl.Contains('?') ? "&" : "?") + fileReferenceQuery;
+                        downloadurl += (downloadurl.Contains('?') ? "&" : "?") + referenceJs;
+                        previewurl += (previewurl.Contains('?') ? "&" : "?") + referenceJs;
+                        picurl += "&" + referenceJs;
                     }
                     output.PostElement.AppendHtml($@"
 <script>

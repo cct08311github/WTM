@@ -200,6 +200,10 @@ git merge --no-ff upstream/dotnet10
 | `src/WalkingTec.Mvvm.Mvc/Views/_Framework/Selector.cshtml`、`src/WalkingTec.Mvvm.Mvc/Helper/SelectorScript.cs`（新增） | 寫入內聯腳本的值依所在位置編碼；`SubmitFunc` 只接受函數名或成員路徑 | 第 25 節 |
 | `src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs` | `SetTenant` 移除 `[Public]`，檢查 `SetCurrentTenant` 的結果，改為 `async Task<IActionResult>` | 第 26 節 |
 | `src/WalkingTec.Mvvm.Core/WTMContext.cs` | `DoLogin` 一律驗證請求的帳號、密碼與租戶；已登入請求的重建流程改為內部方法 `LoadSignedInUser` | 第 27 節 |
+| `src/WalkingTec.Mvvm.Core/Support/FileEndpointGuard.cs`、`ConfigOptions/FileEndpointOptions.cs`（新增）、`ConfigOptions/Configs.cs`、`WTMContext.cs`、`Utils.cs`、`IUIService.cs`、`Extensions/ListVMExtension.cs` | 檔案參考與模式（`FileEndpoints`）、`CreateFileReference`／`GetFileUrl`、`IFileAccessPolicy`；`IUIService` 新增有預設實作的 `MakeDownloadButtonWithReference`／`MakeViewButtonWithReference`；`Utils.GetUrlByFileAttachmentId` 新增帶 `WTMContext` 的多載 | 第 28 節 |
+| `src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs`、`Filters/PrivilegeFilter.cs`（註解）、`Helper/FrameworkServiceExtension.cs` | `Upload*`、`GetFile`、`ViewFile`、`GetFileName` 依第 28 節檢查並決定連線；`IFileAccessPolicy` 預設註冊與啟動記錄 | 第 28 節 |
+| `src/WalkingTec.Mvvm.TagHelpers.LayUI/Common/LayuiUIService.cs`、`ImageTagHelper.cs`、`Abstraction/BaseElementTag.cs`、`Form/{Upload,MultiUpload,Display,RichText}*.cs` | 檔案連結與上傳連結帶參考 | 第 28 節 |
+| `test/WalkingTec.Mvvm.Test.Mock/MockWtmContext.cs` | 選用參數 `loggerFactory`、`configs`、`fileAccessPolicy`；預設空的 `Request.Query` | 第 28 節 |
 | Dependabot 的依賴升級 | 各 csproj／`package-lock.json` 的版本號 | 見各 `dependencies` PR |
 
 fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder,GenericEndpointGuard}.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/GenericEndpointOptions.cs`、`docs/security/generic-endpoint-authz.md`、`test/WalkingTec.Mvvm.LayUI.E2EHost/Controllers/ReportController.cs`（授權測試用頁面）、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270、#272）、`test/WalkingTec.Mvvm.E2E.Instrumentation/`（E2E 的路由覆蓋與 hosting startup，#272）。
@@ -824,3 +828,42 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 - **誰會受影響**：在「已登入」的請求中呼叫 `Wtm.DoLogin(account, null, null)` 來取得目前使用者的下游程式碼（改用 `Wtm.ReloadUser(itcode)` 或 `Wtm.LoginUserInfo`）；正常的登入頁與登入 API 不需修改。`HasMainHost` 模式下，`DoLogin` 不再使用登入狀態內的 remote token，改為以帳號密碼向主站台驗證（請求自帶的 `_remotetoken` 查詢參數維持原行為）
 - **回滾方式**：退回前一個 fork 版本（`Core` 單獨即可）
 - **測試**：Admin.Test 的 `DoLoginPasswordTest`（已登入請求仍驗證密碼、不能取得他人帳號、租戶規則與匿名相同、`ReloadUser` 與 `LoginUserInfo` 重建行為不變）；E2E 的 `FrameworkEndpointTests.Login_WhenAlreadySignedIn_…`、`Vue3ApiTests.Account_SignedInCallers_…`；LayUI 權限矩陣的 `login/login POST`，已登入身分的探測請求（不帶有效憑證）原本回 302，現在重新顯示登入頁（`ok`）。`HasMainHost` 分支沒有單元或 E2E 測試（需要主站台）
+
+## 28. `_Framework` 檔案端點的參考、模式與連線（安全強化，預設 `Audit`）
+
+**範圍**：`/_Framework/Upload`、`UploadImage`、`UploadForLayUIRichTextBox`、`UploadForLayUIUEditor`、`GetFileName`、`GetFile`、`ViewFile`。設計與取捨見 [docs/security/file-endpoint-authz.md](docs/security/file-endpoint-authz.md)。不變：`WtmFileProvider` 的伺服器端方法、demo 範本的 `FileApiController`、`DeletedFileIds` 與匯入的 `UploadFileId`。
+
+**變更**：
+
+| 項目 | 行為 |
+|---|---|
+| 簽名參考 | 伺服器渲染的檔案連結（LayUI `wt:upload`／`wt:multiupload`／`wt:image`／`wt:display`、表格的下載與檢視欄、`Utils.GetUrlByFileAttachmentId(Wtm, ...)`、`Wtm.GetFileUrl`／`Wtm.CreateFileReference`）帶 `_DONOT_USE_FREF`：以 Data Protection 保護，綁定檔案 id、目的（檢視／下載／檔名）、連線、使用者（匿名頁面為空）、租戶與到期時間（`FileEndpoints:ReferenceLifetimeMinutes`，預設 480）。上傳回應的 `Data` 另外增加 `Url`、`Ref`（`Id`、`Name` 不變） |
+| 模式 | `FileEndpoints:Mode`：`Legacy`（舊行為）／`Audit`（**預設**：沒有有效參考的請求照常提供並記錄 Warning，內容為端點、使用者、`Referer`、原因，不含檔案內容）／`Enforce`（拒絕，形式與通用資料端點相同：HTTP 200，「沒有權限」） |
+| 連線 | 請求的 `_DONOT_USE_CS` 不再選擇連線（**立即生效，不分模式**）：有效參考的連線優先；沒有參考時，只有列在 `FileEndpoints:RequestConnectionKeys` 的連線，或 `GenericEndpoints:AllowRequestConnectionKey=true`（恢復舊行為）才採用；其餘使用伺服器決定的連線（為空時 `CreateDC()` 不帶 key，租戶資料庫照常路由）。未設定的 key 乾淨地拒絕（原本是 500） |
+| `IsFilePublic=true` | 頁面渲染的連結（參考）到期前匿名可用；只知道 id 的匿名請求：`Audit` 提供並記錄，`Enforce` 拒絕 |
+| 內嵌檔案 | 富文本框／UEditor 上傳的檔案由伺服器在 `ExtraInfo` 加上保留前綴，在 `Enforce` 下維持用 id 取得（已登入者；`IsFilePublic` 時匿名亦可）。一般上傳會移除用戶端在 `extra` 帶來的這個前綴。富文本框與 UEditor 的連結不帶參考 |
+| 升級前的檔案 | `FileEndpoints:LegacyUploadedBefore`（時間，伺服器本地時間）：`UploadTime` 早於它的檔案在 `Enforce` 下維持用 id 取得 |
+| 應用程式的規則 | `IFileAccessPolicy`（預設全部允許，`TryAdd` 註冊，可取代）：通過參考檢查之後呼叫，傳回 false 即拒絕 |
+| `ViewFile` | 輸出的 `id`、連線 key 與 `width` 經 HTML 編碼；檔案不存在時回空內容（原本是例外）；內層的連結帶自己的參考 |
+| 富文本框上傳 | 回傳的位址使用實際寫入檔案的連線 key（原本寫入的是伺服器目前的 key） |
+| 公開 API | `Wtm.CreateFileReference`、`Wtm.GetFileUrl`、`Utils.GetUrlByFileAttachmentId(WTMContext, ...)`、`IUIService.MakeDownloadButtonWithReference`／`MakeViewButtonWithReference`（預設實作呼叫原方法，既有實作不必修改）、`IFileAccessPolicy`。原有方法與簽名不變 |
+
+**設定 `FileEndpoints`**：
+
+| 設定 | 預設 | 說明 |
+|---|---|---|
+| `Mode` | `Audit` | `Legacy`／`Audit`／`Enforce`。啟動時 `Legacy` 輸出 Warning，`Audit` 輸出 Information |
+| `ReferenceLifetimeMinutes` | `480` | 參考有效分鐘數 |
+| `LegacyUploadedBefore` | 未設定 | 見上表 |
+| `RequestConnectionKeys` | 空 | 沒有參考的請求可以指定的其他連線；非空時啟動輸出 Warning |
+
+- **升級步驟（Runbook）**：
+  1. 升級後什麼都不用做：預設 `Audit`，檔案照常提供，LayUI 頁面（TagHelper、表格按鈕）自動帶參考
+  2. 觀察 Warning（「File endpoint … served a request without a valid file reference」，含端點、使用者與 `Referer`），找出仍以 id 取得檔案的呼叫者：自己寫的連結改用 `Wtm.GetFileUrl(id, purpose)`，或在 `<a>`／`<img>` 的位址用 `Wtm.CreateFileReference`；儲存在內容中的舊連結（編輯器之外）若無法改，用 `LegacyUploadedBefore` 保留升級前的檔案
+  3. 使用第二個資料庫（`[FixConnection]`、`_DONOT_USE_CS` 指向非預設連線）的頁面：TagHelper 與按鈕產生的連結會帶連線；自己寫的連結請列入 `FileEndpoints:RequestConnectionKeys`（立即生效，不分模式）。富文本框與 UEditor 的內嵌連結不帶參考，連線不是預設時同樣需要列入
+  4. 警告不再出現後設 `FileEndpoints:Mode=Enforce`
+  5. Data Protection 金鑰必須持久化，多實例部署還要共用；金鑰是暫時的時，重啟後已打開的頁面要重新整理
+- **回滾方式**：`FileEndpoints:Mode=Legacy`（連線的決定方式另以 `RequestConnectionKeys` 或 `GenericEndpoints:AllowRequestConnectionKey` 處理），或退回前一個 fork 版本
+- **誰會受影響**：自己組出 `/_Framework/GetFile`、`ViewFile`、`GetFileName` 連結的頁面（`Enforce` 前需改用參考）；`_DONOT_USE_CS` 指向非預設連線而沒有走 TagHelper 的呼叫（需列入 `RequestConnectionKeys`）；`GetFile` 的顯式 `default` key 原本會略過租戶資料庫路由，現在與不帶 key 相同（走租戶資料庫）
+- **已知限制**：參考綁定使用者與租戶，不綁定登入工作階段；`wt:ueditor` 的上傳位址是全站共用設定，不帶參考；表格欄位一次簽發每列一個參考
+- **測試**：Core.Test 的 `FileEndpointGuardTest`、`FileEndpointContextTest`；E2E 的 `FileEndpointTests`（`E2E_FILE_ENDPOINTS_MODE=Enforce` 或 `Legacy` 以其他模式跑整個 LayUI 站台，預設 `Audit`）、`LayUiUploadTests`、`FrameworkEndpointTests`

@@ -295,6 +295,18 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.Controllers
             return Content(reference ?? "", "text/plain");
         }
 
+        /// <summary>
+        /// Test only: the reference the file endpoints check, for a file and the current user, the way a page of an application obtains one
+        /// (<c>Wtm.CreateFileReference</c>). Purposes: names of <c>FilePurpose</c>, comma separated (default: view, download and name).
+        /// </summary>
+        [AllRights]
+        [ActionDescription("FileRef")]
+        public ActionResult FileRef(string id, string purposes, string cs)
+        {
+            var parsed = string.IsNullOrEmpty(purposes) ? FilePurpose.Read : Enum.Parse<FilePurpose>(purposes);
+            return Content(Wtm.CreateFileReference(id, parsed, string.IsNullOrEmpty(cs) ? null : cs) ?? "", "text/plain");
+        }
+
         [AllRights]
         [ActionDescription("Ping")]
         public ActionResult Ping()
