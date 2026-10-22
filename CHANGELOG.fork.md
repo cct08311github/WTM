@@ -10,6 +10,10 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
+## 未发布
+
+* **修复（安全）：**   API 响应不再包含用户的 `Password` 字段（#287）。框架的默认 JSON 设置（`UseWtmJsonOptions`）在**输出**时排除 `FrameworkUserBase.Password`（含其子类，例如各项目的 `FrameworkUser`）；读取输入不受影响，新增用户、修改密码照常。做法是在 `System.Text.Json` 的 type info resolver 上加一个只针对该属性的 modifier（`UserPasswordOutputExclusion`），不在模型上使用 `[JsonIgnore]`；`PocoConverter` 复制选项时保留 resolver，使经由它输出的实体同样适用。其他类型上的同名 `Password` 属性不受影响；框架发给其他服务的请求（`DefaultPostJsonOption`）不变。升级说明：修复在框架内，由范本产生的 `_Admin` controller 副本（`Get`、`Add`、`Edit`、`Password`）升级框架后即套用，**不需要修改**；响应中不再有该字段，下游若有读取响应中 `Password` 的脚本或客户端请改为不依赖它。仅在应用通过 `AddJsonOptions(o => o.UseWtmJsonOptions())` 套用框架的 JSON 设置时生效；自行配置 JSON 的应用可调用 `JsonSerializerOptions.ExcludeUserPasswordFromOutput()`。经 `CoreProgram.DefaultJsonOption`（与响应共用）写入分布式缓存的用户实体不会带出 `Password`，框架自身只缓存 `LoginUserInfo`，不受影响。LayUI 不读取 JSON 响应中的 `Password`，不受影响
+
 ## 10.0.0.8(2026-10-21)
 
 * **修改：**   升级依赖（均在同一主版本内）：`Swashbuckle.AspNetCore.Swagger`／`SwaggerGen` 10.3.0 → 10.3.1、`Swashbuckle.AspNetCore.SwaggerUI` 10.1.7 → 10.3.1（与前两者版本一致）、`Microsoft.OpenApi` 2.12.2 → 2.13.0、`Microsoft.EntityFrameworkCore.Sqlite` 10.0.9 → 10.0.13（与其他 EF 包一致）、`Oracle.EntityFrameworkCore` 10.23.26301 → 10.23.26400（同一 10.23 线；最低仍为 Oracle 19c）（#241、#242、#239、#235、#237）

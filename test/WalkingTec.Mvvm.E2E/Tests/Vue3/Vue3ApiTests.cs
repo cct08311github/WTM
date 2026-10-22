@@ -123,6 +123,13 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
 
         // ---- user management ----
 
+        // the user API accepts a password but never returns one (#287)
+        private static void AssertNoPassword(System.Text.Json.JsonElement response, string action)
+        {
+            var text = response.GetRawText();
+            Assert.IsFalse(text.Contains("\"Password\""), $"{action} response must not contain the password field: {text}");
+        }
+
         [TestMethod]
         public async Task User_Api_CreateReadEditPasswordSelectorsExportImportDelete()
         {
@@ -132,28 +139,32 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
             var account = UniqueName("api").ToLowerInvariant();
             var photoId = await api.UploadAsync("photo.png", "image/png", Png);
 
-            await api.PostAsync("/api/_FrameworkUser/Add", new
+            var added = await api.PostAsync("/api/_FrameworkUser/Add", new
             {
                 Entity = new { ITCode = account, Password = "Pw-" + UniqueName(""), Name = "Api User", PhotoId = photoId },
                 SelectedRolesCodes = new[] { "002" },
                 SelectedGroupCodes = new[] { groupCode }
             });
+            AssertNoPassword(added, "Add");
             var id = Ids(await api.PostAsync("/api/_FrameworkUser/Search", new { ITCode = account })).Single();
 
             var read = await api.GetAsync("/api/_FrameworkUser/" + id);
             Assert.AreEqual("Api User", read.GetProperty("Entity").GetProperty("Name").GetString());
+            AssertNoPassword(read, "Get");
             CollectionAssert.AreEqual(new[] { "002" }, read.GetProperty("SelectedRolesCodes").EnumerateArray().Select(x => x.GetString()).ToArray());
-            await api.PutAsync("/api/_FrameworkUser/Edit", new
+            var edited = await api.PutAsync("/api/_FrameworkUser/Edit", new
             {
                 Entity = new { ID = id, ITCode = account, Name = "Api User 2", PhotoId = photoId },
                 SelectedRolesCodes = new[] { "002" },
                 SelectedGroupCodes = new string[0]
             });
+            AssertNoPassword(edited, "Edit");
             Assert.AreEqual("Api User 2", (await api.GetAsync("/api/_FrameworkUser/" + id)).GetProperty("Entity").GetProperty("Name").GetString());
 
             // the password action replaces the password: the new one signs in
             var newPassword = "New-" + UniqueName("");
-            await api.PutAsync("/api/_FrameworkUser/Password", new { Entity = new { ID = id, ITCode = account, Password = newPassword } });
+            var changed = await api.PutAsync("/api/_FrameworkUser/Password", new { Entity = new { ID = id, ITCode = account, Password = newPassword } });
+            AssertNoPassword(changed, "Password");
             var anonymous = await Playwright.APIRequest.NewContextAsync(new() { BaseURL = Site.BaseUri.ToString() });
             Assert.IsFalse(string.IsNullOrEmpty(await Vue3Api.LoginAsync(anonymous, account, newPassword)));
             await anonymous.DisposeAsync();

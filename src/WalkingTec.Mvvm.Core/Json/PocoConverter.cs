@@ -62,6 +62,12 @@ namespace WalkingTec.Mvvm.Core.Json
             rv.ReadCommentHandling = op.ReadCommentHandling;
             rv.ReferenceHandler = op.ReferenceHandler;
             rv.WriteIndented = op.WriteIndented;
+            // keep the type info resolver (and the modifiers added to it, e.g. UserPasswordOutputExclusion) of the options in use:
+            // entities are written through the cloned options, which would otherwise start from a plain default resolver
+            if (op.TypeInfoResolver != null)
+            {
+                rv.TypeInfoResolver = op.TypeInfoResolver;
+            }
             return rv;
         }
 
