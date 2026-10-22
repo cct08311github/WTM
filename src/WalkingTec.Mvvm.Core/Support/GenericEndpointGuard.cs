@@ -73,7 +73,13 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>For an admission by reference: the url of the page whose privilege the reference depends on (null: the page is open to every signed-in user).</summary>
         public string PrivilegeUrl { get; init; }
 
-        public static GenericEndpointDecision Admit(GenericEndpointAdmission how, string privilegeUrl = null) => new GenericEndpointDecision { Admission = how, PrivilegeUrl = privilegeUrl };
+        /// <summary>
+        /// For an admission by reference: the connection key the page was shown on, as the server decided it when the page was produced
+        /// (empty: the connection the server picks by default). Null for the other admissions.
+        /// </summary>
+        public string Connection { get; init; }
+
+        public static GenericEndpointDecision Admit(GenericEndpointAdmission how, string privilegeUrl = null, string connection = null) => new GenericEndpointDecision { Admission = how, PrivilegeUrl = privilegeUrl, Connection = connection };
         public static GenericEndpointDecision Refuse(GenericEndpointRefusal why) => new GenericEndpointDecision { Admission = GenericEndpointAdmission.None, Refusal = why };
     }
 
@@ -317,6 +323,46 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region connection
+
+        /// <summary>
+        /// The connection a key belongs to: the key without the read-replica suffix (<c>reports_1</c> is a replica of <c>reports</c>, the same
+        /// rule as <see cref="Utils.GetCS"/>), empty for no key. A read picks a replica at random, so keys are compared in this form.
+        /// </summary>
+        public static string NormalizeConnectionKey(string key)
+        {
+            if (string.IsNullOrEmpty(key))
+            {
+                return string.Empty;
+            }
+            var index = key.LastIndexOf('_');
+            return index > 0 ? key.Substring(0, index) : key;
+        }
+
+        /// <summary>
+        /// Decides which connection an endpoint that takes no connection key of its own runs on: the one the page's reference is bound to.
+        /// Returns false when the key in the reference is not (or no longer) a configured connection, then the request must be refused.
+        /// An empty key means the page ran on the connection the server picks by default; <paramref name="connection"/> is then null and the
+        /// connection the server chose for the request is kept. Otherwise it is the configured key: for a write the base connection
+        /// (never a replica), for a read the base connection or one of its replicas, as for an action with a fixed connection.
+        /// </summary>
+        public static bool TryResolveConnection(string pinnedKey, Configs configs, bool write, out string connection)
+        {
+            connection = null;
+            if (string.IsNullOrEmpty(pinnedKey))
+            {
+                return true;
+            }
+            if (configs?.Connections == null || configs.Connections.Any(x => string.Equals(x.Key, pinnedKey, StringComparison.OrdinalIgnoreCase)) == false)
+            {
+                return false;
+            }
+            connection = Utils.GetCS(pinnedKey, write ? "Write" : "Read", configs);
+            return true;
+        }
+
+        #endregion
+
         #region decision
 
         /// <summary>
@@ -384,7 +430,7 @@ namespace WalkingTec.Mvvm.Core
                 return GenericEndpointDecision.Refuse(GenericEndpointRefusal.PurposeMismatch);
             }
             if (ctx.CheckConnection
-                && string.Equals(reference.Connection ?? string.Empty, ctx.ConnectionKey ?? string.Empty, StringComparison.Ordinal) == false)
+                && string.Equals(NormalizeConnectionKey(reference.Connection), NormalizeConnectionKey(ctx.ConnectionKey), StringComparison.OrdinalIgnoreCase) == false)
             {
                 return GenericEndpointDecision.Refuse(GenericEndpointRefusal.ConnectionMismatch);
             }
@@ -398,7 +444,7 @@ namespace WalkingTec.Mvvm.Core
             {
                 return GenericEndpointDecision.Refuse(GenericEndpointRefusal.FieldNotAllowed);
             }
-            return GenericEndpointDecision.Admit(GenericEndpointAdmission.Reference, reference.PrivilegeUrl);
+            return GenericEndpointDecision.Admit(GenericEndpointAdmission.Reference, reference.PrivilegeUrl, reference.Connection ?? string.Empty);
         }
 
         #endregion

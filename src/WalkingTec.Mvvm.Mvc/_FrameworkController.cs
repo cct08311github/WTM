@@ -56,7 +56,9 @@ namespace WalkingTec.Mvvm.Mvc
         /// shows the view model has prepared (see <see cref="GenericEndpointGuard"/>), and the connection key must be a configured one.
         /// Returns null when the request may be served, otherwise the answer to send.
         /// </summary>
-        private IActionResult CheckGenericEndpoint(string vmName, GenericEndpointPurpose purpose, bool checkConnection = false, string connectionKey = null, string field = null, bool propagatePrivilege = false)
+        /// <param name="usePinnedConnection">for the endpoints that take no connection key: run on the connection the page's reference is bound to</param>
+        /// <param name="writeConnection">with <paramref name="usePinnedConnection"/>: the request writes, so it runs on the base connection and never on a replica</param>
+        private IActionResult CheckGenericEndpoint(string vmName, GenericEndpointPurpose purpose, bool checkConnection = false, string connectionKey = null, string field = null, bool propagatePrivilege = false, bool usePinnedConnection = false, bool writeConnection = false)
         {
             GenericEndpointRefusal refusal;
             if (string.IsNullOrEmpty(connectionKey) == false
@@ -67,6 +69,21 @@ namespace WalkingTec.Mvvm.Mvc
             else
             {
                 var decision = Wtm.AuthorizeGenericEndpoint(vmName, GenericEndpointReferenceValue(), purpose, checkConnection, connectionKey, field);
+                if (decision.Allowed && usePinnedConnection && decision.Admission == GenericEndpointAdmission.Reference)
+                {
+                    // the key in the reference was decided by the server when the page was produced; a key that is no longer configured is refused
+                    if (GenericEndpointGuard.TryResolveConnection(decision.Connection, ConfigInfo, writeConnection, out var pinned))
+                    {
+                        if (pinned != null)
+                        {
+                            Wtm.CurrentCS = pinned;
+                        }
+                    }
+                    else
+                    {
+                        decision = GenericEndpointDecision.Refuse(GenericEndpointRefusal.UnknownConnection);
+                    }
+                }
                 if (decision.Allowed)
                 {
                     if (propagatePrivilege)
@@ -168,7 +185,7 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("GetEmptyData")]
         public IActionResult GetEmptyData(string _DONOT_USE_VMNAME)
         {
-            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.List, true, Wtm.CurrentCS);
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.List, usePinnedConnection: true);
             if (refused != null)
             {
                 return refused;
@@ -269,7 +286,7 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost]
         public IActionResult UpdateModelProperty(string _DONOT_USE_VMNAME, Guid id, string field, string value)
         {
-            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.Update, true, Wtm.CurrentCS, field: field);
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.Update, field: field, usePinnedConnection: true, writeConnection: true);
             if (refused != null)
             {
                 return refused;
@@ -344,7 +361,7 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("DownloadTemplate")]
         public IActionResult GetExcelTemplate(string _DONOT_USE_VMNAME, string _DONOT_USE_CS)
         {
-            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.Template, true, Wtm.CurrentCS);
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.Template, usePinnedConnection: true);
             if (refused != null)
             {
                 return refused;
