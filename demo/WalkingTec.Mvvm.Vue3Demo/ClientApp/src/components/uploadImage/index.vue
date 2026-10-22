@@ -3,7 +3,7 @@
     v-model:file-list="files" :show-file-list="multi" list-type="picture-card" :disabled="props.disabled" :multiple="props.multi">
     <div v-if="imageUrl && multi !== true">
       <el-image :src="imageUrl" fit="fill"
-        :preview-src-list="props.disabled === true ? ['/api/_file/getfile/' + props.modelValue] : undefined" />
+        :preview-src-list="props.disabled === true ? [fileUrl(props.modelValue)] : undefined" />
     </div>
     <i v-else-if="disabled!==true" class="fa fa-plus"></i>
     <span v-else>{{$t("message._system.uploadFile.total",{count:files?.length})}}</span>
@@ -33,6 +33,7 @@
 import { ref, computed, watch } from 'vue';
 import { Local } from '/@/utils/storage';
 import fileApi from '/@/api/file';
+import { fileUrl, remember, rememberDelete } from '/@/utils/fileRefs';
 
 const emit = defineEmits(['refresh', 'update:modelValue', 'update:deletedFiles']);
 const uploadRef = ref();
@@ -67,7 +68,7 @@ const previewIndex = ref(0);
 const files = ref();
 const imageUrl = ref('');
 const imageUrls = computed(()=>{
-  return files.value.map((item:any)=>{return '/api/_file/getfile/'+item.FileId});
+  return files.value.map((item:any)=>{return fileUrl(item.FileId)});
 })
 const header = computed(() => {
   return { Authorization: `Bearer ${Local.get('token')}` }
@@ -95,8 +96,8 @@ if (props.multi == false) {
     if (props.modelValue) {
       imageUrl.value = "empty";
       let filename = await fileApi().getName(props.modelValue);
-      files.value = [{ name: filename, url: '/api/_file/getfile/' + props.modelValue+"?width=150&height=150", FileId: props.modelValue }];
-      imageUrl.value = '/api/_file/getfile/' + props.modelValue+"?width=150&height=150";
+      files.value = [{ name: filename, url: fileUrl(props.modelValue,{width:150,height:150}), FileId: props.modelValue }];
+      imageUrl.value = fileUrl(props.modelValue,{width:150,height:150});
     }
   }
 }
@@ -107,7 +108,7 @@ else{
       let nv = 
         { 
           name: filename, 
-          url: '/api/_file/getfile/' + props.modelValue[i].FileId +"?width=150&height=150", 
+          url: fileUrl(props.modelValue[i].FileId,{width:150,height:150}), 
           FileId: props.modelValue[i].FileId,
           keyID: props.modelValue[i].ID,
           index:i
@@ -135,6 +136,8 @@ const onPreview = (file: any) => {
 }
 const onSuccess = (res: any, uploadFile: any, uploadFiles: any) => {
   uploadFile.FileId = res.Id;
+  remember(res.Id, res.Ref);
+  rememberDelete(res.Id, res.DeleteRef);
   if (props.multi == false) {    
     filevalue.value = res.Id;
     imageUrl.value = URL.createObjectURL(uploadFile.raw!);
@@ -155,6 +158,7 @@ const onSuccess = (res: any, uploadFile: any, uploadFiles: any) => {
 }
 
 const onRemove = (file: any) => {
+  // only a file uploaded in this session can be deleted (it has a DeleteRef); a saved file is only taken out of the field
   fileApi().deleteFile(file.FileId);
   const f = files.value;
   if (f) {

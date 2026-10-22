@@ -35,8 +35,31 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkUserVms
             SelectedGroupCodes = DC.Set<FrameworkUserGroup>().Where(x => x.UserCode == Entity.ITCode).Select(x => x.GroupCode).ToList();
         }
 
+        // the photo of a user is shown without a reference: only a picture that nothing else uses is taken
+        private bool PhotoIsAcceptable(bool changedOnly)
+        {
+            if (Entity.PhotoId == null)
+            {
+                return true;
+            }
+            if (changedOnly && DC.Set<FrameworkUser>().AsNoTracking().Where(x => x.ID == Entity.ID).Select(x => x.PhotoId).FirstOrDefault() == Entity.PhotoId)
+            {
+                return true;
+            }
+            if (Wtm.IsPhotoAssignable(DC, Entity.PhotoId.Value))
+            {
+                return true;
+            }
+            MSD.AddModelError("Entity.PhotoId", Localizer["Sys.UploadFailed"]);
+            return false;
+        }
+
         public override async Task DoAddAsync()
         {
+            if (PhotoIsAcceptable(false) == false)
+            {
+                return;
+            }
             using (var trans = DC.BeginTransaction())
             {
                 if (SelectedRolesCodes != null)
@@ -81,6 +104,10 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkUserVms
 
         public override async Task DoEditAsync(bool updateAllFields = false)
         {
+            if (PhotoIsAcceptable(true) == false)
+            {
+                return;
+            }
             using (var trans = DC.BeginTransaction())
             {
                 if (SelectedRolesCodes != null)

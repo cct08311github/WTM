@@ -834,7 +834,7 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 
 ## 28. `_Framework` 檔案端點的參考、模式與連線（安全強化，預設 `Audit`）
 
-**範圍**：`/_Framework/Upload`、`UploadImage`、`UploadForLayUIRichTextBox`、`UploadForLayUIUEditor`、`GetFileName`、`GetFile`、`ViewFile`。設計與取捨見 [docs/security/file-endpoint-authz.md](docs/security/file-endpoint-authz.md)。**不在範圍內**：demo／範本的 `/api/_file/*`（`FileApiController`，包括它的 `GetFile`、`GetFileName`、`DownloadFile`、`UploadImage`）不受 `FileEndpoints:Mode` 影響，會另行處理。不變：`WtmFileProvider` 的伺服器端方法（下游在伺服器端直接呼叫，也不處理內嵌標記）、`DeletedFileIds` 與匯入的 `UploadFileId` 的信任方式。本節只涵蓋框架的 `/_Framework` 檔案端點。
+**範圍**：`/_Framework/Upload`、`UploadImage`、`UploadForLayUIRichTextBox`、`UploadForLayUIUEditor`、`GetFileName`、`GetFile`、`ViewFile`。設計與取捨見 [docs/security/file-endpoint-authz.md](docs/security/file-endpoint-authz.md)。**不在範圍內**：demo／範本的 `/api/_file/*`（`FileApiController`，包括它的 `GetFile`、`GetFileName`、`DownloadFile`、`UploadImage`）不受本節的設定影響（其處理見第 29 節）。不變：`WtmFileProvider` 的伺服器端方法（下游在伺服器端直接呼叫，也不處理內嵌標記）、`DeletedFileIds` 與匯入的 `UploadFileId` 的信任方式。本節只涵蓋框架的 `/_Framework` 檔案端點。
 
 **變更**：
 
@@ -875,3 +875,31 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 - **UEditor 回應**：`UploadForLayUIUEditor` 成功的回應改由序列化器產生（成員不變），檔名不能改變回應的結構
 - **已知限制**：參考綁定使用者與租戶，不綁定登入工作階段；`wt:ueditor` 的上傳位址是全站共用設定，不帶參考；表格欄位一次簽發每列一個參考
 - **測試**：Core.Test 的 `FileEndpointGuardTest`、`FileEndpointContextTest`；E2E 的 `FileEndpointTests`（`E2E_FILE_ENDPOINTS_MODE=Enforce` 或 `Legacy` 以其他模式跑整個 LayUI 站台，預設 `Audit`）、`LayUiUploadTests`、`FrameworkEndpointTests`
+
+
+## 29. 範本檔案 API（`/api/_file/*`）的參考、模式與刪除（安全強化，預設 `Audit`）
+
+**範圍**：demo／範本的 `FileApiController`（`/api/_file/*`，SPA 的檔案 API）改為使用第 28 節的同一套機制：`FileEndpoints:Mode`、`_DONOT_USE_FREF`、連線的決定方式與 `IFileAccessPolicy`。第 28 節的 `/_Framework` 端點不變。不變：`WtmFileProvider` 的伺服器端方法、`BaseCRUDVM.DoEdit` 與 `DeletedFileIds`、LayUI 的行為（`PrivilegeFilter` 只新增標記屬性，原有的名稱規則保留）。設計見 [docs/security/file-endpoint-authz.md](docs/security/file-endpoint-authz.md) 第 7 節；下游副本的最小修改見 [docs/security/vue3-file-api-downstream.md](docs/security/vue3-file-api-downstream.md)。
+
+**變更**：
+
+| 項目 | 行為 |
+|---|---|
+| 框架輔助類 | `WalkingTec.Mvvm.Mvc.SpaFileApi`：範本 controller 的每個 action 只呼叫它一次（`Upload`、`UploadImage`、`UploadForEditor`、`GetFile`、`DownloadFile`、`GetFileName`、`GetFileInfo`、`GetUserPhoto`、`DeleteFile`）。不使用基底類別。圖片解碼的限制（`ImageDecodeGuard`）仍在應用程式，以 `SpaImageResizer` 傳入 |
+| 標記屬性 | `[FileEndpoint(PublicWhenFilesPublic = ...)]`：`PrivilegeFilter` 在 `IsFilePublic=true` 時把標記了 `PublicWhenFilesPublic` 的 action 視為公開（原有的 `FileApiController` 名稱規則保留）。啟動時若有路由在 `api/_file` 的 controller 暴露 `DeletedFile`／`GetFileInfo` 而沒有標記，輸出 Warning（未更新的副本） |
+| 讀取的參考 | SPA 的 `<img>` 不能帶憑證，所以讀取用**不綁定使用者的短期參考**（`Wtm.CreateFileCapability`）：綁定檔案、連線、租戶與到期時間（`FileEndpoints:ReferenceLifetimeMinutes`），用途為 `Read`，不含 `Delete`、`Upload`。列表的純文字回應在檔案欄位旁加 `<欄位>__fref`（欄位的格式為下載／檢視按鈕時；HTML 模式與匯出不加）；詳細資料 `BaseCRUDVM.FileRefs`（檔案 id → 參考；僅從資料庫讀出的記錄、僅唯讀屬性、不可由請求繫結）；上傳回應的 `Ref` |
+| 讀取的模式 | 連線一律先由 `ResolveFileConnection` 決定（所有模式；未設定的 key 拒絕）。`Legacy` 照舊；`Audit` 沒有有效參考的請求照常提供並記錄；`Enforce` 只接受有效參考。未登入且 `IsFilePublic=false` 時：`Enforce` 只接受有效參考，另外內嵌與 `LegacyUploadedBefore` 之前的檔案可用 id **顯示**（僅 `GetFile`／`GetUserPhoto`），`Audit` 提供並記錄。拒絕為 HTTP 403 |
+| 上傳 | 需要登入；移除客戶端在 `extra` 帶來的內嵌標記；連線由 `ResolveFileConnection(csName, null, Upload, 參考)` 決定；回應保留 `Id`、`Name`、`errno`、`data.url`（舊編輯器用的 id 位址），新增 `Url`（含參考的 `GetFile` 位址）、`Ref`、`DeleteRef`（綁定使用者的刪除參考）。`UploadImage` 仍經 `ImageDecodeGuard`；新增 `UploadForEditor`（伺服器加內嵌標記，回應 wangEditor 的格式 `errno`／`data.url`） |
+| 刪除 | `DeletedFile` 需要登入，且需要發給**該使用者、該檔案**的 `Delete` 參考（綁定使用者、租戶、到期）；沒有時拒絕並記錄，**除 `Legacy` 外所有模式（含 `Audit`）**。接受 GET（相容）、POST、DELETE |
+| `GetFileInfo` | 所有模式都只回傳 `Id`、`FileName`、`FileExt`、`Length`、`UploadTime`，不含檔案內容、路徑、`ExtraInfo`、`HandlerInfo` |
+| `GetUserPhoto` | 保留主站台轉址；使用者的頭像（該 id 是租戶內可見、有效使用者的 `PhotoId`，且為圖片類型，不含 SVG）不需參考即可顯示（新的 `Avatar` 通過方式，`IFileAccessPolicy` 仍會被詢問），其他 id 依 `GetFile` 的規則。`AccountController.Reg` 不再採用客戶端帶來的 `PhotoId`；範本的 `FrameworkUserVM` 新增或變更 `PhotoId` 時，只接受存在、為圖片類型（不含 SVG）、且沒有被其他記錄的 `FileAttachment` 外鍵使用的檔案（`Wtm.IsPhotoAssignable`）。`IsUserPhoto` 的結果（含否定）依連線、租戶與檔案快取 30 秒，所以頭像被移除後最多 30 秒仍可顯示。`IFileAccessPolicy` 會收到 `Admission=Avatar`，應用程式可據此限制頭像。導覽列的頭像：`CheckUserInfo` 在 `Attributes.PhotoRef` 帶該頭像的參考，沒有時用 `GetUserPhoto`；主站台轉址保留查詢字串（含 `_DONOT_USE_FREF`）；自己寫的頭像欄位不會得到 `Avatar` 通過方式 |
+| 回應標頭 | 所有 GET 加 `X-Content-Type-Options: nosniff`，`Content-Type` 來自 `FileServing`；`GetFile`／`GetUserPhoto` 對會被瀏覽器當作網站一部分執行的內容用 `attachment`，`DownloadFile` 一律 `attachment`；mp4 保留 range；除非 `IsFilePublic=true`，讀取的回應帶 `Cache-Control: private, no-store`；瀏覽器會執行的內容另加 `Content-Security-Policy: sandbox` |
+| SPA | `utils/fileRefs.ts` 在記憶體中保存參考（有上限，登出時清除）；回應攔截器收集 `FileRefs`、`<欄位>__fref`；圖片、檔案上傳元件、表格、匯入元件、頭像、`api/file` 用它組位址，找不到時退回原本的位址。移除已儲存的附件只清除欄位（不呼叫刪除）；只有本次上傳的檔案（有 `DeleteRef`）才會刪除。編輯器改用 `UploadForEditor`。已產生的頁面不需修改 |
+| 公開 API／設定 | `FilePurpose.Delete`、`Wtm.CreateFileCapability`、`Wtm.GetFileUrl(…, path, …)`、`Wtm.CreateFileDC`、`Wtm.AuthorizeFileDeletion`、`Wtm.IsUserPhoto`、`Wtm.AuthorizeFileRequest(…, isAvatar)`、`FileEndpointAdmission.Avatar`、`FileEndpointGuard.BuildUrl`／`AuthorizeDeletion`、`BaseCRUDVM.FileRefs`、`SpaFileApi`、`FileEndpointAttribute`。皆為新增；沒有新設定 |
+
+**升級步驟**：(1) 升級後預設 `Audit`，SPA 照常運作；(2) 觀察 Warning（含 `GetFile`、`DownloadFile`、`GetFileName`、`GetFileInfo`、`GetUserPhoto` 的端點名稱與 `Referer`）；(3) 自寫的前端程式碼若直接組 `/api/_file/...` 位址，改用參考（見 runbook）；(4) 設 `FileEndpoints:Mode=Enforce`。**刪除不分模式（除 `Legacy`）都需要刪除參考**：呼叫 `DeletedFile` 的自訂前端必須帶上傳回應的 `DeleteRef`。回滾：`FileEndpoints:Mode=Legacy`（刪除仍需登入），或退回前一個 fork 版本。
+
+**行為變更**：(a) `DeletedFile` 沒有刪除參考時一律拒絕（`Legacy` 除外）；(b) 範本的元件不再在使用者按下移除時立即刪除已儲存的附件（取消編輯會保留檔案；被取代的檔案留在原處，本版不清理）；(c) `GetFileInfo` 的回應只有中繼資料；(d) 匿名註冊忽略 `PhotoId`；(e) 拒絕為 403（`/_Framework` 是 200 加提示）。
+
+
+**測試**：Core.Test 的 `FileEndpointGuardTest`、`FileEndpointContextTest`（刪除、capability、頭像、租戶路由、URL）、`FileRefsTest`、`SpaFileApiTest`（模式 × `IsFilePublic` × 登入與否、`GetFileInfo`、標頭、上傳、標記、連線、刪除、啟動檢查）；Admin.Test 的 `FileApiControllerTest`、`AccountRegTest`；E2E 的 `Vue3FileApiTests`、`Vue3FileUiTests`（`E2E_FILE_ENDPOINTS_MODE=Enforce` 以 `Enforce` 跑整個 Vue3Demo）與權限矩陣的 `vue3demo` `file-enforce` 設定。
