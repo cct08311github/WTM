@@ -1313,6 +1313,35 @@ params string[] groupcode)
             return CreateDC(cskey: connection?.Key);
         }
 
+        // the image types a browser shows as a picture of a person; SVG is deliberately not one of them
+        private static readonly string[] AvatarExtensions = { "jpg", "jpeg", "png", "gif", "bmp", "webp", "ico" };
+
+        /// <summary>
+        /// True when the file is the photo (<c>PhotoId</c>) of a valid user that <paramref name="dc"/> can see (so, in the tenant the context is
+        /// scoped to) and the file is a picture type a browser shows (not SVG or any other type that runs as part of a site). For file endpoints that
+        /// let anybody see the photo of a user (see <see cref="AuthorizeFileRequest(string, string, FilePurpose, string, Func{FileEndpointFileInfo}, Func{bool})"/>).
+        /// </summary>
+        public bool IsUserPhoto(IDataContext dc, string fileId)
+        {
+            try
+            {
+                if (dc == null || GlobaInfo?.CustomUserType == null || Guid.TryParse(fileId, out var id) == false)
+                {
+                    return false;
+                }
+                if (GetUserQuery(dc).Any(x => x.PhotoId == id && x.IsValid) == false)
+                {
+                    return false;
+                }
+                var ext = dc.Set<FileAttachment>().Where(x => x.ID == id).Select(x => x.FileExt).FirstOrDefault();
+                return ext != null && AvatarExtensions.Contains(ext.TrimStart('.').ToLowerInvariant());
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
         /// <summary>
         /// Decides which database connection a file endpoint runs on. See <see cref="FileEndpointGuard.ResolveConnection"/>: a valid reference
         /// (for the file and purpose, or an upload reference) decides, otherwise only the keys the application lists in
