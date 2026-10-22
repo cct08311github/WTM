@@ -144,7 +144,12 @@ var editRef = Wtm.CreateGenericEndpointReference(typeof(MyVM), GenericEndpointPu
 - 參考綁定帳號與租戶，不綁定登入工作階段；在到期（預設 480 分鐘）或頁面權限被移除之前一直有效。
 - 檔案端點（`GetFile` 等）的連線參數，以及 `UpdateModelProperty` 的紀錄層級資料權限，不在這次變更內，另行處理。
 - `ExemptViewModels` 內的 view model 沒有參考可比對連線 key，所以忽略請求帶的 key（見 5.7 與第 7 節）。
-- 資料權限（`DPWhere`）不變；本修正不處理列級權限。`UpdateModelProperty` 依 id 載入的紀錄、以及它不儲存變更的問題（#284）都不在範圍。
+- 資料權限（`DPWhere`）不變；本修正不處理列級權限。`UpdateModelProperty` 依 id 載入的紀錄（套用資料上下文的全域篩選，與功能頁的載入相同）不在範圍。
+- `UpdateModelProperty` 的寫入語意（#284）：參考與可編輯屬性清單的檢查通過後，對載入的紀錄設定該屬性值，只把該欄（`IBasePoco` 另含 `UpdateTime`／`UpdateBy`）標記為已修改並在參考綁定的基底連線上儲存；失敗一律回 HTTP 400（不是 Success），回應只有通用訊息（或屬性的驗證訊息），日誌只記例外的型別名稱。依序檢查：參考（格式與版本、到期、使用者與租戶、view model、目的、連線 key、頁面權限、屬性清單）→ 紀錄存在且 view model 是 CRUD view model → 屬性可寫（以下）→ 在 EF 模型內是非主鍵的對應欄位 → 文字能嚴格轉成屬性型別 → 該屬性的 DataAnnotations → `Validate()`（含重複資料檢查）→ 儲存。
+  - **不論 `Mode` 與可編輯屬性清單，一律拒絕**：`ID`、`ITenant.TenantCode`、`IPersistPoco.IsValid`、`IBasePoco` 的 `CreateTime`／`CreateBy`／`UpdateTime`／`UpdateBy`，以及標記 `[NotMapped]`／`[CanNotEdit]` 的屬性；只接受公開、有公開 setter 的純量屬性（字串、數字、bool、日期、`Guid`、列舉與其 nullable），導覽屬性、集合、陣列、靜態成員與索引子一律拒絕。屬性名稱逐字比對（大小寫不同即拒絕）。
+  - 轉型是嚴格的：數字用不分文化（invariant）解析且不接受千分位；日期接受 ISO 8601（及 invariant 文化認得的格式）；列舉須是已定義的名稱或值（`[Flags]` 除外）；無法解析的文字回 400，**不會**變成預設值（0、false、`Guid.Empty`、最小日期）。空字串：字串或 nullable 屬性寫成 null，其他型別回 400。
+  - **`GenericEndpoints:Mode=Legacy`**：沒有參考、也沒有可編輯屬性清單，這個端點在升級前是「不儲存」的空操作，現在會真的寫入（仍受上述一律拒絕的規則限制）。仍使用 `Legacy` 的網站請知道這個變化，並盡快改回 `Enforce`。
+  - CSRF：端點是 POST，登入 cookie 為 `SameSite=Strict`（`FrameworkServiceExtension`），沒有 antiforgery token；跨站請求不會帶登入 cookie。若網站改用較寬鬆的 cookie 設定（`SameSite=Lax` 或 `None`），要另外加上 antiforgery 保護。
 - 在 `[AllRights]` 頁面上顯示的 view model，授權就是「任何已登入者」，與該頁相同。
 - 本文件未列出的其他 `_Framework` action 的授權不在本次範圍。
 - 由範本產生、已複製到下游專案的 `_Admin` controller 不在本次範圍；範本更新後，下游的複本可能需要套用相同的修改。
