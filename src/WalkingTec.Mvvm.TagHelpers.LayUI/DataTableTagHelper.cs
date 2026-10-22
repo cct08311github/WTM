@@ -332,8 +332,39 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
         }
 
+        private string _genericEndpointReference;
+
+        /// <summary>
+        /// True when the grid offers an export to this user: the export button of the generic endpoint of the framework or an action marked
+        /// as export, at the top level or inside a button group, and not hidden for the user (the same visibility rule as
+        /// <see cref="AddSubButton"/>). An action marked as export counts although it posts to its own controller, because the standard
+        /// export flow of the grid relies on it.
+        /// </summary>
+        private bool HasExportAction()
+        {
+            var vm = Vm.Model as BaseVM;
+            var actions = ListVM?.GetGridActions();
+            return actions != null && actions.Any(x => OffersExport(x, vm));
+        }
+
+        private static bool OffersExport(GridAction item, BaseVM vm)
+        {
+            var visible = string.IsNullOrEmpty(item.Url) || vm?.Wtm?.IsUrlPublic(item.Url) == true || vm?.Wtm?.IsAccessable(item.Url) == true
+                || item.ParameterType == GridActionParameterTypesEnum.AddRow || item.ParameterType == GridActionParameterTypesEnum.RemoveRow;
+            if (visible == false || (item.ShowInRow == false && item.HideOnToolBar))
+            {
+                return false;
+            }
+            if (item.IsExport || (string.IsNullOrEmpty(item.Area) && item.ControllerName == "_Framework" && item.ActionName == "GetExportExcel"))
+            {
+                return true;
+            }
+            return item.ActionName == "ActionsGroup" && item.SubActions != null && item.SubActions.Any(x => OffersExport(x, vm));
+        }
+
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
+            _genericEndpointReference = null;
             if (Loading == null)
             {
                 Loading = true;
@@ -410,6 +441,18 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 if (Filter == null) Filter = new Dictionary<string, object>();
                 Filter.Add("_DONOT_USE_VMNAME", vmQualifiedName);
                 Filter.Add("_DONOT_USE_CS", ListVM.CurrentCS);
+                // the generic data endpoints serve this view model only to a request that carries this reference
+                // the grid inside the selector pop-up only lists rows; a grid that has no export button does not need the right to export either
+                var referencePurposes = GenericEndpointPurpose.List;
+                if (IsInSelector != true && HasExportAction())
+                {
+                    referencePurposes |= GenericEndpointPurpose.Export;
+                }
+                _genericEndpointReference = (Vm.Model as BaseVM)?.Wtm?.CreateGenericEndpointReference(Vm.Model.GetType(), referencePurposes, ListVM.CurrentCS);
+                if (_genericEndpointReference != null)
+                {
+                    Filter[GenericEndpointGuard.ReferenceParameter] = _genericEndpointReference;
+                }
                 Filter.Add("SearcherMode", ListVM.SearcherMode);
                 Filter.Add("SelectorValueField", ListVM.SelectorValueField);
                 Filter.Add("ViewDivId", ListVM.ViewDivId);
@@ -850,6 +893,10 @@ setTimeout(function(){{
                 if (item.ControllerName == "_Framework" && item.ActionName == "GetExportExcel") // 导出按钮 接口地址
                 {
                     url = $"{url}&_DONOT_USE_VMNAME={vmQualifiedName}";
+                    if (_genericEndpointReference != null)
+                    {
+                        url = $"{url}&{GenericEndpointGuard.ReferenceParameter}={Uri.EscapeDataString(_genericEndpointReference)}";
+                    }
                 }
                 var script = new StringBuilder($"var tempUrl = '{JsStringEncoder.Escape(url)}',whereStr={JsonSerializer.Serialize(item.whereStr)};");
 

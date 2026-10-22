@@ -39,6 +39,84 @@ namespace WalkingTec.Mvvm.Mvc
         /// </summary>
         private readonly ISecurityCodeHelper _securityCode = securityCode;
 
+        #region check of the view model a request names
+
+        private string GenericEndpointReferenceValue()
+        {
+            string rv = Request.Query[GenericEndpointGuard.ReferenceParameter];
+            if (string.IsNullOrEmpty(rv) && Request.HasFormContentType)
+            {
+                rv = Request.Form[GenericEndpointGuard.ReferenceParameter];
+            }
+            return rv;
+        }
+
+        /// <summary>
+        /// The generic data endpoints build a view model from a name in the request. Before they do, the request must be one the page that
+        /// shows the view model has prepared (see <see cref="GenericEndpointGuard"/>), and the connection key must be a configured one.
+        /// Returns null when the request may be served, otherwise the answer to send.
+        /// </summary>
+        /// <param name="applyRequestConnection">for the endpoints that take the connection key in the request: run on it, in the spelling of the configured connection, where <see cref="GenericEndpointGuard.TryGetRequestConnection"/> allows it</param>
+        /// <param name="usePinnedConnection">for the endpoints that take no connection key: run on the connection the page's reference is bound to</param>
+        /// <param name="writeConnection">with <paramref name="usePinnedConnection"/>: the request writes, so it runs on the base connection and never on a replica</param>
+        private IActionResult CheckGenericEndpoint(string vmName, GenericEndpointPurpose purpose, bool checkConnection = false, string connectionKey = null, string field = null, bool propagatePrivilege = false, bool usePinnedConnection = false, bool writeConnection = false, bool applyRequestConnection = false)
+        {
+            GenericEndpointRefusal refusal;
+            if (string.IsNullOrEmpty(connectionKey) == false
+                && ConfigInfo.Connections.Any(x => string.Equals(x.Key, connectionKey, StringComparison.OrdinalIgnoreCase)) == false)
+            {
+                refusal = GenericEndpointRefusal.UnknownConnection;
+            }
+            else
+            {
+                var decision = Wtm.AuthorizeGenericEndpoint(vmName, GenericEndpointReferenceValue(), purpose, checkConnection, connectionKey, field);
+                if (decision.Allowed && usePinnedConnection && decision.Admission == GenericEndpointAdmission.Reference)
+                {
+                    // the key in the reference was decided by the server when the page was produced; a key that is no longer configured is refused
+                    if (GenericEndpointGuard.TryResolveConnection(decision.Connection, ConfigInfo, writeConnection, out var pinned))
+                    {
+                        if (pinned != null)
+                        {
+                            Wtm.CurrentCS = pinned;
+                        }
+                    }
+                    else
+                    {
+                        decision = GenericEndpointDecision.Refuse(GenericEndpointRefusal.UnknownConnection);
+                    }
+                }
+                if (decision.Allowed && applyRequestConnection
+                    && GenericEndpointGuard.TryGetRequestConnection(decision.Admission, connectionKey, ConfigInfo, out var requested))
+                {
+                    Wtm.CurrentCS = requested;
+                }
+                if (decision.Allowed)
+                {
+                    if (propagatePrivilege)
+                    {
+                        // views produced for the request (the grid inside the selector) write references with the privilege of the original page
+                        Wtm.PagePrivilegeUrl = decision.PrivilegeUrl;
+                    }
+                    return null;
+                }
+                refusal = decision.Refusal;
+            }
+            HttpContext.RequestServices.GetService<ILoggerFactory>()?.CreateLogger<_FrameworkController>()
+                .LogWarning("Generic data endpoint {Action} refused a request: {Reason} (user {User})", ControllerContext.ActionDescriptor.ActionName, refusal, Wtm.LoginUserInfo?.ITCode);
+            if (Request.Headers.ContainsKey("layuisearch"))
+            {
+                return new ContentResult()
+                {
+                    Content = "{\"Data\":[],\"Count\":0,\"Page\":1,\"PageCount\":0,\"Msg\":" + JsonSerializer.Serialize((string)MvcProgram._localizer["Sys.NoPrivilege"]) + ",\"Code\":403}",
+                    ContentType = "application/json",
+                    StatusCode = 200
+                };
+            }
+            return new ContentResult() { Content = MvcProgram._localizer["Sys.NoPrivilege"], ContentType = "text/html", StatusCode = 200 };
+        }
+
+        #endregion
+
 
 
 
@@ -58,7 +136,12 @@ namespace WalkingTec.Mvvm.Mvc
         )
         {
             string cs =_DONOT_USE_CURRENTCS;
-            Wtm.CurrentCS = cs;
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.Selector, true, cs, propagatePrivilege: true, applyRequestConnection: true);
+            if (refused != null)
+            {
+                return refused;
+            }
+            cs = Wtm.CurrentCS;
             var listVM = Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true) as IBasePagedListVM<TopBasePoco, ISearcher>;
 
             if (listVM is IBasePagedListVM<TopBasePoco, ISearcher>)
@@ -108,6 +191,11 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("GetEmptyData")]
         public IActionResult GetEmptyData(string _DONOT_USE_VMNAME)
         {
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.List, usePinnedConnection: true);
+            if (refused != null)
+            {
+                return refused;
+            }
             var listVM = Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true) as IBasePagedListVM<TopBasePoco, BaseSearcher>;
             string data = listVM.GetSingleDataJson(null, false);
             var rv = new ContentResult
@@ -129,6 +217,11 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("GetPagingData")]
         public IActionResult GetPagingData(string _DONOT_USE_VMNAME, string _DONOT_USE_CS)
         {
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.List, true, _DONOT_USE_CS, applyRequestConnection: true);
+            if (refused != null)
+            {
+                return refused;
+            }
             var qs = new Dictionary<string, object>();
             foreach (var item in Request.Form.Keys)
             {
@@ -138,7 +231,6 @@ namespace WalkingTec.Mvvm.Mvc
             //var vmType = Type.GetType(_DONOT_USE_VMNAME);
             //var vmCreater = vmType.GetConstructor(Type.EmptyTypes);
             //var listVM = vmCreater.Invoke(null) as BaseVM;
-            Wtm.CurrentCS = _DONOT_USE_CS;
             var listVM = Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true) as IBasePagedListVM<TopBasePoco, BaseSearcher>;
             listVM.FC = qs;
             if (listVM is IBasePagedListVM<TopBasePoco, ISearcher>)
@@ -199,6 +291,11 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost]
         public IActionResult UpdateModelProperty(string _DONOT_USE_VMNAME, Guid id, string field, string value)
         {
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.Update, field: field, usePinnedConnection: true, writeConnection: true);
+            if (refused != null)
+            {
+                return refused;
+            }
             if (value == null && Microsoft.Extensions.Primitives.StringValues.IsNullOrEmpty(Request.Form[nameof(value)]))
             {
                 value = string.Empty;
@@ -221,6 +318,11 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("Export")]
         public IActionResult GetExportExcel(string _DONOT_USE_VMNAME, string _DONOT_USE_CS)
         {
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.Export, true, _DONOT_USE_CS, applyRequestConnection: true);
+            if (refused != null)
+            {
+                return refused;
+            }
             var qs = new Dictionary<string, object>();
             foreach (var item in Request.Query.Keys)
             {
@@ -235,7 +337,6 @@ namespace WalkingTec.Mvvm.Mvc
             }
             var instanceType = Type.GetType(_DONOT_USE_VMNAME);
 
-            Wtm.CurrentCS =  _DONOT_USE_CS;
             var listVM = Wtm.CreateVM(_DONOT_USE_VMNAME) as IBasePagedListVM<TopBasePoco, ISearcher>;
 
             listVM.FC = qs;
@@ -264,6 +365,11 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("DownloadTemplate")]
         public IActionResult GetExcelTemplate(string _DONOT_USE_VMNAME, string _DONOT_USE_CS)
         {
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.Template, usePinnedConnection: true);
+            if (refused != null)
+            {
+                return refused;
+            }
             //Wtm.CurrentCS = _DONOT_USE_CS ?? "default";
             var importVM = Wtm.CreateVM(_DONOT_USE_VMNAME) as IBaseImport<BaseTemplateVM>;
             var qs = new Dictionary<string, string>();
@@ -750,10 +856,45 @@ namespace WalkingTec.Mvvm.Mvc
             return $"<script>window.location.href='{JsStringEncoder.Escape(HttpUtility.UrlDecode(redirect))}'</script>";
         }
 
+        /// <summary>
+        /// The role code of the administrator role. Every site is created with it, and the framework's own administrator-only features
+        /// (the workflow designer page, the data privilege scope) recognise administrators by it.
+        /// </summary>
+        private const string AdministratorRoleCode = "001";
+
+        /// <summary>True when the signed-in user holds the administrator role (false when nobody is signed in).</summary>
+        public static bool IsAdministrator(LoginUserInfo user)
+        {
+            return user?.Roles != null && user.Roles.Any(x => x != null && x.RoleCode == AdministratorRoleCode);
+        }
+
+        /// <summary>
+        /// The cache of other accounts is cleared only on behalf of an administrator. Returns null when the caller may go on, otherwise the
+        /// answer to send (the same form as the privilege filter uses for an action the caller has no privilege for).
+        /// </summary>
+        private IActionResult RefuseUnlessAdministrator()
+        {
+            if (IsAdministrator(Wtm.LoginUserInfo))
+            {
+                return null;
+            }
+            if (Request.Headers.ContainsKey("Authorization"))
+            {
+                return Forbid(Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme);
+            }
+            return new ContentResult() { Content = MvcProgram._localizer["Sys.NoPrivilege"], ContentType = "text/html", StatusCode = 200 };
+        }
+
+        // these three are not pages of a menu: the privilege filter lets every signed-in user through the controller, so each checks the role itself
         [AllRights]
         [HttpPost]
         public async Task<ActionResult> RemoveUserCacheByAccount(string[] itcode)
         {
+            var refused = RefuseUnlessAdministrator();
+            if (refused != null)
+            {
+                return (ActionResult)refused;
+            }
             await Wtm.RemoveUserCache(itcode);
             return Ok();
         }
@@ -762,6 +903,11 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost]
         public async Task<ActionResult> RemoveUserCacheByRole(string[] rolecode)
         {
+            var refused = RefuseUnlessAdministrator();
+            if (refused != null)
+            {
+                return (ActionResult)refused;
+            }
             await Wtm.RemoveUserCacheByRole(rolecode);
             return Ok();
         }
@@ -770,9 +916,13 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost]
         public async Task<ActionResult> RemoveUserCacheByGroup(string[] groupcode)
         {
+            var refused = RefuseUnlessAdministrator();
+            if (refused != null)
+            {
+                return (ActionResult)refused;
+            }
             await Wtm.RemoveUserCacheByGroup(groupcode);
             return Ok();
         }
     }
 }
-

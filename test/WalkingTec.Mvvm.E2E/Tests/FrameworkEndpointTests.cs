@@ -39,10 +39,22 @@ namespace WalkingTec.Mvvm.E2E.Tests
 
         // ---- grid helpers -----------------------------------------------------------------------------------------
 
+        /// <summary>
+        /// The reference a page writes for a script of its own that calls the generic data endpoints (the Lab helper action calls
+        /// Wtm.CreateGenericEndpointReference for the signed-in user).
+        /// </summary>
+        private async Task<string> ReferenceAsync(string vm, string purposes, string fields = null)
+        {
+            var response = await Api.GetAsync("/Lab/GenericReference?vm=" + Uri.EscapeDataString(vm) + "&purposes=" + purposes + (fields == null ? "" : "&fields=" + fields));
+            Assert.AreEqual(200, response.Status);
+            return await response.TextAsync();
+        }
+
         [TestMethod]
         public async Task GetEmptyData_ReturnsAnEmptyRowOfTheListViewModel()
         {
-            var response = await Api.GetAsync("/_Framework/GetEmptyData?_DONOT_USE_VMNAME=" + Uri.EscapeDataString(LabListVm));
+            var reference = await ReferenceAsync(LabListVm, "List");
+            var response = await Api.GetAsync("/_Framework/GetEmptyData?_DONOT_USE_VMNAME=" + Uri.EscapeDataString(LabListVm) + "&_DONOT_USE_VMREF=" + reference);
 
             Assert.AreEqual(200, response.Status);
             StringAssert.Contains(response.Headers["content-type"], "application/json");
@@ -66,10 +78,11 @@ namespace WalkingTec.Mvvm.E2E.Tests
         public async Task UpdateModelProperty_AnswersSuccessForAnExistingRecord()
         {
             var gadget = await CreateGadgetAsync("P");
+            var reference = await ReferenceAsync(GadgetVm, "Update", "Code");
 
             var response = await Api.PostAsync("/_Framework/UpdateModelProperty", new APIRequestContextOptions
             {
-                Form = Api.CreateFormData().Set("_DONOT_USE_VMNAME", GadgetVm).Set("id", gadget.Id).Set("field", "Code").Set("value", "P-2")
+                Form = Api.CreateFormData().Set("_DONOT_USE_VMNAME", GadgetVm).Set("id", gadget.Id).Set("field", "Code").Set("value", "P-2").Set("_DONOT_USE_VMREF", reference)
             });
 
             Assert.AreEqual(200, response.Status);
@@ -81,10 +94,11 @@ namespace WalkingTec.Mvvm.E2E.Tests
         public async Task UpdateModelProperty_ChangesOneFieldOfARecord()
         {
             var gadget = await CreateGadgetAsync("Q");
+            var reference = await ReferenceAsync(GadgetVm, "Update", "Code");
 
             await Api.PostAsync("/_Framework/UpdateModelProperty", new APIRequestContextOptions
             {
-                Form = Api.CreateFormData().Set("_DONOT_USE_VMNAME", GadgetVm).Set("id", gadget.Id).Set("field", "Code").Set("value", "Q-2")
+                Form = Api.CreateFormData().Set("_DONOT_USE_VMNAME", GadgetVm).Set("id", gadget.Id).Set("field", "Code").Set("value", "Q-2").Set("_DONOT_USE_VMREF", reference)
             });
 
             Assert.AreEqual("Q-2", await FindGadgetAsync(gadget.Name, "Code"));

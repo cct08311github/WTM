@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Distributed;
@@ -1045,6 +1046,74 @@ params string[] groupcode)
             }
             return false;
         }
+
+        #region Generic endpoint references
+
+        /// <summary>
+        /// Set by the privilege filter of the request: the url of the current page when opening it needs a menu privilege (it is not public
+        /// and not open to every signed-in user), otherwise null. References written into the page record it, so that they stop working when
+        /// the user loses the privilege. See <see cref="GenericEndpointGuard"/>.
+        /// </summary>
+        public string PagePrivilegeUrl { get; set; }
+
+        private IDataProtector GenericEndpointProtector()
+        {
+            return GenericEndpointGuard.CreateProtector(ServiceProvider?.GetService<IDataProtectionProvider>());
+        }
+
+        /// <summary>
+        /// Creates the reference that lets the generic data endpoints (<c>/_Framework/GetPagingData</c>, <c>Selector</c>, <c>GetExportExcel</c>,
+        /// <c>GetExcelTemplate</c>, <c>GetEmptyData</c>, <c>UpdateModelProperty</c>) serve a view model to the current user. The LayUI
+        /// TagHelpers call it for the view models they show; pages that call the endpoints from their own script obtain the reference here
+        /// and send it as <see cref="GenericEndpointGuard.ReferenceParameter"/> together with <c>_DONOT_USE_VMNAME</c>.
+        /// </summary>
+        /// <param name="viewModelType">the view model</param>
+        /// <param name="purposes">what the endpoints may do with it</param>
+        /// <param name="connectionKey">connection key the page uses (default: <see cref="CurrentCS"/>)</param>
+        /// <param name="editableFields">for <see cref="GenericEndpointPurpose.Update"/>: the properties the page lets the user edit</param>
+        /// <returns>the reference, or null when none can be created (then the endpoints refuse the request)</returns>
+        public string CreateGenericEndpointReference(Type viewModelType, GenericEndpointPurpose purposes, string connectionKey = null, IEnumerable<string> editableFields = null)
+        {
+            try
+            {
+                return GenericEndpointGuard.Issue(GenericEndpointProtector(), ConfigInfo?.GenericEndpoints, viewModelType, purposes,
+                    connectionKey ?? CurrentCS, LoginUserInfo?.ITCode, LoginUserInfo?.CurrentTenant, PagePrivilegeUrl, DateTimeOffset.UtcNow, editableFields);
+            }
+            catch (Exception ex)
+            {
+                _loggerFactory?.CreateLogger<WTMContext>().LogWarning("A generic endpoint reference could not be created: {ExceptionType}", ex.GetType().Name);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Decides whether a generic data endpoint may serve the view model a request names. See <see cref="GenericEndpointGuard.Authorize"/>.
+        /// </summary>
+        public GenericEndpointDecision AuthorizeGenericEndpoint(string viewModelName, string reference, GenericEndpointPurpose purpose, bool checkConnection = false, string connectionKey = null, string field = null)
+        {
+            var protector = GenericEndpointProtector();
+            return GenericEndpointGuard.Authorize(new GenericEndpointRequestContext
+            {
+                Options = ConfigInfo?.GenericEndpoints,
+                ViewModelName = viewModelName,
+                Purpose = purpose,
+                Reference = reference,
+                CheckConnection = checkConnection,
+                ConnectionKey = connectionKey,
+                Field = field,
+                User = LoginUserInfo?.ITCode,
+                Tenant = LoginUserInfo?.CurrentTenant,
+                Now = DateTimeOffset.UtcNow,
+                OpenReference = r => GenericEndpointGuard.Unprotect(protector, r),
+                CanOpenPage = IsAccessable,
+                ResolveType = n =>
+                {
+                    try { return Type.GetType(n); } catch { return null; }
+                }
+            });
+        }
+
+        #endregion
 
         public bool IsUrlPublic(string url)
         {

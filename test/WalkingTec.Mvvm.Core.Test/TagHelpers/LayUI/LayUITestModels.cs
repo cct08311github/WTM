@@ -79,4 +79,42 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
             return DC.Set<School>().OrderBy(x => x.ID);
         }
     }
+
+    /// <summary>List view model whose grid has the standard export button (it posts to its own controller).</summary>
+    public class LayuiExportSchoolListVM : LayuiSchoolListVM
+    {
+        protected override List<GridAction> InitGridAction()
+        {
+            return new List<GridAction>
+            {
+                this.MakeStandardAction("School", GridActionStandardTypesEnum.ExportExcel, "Export", ""),
+            };
+        }
+    }
+
+    /// <summary>List view model whose grid has the export button that posts to the generic data endpoint of the framework.</summary>
+    public class LayuiFrameworkExportSchoolListVM : LayuiSchoolListVM
+    {
+        protected override List<GridAction> InitGridAction()
+        {
+#pragma warning disable CS0618 // the generic export action is still offered to applications
+            return new List<GridAction> { this.MakeStandardExportAction() };
+#pragma warning restore CS0618
+        }
+    }
+
+    /// <summary>List view model whose export button sits inside a button group.</summary>
+    public class LayuiGroupedExportSchoolListVM : LayuiSchoolListVM
+    {
+        protected override List<GridAction> InitGridAction()
+        {
+            return new List<GridAction>
+            {
+                this.MakeActionsGroup("More", new List<GridAction>
+                {
+                    this.MakeStandardAction("School", GridActionStandardTypesEnum.ExportExcel, "Export", ""),
+                })
+            };
+        }
+    }
 }

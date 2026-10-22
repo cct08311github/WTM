@@ -216,6 +216,9 @@ namespace WalkingTec.Mvvm.Mvc.Filters
 
                 if (isAllRights == false)
                 {
+                    // pages that are shown only with a menu privilege record their url, so that the references they write for
+                    // the generic data endpoints are honoured only while the user keeps that privilege
+                    controller.Wtm.PagePrivilegeUrl = controller.BaseUrl;
                     bool canAccess = controller.Wtm.IsAccessable(controller.BaseUrl);
                     if (canAccess == false && controller.ConfigInfo.IsQuickDebug == false)
                     {
