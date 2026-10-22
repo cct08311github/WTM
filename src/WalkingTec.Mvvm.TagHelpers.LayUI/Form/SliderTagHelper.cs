@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Linq;
 
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
@@ -130,6 +131,41 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             return true;
         }
 
+        /// <summary>
+        /// The bound value as a JavaScript number literal, or null when it is not a finite number.
+        /// The literal is built from the parsed number with the invariant culture, so it only contains
+        /// digits, '.', '-', '+' and 'E' whatever the current culture or the original text is.
+        /// </summary>
+        private static string ToScriptNumber(object model)
+        {
+            double d;
+            switch (model)
+            {
+                case string s:
+                    if (!double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out d))
+                    {
+                        return null;
+                    }
+                    break;
+                case sbyte _:
+                case byte _:
+                case short _:
+                case ushort _:
+                case int _:
+                case uint _:
+                case long _:
+                case ulong _:
+                case float _:
+                case double _:
+                case decimal _:
+                    d = Convert.ToDouble(model, CultureInfo.InvariantCulture);
+                    break;
+                default:
+                    return null;
+            }
+            return double.IsFinite(d) ? d.ToString(CultureInfo.InvariantCulture) : null;
+        }
+
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
             output.TagName = "div";
@@ -166,6 +202,25 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 else if (defaultItems.Length == 0)
                 {
                     scriptDefault = null;
+                }
+            }
+
+            // The handle is drawn from the bound value (the one written to the hidden inputs) when there is one.
+            // A bound 0 does not override an explicit default-value: a value type cannot tell "not set" from 0,
+            // and such a slider has always started at its default-value. Without a default-value a bound 0 is only
+            // written when the scale starts below 0 (otherwise layui puts the handle at 0 anyway).
+            if (Field?.Model != null || Field1?.Model != null)
+            {
+                var bound0 = Field?.Model == null ? "0" : ToScriptNumber(Field.Model);
+                var bound1 = !range ? null : (Field1?.Model == null ? "0" : ToScriptNumber(Field1.Model));
+                if (bound0 != null && (!range || bound1 != null))
+                {
+                    var isZero = double.Parse(bound0, CultureInfo.InvariantCulture) == 0
+                        && (bound1 == null || double.Parse(bound1, CultureInfo.InvariantCulture) == 0);
+                    if (!isZero || (scriptDefault == null && (Min ?? 0) < 0))
+                    {
+                        scriptDefault = range ? $"[{bound0},{bound1}]" : bound0;
+                    }
                 }
             }
 
