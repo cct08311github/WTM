@@ -85,7 +85,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                     }
                     else
                     {
-                        rv = vm.UIService.MakeDownloadButton(info.ButtonType, info.FileID.Value, info.Text, vm.CurrentCS, info.ButtonClass, info.Style).ToString();
+                        rv = vm.UIService.MakeDownloadButtonWithReference(info.ButtonType, info.FileID.Value, vm.Wtm?.CreateFileReference(info.FileID.Value, FilePurpose.Download, vm.CurrentCS), info.Text, vm.CurrentCS, info.ButtonClass, info.Style).ToString();
                     }
                     break;
                 case ColumnFormatTypeEnum.ViewPic:
@@ -95,7 +95,7 @@ namespace WalkingTec.Mvvm.Core.Extensions
                     }
                     else
                     {
-                        rv = vm.UIService.MakeViewButton(info.ButtonType, info.FileID.Value, info.Text, info.Width, info.Height, info.Title, info.Resizable, vm.CurrentCS, info.Maxed, info.ButtonClass, info.Style).ToString();
+                        rv = vm.UIService.MakeViewButtonWithReference(info.ButtonType, info.FileID.Value, vm.Wtm?.CreateFileReference(info.FileID.Value, FilePurpose.View | FilePurpose.Download, vm.CurrentCS), info.Text, info.Width, info.Height, info.Title, info.Resizable, vm.CurrentCS, info.Maxed, info.ButtonClass, info.Style).ToString();
                     }
                     break;
                 case ColumnFormatTypeEnum.Script:

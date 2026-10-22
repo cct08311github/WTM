@@ -47,7 +47,20 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
             RouteExclusionFile = LayUI.RouteExclusionFile,
             ReadyPath = LayUI.ReadyPath,
             ReportRouteCoverage = false,
-            ConfigureEnvironment = LayUiSetup.ConfigureEnvironment
+            // the table states the outcomes of the default mode of the file endpoints, whatever mode the whole run was started in
+            ConfigureEnvironment = (site, env) => { LayUiSetup.ConfigureEnvironment(site, env); env["FileEndpoints__Mode"] = "Audit"; }
+        };
+
+        /// <summary>The LayUI test host with FileEndpoints:Mode=Enforce for the permission matrix: the table lists the differences to the default.</summary>
+        public static readonly SiteTarget LayUIMatrixFileEnforce = new SiteTarget
+        {
+            Name = "layui-e2ehost-matrix-file-enforce",
+            ProjectDir = LayUI.ProjectDir,
+            AssemblyName = LayUI.AssemblyName,
+            RouteExclusionFile = LayUI.RouteExclusionFile,
+            ReadyPath = LayUI.ReadyPath,
+            ReportRouteCoverage = false,
+            ConfigureEnvironment = (site, env) => { LayUiSetup.ConfigureEnvironment(site, env); env["FileEndpoints__Mode"] = "Enforce"; }
         };
 
         /// <summary>A second instance of the Vue3Demo for the permission matrix (workflow feature off, the default).</summary>

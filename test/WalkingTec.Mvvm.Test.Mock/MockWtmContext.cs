@@ -16,7 +16,7 @@ namespace WalkingTec.Mvvm.Test.Mock
 {
     public static class MockWtmContext
     {
-        public static WTMContext CreateWtmContext(IDataContext dataContext= null, string usercode = null, string remoteToken = null, Microsoft.AspNetCore.DataProtection.IDataProtectionProvider dataProtection = null)
+        public static WTMContext CreateWtmContext(IDataContext dataContext= null, string usercode = null, string remoteToken = null, Microsoft.AspNetCore.DataProtection.IDataProtectionProvider dataProtection = null, Microsoft.Extensions.Logging.ILoggerFactory loggerFactory = null, Configs configs = null, IFileAccessPolicy fileAccessPolicy = null)
         {
             GlobalData gd = new GlobalData();
             gd.AllAccessUrls = new List<string>();
@@ -28,6 +28,7 @@ namespace WalkingTec.Mvvm.Test.Mock
             Mock<IServiceProvider> mockService = new Mock<IServiceProvider>();
             MockHttpSession mockSession = new MockHttpSession();
             mockHttpRequest.Setup(x => x.Cookies).Returns(new MockCookie());
+            mockHttpRequest.Setup(x => x.Query).Returns(new QueryCollection());
             if (remoteToken != null)
             {
                 mockHttpRequest.Setup(x => x.Query).Returns(new QueryCollection(new Dictionary<string, Microsoft.Extensions.Primitives.StringValues> { { "_remotetoken", remoteToken } }));
@@ -43,7 +44,17 @@ namespace WalkingTec.Mvvm.Test.Mock
             mockHttpContext.Setup(x => x.RequestServices).Returns(mockService.Object);
             var httpa = new HttpContextAccessor();
             httpa.HttpContext = mockHttpContext.Object;
-            var wtmcontext = new WTMContext(null, new GlobalData(), httpa, new DefaultUIService(), null,dataContext, res, cache:cache);
+            if (fileAccessPolicy != null)
+            {
+                mockService.Setup(x => x.GetService(typeof(IFileAccessPolicy))).Returns(fileAccessPolicy);
+            }
+            Mock<IOptionsMonitor<Configs>> configMonitor = null;
+            if (configs != null)
+            {
+                configMonitor = new Mock<IOptionsMonitor<Configs>>();
+                configMonitor.Setup(x => x.CurrentValue).Returns(configs);
+            }
+            var wtmcontext = new WTMContext(configMonitor?.Object, new GlobalData(), httpa, new DefaultUIService(), null,dataContext, res, loggerFactory: loggerFactory, cache:cache);
             wtmcontext.MSD = new BasicMSD();
             wtmcontext.Session = new SessionServiceProvider(mockSession);
             if (dataContext == null)

@@ -42,11 +42,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                     output.Attributes.Add("style", "margin:9px 0;width:unset");
                     if (context.Items["model"] is BaseVM vm)
                     {
-                        output.Attributes.Add("href", $"/_Framework/GetFile/{Field.Model}?_DONOT_USE_CS={vm.CurrentCS}");
+                        output.Attributes.Add("href", WithFileReference($"/_Framework/GetFile/{Field.Model}?_DONOT_USE_CS={vm.CurrentCS}", vm, Field.Model, vm.CurrentCS, FilePurpose.Download));
                     }
                     else
                     {
-                        output.Attributes.Add("href", $"/_Framework/GetFile/{Field.Model}");
+                        output.Attributes.Add("href", WithFileReference($"/_Framework/GetFile/{Field.Model}", null, Field.Model, null, FilePurpose.Download));
                     }
                     output.Content.AppendHtml(THProgram._localizer["Sys.Download"]);
                 }

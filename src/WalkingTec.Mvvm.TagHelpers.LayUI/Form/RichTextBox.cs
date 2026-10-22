@@ -73,6 +73,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
             {
                 url = url.AppendQuery($"_DONOT_USE_CS={ConnectionString}");
             }
+            // the connection of the page travels with a reference the server can verify (a request cannot choose a connection by itself)
+            var richVm = context.Items.TryGetValue("model", out var richModel) ? richModel as BaseVM : null;
+            var uploadReference = UploadReferenceQuery(richVm, string.IsNullOrEmpty(ConnectionString) ? richVm?.CurrentCS : ConnectionString);
+            if (uploadReference != null)
+            {
+                url = url.AppendQuery(uploadReference);
+            }
             url = url.AppendQuery(ExtraQuery);
 
 

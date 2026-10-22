@@ -12,6 +12,23 @@ namespace WalkingTec.Mvvm.Core.Test
     public class SetLanguageForBlazorTest
     {
         [TestMethod]
+        public void UEditorSuccess_IsBuiltByTheSerializer()
+        {
+            var ordinary = System.Text.Json.JsonDocument.Parse(_FrameworkController.BuildUEditorSuccess("/_Framework/GetFile?id=1&stream=true", "圖 a.png")).RootElement;
+            Assert.AreEqual(200, ordinary.GetProperty("Code").GetInt32());
+            Assert.AreEqual("success", ordinary.GetProperty("Msg").GetString());
+            Assert.AreEqual("/_Framework/GetFile?id=1&stream=true", ordinary.GetProperty("Data").GetProperty("src").GetString());
+            Assert.AreEqual("圖 a.png", ordinary.GetProperty("Data").GetProperty("FileName").GetString());
+
+            const string hostile = "x\",\"Code\":500,\"y\":\"\\</script>";
+            var json = _FrameworkController.BuildUEditorSuccess("/u", hostile);
+            var data = System.Text.Json.JsonDocument.Parse(json).RootElement;
+            Assert.AreEqual(200, data.GetProperty("Code").GetInt32(), "the file name cannot add or replace a member");
+            Assert.AreEqual(hostile, data.GetProperty("Data").GetProperty("FileName").GetString());
+            Assert.AreEqual(2, System.Linq.Enumerable.Count(data.GetProperty("Data").EnumerateObject()));
+        }
+
+        [TestMethod]
         public void NormalUrl_OutputIsUnchanged()
         {
             Assert.AreEqual(

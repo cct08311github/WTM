@@ -146,6 +146,11 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs
         public List<string> PlainItems { get; set; }
         public GadgetListVM AllGadgets { get; set; }
 
+        /// <summary>Selector fixture whose value is the name of the row (a string with characters that need encoding for some rows).</summary>
+        [Display(Name = "Item names")]
+        public List<string> ItemNames { get; set; }
+        public LabItemListVM AllItems { get; set; }
+
         /// <summary>Synthetic characters that need encoding, see <see cref="LabText.Special"/>.</summary>
         public string SpecialText => LabText.Special;
 
@@ -168,6 +173,7 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs
             PageTreeItems = LabText.TreeWithPages();
             PlainItems = new List<string> { "alpha", "beta", "gamma" };
             AllGadgets = new GadgetListVM();
+            AllItems = new LabItemListVM();
             Level = Level == 0 ? 30 : Level;
             Low = Low == 0 ? 20 : Low;
             High = High == 0 ? 70 : High;

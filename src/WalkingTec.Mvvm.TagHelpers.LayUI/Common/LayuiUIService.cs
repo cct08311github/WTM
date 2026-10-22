@@ -61,16 +61,34 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
 
         public string MakeDownloadButton(ButtonTypesEnum buttonType, Guid fileID, string buttonText = null, string _DONOT_USE_CS = "default", string buttonClass = null, string style = null)
         {
+            return MakeDownloadButtonWithReference(buttonType, fileID, null, buttonText, _DONOT_USE_CS, buttonClass, style);
+        }
+
+        /// <summary>The link carries the file reference when there is one (see <see cref="FileEndpointGuard"/>).</summary>
+        public string MakeDownloadButtonWithReference(ButtonTypesEnum buttonType, Guid fileID, string fileReference, string buttonText = null, string _DONOT_USE_CS = "default", string buttonClass = null, string style = null)
+        {
+            string href = $"/_Framework/GetFile/{fileID}?_DONOT_USE_CS={HtmlAttributeEncoder.Encode(_DONOT_USE_CS)}{FileReferenceQuery(fileReference, true)}";
             string rv = "";
             if (buttonType == ButtonTypesEnum.Link)
             {
-                rv = $"<a  style='{HtmlAttributeEncoder.Encode(style ?? "color:blue;cursor:pointer")}' class='{HtmlAttributeEncoder.Encode(buttonClass)}' href='/_Framework/GetFile/{fileID}?_DONOT_USE_CS={HtmlAttributeEncoder.Encode(_DONOT_USE_CS)}'>{HtmlText(buttonText)}</a>";
+                rv = $"<a  style='{HtmlAttributeEncoder.Encode(style ?? "color:blue;cursor:pointer")}' class='{HtmlAttributeEncoder.Encode(buttonClass)}' href='{href}'>{HtmlText(buttonText)}</a>";
             }
             if (buttonType == ButtonTypesEnum.Button)
             {
-                rv = $"<a  style='{HtmlAttributeEncoder.Encode(style)}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{HtmlAttributeEncoder.Encode(buttonClass)}")}' href='/_Framework/GetFile/{fileID}?_DONOT_USE_CS={HtmlAttributeEncoder.Encode(_DONOT_USE_CS)}'>{HtmlText(buttonText)}</a>";
+                rv = $"<a  style='{HtmlAttributeEncoder.Encode(style)}' class='layui-btn {(string.IsNullOrEmpty(buttonClass) ? "layui-btn-primary layui-btn-xs" : $"{HtmlAttributeEncoder.Encode(buttonClass)}")}' href='{href}'>{HtmlText(buttonText)}</a>";
             }
             return rv;
+        }
+
+        /// <summary>The query string part that carries a file reference (empty when there is none). References contain only url safe characters.</summary>
+        private static string FileReferenceQuery(string fileReference, bool encodeForAttribute)
+        {
+            if (string.IsNullOrEmpty(fileReference))
+            {
+                return string.Empty;
+            }
+            var part = "&" + FileEndpointGuard.ReferenceParameter + "=" + Uri.EscapeDataString(fileReference);
+            return encodeForAttribute ? HtmlAttributeEncoder.Encode(part) : part;
         }
 
         public string MakeCheckBox(bool ischeck, string text = null, string name = null, string value = null, bool isReadOnly = false)
@@ -185,10 +203,16 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
 
         public string MakeViewButton(ButtonTypesEnum buttonType, Guid fileID, string buttonText = null, int? width = null, int? height = null, string title = null, bool resizable = true, string _DONOT_USE_CS = "default", bool maxed = false, string buttonClass = null, string style = null)
         {
+            return MakeViewButtonWithReference(buttonType, fileID, null, buttonText, width, height, title, resizable, _DONOT_USE_CS, maxed, buttonClass, style);
+        }
+
+        /// <summary>The link carries the file reference when there is one (see <see cref="FileEndpointGuard"/>).</summary>
+        public string MakeViewButtonWithReference(ButtonTypesEnum buttonType, Guid fileID, string fileReference, string buttonText = null, int? width = null, int? height = null, string title = null, bool resizable = true, string _DONOT_USE_CS = "default", bool maxed = false, string buttonClass = null, string style = null)
+        {
             var  buttonID = Guid.NewGuid().ToString();
             var innerClick = "";
             string windowid = Guid.NewGuid().ToString();
-            var url = $"/_Framework/GetFile/{fileID}?_DONOT_USE_CS={_DONOT_USE_CS}";
+            var url = $"/_Framework/GetFile/{fileID}?_DONOT_USE_CS={_DONOT_USE_CS}{FileReferenceQuery(fileReference, false)}";
             innerClick = $"layui.layer.photos({{photos: {{data: [{{src: '{JsStringEncoder.Escape(url)}'}}]}},anim: 5}});";
             string funcname = $"x{buttonID.Replace("-", "")}click";
             var click = $"<script>function {funcname}(){{{innerClick};return false;}}</script>";

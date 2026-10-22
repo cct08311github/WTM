@@ -190,6 +190,60 @@ namespace WalkingTec.Mvvm.E2E.Tests
             Assert.IsFalse(html.Contains("it's done"), "The quote must not end the string literal.");
         }
 
+        private async Task<string> SelectorDialogAsync(Func<string, string> value)
+        {
+            var reference = await ReferenceAsync(LabListVm, "Selector");
+            var form = Api.CreateFormData()
+                .Set("_DONOT_USE_VMNAME", LabListVm)
+                .Set("_DONOT_USE_VMREF", reference)
+                .Set("_DONOT_USE_KFIELD", value("Name"))
+                .Set("_DONOT_USE_VFIELD", "ID")
+                .Set("_DONOT_USE_FIELD", value("Entity.Items"))
+                .Set("_DONOT_USE_MULTI_SEL", "true")
+                .Set("_DONOT_USE_SEL_ID", value("Entity_Items"))
+                .Set("_DONOT_USE_SUBMIT", value("onPick"))
+                .Set("_DONOT_USE_LINK_FIELD", "Entity_Other")
+                .Set("_DONOT_USE_TRIGGER_URL", value("/Api/Changed"));
+            var response = await Api.PostAsync("/_Framework/Selector", new APIRequestContextOptions { Form = form });
+            Assert.AreEqual(200, response.Status);
+            return await response.TextAsync();
+        }
+
+        [TestMethod]
+        public async Task Selector_OrdinaryRequestValues_AreWrittenIntoTheDialogScriptAsTheyAre()
+        {
+            var html = await SelectorDialogAsync(v => v);
+
+            StringAssert.Contains(html, "multiSel = true");
+            StringAssert.Contains(html, "displayStrArr.push(selected[i]['Name']);");
+            StringAssert.Contains(html, "name='Entity.Items' value='\" + ff.EncodeHtml(selected[i]['ID']) + \"' />");
+            StringAssert.Contains(html, "onPick(selected);");
+            StringAssert.Contains(html, "$(\"#Entity_Items_Display\").val(");
+            StringAssert.Contains(html, "var url = '/Api/Changed?t='");
+            StringAssert.Contains(html, "url += '&id=' +encodeURIComponent(selected[i]['ID']);");
+            StringAssert.Contains(html, "ff.ChainChange(url, $('#Entity_Items_Display')[0]);");
+        }
+
+        [TestMethod]
+        public async Task Selector_RequestValuesWithSpecialCharacters_StayInsideTheirStringInTheDialogScript()
+        {
+            // the model binder already HTML-encodes quotes and angle brackets of the request; a backslash, a line break and a line separator
+            // are not touched by it and would end or change a script string literal
+            const string probe = "\\\n\u2028Z";
+            var html = await SelectorDialogAsync(v => v + probe);
+
+            StringAssert.Contains(html, "displayStrArr.push(selected[i]['Name\\\\\\n\\u2028Z']);");
+            StringAssert.Contains(html, "var url = '/Api/Changed\\\\\\n\\u2028Z?t='");
+            StringAssert.Contains(html, "$('#Entity_Items\\\\\\n\\u2028Z_Display')");
+            StringAssert.Contains(html, "$('#Entity_Items\\\\\\n\\u2028Z_Container input[type=hidden]')");
+            StringAssert.Contains(html, "name='Entity.Items\\\\\\n\\u2028Z' value='");
+            Assert.IsFalse(html.Contains("\u2028"), "A line separator was written into the page.");
+            Assert.IsFalse(html.Contains("Name\\\n"), "A backslash was written in front of a line break inside a string literal.");
+            // a submit handler that is not a function name is not written as code at all
+            Assert.IsFalse(html.Contains("onPick"), "A submit handler value that is not a function name must not be written as code.");
+            Assert.IsFalse(html.Contains("(selected);;"), "No call is written for a submit handler that is not a function name.");
+        }
+
         [TestMethod]
         public async Task SetTenant_WithoutTenants_AnswersWithAReloadScript()
         {
@@ -197,6 +251,49 @@ namespace WalkingTec.Mvvm.E2E.Tests
 
             Assert.AreEqual(200, response.Status);
             StringAssert.Contains(await response.TextAsync(), "location.reload();");
+        }
+
+        [TestMethod]
+        public async Task Login_WhenAlreadySignedIn_StillVerifiesThePassword()
+        {
+            // the session of the test is the signed-in administrator: posting the login form again must check the credentials it carries
+            var wrong = await Api.PostAsync("/Login/Login", new APIRequestContextOptions
+            {
+                Form = Api.CreateFormData().Set("ITCode", Site.AdminAccount).Set("Password", "not-the-password"),
+                MaxRedirects = 0
+            });
+            Assert.AreEqual(200, wrong.Status, "The login page is shown again.");
+
+            var right = await Api.PostAsync("/Login/Login", new APIRequestContextOptions
+            {
+                Form = Api.CreateFormData().Set("ITCode", Site.AdminAccount).Set("Password", Site.AdminPassword),
+                MaxRedirects = 0
+            });
+            Assert.AreEqual(302, right.Status);
+        }
+
+        [TestMethod]
+        public async Task SetTenant_Anonymous_IsSentToTheSignInPage_AndNothingIsSwitched()
+        {
+            await using var anonymous = await AnonymousAsync();
+            var response = await anonymous.GetAsync("/_Framework/SetTenant?tenant=t1");
+
+            Assert.AreEqual(200, response.Status);
+            var body = await response.TextAsync();
+            StringAssert.Contains(body, "window.location.href=", "The caller is sent to the sign-in page.");
+            Assert.IsFalse(body.Contains("location.reload();"), "An anonymous caller must not get the answer of a successful switch.");
+            Assert.IsFalse(response.Headers.ContainsKey("set-cookie"), "No cookie is issued.");
+        }
+
+        [TestMethod]
+        public async Task SetTenant_SignedIn_StaysAGetAndAnswersWithAReloadScript()
+        {
+            // downstream layouts call it with a GET and the tenant of the signed-in user (empty for the main tenant)
+            var response = await Api.GetAsync("/_Framework/SetTenant?tenant=");
+
+            Assert.AreEqual(200, response.Status);
+            StringAssert.Contains(await response.TextAsync(), "location.reload();");
+            Assert.IsTrue(response.Headers.ContainsKey("set-cookie"), "The sign-in cookie is refreshed.");
         }
 
         [TestMethod]
@@ -267,6 +364,21 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
+        public async Task UEditorUpload_AnswersWithValidJson_ForAFileNameWithQuotesAndBackslashes()
+        {
+            var response = await Api.PostAsync("/_Framework/UploadForLayUIUEditor", new APIRequestContextOptions
+            {
+                Multipart = Api.CreateFormData().Set("upfile", File("we'ird,{x}:1.png", Png, "image/png"))
+            });
+
+            Assert.AreEqual(200, response.Status);
+            var data = JsonDocument.Parse(await response.TextAsync()).RootElement.GetProperty("Data");
+            StringAssert.Contains(data.GetProperty("FileName").GetString(), "ird");
+            Assert.AreEqual(JsonValueKind.String, data.GetProperty("src").ValueKind);
+            Assert.AreEqual(2, data.EnumerateObject().Count(), "No property was added by the file name.");
+        }
+
+        [TestMethod]
         public async Task UEditorTag_Renders_AContainerAndAnEscapedInitialContent()
         {
             // the editor scripts are not part of the shared static files, so only the markup the tag helper writes is checked
@@ -289,9 +401,9 @@ namespace WalkingTec.Mvvm.E2E.Tests
             var image = await UploadAsync("view.png", Png);
             var pdf = await UploadAsync("view.pdf", Encoding.ASCII.GetBytes("%PDF-1.4 test"));
 
-            var imageHtml = await (await Api.GetAsync("/_Framework/ViewFile/" + image)).TextAsync();
+            var imageHtml = await (await Api.GetAsync(await WithRefAsync("/_Framework/ViewFile/" + image, image))).TextAsync();
             StringAssert.Contains(imageHtml, "<img id='FileObject'");
-            var pdfHtml = await (await Api.GetAsync("/_Framework/ViewFile/" + pdf)).TextAsync();
+            var pdfHtml = await (await Api.GetAsync(await WithRefAsync("/_Framework/ViewFile/" + pdf, pdf))).TextAsync();
             StringAssert.Contains(pdfHtml, "<embed");
             StringAssert.Contains(pdfHtml, "application/pdf");
         }
@@ -301,7 +413,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         {
             var id = await UploadAsync("download me.pdf", Encoding.ASCII.GetBytes("%PDF-1.4 test"));
 
-            var response = await Api.GetAsync("/_Framework/GetFile/" + id);
+            var response = await Api.GetAsync(await WithRefAsync("/_Framework/GetFile/" + id, id));
 
             Assert.AreEqual(200, response.Status);
             Assert.AreEqual("application/pdf", response.Headers["content-type"]);

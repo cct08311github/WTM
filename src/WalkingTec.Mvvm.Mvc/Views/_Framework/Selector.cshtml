@@ -1,60 +1,56 @@
 @model WalkingTec.Mvvm.Core.IBasePagedListVM<WalkingTec.Mvvm.Core.TopBasePoco, WalkingTec.Mvvm.Core.BaseSearcher>
 @using WalkingTec.Mvvm.Core.Extensions;
+@using WalkingTec.Mvvm.Mvc;
 @{
   var tempvar = $"var_{Guid.NewGuid().ToNoSplitString()}";
   var linkscript = "";
-
+  // the values below come from the request (_DONOT_USE_*) through ViewBag; each one is encoded for the place it is written to (SelectorScript)
+  var submitFunc = SelectorScript.FunctionReference(ViewBag.SubmitFunc);
 }
 
 <script>
     function submitSelect() {
         var res = []
-            ,multiSel = @(ViewBag.MultiSel.ToString().ToLower())
+            ,multiSel = @Html.Raw(SelectorScript.Boolean(ViewBag.MultiSel))
             ,displayStrArr = []
             ,hiddenStrArr = [];
         selected = @(tempvar);
-        @if (ViewBag.SubmitFunc != null)
+        @if (submitFunc != null)
         {
-            @(ViewBag.SubmitFunc.ToString())<Text>(selected);</Text>;
+            @Html.Raw(submitFunc)<Text>(selected);</Text>;
         }
       if (selected.length > 0) {
         if (!multiSel && selected.length > 1) {
-          layui.layer.msg('@WalkingTec.Mvvm.Core.CoreProgram._localizer?["Sys.SelectOneRowMax"]');
+          layui.layer.msg('@Html.Raw(SelectorScript.JsString(WalkingTec.Mvvm.Core.CoreProgram._localizer?["Sys.SelectOneRowMax"]))');
           return;
         }
         for (var i = 0; i < selected.length; i++) {
-          displayStrArr.push(selected[i]['@ViewBag.TextName']);
-          hiddenStrArr.push("<input type='hidden' wtm-tag='wtmselector' name='@ViewBag.FieldName' value='" + selected[i]['@ViewBag.ValName'] + "' />");
+          displayStrArr.push(selected[i]['@Html.Raw(SelectorScript.JsString(ViewBag.TextName))']);
+          hiddenStrArr.push("<input type='hidden' wtm-tag='wtmselector' name='@Html.Raw(SelectorScript.HtmlAttributeInJsString(ViewBag.FieldName))' value='" + ff.EncodeHtml(selected[i]['@Html.Raw(SelectorScript.JsString(ViewBag.ValName))']) + "' />");
         }
       }
       else {
-          hiddenStrArr.push("<input type='hidden' wtm-tag='wtmselector' name='@ViewBag.FieldName' value='' />");
+          hiddenStrArr.push("<input type='hidden' wtm-tag='wtmselector' name='@Html.Raw(SelectorScript.HtmlAttributeInJsString(ViewBag.FieldName))' value='' />");
       }
 
         ff.CloseDialog();
 
-        var vals = $('#@(ViewBag.SelId)_Container input[type=hidden]');
+        var vals = $('#@Html.Raw(SelectorScript.JsString(ViewBag.SelId))_Container input[type=hidden]');
         for (var i = 0; i < vals.length; i++) {
             vals[i].remove();
         }
-        $("#@(ViewBag.SelId)_Display").val(displayStrArr.join(","));
-        $("#@(ViewBag.SelId)_Display").after(hiddenStrArr.join(''));
+        $("#@Html.Raw(SelectorScript.JsString(ViewBag.SelId))_Display").val(displayStrArr.join(","));
+        $("#@Html.Raw(SelectorScript.JsString(ViewBag.SelId))_Display").after(hiddenStrArr.join(''));
         @if (ViewBag.TriggerUrl != null)
         {
 
-           linkscript = $@"
-            var url = '{ViewBag.TriggerUrl}?t=' + new Date().getTime();
-            for (var i = 0; i < selected.length; i++) {{
-              url += '&id=' +selected[i]['{ViewBag.ValName}'];
-              }}
-          ff.ChainChange(url, $('#{ViewBag.SelId}_Display')[0]);
-  ";
+           linkscript = SelectorScript.TriggerScript(ViewBag.TriggerUrl, ViewBag.ValName, ViewBag.SelId);
           }
       @Html.Raw(linkscript);
     }
 
 
-    var @(tempvar) = @Html.Raw(ViewBag.SelectData);
+    var @(tempvar) = @Html.Raw(SelectorScript.JsonData(ViewBag.SelectData));
     function gridCheckedFunc(obj) {
         var ids = []
             ,gridId = 'wtTable_@Model.UniqueId';

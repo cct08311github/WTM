@@ -59,6 +59,29 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
         // ---- account ----
 
         [TestMethod]
+        public async Task Account_SignedInCallers_StillNeedTheirPasswordToGetANewSignIn()
+        {
+            var api = await StartAsync();
+
+            // signed in with a token: the credentials of the request are verified, no new token for a wrong password
+            var wrongWithToken = await api.Context.PostAsync("/api/_account/loginjwt", new() { DataObject = new { Account = Site.AdminAccount, Password = "not-the-password" } });
+            Assert.AreEqual(400, wrongWithToken.Status);
+            var emptyWithToken = await api.Context.PostAsync("/api/_account/loginjwt", new() { DataObject = new { Account = Site.AdminAccount, Password = "" } });
+            Assert.AreEqual(400, emptyWithToken.Status);
+            var rightWithToken = await api.Context.PostAsync("/api/_account/loginjwt", new() { DataObject = new { Account = Site.AdminAccount, Password = Site.AdminPassword } });
+            Assert.AreEqual(200, rightWithToken.Status);
+
+            // signed in with the cookie
+            await using var session = await Playwright.APIRequest.NewContextAsync(new() { BaseURL = Site.BaseUri.ToString() });
+            var cookie = await session.PostAsync("/api/_account/login", new() { Form = session.CreateFormData().Set("account", Site.AdminAccount).Set("password", Site.AdminPassword) });
+            Assert.AreEqual(200, cookie.Status);
+            var wrongWithCookie = await session.PostAsync("/api/_account/login", new() { Form = session.CreateFormData().Set("account", Site.AdminAccount).Set("password", "not-the-password") });
+            Assert.AreEqual(400, wrongWithCookie.Status);
+            var wrongJwtWithCookie = await session.PostAsync("/api/_account/loginjwt", new() { DataObject = new { Account = Site.AdminAccount, Password = "not-the-password" } });
+            Assert.AreEqual(400, wrongJwtWithCookie.Status);
+        }
+
+        [TestMethod]
         public async Task Account_TokenCookieAndSelectorEndpoints()
         {
             var api = await StartAsync();

@@ -11,6 +11,9 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
     /// </summary>
     public static class LayUiSetup
     {
+        /// <summary>Environment variable that sets <c>FileEndpoints:Mode</c> (Legacy, Audit or Enforce) of the LayUI test host for the whole run.</summary>
+        public const string FileEndpointsModeVariable = "E2E_FILE_ENDPOINTS_MODE";
+
         public static void ConfigureEnvironment(SiteProcess site, IDictionary<string, string> env)
         {
             var dir = Path.GetDirectoryName(site.DatabasePath);
@@ -22,6 +25,12 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
             env["Connections__2__DbType"] = "sqlite";
             // a list view model that the generic data endpoints serve without a page reference (only the tests of that setting use it)
             env["GenericEndpoints__ExemptViewModels__0"] = "WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.GadgetVMs.ExemptGadgetListVM";
+            // the mode of the file endpoints can be chosen for a whole run: E2E_FILE_ENDPOINTS_MODE=Enforce (default of the product: Audit)
+            var fileMode = System.Environment.GetEnvironmentVariable(FileEndpointsModeVariable);
+            if (string.IsNullOrWhiteSpace(fileMode) == false)
+            {
+                env["FileEndpoints__Mode"] = fileMode;
+            }
         }
     }
 }

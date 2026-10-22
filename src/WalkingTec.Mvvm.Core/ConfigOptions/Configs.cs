@@ -221,6 +221,32 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region File endpoint options
+
+        private FileEndpointOptions _fileEndpoints;
+
+        /// <summary>
+        /// Settings of the check applied by the file endpoints (<c>/_Framework/GetFile</c>, <c>ViewFile</c>, <c>GetFileName</c>) and of the way they
+        /// choose the database connection. See <see cref="FileEndpointOptions"/>.
+        /// </summary>
+        public FileEndpointOptions FileEndpoints
+        {
+            get
+            {
+                if (_fileEndpoints == null)
+                {
+                    _fileEndpoints = new FileEndpointOptions();
+                }
+                return _fileEndpoints;
+            }
+            set
+            {
+                _fileEndpoints = value;
+            }
+        }
+
+        #endregion
+
         #region Workflow options
 
         private WorkflowOption _workflowOptions;

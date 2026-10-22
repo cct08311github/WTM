@@ -611,6 +611,24 @@ namespace WalkingTec.Mvvm.Core
             return url;
         }
 
+        /// <summary>
+        /// Same as <see cref="GetUrlByFileAttachmentId(IDataContext, Guid?, bool, string)"/>, and the url carries the file reference of the current user
+        /// (<see cref="FileEndpointGuard.ReferenceParameter"/>) that the file endpoints check. Use it when the url is written into a page.
+        /// </summary>
+        public static string GetUrlByFileAttachmentId(WTMContext wtm, IDataContext dc, Guid? fileAttachmentId, bool isIntranetUrl = false, string urlHeader = null)
+        {
+            var url = GetUrlByFileAttachmentId(dc, fileAttachmentId, isIntranetUrl, urlHeader);
+            if (string.IsNullOrEmpty(url) == false && wtm != null)
+            {
+                var reference = wtm.CreateFileReference(fileAttachmentId.Value, FilePurpose.Read);
+                if (reference != null)
+                {
+                    url += "?" + FileEndpointGuard.ReferenceParameter + "=" + Uri.EscapeDataString(reference);
+                }
+            }
+            return url;
+        }
+
         #region 加解密
         /// <summary>
         /// 通过密钥将内容加密

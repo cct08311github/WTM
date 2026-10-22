@@ -57,6 +57,45 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             return (overrideValue ?? EncodeHtmlContent) ? HtmlAttributeEncoder.Encode(text) : text;
         }
 
+        /// <summary>The framework context of the page: the one of the view model when there is one, otherwise the one of the request.</summary>
+        protected WTMContext GetWtm(BaseVM vm = null)
+        {
+            return vm?.Wtm ?? ViewContext?.HttpContext?.RequestServices?.GetService<WTMContext>();
+        }
+
+        /// <summary>
+        /// Appends the reference the file endpoints check to a link to a file that this page shows (see <see cref="FileEndpointGuard"/>); the
+        /// url is unchanged when no reference can be created.
+        /// </summary>
+        protected string WithFileReference(string url, BaseVM vm, object fileId, string connectionKey, FilePurpose purposes = FilePurpose.Read)
+        {
+            var query = FileReferenceQuery(vm, fileId, connectionKey, purposes);
+            return string.IsNullOrEmpty(url) || query == null ? url : url + (url.Contains('?') ? "&" : "?") + query;
+        }
+
+        /// <summary>The query part (<c>_DONOT_USE_FREF=...</c>) that carries the reference for a file; null when none can be created.</summary>
+        protected string FileReferenceQuery(BaseVM vm, object fileId, string connectionKey, FilePurpose purposes = FilePurpose.Read)
+        {
+            var id = fileId?.ToString();
+            if (string.IsNullOrEmpty(id))
+            {
+                return null;
+            }
+            var reference = GetWtm(vm)?.CreateFileReference(id, purposes, connectionKey);
+            return reference == null ? null : FileEndpointGuard.ReferenceParameter + "=" + System.Uri.EscapeDataString(reference);
+        }
+
+        /// <summary>The query part that carries the reference of an upload to the connection the page uses; null when the page uses the default connection.</summary>
+        protected string UploadReferenceQuery(BaseVM vm, string connectionKey)
+        {
+            if (string.IsNullOrEmpty(connectionKey))
+            {
+                return null;
+            }
+            var reference = GetWtm(vm)?.CreateFileReference(string.Empty, FilePurpose.Upload, connectionKey);
+            return reference == null ? null : FileEndpointGuard.ReferenceParameter + "=" + System.Uri.EscapeDataString(reference);
+        }
+
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
             var preHtml = string.Empty;

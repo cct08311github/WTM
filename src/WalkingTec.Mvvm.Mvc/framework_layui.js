@@ -195,7 +195,7 @@ window.ff = {
     LoadPage1: function (url, where) {
         url = url.toLowerCase();
         if (url.indexOf("http://") === 0 || url.indexOf("https://") === 0) {
-            $('#' + where).html("<iframe frameborder='no' border='0' height='100%' src='" + url + "'></iframe>");
+            $('#' + where).html("<iframe frameborder='no' border='0' height='100%' src='" + ff.EncodeHtml(url) + "'></iframe>");
             $('#' + where).css("overflow-y", "auto");
         }
         else {
@@ -965,22 +965,22 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
         }
     }
 
-    var form = $('<form method="POST" action="' + url + '">');
+    var form = $('<form method="POST" action="' + ff.EncodeHtml(url) + '">');
     for (var attr in tempwhere) {
         if (tempwhere[attr] != null) {
             if (Array.isArray(tempwhere[attr])) {
                 for (var i = 0; i < tempwhere[attr].length; i++) {
-                    form.append($('<input type="hidden" name="' + attr + '[' + i + ']" value="' + tempwhere[attr][i] + '">'));
+                    form.append($('<input type="hidden" name="' + ff.EncodeHtml(attr) + '[' + i + ']" value="' + ff.EncodeHtml(tempwhere[attr][i]) + '">'));
                 }
             }
             else {
-                form.append($('<input type="hidden" name="' + attr + '" value="' + tempwhere[attr] + '">'));
+                form.append($('<input type="hidden" name="' + ff.EncodeHtml(attr) + '" value="' + ff.EncodeHtml(tempwhere[attr]) + '">'));
             }
         }
     }
     if (ids !== undefined && ids !== null) {
         for (var i = 0; i < ids.length; i++) {
-            form.append($('<input type="hidden" name="Ids" value="' + ids[i] + '">'));
+            form.append($('<input type="hidden" name="Ids" value="' + ff.EncodeHtml(ids[i]) + '">'));
         }
     }
     $('body').append(form);
@@ -989,10 +989,10 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
 },
 
     Download: function (url, ids) {
-        var form = $('<form method="POST" action="' + url + '">');
+        var form = $('<form method="POST" action="' + ff.EncodeHtml(url) + '">');
         if (ids !== undefined && ids !== null) {
             for (var i = 0; i < ids.length; i++) {
-                form.append($('<input type="hidden" name="Ids" value="' + ids[i] + '">'));
+                form.append($('<input type="hidden" name="Ids" value="' + ff.EncodeHtml(ids[i]) + '">'));
             }
         }
         $('body').append(form);

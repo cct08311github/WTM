@@ -76,10 +76,10 @@ namespace WalkingTec.Mvvm.E2E.Tests
             CollectionAssert.AreEqual(new[] { id }, (await Lab.LastPostAsync("Pickers"))["AttachmentId"]);
 
             // download it again: GetFile returns the bytes, GetFileName the name
-            var file = await Page.Context.APIRequest.GetAsync("/_Framework/GetFile/" + id);
+            var file = await Page.Context.APIRequest.GetAsync(await WithRefAsync("/_Framework/GetFile/" + id, id));
             Assert.AreEqual(200, file.Status);
             Assert.AreEqual("report body 測試", Encoding.UTF8.GetString(await file.BodyAsync()));
-            var name = await Page.Context.APIRequest.GetAsync("/_Framework/GetFileName/" + id);
+            var name = await Page.Context.APIRequest.GetAsync(await WithRefAsync("/_Framework/GetFileName/" + id, id));
             Assert.AreEqual(200, name.Status);
             StringAssert.Contains(await name.TextAsync(), "report.txt");
         }
@@ -128,7 +128,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
             var id = await Body.Locator("#LabFormVM_PictureId").InputValueAsync();
             StringAssert.Matches(id, new Regex("^[0-9a-f-]{36}$"));
 
-            var thumb = await Page.Context.APIRequest.GetAsync($"/_Framework/GetFile?id={id}&stream=true&width=64&height=64");
+            var thumb = await Page.Context.APIRequest.GetAsync(await WithRefAsync($"/_Framework/GetFile?id={id}&stream=true&width=64&height=64", id));
             Assert.AreEqual(200, thumb.Status);
             // a resized image comes back as JPEG (magic number FF D8)
             var bytes = await thumb.BodyAsync();
@@ -188,7 +188,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
 
             await Expect(Body.Locator("#LabFormVM_Fileslabel")).ToContainTextAsync("view-me.txt");
             var id = (await Lab.LastPostAsync("Pickers"))["Files[0].FileId"].Single();
-            var view = await Page.Context.APIRequest.GetAsync("/_Framework/ViewFile/" + id);
+            var view = await Page.Context.APIRequest.GetAsync(await WithRefAsync("/_Framework/ViewFile/" + id, id));
             Assert.AreEqual(200, view.Status);
         }
 

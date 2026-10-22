@@ -33,6 +33,8 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 {
                     Url = Url.AppendQuery($"_DONOT_USE_CS={vm.CurrentCS}");
                 }
+                // the link carries the reference the file endpoints check
+                Url = WithFileReference(Url, vm, Field.Model, vm?.CurrentCS, FilePurpose.View | FilePurpose.Download);
             }
             output.TagName = "img";
             output.TagMode = TagMode.SelfClosing;
