@@ -1167,7 +1167,7 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
     clearSelector: function (id) {
         $("#" + id).val("");
         $("#" + id + "_Display").val("");
-        var vals = $('#' + "id" + '_Container input[type=hidden]');
+        var vals = $('#' + id + '_Container input[type=hidden]');
         for (var i = 0; i < vals.length; i++) {
             vals[i].remove();
         }

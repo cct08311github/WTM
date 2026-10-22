@@ -223,21 +223,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     }}
   }}
   function {Id}DoDelete(fileid){{
-    $.ajax({{
-            type: 'get',
-            url: '/api/_file/DeletedFile/' + fileid,
-            success: function () {{
-                $('#label'+fileid).remove();
-                {Id}selected = {Id}selected.filter(function(item) {{
-                    return item != fileid;
-                 }});
-                {Id}SetValues();
-            }},
-            error: function () {{
-                console.log('failed');
-            }}
-        }});
-}}
+    /* like wt:upload: the form tells the server which file was removed (DeletedFileIds); the file leaves the list and the posted values */
+    $('#{Id}').parents('form').append($('<input type=""hidden"" name=""DeletedFileIds"" />').val(fileid));
+    $('#{Id}label label').filter(function(){{ return this.id === 'label' + fileid; }}).remove();
+    {Id}selected = {Id}selected.filter(function(item) {{
+        return item != fileid;
+    }});
+    {Id}SetValues();
+  }}
 function {Id}DoPreview(){{
 		layui.layer.photos({{
 			photos: '#{Id}label',
