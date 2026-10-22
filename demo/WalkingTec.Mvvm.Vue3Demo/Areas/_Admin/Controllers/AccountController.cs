@@ -126,7 +126,8 @@ namespace WalkingTec.Mvvm.Admin.Api
                 Name = regInfo.Name,
                 Password = Wtm.HashPassword(regInfo.Password),
                 IsValid = true,
-                PhotoId = regInfo.PhotoId,
+                // registration does not take a photo from the client
+                PhotoId = null,
                 TenantCode = DC.TenantCode
             };
             if (hasuserrole != null)
