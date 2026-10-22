@@ -13,6 +13,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 ## 未发布
 
 * **修复（涉及 LayUI 受保护路径）：**   LayUI `wt:multiupload` 的删除按钮不再呼叫不存在的 `/api/_file/DeletedFile/{id}`（框架的 controller 与 LayUI 站台都没有提供，请求失败，文件仍留在列表中）。现在与 `wt:upload` 的做法一致：只在页面上处理，文件从列表与要送出的值（`Files[n].FileId`）中移除，并在表单加入 `DeletedFileIds`，由框架在保存 view model 时按既有机制删除文件。**没有新增任何服务器端点，`DeletedFileIds` 的信任方式不变；** 标签属性、路由与 `wt:upload` 的行为不变，生成的其余脚本与标记不变（只改了 `MultiUploadTagHelper.cs` 内的 `DoDelete` 函数）。影响：使用 `wt:multiupload` 的页面删除文件后，保存时会多送出 `DeletedFileIds`（`BaseCRUDVM` 的保存流程会删除这些文件，与 `wt:upload` 相同）；下游若不经 `BaseCRUDVM` 保存并想保留文件，可忽略该字段。回滚：退回上一个 fork 版本 (#282)
+* **修复（涉及 LayUI 受保护路径）：**   `ff.clearSelector(id)`（`framework_layui.js`）清空 selector 时，原先在字面名为 `#id_Container` 的容器里查找隐藏的 id 字段，而 `wt:selector` 渲染的容器是 `#<id>_Container`，所以清除后选中的 id 仍留在表单并被提交；现在改为在 `#<id>_Container` 中查找并移除。受影响的是调用 `ff.clearSelector` 的页面（例如自行在脚本里清空 selector）；显示文字与 `#<id>` 的清空逻辑不变，没有传入任何新参数，其他 JS 函数与 TagHelper 输出不变。回滚：退回上一个 fork 版本。(#283)
 * **修复（涉及 LayUI 受保护路径）：**   `wt:slider` 画把手时只使用 `default-value`、忽略绑定字段的值（隐藏 input 的值正确，但把手停在最小值）；现在绑定字段有值时，把手按该值显示（与写入隐藏 input 的值一致，范围滑块取 `field`／`field1` 两端），数字以不依赖当前区域设置的格式（invariant culture）写入脚本，不是数字的值（含文字、无穷大）不会写入脚本。绑定字段没有值（如 `int?` 为 `null`）时，`default-value` 照旧生效；值类型字段（如 `int`）的值为 0 时无法区分“未设置”，所以仍沿用 `default-value`，没有 `default-value` 且刻度从 0 起（默认）时输出与之前逐字节相同，只有 `min` 小于 0 时才会写入 `value:0`。受影响的是绑定了非零值的 `wt:slider`（原先把手停在最小值或 `default-value`，现在显示绑定值）；没有绑定值的页面输出不变。回滚：退回上一个 fork 版本。(#281)
 
 ## 10.0.0.11(2026-10-22)
