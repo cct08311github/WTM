@@ -22,7 +22,11 @@ function createEnv() {
     sandbox.location = { hash: '', href: '' };
     sandbox.alert = () => {};
     sandbox.layui = { layer: { alert: () => {} }, form: { render: () => {} }, use: () => {} };
+    const htmlSet = [];
     function $(arg) {
+        if (typeof arg === 'string' && arg.charAt(0) === '#') {
+            return { append() {}, length: 0, closest: () => ({ length: 0 }), html(h) { htmlSet.push(h); return this; }, css() { return this; } };
+        }
         if (typeof arg === 'string' && arg.charAt(0) === '<') {
             created.push(arg);
             const el = { markup: arg, children: [], append(c) { el.children.push(c); return el; }, submit() { forms.push(el); }, remove() {} };
@@ -38,7 +42,7 @@ function createEnv() {
     vm.createContext(sandbox);
     vm.runInContext(source, sandbox, { filename: 'framework_layui.js' });
     sandbox.ff.GetSearchFormData = () => ({});
-    return { sandbox, ff: sandbox.ff, created, forms };
+    return { sandbox, ff: sandbox.ff, created, forms, htmlSet };
 }
 
 // the inputs a form was built from, as [name, value] pairs after parsing the quoted attributes like a browser does
@@ -58,6 +62,44 @@ function test(name, fn) {
     try { fn(); console.log('ok   - ' + name); }
     catch (e) { failed++; console.log('FAIL - ' + name + '\n' + (e && e.stack || e)); }
 }
+
+// ---- the addresses written into attributes ---------------------------------------------------------------------------------------------
+const HOSTILE_URL = `/x?a=1&b="><script>1</script>'`;
+function attributeOf(markup, name) {
+    const m = new RegExp(name + '=(["\'])(.*?)\\1', 's').exec(markup);
+    assert.ok(m, 'no ' + name + ' attribute in ' + markup);
+    return m[2];
+}
+
+test('Download and DownloadExcelOrPdf: an ordinary address gives the markup it always gave', () => {
+    const e = createEnv();
+    e.ff.Download('/Gadget/Download', ['1']);
+    e.ff.DownloadExcelOrPdf('/Gadget/Export', 'f1', {}, ['1']);
+    assert.strictEqual(e.created[0], '<form method="POST" action="/Gadget/Download">');
+    assert.ok(e.created.includes('<form method="POST" action="/Gadget/Export">'));
+});
+
+test('Download and DownloadExcelOrPdf: an address cannot end the attribute of the form', () => {
+    const e = createEnv();
+    e.ff.Download(HOSTILE_URL, []);
+    e.ff.DownloadExcelOrPdf(HOSTILE_URL, 'f1', {}, []);
+    for (const markup of e.created.filter(x => x.startsWith('<form'))) {
+        const action = attributeOf(markup, 'action');
+        assert.ok(!/["'<>]/.test(action), 'raw special characters in the action: ' + markup);
+        assert.strictEqual(decode(action), HOSTILE_URL);
+    }
+});
+
+test('LoadPage1: an ordinary external address gives the markup it always gave, a hostile one stays inside the attribute', () => {
+    const e = createEnv();
+    e.ff.LoadPage1('https://example.com/a/b', 'w');
+    assert.deepStrictEqual(e.htmlSet, ["<iframe frameborder='no' border='0' height='100%' src='https://example.com/a/b'></iframe>"]);
+    const h = createEnv();
+    h.ff.LoadPage1("https://example.com/a'onload='x\"><script>1</script>", 'w');
+    const m = /^<iframe frameborder='no' border='0' height='100%' src='([^']*)'><\/iframe>$/.exec(h.htmlSet[0]);
+    assert.ok(m, 'the address ended its attribute: ' + h.htmlSet[0]);
+    assert.ok(!/[<>"]/.test(m[1]), 'raw special characters in the src: ' + h.htmlSet[0]);
+});
 
 // ---- the hidden inputs of the downloads and exports ------------------------------------------------------------------------------
 test('Download: ordinary ids give the markup they always gave', () => {

@@ -1,3 +1,4 @@
+using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Mvc;
 
@@ -68,6 +69,9 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.AreEqual("_pick$1", SelectorScript.FunctionReference("_pick$1"));
             Assert.AreEqual("MyPage.Dialog.onPick", SelectorScript.FunctionReference("MyPage.Dialog.onPick"));
             Assert.AreEqual("選取", SelectorScript.FunctionReference("選取"));
+            Assert.AreEqual("選取.處理$1", SelectorScript.FunctionReference("選取.處理$1"));
+            Assert.AreEqual("função.ação", SelectorScript.FunctionReference("função.ação"));
+            Assert.AreEqual("名前2", SelectorScript.FunctionReference("名前2"));
         }
 
         [TestMethod]
@@ -81,6 +85,30 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.IsNull(SelectorScript.FunctionReference("1abc"));
             Assert.IsNull(SelectorScript.FunctionReference("a b"));
             Assert.IsNull(SelectorScript.FunctionReference("</script>"));
+            Assert.IsNull(SelectorScript.FunctionReference("onPick\n"), "a trailing line break is not part of a name");
+            Assert.IsNull(SelectorScript.FunctionReference("onPick\r\n"));
+            Assert.IsNull(SelectorScript.FunctionReference("a.b\n"));
+            Assert.IsNull(SelectorScript.FunctionReference("pick\u2028"));
+            Assert.IsNull(SelectorScript.FunctionReference("\nonPick"));
+        }
+
+        [TestMethod]
+        public void ADroppedSubmitHandler_IsReportedOncePerValue_WithoutLineBreaks()
+        {
+            var logs = new WalkingTec.Mvvm.Test.Mock.CapturingLoggerFactory();
+            var logger = logs.CreateLogger("t");
+            var value = "x();alert(1)\r\nforged line " + System.Guid.NewGuid();
+
+            Assert.IsTrue(SelectorScript.ReportDroppedSubmitFunc(logger, value));
+            Assert.IsFalse(SelectorScript.ReportDroppedSubmitFunc(logger, value), "the same value is reported once");
+            Assert.IsFalse(SelectorScript.ReportDroppedSubmitFunc(logger, "onPick"), "a usable handler is not reported");
+            Assert.IsFalse(SelectorScript.ReportDroppedSubmitFunc(logger, null));
+            Assert.IsFalse(SelectorScript.ReportDroppedSubmitFunc(logger, ""));
+
+            var entry = logs.Entries.Single();
+            Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Warning, entry.Level);
+            Assert.IsFalse(entry.Message.Contains("\n") || entry.Message.Contains("\r"));
+            StringAssert.Contains(entry.Message, "x();alert(1)");
         }
 
         [TestMethod]
@@ -108,7 +136,7 @@ namespace WalkingTec.Mvvm.Core.Test
         {
             var js = SelectorScript.TriggerScript("/Api/Changed", "ID", "Entity_ItemId");
             StringAssert.Contains(js, "var url = '/Api/Changed?t=' + new Date().getTime();");
-            StringAssert.Contains(js, "url += '&id=' +selected[i]['ID'];");
+            StringAssert.Contains(js, "url += '&id=' +encodeURIComponent(selected[i]['ID']);");
             StringAssert.Contains(js, "ff.ChainChange(url, $('#Entity_ItemId_Display')[0]);");
         }
 
@@ -118,7 +146,7 @@ namespace WalkingTec.Mvvm.Core.Test
             var js = SelectorScript.TriggerScript(Hostile, Hostile, Hostile);
             var escaped = SelectorScript.JsString(Hostile);
             StringAssert.Contains(js, "var url = '" + escaped + "?t='");
-            StringAssert.Contains(js, "selected[i]['" + escaped + "']");
+            StringAssert.Contains(js, "encodeURIComponent(selected[i]['" + escaped + "'])");
             StringAssert.Contains(js, "$('#" + escaped + "_Display')");
             Assert.IsFalse(js.Contains("</script>"));
             Assert.IsFalse(js.Contains("alert(1);//</"));

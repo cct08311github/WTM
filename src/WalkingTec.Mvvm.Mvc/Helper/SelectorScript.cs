@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core;
 
 namespace WalkingTec.Mvvm.Mvc
@@ -12,7 +13,27 @@ namespace WalkingTec.Mvvm.Mvc
     public static class SelectorScript
     {
         // a function name or a member path such as "MyPage.onPick"; anything else is not a reference the dialog could call
-        private static readonly Regex FunctionPath = new Regex(@"^[\p{L}_$][\p{L}\p{N}_$]*(\.[\p{L}_$][\p{L}\p{N}_$]*)*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private static readonly Regex FunctionPath = new Regex(@"^[\p{L}_$][\p{L}\p{N}_$]*(\.[\p{L}_$][\p{L}\p{N}_$]*)*\z", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> ReportedSubmitFuncs = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>();
+
+        /// <summary>
+        /// Writes a warning (once for each distinct value) when a selector asks for a submit handler that is not a function name or member path
+        /// and is therefore not called, so that the application notices. Returns true when a warning was written.
+        /// </summary>
+        public static bool ReportDroppedSubmitFunc(Microsoft.Extensions.Logging.ILogger logger, string submitFunc)
+        {
+            if (string.IsNullOrEmpty(submitFunc) || FunctionReference(submitFunc) != null || logger == null || ReportedSubmitFuncs.Count > 100)
+            {
+                return false;
+            }
+            if (ReportedSubmitFuncs.TryAdd(submitFunc, 0) == false)
+            {
+                return false;
+            }
+            logger.LogWarning("The selector dialog does not call the submit handler '{SubmitFunc}': only a function name or a member path such as MyPage.onPick is accepted.", LogText.Sanitize(submitFunc, 100));
+            return true;
+        }
 
         /// <summary>The text to place INSIDE a quoted JavaScript string literal (the quotes are not added).</summary>
         public static string JsString(object value)
@@ -73,7 +94,7 @@ namespace WalkingTec.Mvvm.Mvc
             return $@"
             var url = '{JsString(triggerUrl)}?t=' + new Date().getTime();
             for (var i = 0; i < selected.length; i++) {{
-              url += '&id=' +selected[i]['{JsString(valName)}'];
+              url += '&id=' +encodeURIComponent(selected[i]['{JsString(valName)}']);
               }}
           ff.ChainChange(url, $('#{JsString(selId)}_Display')[0]);
   ";

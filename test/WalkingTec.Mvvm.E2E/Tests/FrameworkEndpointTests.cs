@@ -220,6 +220,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
             StringAssert.Contains(html, "onPick(selected);");
             StringAssert.Contains(html, "$(\"#Entity_Items_Display\").val(");
             StringAssert.Contains(html, "var url = '/Api/Changed?t='");
+            StringAssert.Contains(html, "url += '&id=' +encodeURIComponent(selected[i]['ID']);");
             StringAssert.Contains(html, "ff.ChainChange(url, $('#Entity_Items_Display')[0]);");
         }
 

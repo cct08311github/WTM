@@ -158,6 +158,7 @@ namespace WalkingTec.Mvvm.Mvc
             ViewBag.MultiSel = _DONOT_USE_MULTI_SEL;
             ViewBag.SelId = _DONOT_USE_SEL_ID;
             ViewBag.SubmitFunc = _DONOT_USE_SUBMIT;
+            SelectorScript.ReportDroppedSubmitFunc(HttpContext.RequestServices.GetService<ILoggerFactory>()?.CreateLogger<_FrameworkController>(), _DONOT_USE_SUBMIT);
             ViewBag.LinkField = _DONOT_USE_LINK_FIELD;
             ViewBag.TriggerUrl = _DONOT_USE_TRIGGER_URL;
             ViewBag.CurrentCS = cs;
