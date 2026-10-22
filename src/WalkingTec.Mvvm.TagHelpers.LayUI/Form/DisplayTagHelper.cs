@@ -169,7 +169,8 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 {
                     val = DisplayText;
                 }
-                output.Content.AppendHtml(HtmlText(val, EncodeHtml));
+                //values saved through a form were already HTML-encoded by the model binder, so encode once instead of twice (#286); unchanged when not encoding
+                output.Content.AppendHtml((EncodeHtml ?? EncodeHtmlContent) ? HtmlAttributeEncoder.EncodeOnce(val) : val);
             }
             base.Process(context, output);
         }

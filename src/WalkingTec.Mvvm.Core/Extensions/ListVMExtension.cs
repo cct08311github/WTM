@@ -241,10 +241,11 @@ namespace WalkingTec.Mvvm.Core.Extensions
                                 else
                                 {
                                     html = info.ToString();
-                                    //opt-in: a plain value (not the result of a column format, which is HTML by design) is data, so encode it
+                                    //opt-in: a plain value (not the result of a column format, which is HTML by design) is data, so encode it.
+                                    //Values saved through a form were already HTML-encoded by the model binder, so encode once (decode one level, then encode) instead of encoding twice (#286)
                                     if (encodeHtml)
                                     {
-                                        html = HtmlAttributeEncoder.Encode(html);
+                                        html = HtmlAttributeEncoder.EncodeOnce(html);
                                     }
                                 }
                             }

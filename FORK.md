@@ -178,8 +178,8 @@ git merge --no-ff upstream/dotnet10
 | `src/WalkingTec.Mvvm.Mvc/Helper/WorkflowActivitiesGuard.cs`、`WorkflowActivitiesDescriber.cs` | 新增：Elsa `/v1/*` 端點的登入檢查；複製 Elsa `Activities.List` 的邏輯在程式內產生活動清單 JSON | #208、#216、#225、#256 |
 | `src/WalkingTec.Mvvm.Mvc/Filters/FrameworkFilter.cs` | 依 `ExposeExceptionDetails` 決定是否輸出例外細節 | #26 |
 | `src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/{Upload,MultiUpload,UEditor}TagHelper.cs` | 安全取得表單的 model | #88 |
-| `src/WalkingTec.Mvvm.TagHelpers.LayUI/**`（Form、Tree、LinkButton、DataTable、Chart、`BaseButton`、`BaseFieldTag`、`BaseElementTag`、`LayuiUIService`…） | 嵌入 JS 字串的值改用 `JsStringEncoder` 轉義；HTML 屬性值改用 `HtmlAttributeEncoder` 編碼；選用的 HTML 內容編碼（`UIOptions:EncodeHtmlContent`） | #24、#25 |
-| `src/WalkingTec.Mvvm.Core/ConfigOptions/UIOptions.cs`、`src/WalkingTec.Mvvm.Core/Extensions/ListVMExtension.cs` | `EncodeHtmlContent` 選項、表格儲存格的一般值依設定編碼 | #24 |
+| `src/WalkingTec.Mvvm.TagHelpers.LayUI/**`（Form、Tree、LinkButton、DataTable、Chart、`BaseButton`、`BaseFieldTag`、`BaseElementTag`、`LayuiUIService`…） | 嵌入 JS 字串的值改用 `JsStringEncoder` 轉義；HTML 屬性值改用 `HtmlAttributeEncoder` 編碼；選用的 HTML 內容編碼（`UIOptions:EncodeHtmlContent`；`wt:display` 對已編碼的值只編碼一次） | #24、#25、#286 |
+| `src/WalkingTec.Mvvm.Core/ConfigOptions/UIOptions.cs`、`src/WalkingTec.Mvvm.Core/Extensions/ListVMExtension.cs`、`src/WalkingTec.Mvvm.Core/Support/HtmlAttributeEncoder.cs` | `EncodeHtmlContent` 選項、表格儲存格的一般值依設定編碼（已編碼的值只編碼一次） | #24、#286 |
 | `src/WalkingTec.Mvvm.Mvc/Filters/PrivilegeFilter.cs`、`FrameworkFilter.cs` | 嵌入 JS 字串的值改用 `JsStringEncoder` 轉義 | #24 |
 | `src/WalkingTec.Mvvm.Mvc/Helper/FResultExtension.cs` | 訊息轉義；修正 `RedirectUrl` | #25 |
 | `src/WalkingTec.Mvvm.Mvc/framework_layui.js` | 全域變數查找改用 `window[...]` | #25 |
@@ -499,7 +499,7 @@ HEADED=1 dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build   # 顯示�
 
 **特殊字元**：Lab 的測試資料含需要 HTML／JS 編碼的字元（角括號、`&`、單雙引號、反斜線、`</script>`、樣板分隔符與非 ASCII 文字），每個「看起來像標籤」的片段都帶 `id="e2e-probe…"`。測試檢查：文字原樣顯示、原樣送回伺服器（`/Lab/LastPost` 回傳瀏覽器實際送出的表單），而且沒有任何元素是由這些文字產生的。
 
-**`UIOptions:EncodeHtmlContent`**：測試 host 預設開（`appsettings.json`），Lab 的顯示與編碼測試都以開啟為前提；預設值（關）下，標題、標籤、按鈕文字與表格儲存格會原樣輸出，另有測試固定這個相容行為（`LayUiHtmlEncodingOptionTests`）。測試要暫時切換時用 `SetHtmlContentEncodingAsync(bool)`（呼叫 host 的 `/Lab/HtmlEncoding`，測試結束自動還原）。另外要留意：框架在綁定請求時，預設會把字串先做 HTML 編碼（`StringIgnoreLTGTBinder`），所以經表單存進資料庫的值本來就是編碼過的；`Gadget` 這類資料用預設設定（關）顯示才正確，Lab 的種子資料則是未編碼的原始文字。
+**`UIOptions:EncodeHtmlContent`**：測試 host 預設開（`appsettings.json`），Lab 的顯示與編碼測試都以開啟為前提；預設值（關）下，標題、標籤、按鈕文字與表格儲存格會原樣輸出，另有測試固定這個相容行為（`LayUiHtmlEncodingOptionTests`）。測試要暫時切換時用 `SetHtmlContentEncodingAsync(bool)`（呼叫 host 的 `/Lab/HtmlEncoding`，測試結束自動還原）。另外要留意：框架在綁定請求時，預設會把字串先做 HTML 編碼（`StringIgnoreLTGTBinder`），所以經表單存進資料庫的值本來就是編碼過的；`Gadget` 這類資料用預設設定（關）顯示才正確，Lab 的種子資料則是未編碼的原始文字。表格顯示端對這種值只編碼一次的行為見第 23 節（#286）。
 
 **待處理（`[Ignore("#N: …")]`）**：下列測試寫的是「應有的行為」，目前因產品行為不符而略過，修正後移除 `[Ignore]` 即可。清單與原因都在各測試的 `Ignore` 訊息：
 - `checkbox`／`radio`／`combobox`／`transfer`／`tree`／`treecontainer` 的選項文字含標記字元時，由元件寫入為 HTML（元素被建立）（#279）
@@ -511,7 +511,6 @@ HEADED=1 dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build   # 顯示�
 - `ff.clearSelector` 找不到 selector 的隱藏 id 欄位（容器名稱寫成 `id_Container`）（#283）
 - `_Framework/UpdateModelProperty` 回傳 Success，但資料沒有存入（#284）
 - 匯出 Excel 會移除儲存格中看起來像 HTML 標籤的文字（#285）
-- `EncodeHtmlContent` 開啟時，經表單存入（已被框架編碼）的值在表格會被再編碼一次（#286）
 
 **JS 覆蓋率**（`framework_layui.js`，`/_js/framework_layui.js`）：Playwright for .NET 沒有 `page.Coverage`，所以測試經 CDP session 呼叫 `Profiler.startPreciseCoverage`／`takePreciseCoverage`（呼叫次數＋區塊範圍），在每個測試結束時收集，整個 run 彙總。函式只要有任何一個測試呼叫過就算涵蓋。輸出 `TestResults/e2e/js-coverage/framework_layui.report.md|json`（函式、具名函式、字元範圍三種數字，與未被呼叫的函式清單），CI 放進 step summary 與 artifact `e2e-js-coverage`。**只記錄基線，不因數字低而失敗。** 會整頁重新載入的測試（例如切換語言）要在重新載入前呼叫 `FlushJsCoverageAsync()`，否則舊文件的資料會遺失。目前基線：函式 86／95（90.5%），具名函式 65／69（94.2%），字元範圍 72.6%。沒有被呼叫的 9 個：舊瀏覽器用的 `String.startsWith` 補丁、`LoadPage` 開新視窗的分支、`OpenDialog2` 的失敗回呼、對話框內圖表縮放的三個回呼，以及舊的 `changeComboIcon`、`refreshcombobox`（後者依賴不在靜態檔內的 `layui.formSelects`）。
 
@@ -694,3 +693,23 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 - **影響範圍**：隨 NuGet 發佈的 `WalkingTec.Mvvm.Core`；LayUI 匯入（`_FrameworkController`）與 SPA／API 匯入共用 `BaseImportVM`，兩者一併生效。`BaseImportVM` 的 public API 沒有變動；新增 public 方法 `OpenXmlHelper.IsDateFormattedCell(Cell, WorkbookPart)`
 - **下游提醒**：自行覆寫 `SetTemplateData` 並呼叫 `GetCellTextValue` 的匯入類別不受影響，但不會自動取得這項轉換
 - **測試**：`test/WalkingTec.Mvvm.Core.Test/Excel/ExcelTemplateImportTests.cs`（`Import_DateColumn_*`、`Import_NumberColumn_*`、`IsDateFormattedCell_*`）：內建格式 14、東亞格式 31／57、WTM 範本的格式 165、自訂 `yyyy/m/d`、經過時間格式（46、`[h]:mm:ss`、`[mm]:ss`）不轉換、文字欄的日期格式數值維持序列值字串、逐一涵蓋所有內建格式 ID、數值欄的 `0.00`、文字日期、沒有日期格式的純數字、1904 日期系統、超出範圍的序列值，以及各種格式碼的分類
+
+## 23. `UIOptions:EncodeHtmlContent=true` 的語意與表格的重複編碼（#286）
+
+預設值為 **false**，本節的行為只在開啟後才有；預設行為與資料庫的儲存格式都不變。
+
+| 階段 | `EncodeHtmlContent=true` 時 |
+|---|---|
+| 綁定請求（`StringIgnoreLTGTBinder`） | **與此選項無關**：框架本來就會把表單送來的字串先做 HTML 編碼再存入（除非 action 標註 `StringNeedLTGT`）。所以經表單存入的值在資料庫裡是編碼過的（`A&B` 存成 `A&amp;B`）。本修正沒有改動 |
+| 顯示：LayUI TagHelper 的標題、label、按鈕文字等 | 以 HTML 內容輸出的文字一律編碼（第 6 節 #24，不變） |
+| 顯示：`wt:display`（欄位值與 `display-text`） | 同表格：先解碼一層再編碼一次（`EncodeOnce`）；`encode-html` 屬性明確指定 `true` 時同樣如此，指定 `false` 時原樣輸出（不變） |
+| 顯示：表格儲存格的一般值（`GetSingleDataJson`） | 先 HTML 解碼**一層**，再用 `HtmlAttributeEncoder.Encode` 編碼（`HtmlAttributeEncoder.EncodeOnce`）。修正前直接再編碼一次，表單存入的值在表格上會顯示成 `A&amp;B` |
+
+- **為什麼安全**：輸出永遠是 `HtmlAttributeEncoder.Encode(...)` 的結果，所以無論輸入是已編碼、未編碼（例如種子資料、匯入的資料）或兩者混合，輸出都不含未編碼的 `< > " '`，`&` 之後也只會接編碼器自己寫的實體。不是「含 `&` 就略過編碼」。解碼只做一層，因此使用者輸入的 `&lt;` 字樣（存成 `&amp;lt;`）仍如實顯示為 `&lt;`；數字實體（如 `&#60;`）解碼後同樣會再被編碼，不會變成標記
+- **語意上的取捨**：原始值（未經綁定器編碼、直接寫入資料庫的資料）若本身含有看起來像實體的文字（例如字面的 `&amp;`），表格會把它當成已編碼而顯示 `&`。這類資料在預設值（false）下本來就會被瀏覽器解成同樣的字元
+- **範圍**：表格儲存格的一般值與 `wt:display`。自訂格式（`SetFormat`）的輸出仍視為 HTML、不編碼（不變）。`wt:display` 的修改位於 LayUI 受保護路徑（`DisplayTagHelper.cs`）內，只有一行，且僅在編碼啟用時改變輸出；關閉（預設）時輸出逐字相同。其他以 HTML 內容輸出文字的 TagHelper（標題、label、按鈕、`wt:selector` 的已選文字等）的編碼方式不變
+- **已知且保留的行為**（不在本修正範圍，需要時另案處理）：
+  - 搜尋條件含 `& < " '` 時，比對不到以綁定器編碼後存入的值（資料庫存的是編碼後的文字）
+  - `StringLength` 等驗證是對**編碼後**的長度計算（一個 `&` 算 5 個字元，一個引號算 6 個）
+- **LayUI**：沒有修改 LayUI 受保護路徑（第 3 節）的檔案；表格的儲存格範本與 `framework_layui.js` 都沒有變動，預設值下的輸出逐字相同
+- **測試**：`HtmlContentEncodingTests`（儲存格已編碼／混合標記／實體字樣／預設值不變）、`DisplayTagHelper` 的對應案例、`HtmlAttributeEncoderTest`（`EncodeOnce`）；E2E `SpecialCharacterRoundTripTests.Grid_WithEncodeHtmlContentOn_ShowsTheSavedTextAsTyped`（已移除 `[Ignore]`）

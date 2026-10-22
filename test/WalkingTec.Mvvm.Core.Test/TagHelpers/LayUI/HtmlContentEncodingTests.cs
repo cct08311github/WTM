@@ -109,6 +109,63 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
             AssertContains(on, ">" + Encoded + "</label>");
         }
 
+        // #286: a value saved through a form is already HTML-encoded by the model binder; wt:display must not encode it a second time
+        [TestMethod]
+        public void Display_OptionOn_AlreadyEncodedValueIsEncodedOnlyOnce()
+        {
+            var vm = NewVm();
+            vm.Memo = "A&amp;B &lt;i&gt; &quot;q&quot; &#39;q&#39;";
+
+            var html = Render(new DisplayTagHelper { Field = Field(vm, x => x.Memo), ConfigsMonitor = On() }, "wt:display");
+
+            AssertContains(html, ">A&amp;B &lt;i&gt; &quot;q&quot; &#39;q&#39;</label>");
+            AssertNotContains(html, "&amp;amp;", "&amp;lt;", "&amp;quot;", "&amp;#39;");
+        }
+
+        [TestMethod]
+        public void Display_OptionOn_TextTypedAsAnEntityIsStillShownAsTyped()
+        {
+            var vm = NewVm();
+            vm.Memo = "&amp;lt;";
+
+            var html = Render(new DisplayTagHelper { Field = Field(vm, x => x.Memo), ConfigsMonitor = On() }, "wt:display");
+
+            AssertContains(html, ">&amp;lt;</label>");
+        }
+
+        [TestMethod]
+        public void Display_OptionOn_MixOfEncodedAndRawMarkupIsStillSafe()
+        {
+            var vm = NewVm();
+            vm.Memo = "A&amp;B <script>alert(1)</script> \"x\" 'y' &#60;img&#62;";
+
+            var html = Render(new DisplayTagHelper { Field = Field(vm, x => x.Memo), ConfigsMonitor = On() }, "wt:display");
+
+            AssertContains(html, ">A&amp;B &lt;script&gt;alert(1)&lt;/script&gt; &quot;x&quot; &#39;y&#39; &lt;img&gt;</label>");
+            AssertNotContains(html, "<script", "<img", "&#60;", "\"x\"", "'y'");
+        }
+
+        [TestMethod]
+        public void Display_OptionOn_DisplayTextAlreadyEncodedIsEncodedOnlyOnce()
+        {
+            var vm = NewVm();
+
+            var html = Render(new DisplayTagHelper { Field = Field(vm, x => x.Memo), DisplayText = "A&amp;B", ConfigsMonitor = On() }, "wt:display");
+
+            AssertContains(html, ">A&amp;B</label>");
+        }
+
+        [TestMethod]
+        public void Display_Default_AlreadyEncodedValueIsEmittedAsIs()
+        {
+            var vm = NewVm();
+            vm.Memo = "A&amp;B &lt;i&gt;";
+
+            var html = Render(new DisplayTagHelper { Field = Field(vm, x => x.Memo), ConfigsMonitor = Off() }, "wt:display");
+
+            AssertContains(html, ">A&amp;B &lt;i&gt;</label>");
+        }
+
         [TestMethod]
         public void Display_EncodeHtmlAttribute_OverridesTheGlobalOption()
         {
@@ -384,6 +441,75 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
 
             AssertContains(json, "\"SchoolCode\":\"" + Encoded + "\"", "\"SchoolName\":\"<i>fmt</i><script>");
             AssertNotContains(json, Raw);
+        }
+
+        // #286: values saved through a form are already HTML-encoded by the model binder; with the option on, the grid must not encode them again
+        private class CodeOnlyListVM : LayuiSchoolListVM
+        {
+            protected override IEnumerable<IGridColumn<School>> InitGridHeader()
+            {
+                return new List<GridColumn<School>> { this.MakeGridHeader(x => x.SchoolCode) };
+            }
+        }
+
+        private static string CellJsonOf(bool encode, string schoolCode)
+        {
+            var wtm = MockWtmContext.CreateWtmContext();
+            wtm.ConfigInfo.UIOptions.EncodeHtmlContent = encode;
+            var listVm = new CodeOnlyListVM { Wtm = wtm };
+            return listVm.GetSingleDataJson(new School { SchoolCode = schoolCode, SchoolName = "n" }, false);
+        }
+
+        [TestMethod]
+        public void GridCell_OptionOn_AlreadyEncodedValueIsEncodedOnlyOnce()
+        {
+            // what the binder stores for the typed text:  A&B <i> "q" 'q'
+            var json = CellJsonOf(true, "A&amp;B &lt;i&gt; &quot;q&quot; &#39;q&#39;");
+
+            AssertContains(json, "\"SchoolCode\":\"A&amp;B &lt;i&gt; &quot;q&quot; &#39;q&#39;\"");
+            AssertNotContains(json, "&amp;amp;", "&amp;lt;", "&amp;quot;", "&amp;#39;");
+        }
+
+        [TestMethod]
+        public void GridCell_OptionOn_TextThatLooksLikeAnEntityIsStillShownAsTyped()
+        {
+            // the user typed the characters &lt; (the binder stored &amp;lt;), which must still display as &lt; (encoded once: &amp;lt;)
+            var json = CellJsonOf(true, "&amp;lt;");
+
+            AssertContains(json, "\"SchoolCode\":\"&amp;lt;\"");
+        }
+
+        [TestMethod]
+        public void GridCell_OptionOn_MixOfEncodedAndRawMarkupIsStillSafe()
+        {
+            var json = CellJsonOf(true, "A&amp;B <script>alert(1)</script> \"x\" 'y' &lt;i&gt;");
+
+            AssertContains(json, "A&amp;B &lt;script&gt;alert(1)&lt;/script&gt; &quot;x&quot; &#39;y&#39; &lt;i&gt;");
+            AssertNotContains(json, "<script", "</script", "<i", "\"x\"", "'y'");
+        }
+
+        [TestMethod]
+        public void GridCell_OptionOn_NumericEntityForMarkupIsNotLeftActive()
+        {
+            var json = CellJsonOf(true, "&#60;img src=x&#62; &lt;b&gt;");
+
+            AssertContains(json, "&lt;img src=x&gt; &lt;b&gt;");
+            AssertNotContains(json, "<img", "&#60;", "&#62;");
+        }
+
+        [TestMethod]
+        public void GridCell_OptionOn_PlainValueIsUnchanged()
+        {
+            AssertContains(CellJsonOf(true, "plain text 123"), "\"SchoolCode\":\"plain text 123\"");
+        }
+
+        [TestMethod]
+        public void GridCell_Default_AlreadyEncodedValueIsEmittedAsIs()
+        {
+            // with the option off nothing changes: the stored (encoded) text goes to the page untouched
+            var json = CellJsonOf(false, "A&amp;B &lt;i&gt;");
+
+            AssertContains(json, "\"SchoolCode\":\"A&amp;B &lt;i&gt;\"");
         }
 
         [TestMethod]

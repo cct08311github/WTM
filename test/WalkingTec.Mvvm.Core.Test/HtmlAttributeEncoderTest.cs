@@ -73,5 +73,46 @@ namespace WalkingTec.Mvvm.Core.Test
                 CultureInfo.CurrentCulture = old;
             }
         }
+
+        // ---- EncodeOnce (#286): for text that may already have been HTML-encoded by the model binder ----
+
+        [TestMethod]
+        public void EncodeOnce_AlreadyEncodedText_IsNotEncodedAgain()
+        {
+            Assert.AreEqual("A&amp;B &lt;i&gt; &quot;q&quot; &#39;q&#39;", HtmlAttributeEncoder.EncodeOnce("A&amp;B &lt;i&gt; &quot;q&quot; &#39;q&#39;"));
+        }
+
+        [TestMethod]
+        public void EncodeOnce_RawText_IsEncodedLikeEncode()
+        {
+            foreach (var text in new[] { "plain", "a&b<c>d\"e'f", "請&選'擇\"", "", "<script>alert(1)</script>" })
+            {
+                Assert.AreEqual(HtmlAttributeEncoder.Encode(text), HtmlAttributeEncoder.EncodeOnce(text), text);
+            }
+            Assert.AreEqual(string.Empty, HtmlAttributeEncoder.EncodeOnce(null));
+        }
+
+        [TestMethod]
+        public void EncodeOnce_MixOfEntitiesAndRawMarkup_NeverLeavesActiveMarkup()
+        {
+            foreach (var text in new[] { "A&amp;B <script>x</script>", "&lt;b&gt;<b>", "&#60;img&#62;<img src=x onerror=1>", "&amp;lt;<", "a\" onload=\"x &amp; '" })
+            {
+                var once = HtmlAttributeEncoder.EncodeOnce(text);
+                Assert.IsFalse(once.Contains("<") || once.Contains(">") || once.Contains("\"") || once.Contains("'"), text + " => " + once);
+                // every '&' that remains starts one of the entities the encoder itself writes
+                Assert.IsTrue(System.Text.RegularExpressions.Regex.IsMatch(once, "^([^&]|&amp;|&lt;|&gt;|&quot;|&#39;)*$"), text + " => " + once);
+            }
+        }
+
+        [TestMethod]
+        public void EncodeOnce_DisplaysTheTypedTextOnce()
+        {
+            // binder stores HtmlEncode(typed); the browser must show typed again after EncodeOnce
+            foreach (var typed in new[] { "A&B", "<i>x</i>", "&lt;", "&amp;amp;", "a\"b'c", "請&選" })
+            {
+                var stored = WebUtility.HtmlEncode(typed);
+                Assert.AreEqual(typed, WebUtility.HtmlDecode(HtmlAttributeEncoder.EncodeOnce(stored)), typed);
+            }
+        }
     }
 }
