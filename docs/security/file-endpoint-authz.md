@@ -14,7 +14,9 @@
 | `GetFileName` | 檔名 | `Name` |
 | `Upload`、`UploadImage`、`UploadForLayUIRichTextBox`、`UploadForLayUIUEditor` | 上傳 | 不要求參考；參考（目的 `Upload`）只用來帶頁面的連線 |
 
-沒有變更的部分：`WtmFileProvider.GetFile/Upload/DeleteFile`（下游在伺服器端呼叫，例如自己的匯入 VM）、demo 範本的 `FileApiController`（`/api/_file/*`）、`DeletedFileIds` 與匯入的 `UploadFileId` 的信任方式。
+**範圍只有框架的 `/_Framework` 檔案端點。** demo／範本的 `FileApiController`（`/api/_file/*`，包括它的 `GetFile`、`GetFileName`、`DownloadFile`、`UploadImage`）**不受 `FileEndpoints:Mode` 影響**，會另行處理。
+
+沒有變更的部分：`WtmFileProvider.GetFile/Upload/DeleteFile`（下游在伺服器端呼叫，例如自己的匯入 VM；內嵌標記只在 HTTP 端點處理）、`DeletedFileIds` 與匯入的 `UploadFileId` 的信任方式。
 
 ## 2. 限制條件
 
@@ -43,6 +45,14 @@
 1. **內嵌檔案**：`UploadForLayUIRichTextBox`、`UploadForLayUIUEditor` 上傳的檔案，伺服器在 `ExtraInfo` 加上保留前綴（`wtm:embedded;`）。一般的 `Upload`／`UploadImage` 會移除用戶端在 `extra` 帶來的這個前綴，所以用戶端不能自己標記。內嵌檔案維持原樣：已登入者可用 id 取得；`IsFilePublic=true` 時匿名者也可以（編輯器的內容會比任何參考活得久）。
 2. **升級前上傳的檔案**：`FileEndpoints:LegacyUploadedBefore` 設定一個時間（伺服器本地時間，與 `FileAttachment.UploadTime` 相同），`UploadTime` 早於它的檔案維持用 id 取得。未設定時不保留。
 
+回應：`GetFile` 一律加 `X-Content-Type-Options: nosniff`；`stream=true` 時依副檔名設定 `Content-Type`，瀏覽器會當作網站的一部分執行的檔案（`html`、`htm`、`xhtml`、`svg`、`xml`、`xsl`、`js`，以及副檔名不明但內容看起來像 HTML／SVG／script 的檔案）以 `attachment` 送出，其他（圖片、PDF、影片、音訊、純文字）維持 `inline`。
+
+`Enforce` 下沒有有效參考時，不存在的檔案與無權取得的檔案得到相同的拒絕（不透露哪些 id 存在）。
+
+`LegacyUploadedBefore` 與 `UploadTime` 都是伺服器的本地時間（`UploadTime` 以 `DateTime.Now` 寫入），時區或夏令時間調整會影響邊界附近的檔案；`UploadTime` 未設定（0001-01-01）的檔案不算早於截止時間；截止時間在未來時，啟動輸出 Warning。
+
+記錄：拒絕與 `Audit` 放行都記錄端點、使用者、`Referer`（截為 256 字元、移除控制字元）與原因，不含檔案內容；未登入者的請求記在 Information（`IsFilePublic` 時可能是爬蟲），已登入者的記在 Warning。
+
 `IsFilePublic=true` 時 `GetFile`／`ViewFile` 對未登入者開放（`PrivilegeFilter`），由端點決定要不要提供：頁面渲染的連結（參考）在到期之前匿名可用；只知道 id 的請求在 `Audit` 下提供並記錄，在 `Enforce` 下拒絕（內嵌與升級前的檔案除外）。
 
 ### 3.3 資料庫連線
@@ -56,7 +66,7 @@
 
 ### 3.4 應用程式的規則：`IFileAccessPolicy`
 
-參考（或內嵌、升級前）通過之後、提供檔案之前呼叫 `IFileAccessPolicy.IsAllowed(FileAccessRequest)`（檔案 id、目的、通過的方式、使用者、租戶、`WTMContext`）。預設實作 `AllowAllFileAccessPolicy` 允許所有請求；在 `AddFrameworkService` 之前自行註冊會取代它（框架用 `TryAddSingleton`）。`Legacy` 模式不呼叫。
+參考（或內嵌、升級前）通過之後、提供檔案之前呼叫 `IFileAccessPolicy.IsAllowed(FileAccessRequest)`（檔案 id、目的、通過的方式、使用者、租戶、`WTMContext`）。預設實作 `AllowAllFileAccessPolicy` 允許所有請求；在 `AddFrameworkService` 之前自行註冊會取代它（框架用 `TryAddSingleton`）。`Legacy` 模式不呼叫。**自訂的規則在 `Audit` 模式下已經生效**：`Audit` 只放寬「沒有有效參考」這一項。規則丟出例外時請求被拒絕，並記錄 Error。
 
 ## 4. 為什麼是「頁面簽發的參考」
 
@@ -73,4 +83,4 @@
 
 ## 6. 測試
 
-Core.Test：`FileEndpointGuardTest`（簽發、驗證、竄改、到期、使用者、租戶、目的、連線、模式、內嵌標記、截止日期）、`FileEndpointContextTest`（連結、記錄、政策、`IUIService` 相容、按鈕）。E2E：`FileEndpointTests`（預設 `Audit`；環境變數 `E2E_FILE_ENDPOINTS_MODE=Enforce|Legacy` 以其他模式跑整個 LayUI 測試站台）、`LayUiUploadTests`、`FrameworkEndpointTests`、兩份權限矩陣表。
+Core.Test：`FileEndpointGuardTest`（簽發、驗證、竄改、到期、使用者、租戶與所屬租戶、目的、連線、模式、不存在的檔案、內嵌標記、截止日期）、`FileServingTest`（內容類型與 attachment 判斷）、`FileEndpointContextTest`（連結、記錄、政策、`IUIService` 相容、按鈕）。E2E：`FileEndpointTests`（預設 `Audit`；環境變數 `E2E_FILE_ENDPOINTS_MODE=Enforce|Legacy` 以其他模式跑整個 LayUI 測試站台）、`LayUiUploadTests`、`FrameworkEndpointTests`、權限矩陣（含以 `Enforce` 啟動的 `file-enforce` 設定）。

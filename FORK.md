@@ -791,6 +791,7 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 普通值（識別字、欄位名、普通文字）輸出與修改前相同；`wt:selector` 的屬性（`submit-func`、`trigger-url` 等）用法不變。
 
 - **用戶端：選取列的值寫入隱藏欄位（觸及 LayUI 受保護路徑）**：選擇器彈窗的內聯 script（`Selector.cshtml`）與 `framework_layui.js` 的下載／匯出表單（`DownloadExcelOrPdf`、`Download`）原本把選取列的值（`selected[i][ValName]`、列 id、搜尋條件的名稱與值）直接串進隱藏 `<input>` 的 HTML。現在這些值經既有的 `ff.EncodeHtml` 編碼後再寫入；屬性解析後 POST 的仍是原值，顯示用的 `_Display` 欄位本來就以 `.val()` 設定文字。不含 `& < > " '` 的一般資料輸出與修改前逐位元組相同。附帶差異：值為 `null`／`undefined` 時原本寫成字串 `null`，現在寫成空字串。`UIOptions:EncodeHtmlContent=true` 時，表格列的資料本身已是編碼後的文字，POST 的是列所帶的值（以 ID 或數值為取值欄位的一般用法不受影響）。測試：`JsTests/selector-encoding.test.js`（由 `SelectorEncodingTests` 呼叫，找不到 `node` 時標示為 Inconclusive）、E2E 的 `LayUiSelectorTests.Selector_RowWithSpecialCharacters_IsShownAsTextAndPostedUnchanged`
+- **補充**：函數名／成員路徑的檢查以 `\z` 結尾（結尾的換行不算）；觸發連結 script 中附加的 `selected[i][ValName]` 以 `encodeURIComponent` 包起來（網址結果對一般值不變）；被丟棄的 `SubmitFunc` 在渲染時記錄一次 Warning（相同的值只記一次，值截短並移除控制字元）；下載／匯出表單 `action` 與外部頁面 iframe 的 `src` 經 `ff.EncodeHtml` 編碼
 - **誰會受影響**：`SubmitFunc` 寫成函數名或成員路徑以外內容（例如整段運算式）的頁面，不再被呼叫。使用 TagHelper 並以函數名指定的網站不需修改
 - **回滾方式**：退回前一個 fork 版本（`Core`、`Mvc`、`TagHelpers.LayUI` 一起退回）
 - **測試**：Core.Test 的 `SelectorScriptTest`；E2E 的 `FrameworkEndpointTests`（`Selector_OrdinaryRequestValues_…`、`Selector_RequestValuesWithSpecialCharacters_…`），以及既有的 `LayUiSelectorTests`
@@ -833,7 +834,7 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 
 ## 28. `_Framework` 檔案端點的參考、模式與連線（安全強化，預設 `Audit`）
 
-**範圍**：`/_Framework/Upload`、`UploadImage`、`UploadForLayUIRichTextBox`、`UploadForLayUIUEditor`、`GetFileName`、`GetFile`、`ViewFile`。設計與取捨見 [docs/security/file-endpoint-authz.md](docs/security/file-endpoint-authz.md)。不變：`WtmFileProvider` 的伺服器端方法、demo 範本的 `FileApiController`、`DeletedFileIds` 與匯入的 `UploadFileId`。
+**範圍**：`/_Framework/Upload`、`UploadImage`、`UploadForLayUIRichTextBox`、`UploadForLayUIUEditor`、`GetFileName`、`GetFile`、`ViewFile`。設計與取捨見 [docs/security/file-endpoint-authz.md](docs/security/file-endpoint-authz.md)。**不在範圍內**：demo／範本的 `/api/_file/*`（`FileApiController`，包括它的 `GetFile`、`GetFileName`、`DownloadFile`、`UploadImage`）不受 `FileEndpoints:Mode` 影響，會另行處理。不變：`WtmFileProvider` 的伺服器端方法（下游在伺服器端直接呼叫，也不處理內嵌標記）、`DeletedFileIds` 與匯入的 `UploadFileId` 的信任方式。本節只涵蓋框架的 `/_Framework` 檔案端點。
 
 **變更**：
 
@@ -844,9 +845,13 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 | 連線 | 請求的 `_DONOT_USE_CS` 不再選擇連線（**立即生效，不分模式**）：有效參考的連線優先；沒有參考時，只有列在 `FileEndpoints:RequestConnectionKeys` 的連線，或 `GenericEndpoints:AllowRequestConnectionKey=true`（恢復舊行為）才採用；其餘使用伺服器決定的連線（為空時 `CreateDC()` 不帶 key，租戶資料庫照常路由）。未設定的 key 乾淨地拒絕（原本是 500） |
 | `IsFilePublic=true` | 頁面渲染的連結（參考）到期前匿名可用；只知道 id 的匿名請求：`Audit` 提供並記錄，`Enforce` 拒絕 |
 | 內嵌檔案 | 富文本框／UEditor 上傳的檔案由伺服器在 `ExtraInfo` 加上保留前綴，在 `Enforce` 下維持用 id 取得（已登入者；`IsFilePublic` 時匿名亦可）。一般上傳會移除用戶端在 `extra` 帶來的這個前綴。富文本框與 UEditor 的連結不帶參考 |
-| 升級前的檔案 | `FileEndpoints:LegacyUploadedBefore`（時間，伺服器本地時間）：`UploadTime` 早於它的檔案在 `Enforce` 下維持用 id 取得 |
-| 應用程式的規則 | `IFileAccessPolicy`（預設全部允許，`TryAdd` 註冊，可取代）：通過參考檢查之後呼叫，傳回 false 即拒絕 |
-| `ViewFile` | 輸出的 `id`、連線 key 與 `width` 經 HTML 編碼；檔案不存在時回空內容（原本是例外）；內層的連結帶自己的參考 |
+| 升級前的檔案 | `FileEndpoints:LegacyUploadedBefore`（時間）：`UploadTime` 早於它的檔案在 `Enforce` 下維持用 id 取得。`UploadTime` 與它都以**伺服器的本地時間**比較（`FileAttachment.UploadTime` 以 `DateTime.Now` 寫入），時區或夏令時間調整會影響邊界附近的檔案；`UploadTime` 未設定（0001-01-01）的檔案不算「早於」；截止時間在未來時啟動輸出 Warning（到那時為止的所有上傳，包括新上傳，都會以 id 取得） |
+| 應用程式的規則 | `IFileAccessPolicy`（預設全部允許，`TryAdd` 註冊，可取代）：通過參考檢查之後呼叫，傳回 false 即拒絕。**自訂的規則在 `Audit` 模式下已經生效**（`Audit` 只放寬「沒有有效參考」這一項，不放寬應用程式自己的規則）；規則丟出例外時請求被拒絕並記錄 Error；`Legacy` 不呼叫 |
+| 回應標頭 | `GetFile` 一律加 `X-Content-Type-Options: nosniff`，`stream=true` 時依副檔名設定 `Content-Type`。瀏覽器會當作網站的一部分執行的檔案（`html`、`htm`、`xhtml`、`svg`、`xml`、`xsl`、`js`，以及副檔名不明但內容看起來像 HTML／SVG／script 的檔案）一律以 `attachment` 送出；圖片、PDF、影片、音訊與純文字維持 `inline`，一般預覽不變 |
+| 使用者綁定 | 參考除了使用者（`ITCode`）與目前租戶，也綁定使用者所屬的租戶（`LoginUserInfo.TenantCode`），不同所屬租戶的同名使用者不會共用參考 |
+| 拒絕的一致性 | `Enforce`：沒有有效參考時，不存在的檔案與無權取得的檔案得到相同的拒絕，回應不透露哪些 id 存在（`Audit` 對不存在的檔案維持空回應） |
+| 記錄 | 拒絕與 `Audit` 放行的記錄含端點、使用者、`Referer`（截為 256 字元並移除控制字元）、原因，不含檔案內容。未登入者的請求（`IsFilePublic` 時可能是爬蟲）記在 Information，已登入者的記在 Warning（較簡單的作法，不另做節流） |
+| `ViewFile` | 輸出的連結經 HTML 編碼，`width` 只接受正整數並只寫入數字（其他值視同沒有 `width`）；檔案不存在時回空內容（原本是例外；`Enforce` 見上）；內層的連結帶自己的參考 |
 | 富文本框上傳 | 回傳的位址使用實際寫入檔案的連線 key（原本寫入的是伺服器目前的 key） |
 | 公開 API | `Wtm.CreateFileReference`、`Wtm.GetFileUrl`、`Utils.GetUrlByFileAttachmentId(WTMContext, ...)`、`IUIService.MakeDownloadButtonWithReference`／`MakeViewButtonWithReference`（預設實作呼叫原方法，既有實作不必修改）、`IFileAccessPolicy`。原有方法與簽名不變 |
 
@@ -867,5 +872,6 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
   5. Data Protection 金鑰必須持久化，多實例部署還要共用；金鑰是暫時的時，重啟後已打開的頁面要重新整理
 - **回滾方式**：`FileEndpoints:Mode=Legacy`（連線的決定方式另以 `RequestConnectionKeys` 或 `GenericEndpoints:AllowRequestConnectionKey` 處理），或退回前一個 fork 版本
 - **誰會受影響**：自己組出 `/_Framework/GetFile`、`ViewFile`、`GetFileName` 連結的頁面（`Enforce` 前需改用參考）；`_DONOT_USE_CS` 指向非預設連線而沒有走 TagHelper 的呼叫（需列入 `RequestConnectionKeys`）；`GetFile` 的顯式 `default` key 原本會略過租戶資料庫路由，現在與不帶 key 相同（走租戶資料庫）
+- **UEditor 回應**：`UploadForLayUIUEditor` 成功的回應改由序列化器產生（成員不變），檔名不能改變回應的結構
 - **已知限制**：參考綁定使用者與租戶，不綁定登入工作階段；`wt:ueditor` 的上傳位址是全站共用設定，不帶參考；表格欄位一次簽發每列一個參考
 - **測試**：Core.Test 的 `FileEndpointGuardTest`、`FileEndpointContextTest`；E2E 的 `FileEndpointTests`（`E2E_FILE_ENDPOINTS_MODE=Enforce` 或 `Legacy` 以其他模式跑整個 LayUI 站台，預設 `Audit`）、`LayUiUploadTests`、`FrameworkEndpointTests`
