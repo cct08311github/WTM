@@ -68,6 +68,9 @@ namespace WalkingTec.Mvvm.Mvc
             options.JsonSerializerOptions.Converters.Add(new PocoConverter());
             options.JsonSerializerOptions.Converters.Add(new TypeConverter());
             options.JsonSerializerOptions.Converters.Add(new DynamicDataConverter());
+            // output only: FrameworkUserBase.Password is never written to a response, a request body that has it still binds.
+            // DefaultPostJsonOption below (requests the framework sends to other services) is deliberately left as it was.
+            options.JsonSerializerOptions.ExcludeUserPasswordFromOutput();
             Core.CoreProgram.DefaultJsonOption = options.JsonSerializerOptions;
             JsonSerializerOptions jsonOptions2 = new JsonSerializerOptions();
             jsonOptions2.PropertyNamingPolicy = null;
