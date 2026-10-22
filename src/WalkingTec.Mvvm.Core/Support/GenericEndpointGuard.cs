@@ -237,6 +237,10 @@ namespace WalkingTec.Mvvm.Core
             {
                 logger.LogWarning("GenericEndpoints:ExemptViewModels lists {Count} entr(y/ies): those view models are served by the generic data endpoints to any signed-in user without a page reference.", options.ExemptViewModels.Count);
             }
+            if (options.AllowRequestConnectionKey)
+            {
+                logger.LogWarning("GenericEndpoints:AllowRequestConnectionKey is on: a signed-in user can choose the database connection of the pages they can open with the DONOTUSECSName query string. Use [FixConnection] or the connection function to decide the connection on the server.");
+            }
         }
 
         #region protection
@@ -337,6 +341,37 @@ namespace WalkingTec.Mvvm.Core
             }
             var index = key.LastIndexOf('_');
             return index > 0 ? key.Substring(0, index) : key;
+        }
+
+        /// <summary>
+        /// Decides whether an endpoint that takes the connection key in the request (<c>GetPagingData</c>, <c>GetExportExcel</c>,
+        /// <c>Selector</c>) runs on that key. For a request admitted by its page reference the key has been compared with the reference and
+        /// is used; in <see cref="GenericEndpointMode.Legacy"/> it is used as before. For a view model listed in
+        /// <see cref="GenericEndpointOptions.ExemptViewModels"/> there is no reference to compare it with, so it is used only when
+        /// <see cref="GenericEndpointOptions.AllowRequestConnectionKey"/> is on; otherwise the connection the server chose is kept.
+        /// </summary>
+        /// <param name="connection">the key to run on, in the spelling of the configured connection (the request's own when it names none)</param>
+        /// <returns>true when <paramref name="connection"/> is to be used, false when the connection the server chose is kept</returns>
+        public static bool TryGetRequestConnection(GenericEndpointAdmission admission, string requestKey, Configs configs, out string connection)
+        {
+            connection = null;
+            var use = admission == GenericEndpointAdmission.Reference
+                || admission == GenericEndpointAdmission.Legacy
+                || (admission == GenericEndpointAdmission.Exempt && configs?.GenericEndpoints?.AllowRequestConnectionKey == true);
+            if (use == false)
+            {
+                return false;
+            }
+            connection = requestKey;
+            if (string.IsNullOrEmpty(requestKey) == false)
+            {
+                var configured = configs?.Connections?.FirstOrDefault(x => string.Equals(x.Key, requestKey, StringComparison.OrdinalIgnoreCase));
+                if (configured != null)
+                {
+                    connection = configured.Key;
+                }
+            }
+            return true;
         }
 
         /// <summary>

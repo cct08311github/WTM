@@ -56,9 +56,10 @@ namespace WalkingTec.Mvvm.Mvc
         /// shows the view model has prepared (see <see cref="GenericEndpointGuard"/>), and the connection key must be a configured one.
         /// Returns null when the request may be served, otherwise the answer to send.
         /// </summary>
+        /// <param name="applyRequestConnection">for the endpoints that take the connection key in the request: run on it, in the spelling of the configured connection, where <see cref="GenericEndpointGuard.TryGetRequestConnection"/> allows it</param>
         /// <param name="usePinnedConnection">for the endpoints that take no connection key: run on the connection the page's reference is bound to</param>
         /// <param name="writeConnection">with <paramref name="usePinnedConnection"/>: the request writes, so it runs on the base connection and never on a replica</param>
-        private IActionResult CheckGenericEndpoint(string vmName, GenericEndpointPurpose purpose, bool checkConnection = false, string connectionKey = null, string field = null, bool propagatePrivilege = false, bool usePinnedConnection = false, bool writeConnection = false)
+        private IActionResult CheckGenericEndpoint(string vmName, GenericEndpointPurpose purpose, bool checkConnection = false, string connectionKey = null, string field = null, bool propagatePrivilege = false, bool usePinnedConnection = false, bool writeConnection = false, bool applyRequestConnection = false)
         {
             GenericEndpointRefusal refusal;
             if (string.IsNullOrEmpty(connectionKey) == false
@@ -83,6 +84,11 @@ namespace WalkingTec.Mvvm.Mvc
                     {
                         decision = GenericEndpointDecision.Refuse(GenericEndpointRefusal.UnknownConnection);
                     }
+                }
+                if (decision.Allowed && applyRequestConnection
+                    && GenericEndpointGuard.TryGetRequestConnection(decision.Admission, connectionKey, ConfigInfo, out var requested))
+                {
+                    Wtm.CurrentCS = requested;
                 }
                 if (decision.Allowed)
                 {
@@ -130,12 +136,12 @@ namespace WalkingTec.Mvvm.Mvc
         )
         {
             string cs =_DONOT_USE_CURRENTCS;
-            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.Selector, true, cs, propagatePrivilege: true);
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.Selector, true, cs, propagatePrivilege: true, applyRequestConnection: true);
             if (refused != null)
             {
                 return refused;
             }
-            Wtm.CurrentCS = cs;
+            cs = Wtm.CurrentCS;
             var listVM = Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true) as IBasePagedListVM<TopBasePoco, ISearcher>;
 
             if (listVM is IBasePagedListVM<TopBasePoco, ISearcher>)
@@ -211,7 +217,7 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("GetPagingData")]
         public IActionResult GetPagingData(string _DONOT_USE_VMNAME, string _DONOT_USE_CS)
         {
-            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.List, true, _DONOT_USE_CS);
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.List, true, _DONOT_USE_CS, applyRequestConnection: true);
             if (refused != null)
             {
                 return refused;
@@ -225,7 +231,6 @@ namespace WalkingTec.Mvvm.Mvc
             //var vmType = Type.GetType(_DONOT_USE_VMNAME);
             //var vmCreater = vmType.GetConstructor(Type.EmptyTypes);
             //var listVM = vmCreater.Invoke(null) as BaseVM;
-            Wtm.CurrentCS = _DONOT_USE_CS;
             var listVM = Wtm.CreateVM(_DONOT_USE_VMNAME, null, null, true) as IBasePagedListVM<TopBasePoco, BaseSearcher>;
             listVM.FC = qs;
             if (listVM is IBasePagedListVM<TopBasePoco, ISearcher>)
@@ -313,7 +318,7 @@ namespace WalkingTec.Mvvm.Mvc
         [ActionDescription("Export")]
         public IActionResult GetExportExcel(string _DONOT_USE_VMNAME, string _DONOT_USE_CS)
         {
-            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.Export, true, _DONOT_USE_CS);
+            var refused = CheckGenericEndpoint(_DONOT_USE_VMNAME, GenericEndpointPurpose.Export, true, _DONOT_USE_CS, applyRequestConnection: true);
             if (refused != null)
             {
                 return refused;
@@ -332,7 +337,6 @@ namespace WalkingTec.Mvvm.Mvc
             }
             var instanceType = Type.GetType(_DONOT_USE_VMNAME);
 
-            Wtm.CurrentCS =  _DONOT_USE_CS;
             var listVM = Wtm.CreateVM(_DONOT_USE_VMNAME) as IBasePagedListVM<TopBasePoco, ISearcher>;
 
             listVM.FC = qs;
