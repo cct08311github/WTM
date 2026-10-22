@@ -51,6 +51,25 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
             }
         }
 
+        /// <summary>Name is a plain data column; Remark is formatted to HTML; OrderNum is formatted to a plain string.</summary>
+        private class TagLikeExportListVM : BasePagedListVM<GoodsSpecification, BaseSearcher>
+        {
+            protected override IEnumerable<IGridColumn<GoodsSpecification>> InitGridHeader()
+            {
+                return new List<GridColumn<GoodsSpecification>>
+                {
+                    this.MakeGridHeader(x => x.Name),
+                    this.MakeGridHeader(x => x.Remark).SetFormat((entity, val) => "<span class=\"c\">" + val + "</span>"),
+                    this.MakeGridHeader(x => x.OrderNum).SetFormat((entity, val) => "No." + val),
+                };
+            }
+
+            public override IOrderedQueryable<GoodsSpecification> GetSearchQuery()
+            {
+                return DC.Set<GoodsSpecification>().OrderBy(x => x.Name);
+            }
+        }
+
         private static string NewSeed() => Guid.NewGuid().ToString();
 
         private static T NewListVm<T>(string seed) where T : BaseVM, new()
@@ -77,6 +96,50 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
             // data rows follow the query order (OrderNum asc)
             CollectionAssert.AreEqual(new[] { "nut", "1", "r1" }, rows[1]);
             CollectionAssert.AreEqual(new[] { "bolt", "2", "r2" }, rows[2]);
+        }
+
+        // Issue #285: only columns with a Format callback produce HTML; plain data is exported as it is.
+        [TestMethod]
+        public void GenerateExcel_PlainColumn_KeepsTagLikeText()
+        {
+            var vm = NewListVm<GoodsExportListVM>(NewSeed());
+            vm.DC.Set<GoodsSpecification>().Add(new GoodsSpecification { Name = "a<b>c", OrderNum = 1, Remark = "<tag>" });
+            vm.DC.Set<GoodsSpecification>().Add(new GoodsSpecification { Name = "x < y and y > z", OrderNum = 2, Remark = "<script>alert(1)</script>" });
+            vm.DC.SaveChanges();
+
+            var rows = XlsxTestHelper.ReadSheet(vm.GenerateExcel());
+
+            Assert.AreEqual(3, rows.Count);
+            CollectionAssert.AreEqual(new[] { "a<b>c", "1", "<tag>" }, rows[1]);
+            CollectionAssert.AreEqual(new[] { "x < y and y > z", "2", "<script>alert(1)</script>" }, rows[2]);
+        }
+
+        [TestMethod]
+        public void GenerateExcel_FormattedColumn_StillStripsTags()
+        {
+            var vm = NewListVm<TagLikeExportListVM>(NewSeed());
+            vm.DC.Set<GoodsSpecification>().Add(new GoodsSpecification { Name = "<tag>", OrderNum = 5, Remark = "r" });
+            vm.DC.SaveChanges();
+
+            var rows = XlsxTestHelper.ReadSheet(vm.GenerateExcel());
+
+            Assert.AreEqual(2, rows.Count);
+            // Name is plain data: unchanged. Remark has a Format that wraps the value in a span: the tags are removed.
+            // OrderNum has a Format that returns a plain string: nothing to remove.
+            CollectionAssert.AreEqual(new[] { "<tag>", "r", "No.5" }, rows[1]);
+        }
+
+        [TestMethod]
+        public void GenerateExcel_FormattedColumn_RemovesTagLikeTextInTheValueToo()
+        {
+            // the Format callback decides what the cell holds; its whole output is treated as HTML (the behavior before #285)
+            var vm = NewListVm<TagLikeExportListVM>(NewSeed());
+            vm.DC.Set<GoodsSpecification>().Add(new GoodsSpecification { Name = "n", OrderNum = 1, Remark = "a<b>c" });
+            vm.DC.SaveChanges();
+
+            var rows = XlsxTestHelper.ReadSheet(vm.GenerateExcel());
+
+            CollectionAssert.AreEqual(new[] { "n", "ac", "No.1" }, rows[1]);
         }
 
         [TestMethod]

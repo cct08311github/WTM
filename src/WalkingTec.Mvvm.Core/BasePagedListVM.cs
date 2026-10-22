@@ -278,7 +278,12 @@ namespace WalkingTec.Mvvm.Core
                                 {
                                     isEnumBoolProp = true;
                                 }
-                                string text = Regex.Replace(col.GetText(List[i]).ToString(), @"<[^>]*>", String.Empty);
+                                string text = col.GetText(List[i]).ToString();
+                                //only a column with a Format callback produces HTML; plain data (which may contain tag-like text) is exported as it is
+                                if (col.HasFormat())
+                                {
+                                    text = Regex.Replace(text, @"<[^>]*>", String.Empty);
+                                }
 
                                 if (isEnumBoolProp)
                                 {
