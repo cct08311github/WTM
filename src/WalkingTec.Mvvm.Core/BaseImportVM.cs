@@ -5,6 +5,7 @@ using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Data;
 using System.Data.SqlClient;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
@@ -333,7 +334,7 @@ namespace WalkingTec.Mvvm.Core
                         for (int i = 0; i < columnCount; i++)
                         {
                             cells.TryGetValue(i, out Cell currentCell);
-                            string value = GetCellTextValue(currentCell, workbookPart);
+                            string value = GetImportCellValue(currentCell, workbookPart, ListTemplateProptetys[pIndex]);
                             ExcelPropety excelPropety = CopyExcelPropety(ListTemplateProptetys[pIndex]);
 
                             if (excelPropety.DataType == ColumnDataType.Text)
@@ -347,7 +348,7 @@ namespace WalkingTec.Mvvm.Core
                                 for (int dynamicColIndex = 0; dynamicColIndex < dynamicColCount; dynamicColIndex++)
                                 {
                                     cells.TryGetValue(i + dynamicColIndex, out Cell dynamicCell);
-                                    string dv = GetCellTextValue(dynamicCell, workbookPart);
+                                    string dv = GetImportCellValue(dynamicCell, workbookPart, excelPropety.DynamicColumns[dynamicColIndex]);
                                     excelPropety.DynamicColumns[dynamicColIndex].ValueValidity(dv, ErrorListVM.EntityList, rowIndex);
                                 }
                                 i = i + dynamicColCount - 1;
@@ -435,6 +436,37 @@ namespace WalkingTec.Mvvm.Core
             }
 
             return "";
+        }
+
+        /// <summary>
+        /// 读取导入单元格的文本值。仅当列是 Date／DateTime、单元格是数值型且套用了日期格式时，
+        /// 把 Excel 日期序列值转换为 yyyy-MM-dd HH:mm:ss（invariant）；其余情况与 <see cref="GetCellTextValue"/> 相同。
+        /// </summary>
+        private static string GetImportCellValue(Cell cell, WorkbookPart workbookPart, ExcelPropety property)
+        {
+            string value = GetCellTextValue(cell, workbookPart);
+            if (cell == null || property == null) return value;
+            if (property.DataType != ColumnDataType.Date && property.DataType != ColumnDataType.DateTime) return value;
+
+            var cellType = cell.DataType?.Value;
+            if (cellType != null && cellType != CellValues.Number) return value;
+            if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double serial)) return value;
+            if (serial < 0 || !OpenXmlHelper.IsDateFormattedCell(cell, workbookPart)) return value;
+
+            try
+            {
+                // 1904 日期系统（Mac 旧版 Excel）的起点比 1900 系统晚 1462 天
+                if (workbookPart.Workbook?.WorkbookProperties?.Date1904?.Value == true)
+                {
+                    serial += 1462;
+                }
+                return DateTime.FromOADate(serial).ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+            }
+            catch (ArgumentException)
+            {
+                // 超出日期范围：保持原值，交给 ValueValidity 报格式错误
+                return value;
+            }
         }
 
         public string GetCellFormulaValueOpenXml(Cell cell, string Value)

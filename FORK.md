@@ -666,3 +666,30 @@ Vue3Demo 的矩陣跑兩次：預設（`EnableWorkflow=false`）與 `EnableWorkf
 - 請求是無害的：id 不存在、空 body，且只看結果類型。因此看不到依參數內容才決定的授權（例如以名稱指定資料型別的輔助 action），也看不到資料權限（`DataPrivilege`）
 - 沒有租戶身分，`MainTenantOnly` 只驗證主租戶管理員可用
 - 路由清單的 key 可能因設定而不同，所以每組設定各用自己的路由清單比對
+
+## 22. 匯入時讀取日期格式的數值儲存格（#295）
+
+Excel 把日期存成「數值（日期序列值）＋日期數字格式」。上游 10.0 改用 OpenXML SDK 後，匯入以純文字讀出儲存格（例如 `46317`），再交給 `DateTime.TryParse`，所以 Date／DateTime 欄位拒絕真正的 Excel 日期儲存格，包括使用者在 WTM 自己的範本（日期欄的數字格式為 `yyyy-MM-dd HH:mm:ss`）裡輸入的日期。
+
+現在 `BaseImportVM.SetTemplateData` 讀儲存格時（含動態欄位），只在下列條件**全部**成立才轉換：
+
+| 條件 | 說明 |
+|---|---|
+| 欄位型別 | `ExcelPropety.DataType` 為 `Date` 或 `DateTime` |
+| 儲存格型別 | 數值型：`t` 屬性省略或為 `n`（不是共用字串、內嵌字串、字串、布林、錯誤） |
+| 值 | 可用 `double.TryParse(NumberStyles.Float, InvariantCulture)` 解析，且不小於 0 |
+| 數字格式 | `OpenXmlHelper.IsDateFormattedCell` 為 true |
+
+符合時以 `DateTime.FromOADate` 轉換，再輸出成 invariant 字串 `yyyy-MM-dd HH:mm:ss` 交給既有的 `ValueValidity`。工作簿使用 1904 日期系統（`workbookPr date1904`）時，序列值先加 1462 天。轉換失敗（超出日期範圍）時保持原值，由 `ValueValidity` 報格式錯誤。
+
+`IsDateFormattedCell` 的判斷規則：
+
+- 依 `cell.StyleIndex` 找到 `CellFormats` 中的 `NumberFormatId`
+- 內建日期格式：14–22、27–36、45–47、50–58（含東亞語系的內建日期格式）
+- 自訂格式（ID 164 以上）：取 `NumberingFormats` 的 `FormatCode`，先去掉 `"..."` 文字、`[...]` 條件與顏色（`[h]`、`[mm]`、`[ss]` 時間經過格式保留）以及反斜線跳脫字元，剩下的部分含 `y`、`d`、`h`、`s`、`m` 之一（不分大小寫）即視為日期或時間；`0.00` 這類數字格式不含這些字母
+- 找不到樣式表、樣式索引或格式碼時回傳 false（行為與修改前相同）
+
+- **不變的行為**：文字儲存格（例如以字串存放的 `2026-10-22`）、非 Date／DateTime 欄位（數值欄、文字欄等）、沒有日期格式的數值（DateTime 欄位填入純數字仍然是格式錯誤）。`GetCellTextValue` 沒有修改
+- **影響範圍**：隨 NuGet 發佈的 `WalkingTec.Mvvm.Core`；LayUI 匯入（`_FrameworkController`）與 SPA／API 匯入共用 `BaseImportVM`，兩者一併生效。`BaseImportVM` 的 public API 沒有變動；新增 public 方法 `OpenXmlHelper.IsDateFormattedCell(Cell, WorkbookPart)`
+- **下游提醒**：自行覆寫 `SetTemplateData` 並呼叫 `GetCellTextValue` 的匯入類別不受影響，但不會自動取得這項轉換
+- **測試**：`test/WalkingTec.Mvvm.Core.Test/Excel/ExcelTemplateImportTests.cs`（`Import_DateColumn_*`、`Import_NumberColumn_*`、`IsDateFormattedCell_*`）：內建格式 14、東亞格式 31／57、WTM 範本的格式 165、自訂 `yyyy/m/d`、數值欄的 `0.00`、文字日期、沒有日期格式的純數字、1904 日期系統、超出範圍的序列值，以及各種格式碼的分類

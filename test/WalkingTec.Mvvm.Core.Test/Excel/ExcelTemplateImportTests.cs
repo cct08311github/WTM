@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using DocumentFormat.OpenXml;
@@ -614,6 +616,321 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
             var saved = check.Set<Major>().Single();
             Assert.AreEqual("Law", saved.MajorName);
             Assert.AreEqual(MajorTypeEnum.Required, saved.MajorType);
+        }
+
+        #endregion
+
+        #region date cells (#295)
+
+        // Excel stores a date as a number plus a number format, so a date cell reaches the reader as text like "46317".
+        private class DateRow : BasePoco
+        {
+            [Display(Name = "Qty")]
+            public int Qty { get; set; }
+
+            [Display(Name = "Day")]
+            public DateTime? Day { get; set; }
+
+            [Display(Name = "Stamp")]
+            public DateTime? Stamp { get; set; }
+        }
+
+        private class DateTemplateVM : BaseTemplateVM
+        {
+            public ExcelPropety Qty = ExcelPropety.CreateProperty<DateRow>(x => x.Qty);
+            public ExcelPropety Day = ExcelPropety.CreateProperty<DateRow>(x => x.Day);
+            public ExcelPropety Stamp = ExcelPropety.CreateProperty<DateRow>(x => x.Stamp, true);
+        }
+
+        private class DateImportVM : BaseImportVM<DateTemplateVM, DateRow>
+        {
+            public List<DateTemplateVM> Rows => TemplateData;
+        }
+
+        /// <summary>Style index 7 of the WTM template: number format 165, yyyy-MM-dd HH:mm:ss.</summary>
+        private const uint WtmTemplateDateStyle = 7;
+
+        private static readonly DateTime SampleDay = new DateTime(2026, 10, 22);
+        private static readonly DateTime SampleStamp = new DateTime(2026, 10, 22, 13, 45, 30);
+
+        /// <summary>Adds a cell format (and its custom number format code, when given) and returns the style index.</summary>
+        private static uint AddStyle(WorkbookPart workbook, uint numberFormatId, string formatCode = null)
+        {
+            var stylesheet = workbook.WorkbookStylesPart.Stylesheet;
+            if (formatCode != null)
+            {
+                var formats = stylesheet.NumberingFormats;
+                if (formats == null)
+                {
+                    formats = new NumberingFormats();
+                    stylesheet.InsertAt(formats, 0);
+                }
+                formats.Append(new NumberingFormat { NumberFormatId = numberFormatId, FormatCode = formatCode });
+                formats.Count = (uint)formats.ChildElements.Count;
+            }
+            var cellFormats = stylesheet.CellFormats;
+            cellFormats.Append(new CellFormat { NumberFormatId = numberFormatId, ApplyNumberFormat = true });
+            cellFormats.Count = (uint)cellFormats.ChildElements.Count;
+            return (uint)cellFormats.ChildElements.Count - 1;
+        }
+
+        // new MemoryStream(byte[]) cannot grow, which the package needs when it is disposed after a change
+        private static MemoryStream ExpandableStream(byte[] bytes)
+        {
+            var ms = new MemoryStream();
+            ms.Write(bytes, 0, bytes.Length);
+            ms.Position = 0;
+            return ms;
+        }
+
+        private static string Serial(DateTime value) => value.ToOADate().ToString("R", CultureInfo.InvariantCulture);
+
+        /// <summary>A numeric cell: no t attribute, like Excel writes numbers and dates.</summary>
+        private static Cell NumberCell(int col, string value, uint? style, CellValues? type = null) => new Cell
+        {
+            CellReference = OpenXmlHelper.GetCellReference(col, 1),
+            CellValue = new CellValue(value),
+            StyleIndex = style,
+            DataType = type,
+        };
+
+        /// <summary>Appends row 2 to the template. <paramref name="cells"/> may add styles to the workbook first.</summary>
+        private static byte[] FillRowWithCells(byte[] template, Func<WorkbookPart, Cell[]> cells, bool date1904 = false)
+        {
+            var ms = new MemoryStream();
+            ms.Write(template, 0, template.Length);
+            ms.Position = 0;
+            using (var doc = SpreadsheetDocument.Open(ms, true))
+            {
+                var workbook = doc.WorkbookPart;
+                var sheet = workbook.Workbook.GetFirstChild<Sheets>().Elements<Sheet>().OrderBy(s => s.SheetId.Value).First();
+                var sheetData = ((WorksheetPart)workbook.GetPartById(sheet.Id)).Worksheet.GetFirstChild<SheetData>();
+                var row = new Row { RowIndex = 2 };
+                foreach (var cell in cells(workbook))
+                {
+                    row.AppendChild(cell);
+                }
+                sheetData.AppendChild(row);
+                if (date1904)
+                {
+                    workbook.Workbook.WorkbookProperties = new WorkbookProperties { Date1904 = true };
+                }
+                workbook.Workbook.Save();
+                workbook.WorkbookStylesPart.Stylesheet.Save();
+            }
+            return ms.ToArray();
+        }
+
+        private static DateImportVM ImportRow(Func<WorkbookPart, Cell[]> cells, bool date1904 = false)
+        {
+            var wtm = NewWtm(Guid.NewGuid().ToString());
+            var template = new DateImportVM().GenerateTemplate(out _);
+            var vm = NewImportVm<DateImportVM>(wtm, FillRowWithCells(template, cells, date1904));
+            vm.SetTemplateData();
+            return vm;
+        }
+
+        private static void AssertValue(DateImportVM vm, object qty, object day, object stamp)
+        {
+            Assert.AreEqual(0, vm.ErrorListVM.EntityList.Count, string.Join("; ", vm.ErrorListVM.EntityList.Select(e => e.Message)));
+            Assert.AreEqual(1, vm.Rows.Count);
+            Assert.AreEqual(qty, vm.Rows[0].Qty.Value);
+            Assert.AreEqual(day, vm.Rows[0].Day.Value);
+            Assert.AreEqual(stamp, vm.Rows[0].Stamp.Value);
+        }
+
+        [TestMethod]
+        public void Import_DateColumn_BuiltInDateFormatCell_IsReadAsDate()
+        {
+            var vm = ImportRow(wb => new[]
+            {
+                NumberCell(0, "7", null),
+                NumberCell(1, Serial(SampleDay), AddStyle(wb, 14)),
+                NumberCell(2, Serial(SampleStamp), AddStyle(wb, 22)),
+            });
+
+            AssertValue(vm, 7, SampleDay, SampleStamp);
+        }
+
+        [TestMethod]
+        public void Import_DateColumn_EastAsianBuiltInFormatCell_IsReadAsDate()
+        {
+            var vm = ImportRow(wb => new[]
+            {
+                NumberCell(0, "7", null),
+                NumberCell(1, Serial(SampleDay), AddStyle(wb, 31)),
+                NumberCell(2, Serial(SampleStamp), AddStyle(wb, 57)),
+            });
+
+            AssertValue(vm, 7, SampleDay, SampleStamp);
+        }
+
+        [TestMethod]
+        public void Import_DateTimeColumn_WtmTemplateDateStyle_IsReadAsDateTime()
+        {
+            // the format the downloaded template gives the date columns: custom number format 165, yyyy-MM-dd HH:mm:ss
+            var vm = ImportRow(wb => new[]
+            {
+                NumberCell(0, "7", null),
+                NumberCell(1, Serial(SampleDay), WtmTemplateDateStyle),
+                NumberCell(2, Serial(SampleStamp), WtmTemplateDateStyle, CellValues.Number),
+            });
+
+            AssertValue(vm, 7, SampleDay, SampleStamp);
+        }
+
+        [TestMethod]
+        public void Import_DateColumn_CustomFormatWithSingleLetterParts_IsReadAsDate()
+        {
+            var vm = ImportRow(wb => new[]
+            {
+                NumberCell(0, "7", null),
+                NumberCell(1, Serial(SampleDay), AddStyle(wb, 166, "yyyy/m/d")),
+                NumberCell(2, Serial(SampleStamp), AddStyle(wb, 167, "[$-F800]dddd, mmmm dd, yyyy h:mm")),
+            });
+
+            AssertValue(vm, 7, SampleDay, SampleStamp);
+        }
+
+        [TestMethod]
+        public void Import_NumberColumn_WithDecimalFormat_KeepsTheNumber()
+        {
+            var vm = ImportRow(wb => new[]
+            {
+                NumberCell(0, "5", AddStyle(wb, 168, "0.00")),
+                NumberCell(1, Serial(SampleDay), AddStyle(wb, 14)),
+                NumberCell(2, Serial(SampleStamp), WtmTemplateDateStyle),
+            });
+
+            AssertValue(vm, 5, SampleDay, SampleStamp);
+        }
+
+        [TestMethod]
+        public void Import_NumberColumn_WithDateFormat_IsNotConverted()
+        {
+            // only Date/DateTime columns read the serial as a date
+            var vm = ImportRow(wb => new[]
+            {
+                NumberCell(0, "45953", AddStyle(wb, 14)),
+                NumberCell(1, Serial(SampleDay), AddStyle(wb, 14)),
+                NumberCell(2, Serial(SampleStamp), WtmTemplateDateStyle),
+            });
+
+            AssertValue(vm, 45953, SampleDay, SampleStamp);
+        }
+
+        [TestMethod]
+        public void Import_DateColumn_TextCells_AreParsedAsBefore()
+        {
+            var vm = ImportRow(wb => new[]
+            {
+                NumberCell(0, "7", null),
+                TextCell(1, 1, "2026-10-22"),
+                // a text cell that carries a date style is still text
+                new Cell
+                {
+                    CellReference = OpenXmlHelper.GetCellReference(2, 1),
+                    DataType = CellValues.InlineString,
+                    InlineString = new InlineString(new Text("2026-10-22 13:45:30")),
+                    StyleIndex = WtmTemplateDateStyle,
+                },
+            });
+
+            AssertValue(vm, 7, SampleDay, SampleStamp);
+        }
+
+        [TestMethod]
+        public void Import_DateColumn_NumberWithoutDateFormat_IsStillAFormatError()
+        {
+            var vm = ImportRow(wb => new[]
+            {
+                NumberCell(0, "7", null),
+                NumberCell(1, Serial(SampleDay), null),
+                NumberCell(2, Serial(SampleStamp), AddStyle(wb, 2)),
+            });
+
+            Assert.AreEqual(2, vm.ErrorListVM.EntityList.Count, "both date columns hold a bare number");
+            Assert.IsTrue(vm.ErrorListVM.EntityList.All(e => e.Index == 2));
+        }
+
+        [TestMethod]
+        public void Import_DateColumn_1904DateSystem_UsesTheShiftedEpoch()
+        {
+            // the same serial means a date 1462 days later in the 1900 system
+            var serial1904 = (SampleDay.ToOADate() - 1462).ToString("R", CultureInfo.InvariantCulture);
+            var vm = ImportRow(wb => new[]
+            {
+                NumberCell(0, "7", null),
+                NumberCell(1, serial1904, AddStyle(wb, 14)),
+                NumberCell(2, serial1904, AddStyle(wb, 14)),
+            }, date1904: true);
+
+            AssertValue(vm, 7, SampleDay, SampleDay);
+        }
+
+        [TestMethod]
+        public void Import_DateColumn_SerialOutOfRange_IsAFormatError()
+        {
+            var vm = ImportRow(wb => new[]
+            {
+                NumberCell(0, "7", null),
+                NumberCell(1, "99999999", AddStyle(wb, 14)),
+                NumberCell(2, "-5", AddStyle(wb, 14)),
+            });
+
+            Assert.AreEqual(2, vm.ErrorListVM.EntityList.Count);
+        }
+
+        [DataTestMethod]
+        [DataRow(14u, null, true)]
+        [DataRow(31u, null, true)]
+        [DataRow(47u, null, true)]
+        [DataRow(55u, null, true)]
+        [DataRow(0u, null, false)]
+        [DataRow(2u, null, false)]
+        [DataRow(10u, null, false)]
+        [DataRow(49u, null, false)]
+        [DataRow(170u, "yyyy-mm-dd", true)]
+        [DataRow(170u, "yyyy/m/d", true)]
+        [DataRow(170u, "[h]:mm", true)]
+        [DataRow(170u, "mm:ss", true)]
+        [DataRow(170u, "h:mm AM/PM", true)]
+        [DataRow(170u, "m/d/yy;@", true)]
+        [DataRow(170u, "[$-404]e/m/d", true)]
+        [DataRow(170u, "0.00", false)]
+        [DataRow(170u, "#,##0.00_);[Red](#,##0.00)", false)]
+        [DataRow(170u, "0.00E+00", false)]
+        [DataRow(170u, "0.0%", false)]
+        [DataRow(170u, "General", false)]
+        [DataRow(170u, "@", false)]
+        [DataRow(170u, "#,##0 \"m\"", false)]
+        [DataRow(170u, "0 \"days\"", false)]
+        [DataRow(170u, "0\\d", false)]
+        [DataRow(171u, null, false)]
+        public void IsDateFormattedCell_ClassifiesNumberFormats(uint formatId, string formatCode, bool expected)
+        {
+            var template = new DateImportVM().GenerateTemplate(out _);
+            using var doc = SpreadsheetDocument.Open(ExpandableStream(template), true);
+            var workbook = doc.WorkbookPart;
+            var style = AddStyle(workbook, formatId, formatCode);
+
+            Assert.AreEqual(expected, OpenXmlHelper.IsDateFormattedCell(NumberCell(0, "1", style), workbook));
+        }
+
+        [TestMethod]
+        public void IsDateFormattedCell_NoStyleInformation_IsFalse()
+        {
+            var template = new DateImportVM().GenerateTemplate(out _);
+            using var doc = SpreadsheetDocument.Open(ExpandableStream(template), true);
+            var workbook = doc.WorkbookPart;
+
+            Assert.IsFalse(OpenXmlHelper.IsDateFormattedCell(null, workbook));
+            Assert.IsFalse(OpenXmlHelper.IsDateFormattedCell(NumberCell(0, "1", null), workbook), "style 0 is General");
+            Assert.IsFalse(OpenXmlHelper.IsDateFormattedCell(NumberCell(0, "1", 999), workbook), "style index beyond the table");
+            Assert.IsFalse(OpenXmlHelper.IsDateFormattedCell(NumberCell(0, "1", WtmTemplateDateStyle), null));
+
+            workbook.DeletePart(workbook.WorkbookStylesPart);
+            Assert.IsFalse(OpenXmlHelper.IsDateFormattedCell(NumberCell(0, "1", WtmTemplateDateStyle), workbook), "no stylesheet");
         }
 
         #endregion
