@@ -283,7 +283,6 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
         }
 
         [TestMethod]
-        [Ignore("#288: importing a file that has an invalid row fails with the message 'Memory stream is not expandable.' instead of reporting the row errors and offering the error file")]
         public async Task Group_Import_WithInvalidRow_ReportsErrors()
         {
             await SignInAsync();
