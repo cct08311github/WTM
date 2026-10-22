@@ -26,6 +26,9 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>An upload: the reference carries no file, only the connection of the page.</summary>
         Upload = 8,
 
+        /// <summary>Delete the file. Never part of <see cref="Read"/> and never granted to a reference that is not bound to a user.</summary>
+        Delete = 16,
+
         /// <summary>View, download and name: what a file shown by a page needs.</summary>
         Read = View | Download | Name
     }
@@ -65,7 +68,10 @@ namespace WalkingTec.Mvvm.Core
         Audited,
 
         /// <summary>There is no such file; the endpoint answers as it always did.</summary>
-        FileMissing
+        FileMissing,
+
+        /// <summary>The file is the photo of a user the request may see (see <see cref="FileEndpointRequestContext.IsAvatar"/>).</summary>
+        Avatar
     }
 
     /// <summary>What a page tells the file endpoints about a file it shows. It travels as an opaque protected string, never in clear text.</summary>
@@ -120,6 +126,13 @@ namespace WalkingTec.Mvvm.Core
 
         /// <summary>Reads the file's data (null: there is no such file). Called only when the request carries no valid reference.</summary>
         public Func<FileEndpointFileInfo> GetFileInfo { get; set; }
+
+        /// <summary>
+        /// Optional. Tells whether the file is something the request may see without a reference, because it is the photo of a user who is
+        /// visible to the caller. Called only when the request carries no valid reference, the file exists and is neither embedded nor
+        /// grandfathered. True admits the request as <see cref="FileEndpointAdmission.Avatar"/>.
+        /// </summary>
+        public Func<bool> IsAvatar { get; set; }
     }
 
     /// <summary>The outcome of <see cref="FileEndpointGuard.Authorize"/>.</summary>
@@ -177,9 +190,21 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>The configured key to run on; null: the connection the server chooses.</summary>
         public string Key { get; private set; }
 
+        /// <summary>
+        /// The tenant the valid reference was issued in, when the reference is not bound to a user (a capability). A caller who is not signed in
+        /// has no tenant of its own, so the data is read in this one (see <c>WTMContext.CreateFileDC</c>). Null in every other case.
+        /// </summary>
+        public string Tenant { get; private set; }
+
         public static FileConnectionDecision Server() => new FileConnectionDecision { Allowed = true };
         public static FileConnectionDecision Use(string key) => new FileConnectionDecision { Allowed = true, Key = key };
         public static FileConnectionDecision Refuse() => new FileConnectionDecision { Allowed = false };
+
+        internal FileConnectionDecision InTenant(string tenant)
+        {
+            Tenant = string.IsNullOrEmpty(tenant) ? null : tenant;
+            return this;
+        }
     }
 
     /// <summary>
@@ -261,6 +286,11 @@ namespace WalkingTec.Mvvm.Core
             {
                 return null;
             }
+            // the right to delete a file is given to one user only
+            if ((purposes & FilePurpose.Delete) != 0 && (string.IsNullOrEmpty(user) || string.IsNullOrEmpty(fileId)))
+            {
+                return null;
+            }
             var reference = new FileEndpointReference
             {
                 FileId = NormalizeFileId(fileId),
@@ -282,6 +312,25 @@ namespace WalkingTec.Mvvm.Core
                 return string.Empty;
             }
             return Guid.TryParse(id, out var g) ? g.ToString("D") : id;
+        }
+
+        /// <summary>
+        /// Builds the address of a file endpoint: <c>{path}/{id}?1=1</c>, the connection key as <paramref name="connectionParameter"/> and the
+        /// reference as <see cref="ReferenceParameter"/>, each only when there is one.
+        /// </summary>
+        /// <param name="path">address of the endpoint without the id, for example <c>/api/_file/GetFile</c></param>
+        public static string BuildUrl(string path, string fileId, string connectionParameter, string connectionKey, string reference)
+        {
+            var url = $"{(path ?? string.Empty).TrimEnd('/')}/{Uri.EscapeDataString(fileId ?? string.Empty)}?1=1";
+            if (string.IsNullOrEmpty(connectionKey) == false)
+            {
+                url += "&" + (string.IsNullOrEmpty(connectionParameter) ? "_DONOT_USE_CS" : connectionParameter) + "=" + Uri.EscapeDataString(connectionKey);
+            }
+            if (string.IsNullOrEmpty(reference) == false)
+            {
+                url += "&" + ReferenceParameter + "=" + Uri.EscapeDataString(reference);
+            }
+            return url;
         }
 
         #endregion
@@ -333,6 +382,13 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="reference">the opened reference of the request, null when it has none or it is invalid (then only the request key counts)</param>
         /// <param name="serverKey">the connection the server chose for the request (<c>Wtm.CurrentCS</c>)</param>
         public static FileConnectionDecision ResolveConnection(string requestKey, FileEndpointReference reference, Configs configs, string serverKey)
+        {
+            var decision = ResolveConnectionCore(requestKey, reference, configs, serverKey);
+            // a reference that belongs to nobody in particular (a capability) names the tenant of the page that wrote it
+            return reference != null && string.IsNullOrEmpty(reference.User) ? decision.InTenant(reference.Tenant) : decision;
+        }
+
+        private static FileConnectionDecision ResolveConnectionCore(string requestKey, FileEndpointReference reference, Configs configs, string serverKey)
         {
             // a key that names no connection of this application is refused, whatever else the request carries
             if (IsDefaultConnection(requestKey, serverKey) == false && Configured(requestKey, configs) == null)
@@ -403,11 +459,46 @@ namespace WalkingTec.Mvvm.Core
             {
                 return FileEndpointDecision.Admit(FileEndpointAdmission.Grandfathered);
             }
+            if (ctx.IsAvatar != null && ctx.IsAvatar())
+            {
+                return FileEndpointDecision.Admit(FileEndpointAdmission.Avatar);
+            }
             if (options.Mode == FileEndpointMode.Audit)
             {
                 return FileEndpointDecision.Admit(FileEndpointAdmission.Audited, refusal);
             }
             return FileEndpointDecision.Refuse(refusal);
+        }
+
+        /// <summary>
+        /// Decides whether a file may be deleted. Unlike a read, a delete is never served on the strength of the file alone: it needs a signed-in
+        /// user and a <see cref="FilePurpose.Delete"/> reference that was issued to that user for that file (<see cref="FileEndpointMode.Audit"/>
+        /// does not relax this). Only <see cref="FileEndpointMode.Legacy"/> skips the reference.
+        /// </summary>
+        public static FileEndpointDecision AuthorizeDeletion(FileEndpointRequestContext ctx)
+        {
+            var options = ctx.Options ?? new FileEndpointOptions();
+            if (string.IsNullOrEmpty(ctx.User))
+            {
+                return FileEndpointDecision.Refuse(FileEndpointRefusal.UserMismatch);
+            }
+            if (options.Mode == FileEndpointMode.Legacy)
+            {
+                return FileEndpointDecision.Admit(FileEndpointAdmission.Legacy);
+            }
+            var refusal = CheckReference(new FileEndpointRequestContext
+            {
+                Options = options,
+                FileId = ctx.FileId,
+                Purpose = FilePurpose.Delete,
+                Reference = ctx.Reference,
+                User = ctx.User,
+                Tenant = ctx.Tenant,
+                HomeTenant = ctx.HomeTenant,
+                Now = ctx.Now,
+                OpenReference = ctx.OpenReference
+            }, out _);
+            return refusal == FileEndpointRefusal.None ? FileEndpointDecision.Admit(FileEndpointAdmission.Reference) : FileEndpointDecision.Refuse(refusal);
         }
 
         /// <summary>
@@ -438,9 +529,21 @@ namespace WalkingTec.Mvvm.Core
             {
                 return FileEndpointRefusal.UserMismatch;
             }
+            // a reference that belongs to nobody carries the tenant it was issued in: a signed-in caller of another tenant does not use it
+            if (string.IsNullOrEmpty(opened.User) && string.IsNullOrEmpty(ctx.User) == false
+                && string.IsNullOrEmpty(opened.Tenant) == false
+                && string.Equals(opened.Tenant, ctx.Tenant ?? string.Empty, StringComparison.Ordinal) == false)
+            {
+                return FileEndpointRefusal.UserMismatch;
+            }
             if (ctx.Purpose == FilePurpose.None || (opened.Purposes & ctx.Purpose) != ctx.Purpose)
             {
                 return FileEndpointRefusal.PurposeMismatch;
+            }
+            // the right to delete is never open to the audience of a page
+            if ((ctx.Purpose & FilePurpose.Delete) != 0 && string.IsNullOrEmpty(opened.User))
+            {
+                return FileEndpointRefusal.UserMismatch;
             }
             if (ctx.Purpose != FilePurpose.Upload
                 && (string.IsNullOrEmpty(opened.FileId) || string.Equals(opened.FileId, NormalizeFileId(ctx.FileId), StringComparison.OrdinalIgnoreCase) == false))

@@ -77,6 +77,24 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
             AfterStartAsync = Vue3DemoSetup.InstallAdminPasswordAsync
         };
 
+        /// <summary>The Vue3Demo with FileEndpoints:Mode=Enforce for the permission matrix: the table lists the differences to the default.</summary>
+        public static readonly SiteTarget Vue3DemoMatrixFileEnforce = new SiteTarget
+        {
+            Name = "vue3demo-matrix-file-enforce",
+            ProjectDir = Vue3Demo.ProjectDir,
+            AssemblyName = Vue3Demo.AssemblyName,
+            RouteExclusionFile = Vue3Demo.RouteExclusionFile,
+            ReadyPath = Vue3Demo.ReadyPath,
+            AdminAccount = Vue3Demo.AdminAccount,
+            ReportRouteCoverage = false,
+            ConfigureEnvironment = (site, env) =>
+            {
+                Vue3DemoSetup.ConfigureEnvironment(Vue3DemoMatrixFileEnforce, site, env);
+                env["FileEndpoints__Mode"] = "Enforce";
+            },
+            AfterStartAsync = Vue3DemoSetup.InstallAdminPasswordAsync
+        };
+
         /// <summary>
         /// The Vue3Demo started with EnableWorkflow=true (the demo registers the Elsa workflow engine when the setting is on), for the
         /// permission matrix: which endpoints appear, disappear or change their outcome with the feature on.

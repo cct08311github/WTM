@@ -70,6 +70,19 @@ namespace WalkingTec.Mvvm.E2E.Security
             LimitedGrants = Vue3LimitedGrants,
         };
 
+        /// <summary>Vue3Demo with FileEndpoints:Mode=Enforce; the table of this configuration lists the differences to the default.</summary>
+        public static readonly MatrixSetup Vue3FileEnforce = new MatrixSetup
+        {
+            Site = SiteTargets.Vue3DemoMatrixFileEnforce,
+            Configuration = "file-enforce",
+            TableFile = "vue3demo.permission-matrix.json",
+            OpenIdentities = MatrixAccounts.Vue3Async,
+            LoginPaths = new[] { "/_Framework/Redirect401", "/Login/Login" },
+            Kinds = Vue3Kinds,
+            SessionActions = Vue3SessionActions,
+            LimitedGrants = Vue3LimitedGrants,
+        };
+
         /// <summary>Vue3Demo with EnableWorkflow=true; the table of this configuration lists the differences to the default.</summary>
         public static readonly MatrixSetup Vue3WithWorkflow = new MatrixSetup
         {

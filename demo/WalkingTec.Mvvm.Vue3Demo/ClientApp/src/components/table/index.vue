@@ -132,6 +132,7 @@
     import { storeToRefs } from 'pinia';
     import { useThemeConfig } from '/@/stores/themeConfig';
     import fileapi from '/@/api/file'
+    import { fileUrl } from '/@/utils/fileRefs';
     import '/@/theme/tableTool.scss';
     import { AxiosResponse } from 'axios';
     import printJs from 'print-js';
@@ -332,7 +333,7 @@
                 imageHeaders.forEach((ih) => {
                     element[ih.key + "__localurl__"] = "";
                     if (element[ih.key]) {
-                        element[ih.key + "__localurl__"] = '/api/_file/getfile/' + element[ih.key] + "?width=150&height=150";
+                        element[ih.key + "__localurl__"] = fileUrl(element[ih.key], { width: 150, height: 150 });
                         element[ih.key + "__preview__"] = index++;
                         state.picList.push(element[ih.key + "__localurl__"]);
                     }
