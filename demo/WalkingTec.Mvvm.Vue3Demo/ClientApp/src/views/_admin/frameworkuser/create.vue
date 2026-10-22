@@ -7,7 +7,7 @@
 						<el-row >
 							<el-col :xs="24" :lg="24"  class="mb20">
 								<el-form-item ref="Entity_PhotoId_FormItem" prop="Entity.PhotoId" label="头像" >
-									<WtmUploadImage  v-model="state.vmModel.Entity.PhotoId"  :multi="true"/>
+									<WtmUploadImage  v-model="state.vmModel.Entity.PhotoId"/>
 								</el-form-item>
 							</el-col>
 						</el-row>
@@ -160,8 +160,8 @@ const onSubmit = () => {
 	 if (valid) {
 		frameworkuserApi().add(state.vmModel).then(()=>{
 			ElMessage.success("提交成功");
-			closeDialog();
 			emit('refresh');
+			closeDialog();
 		}).catch((error)=>{
 			other.setFormError(ci,error);
 		})

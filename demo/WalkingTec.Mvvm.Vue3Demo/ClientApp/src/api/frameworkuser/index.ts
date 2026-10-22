@@ -12,20 +12,20 @@ export default function frameworkuserApi() {
 		},
 		get: (data: number|string) => {
 			return request({
-				url: '/api/_Admin/FrameworkUser/'+data,
+				url: '/api/_FrameworkUser/'+data,
 				method: 'get'
 			});
 		},
 		add:(data: object)=>{
 			return request({
-				url:'/api/_Admin/FrameworkUser/add',
+				url:'/api/_FrameworkUser/add',
 				method:'post',
 				data
 			});
 		},
 		edit:(data: object)=>{
 			return request({
-				url:'/api/_Admin/FrameworkUser/edit',
+				url:'/api/_FrameworkUser/edit',
 				method:'put',
 				data
 			});
@@ -39,7 +39,7 @@ export default function frameworkuserApi() {
 		},
 		delete:(data: Array<number>|Array<string>)=>{
 			return request({
-				url:'/api/_Admin/FrameworkUser/BatchDelete',
+				url:'/api/_FrameworkUser/BatchDelete',
 				method:'post',
 				data
 			});
@@ -47,7 +47,7 @@ export default function frameworkuserApi() {
 		export: (data: object) => {
 			return request<any,Blob>({
 				responseType: "blob",
-				url: '/api/_Admin/FrameworkUser/ExportExcel',
+				url: '/api/_FrameworkUser/ExportExcel',
 				method: 'post',
 				data,
 			}).then((data)=>{other.downloadFile(data)});;
@@ -55,14 +55,14 @@ export default function frameworkuserApi() {
 		exportById: (data: Array<number>|Array<string>) => {
 			return request<any,Blob>({
                 responseType: "blob",
-				url: '/api/_Admin/FrameworkUser/ExportExcelByIds',
+				url: '/api/_FrameworkUser/ExportExcelByIds',
 				method: 'post',
 				data,
 			}).then((data)=>{other.downloadFile(data)});
 		},
 		import: (data: object) => {
 			return request({
-				url: '/api/_Admin/FrameworkUser/Import',
+				url: '/api/_FrameworkUser/Import',
 				method: 'post',
 				data,
 			});

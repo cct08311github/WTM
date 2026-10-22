@@ -118,7 +118,6 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
         }
 
         [TestMethod]
-        [Ignore("#290: the user management page calls /api/_Admin/FrameworkUser/*, which is not the route of the user API (/api/_FrameworkUser/*), so create, edit, delete, export and import fail from the page")]
         public async Task User_CreateWithPhotoEditDelete_RoundTrip()
         {
             await SignInAsync();
@@ -134,7 +133,7 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
             // create: account, password, name, role, group and a photo
             await list.ToolbarButton("新增").ClickAsync();
             await list.Dialog.Locator("input[type=file]").First.SetInputFilesAsync(new FilePayload { Name = "photo.png", MimeType = "image/png", Buffer = Png });
-            await Expect(list.Dialog.Locator(".el-upload-list__item-thumbnail")).ToHaveCountAsync(1);
+            await Expect(list.Dialog.Locator("img.el-image__inner")).ToHaveCountAsync(1);
             await list.Dialog.Locator("input.el-input__inner").First.FillAsync(account);
             await list.Dialog.Locator("input[type=password]").FillAsync("Pw-" + UniqueName(""));
             await list.Dialog.GetByLabel("姓名").FillAsync(name);
@@ -394,7 +393,6 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
         }
 
         [TestMethod]
-        [Ignore("#290: the tenant list reads the name from a property the list does not return, so its name column is empty")]
         public async Task Tenant_List_ShowsTenantName()
         {
             await SignInAsync();
@@ -471,7 +469,6 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
         }
 
         [TestMethod]
-        [Ignore("#290: the detail button of the data privilege list checks a permission key that no action has, so it is never shown")]
         public async Task DataPrivilege_Detail_IsReachableFromList()
         {
             await SignInAsync();

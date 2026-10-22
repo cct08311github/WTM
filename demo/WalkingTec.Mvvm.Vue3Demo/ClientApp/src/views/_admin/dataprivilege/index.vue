@@ -37,7 +37,7 @@
 				<el-table-column :label="$t('message._system.common.vm.operate')" width="150">
 				<template v-slot="scope">
 					<el-button text type="primary" @click="onEdit(scope.row)" v-auth="'/api/_dataprivilege/Edit'">{{ $t('message._system.common.vm.edit') }}</el-button>
-					<el-button text type="primary" @click="onDetail(scope.row)" v-auth="'/api/_dataprivilege/{id}'">{{ $t('message._system.common.vm.detail') }}</el-button>
+					<el-button text type="primary" @click="onDetail(scope.row)" v-auth="'/api/_dataprivilege/Get'">{{ $t('message._system.common.vm.detail') }}</el-button>
 					<el-popconfirm :title="$t('message._system.common.vm.deletetip')"  @confirm="onDelete(scope.row)">
 						<template #reference>
 							<el-button text type="danger" v-auth="'/api/_dataprivilege/delete'">{{ $t('message._system.common.vm.delete') }}</el-button>

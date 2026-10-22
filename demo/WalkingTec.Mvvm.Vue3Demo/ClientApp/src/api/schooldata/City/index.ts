@@ -54,6 +54,7 @@ function CityApi() {
 		},
 		exportById: (data: Array<number>|Array<string>) => {
 			return request<any,Blob>({
+				responseType: "blob",
 				url: '/api/City/ExportExcelByIds',
 				method: 'post',
 				data,
