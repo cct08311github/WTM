@@ -24,7 +24,8 @@ namespace WalkingTec.Mvvm.E2E.Tests
             await Lab.OpenAsync("Charts");
             foreach (var id in new[] { "labchartbar", "labchartline", "labchartpie", "labchartscatter" })
             {
-                await ExpectScriptAsync($"() => {{ const c = window.echarts.getInstanceByDom(document.getElementById('{id}')); return !!c && (c.getOption().series || []).length > 0 && (c.getOption().series[0].type !== undefined); }}");
+                // Lab.OpenAsync loads the home frame again, so window.echarts can be undefined again here: return false (keep polling) instead of throwing, which would fail WaitForFunction at once (#307)
+                await ExpectScriptAsync($"() => {{ if (!window.echarts) return false; const el = document.getElementById('{id}'); const c = el ? window.echarts.getInstanceByDom(el) : null; if (!c) return false; const series = c.getOption().series || []; return series.length > 0 && series[0].type !== undefined; }}");
             }
         }
 
