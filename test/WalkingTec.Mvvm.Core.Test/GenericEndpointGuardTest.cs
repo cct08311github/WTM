@@ -240,6 +240,69 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
+        public void RequestConnection_IsUsedForAReference_InTheSpellingOfTheConfiguredKey()
+        {
+            var configs = ConfigsWith("default", "Reports", "Reports_1");
+
+            Assert.IsTrue(GenericEndpointGuard.TryGetRequestConnection(GenericEndpointAdmission.Reference, "reports_1", configs, out var connection));
+            Assert.AreEqual("Reports_1", connection);
+            Assert.IsTrue(GenericEndpointGuard.TryGetRequestConnection(GenericEndpointAdmission.Reference, "", configs, out var empty));
+            Assert.AreEqual("", empty);
+            Assert.IsTrue(GenericEndpointGuard.TryGetRequestConnection(GenericEndpointAdmission.Reference, null, configs, out var none));
+            Assert.IsNull(none);
+        }
+
+        [TestMethod]
+        public void RequestConnection_IsIgnoredForAnExemptViewModel_UnlessTheApplicationAllowsIt()
+        {
+            var configs = ConfigsWith("default", "reports");
+
+            Assert.IsFalse(GenericEndpointGuard.TryGetRequestConnection(GenericEndpointAdmission.Exempt, "reports", configs, out var ignored));
+            Assert.IsNull(ignored);
+            configs.GenericEndpoints.AllowRequestConnectionKey = true;
+            Assert.IsTrue(GenericEndpointGuard.TryGetRequestConnection(GenericEndpointAdmission.Exempt, "REPORTS", configs, out var allowed));
+            Assert.AreEqual("reports", allowed);
+        }
+
+        [TestMethod]
+        public void RequestConnection_LegacyModeKeepsTheDocumentedBehavior_AndNoAdmissionUsesNothing()
+        {
+            var configs = ConfigsWith("default", "reports");
+
+            Assert.IsTrue(GenericEndpointGuard.TryGetRequestConnection(GenericEndpointAdmission.Legacy, "reports", configs, out var legacy));
+            Assert.AreEqual("reports", legacy);
+            Assert.IsFalse(GenericEndpointGuard.TryGetRequestConnection(GenericEndpointAdmission.None, "reports", configs, out _));
+        }
+
+        private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger
+        {
+            public List<string> Warnings { get; } = new List<string>();
+            public IDisposable BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+            public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+            {
+                if (logLevel == Microsoft.Extensions.Logging.LogLevel.Warning)
+                {
+                    Warnings.Add(formatter(state, exception));
+                }
+            }
+        }
+
+        [TestMethod]
+        public void StartUp_WarnsWhenTheRequestMayChooseTheConnection()
+        {
+            var logger = new CapturingLogger();
+            GenericEndpointGuard.LogRelaxedWarning(new Configs(), logger);
+            Assert.AreEqual(0, logger.Warnings.Count);
+
+            var configs = new Configs { GenericEndpoints = new GenericEndpointOptions { AllowRequestConnectionKey = true } };
+            GenericEndpointGuard.LogRelaxedWarning(configs, logger);
+
+            Assert.AreEqual(1, logger.Warnings.Count);
+            StringAssert.Contains(logger.Warnings[0], "AllowRequestConnectionKey");
+        }
+
+        [TestMethod]
         public void NullAndEmptyConnectionKey_AreTheSame()
         {
             var reference = Issue(cs: null);

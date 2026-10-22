@@ -519,6 +519,25 @@ namespace WalkingTec.Mvvm.E2E.Tests.Security
             Assert.AreEqual("application/json", empty.ContentType);
         }
 
+        [TestMethod]
+        public async Task ExemptViewModel_IsServedOnTheConnectionTheServerChose_WhateverKeyTheRequestNames()
+        {
+            const string exempt = "WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.GadgetVMs.ExemptGadgetListVM" + Assembly;
+
+            var plain = await SendAsync("admin", HttpMethod.Post, "/_Framework/GetPagingData", GridForm(exempt, null), gridRequest: true);
+            var named = await SendAsync("admin", HttpMethod.Post, "/_Framework/GetPagingData", GridForm(exempt, null, "other"), gridRequest: true);
+            var unknown = await SendAsync("admin", HttpMethod.Post, "/_Framework/GetPagingData", GridForm(exempt, null, "no-such-connection"), gridRequest: true);
+            var anonymous = await SendAsync("anonymous", HttpMethod.Post, "/_Framework/GetPagingData", GridForm(exempt, null), gridRequest: true);
+
+            Assert.AreEqual(200, CodeOf(plain.Body));
+            StringAssert.Contains(plain.Body, "\"Alpha Wrench\"");
+            Assert.AreEqual(200, CodeOf(named.Body));
+            StringAssert.Contains(named.Body, "\"Alpha Wrench\"", "The key of the request is not used: the rows are those of the default connection.");
+            Assert.IsFalse(named.Body.Contains("Base Alpha Wrench"));
+            Assert.AreEqual(403, CodeOf(unknown.Body), "A key that is not a configured connection is still refused.");
+            Assert.AreEqual(401, CodeOf(anonymous.Body));
+        }
+
         // ---- a reference for the selector does not give the right to export ---------------------------------------------------------
 
         [TestMethod]

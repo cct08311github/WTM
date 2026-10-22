@@ -20,6 +20,8 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
             env["Connections__2__Key"] = "other_1";
             env["Connections__2__Value"] = "Data Source=" + Path.Combine(dir, "e2e-other-replica.db");
             env["Connections__2__DbType"] = "sqlite";
+            // a list view model that the generic data endpoints serve without a page reference (only the tests of that setting use it)
+            env["GenericEndpoints__ExemptViewModels__0"] = "WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.GadgetVMs.ExemptGadgetListVM";
         }
     }
 }

@@ -102,4 +102,19 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
 #pragma warning restore CS0618
         }
     }
+
+    /// <summary>List view model whose export button sits inside a button group.</summary>
+    public class LayuiGroupedExportSchoolListVM : LayuiSchoolListVM
+    {
+        protected override List<GridAction> InitGridAction()
+        {
+            return new List<GridAction>
+            {
+                this.MakeActionsGroup("More", new List<GridAction>
+                {
+                    this.MakeStandardAction("School", GridActionStandardTypesEnum.ExportExcel, "Export", ""),
+                })
+            };
+        }
+    }
 }

@@ -33,6 +33,16 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
             return Uri.UnescapeDataString(m.Groups[1].Value);
         }
 
+        private T NewVm<T>(params string[] accessibleUrls) where T : LayuiSchoolListVM, new()
+        {
+            var vm = new T { Wtm = MockWtmContext.CreateWtmContext(usercode: "alice", dataProtection: _provider) };
+            foreach (var url in accessibleUrls)
+            {
+                vm.Wtm.GlobaInfo.AllAccessUrls.Add(url);
+            }
+            return vm;
+        }
+
         private static string RenderGrid(LayuiSchoolListVM listVm, bool inSelector = false)
         {
             return Render(new DataTableTagHelper { Vm = Self(listVm, "Vm"), Url = "/_Framework/GetPagingData", IsInSelector = inSelector }, "wt:grid");
@@ -53,7 +63,7 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
         [TestMethod]
         public void Grid_WithTheStandardExportButton_WritesAReferenceThatAdmitsPagingAndExport()
         {
-            var listVm = new LayuiExportSchoolListVM { Wtm = MockWtmContext.CreateWtmContext(usercode: "alice", dataProtection: _provider) };
+            var listVm = NewVm<LayuiExportSchoolListVM>("/School/ExportExcel");
             var name = GenericEndpointGuard.GetViewModelName(typeof(LayuiExportSchoolListVM));
 
             var reference = ReferenceIn(RenderGrid(listVm));
@@ -63,9 +73,35 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
         }
 
         [TestMethod]
+        public void Grid_WithTheExportButtonInsideAButtonGroup_WritesAReferenceThatAdmitsExport()
+        {
+            var listVm = NewVm<LayuiGroupedExportSchoolListVM>("/School/ExportExcel");
+            var name = GenericEndpointGuard.GetViewModelName(typeof(LayuiGroupedExportSchoolListVM));
+
+            var reference = ReferenceIn(RenderGrid(listVm));
+
+            Assert.IsTrue(listVm.Wtm.AuthorizeGenericEndpoint(name, reference, GenericEndpointPurpose.Export, true, listVm.CurrentCS).Allowed);
+        }
+
+        [TestMethod]
+        public void Grid_WhereTheUserCannotSeeTheExportButton_WritesAReferenceForPagingOnly()
+        {
+            // the button is hidden for a user without the privilege of its action, in a group as well as at the top
+            foreach (var vm in new LayuiSchoolListVM[] { NewVm<LayuiExportSchoolListVM>(), NewVm<LayuiGroupedExportSchoolListVM>(), NewVm<LayuiFrameworkExportSchoolListVM>() })
+            {
+                var name = GenericEndpointGuard.GetViewModelName(vm.GetType());
+
+                var reference = ReferenceIn(RenderGrid(vm));
+
+                Assert.IsTrue(vm.Wtm.AuthorizeGenericEndpoint(name, reference, GenericEndpointPurpose.List, true, vm.CurrentCS).Allowed, name);
+                Assert.IsFalse(vm.Wtm.AuthorizeGenericEndpoint(name, reference, GenericEndpointPurpose.Export, true, vm.CurrentCS).Allowed, name);
+            }
+        }
+
+        [TestMethod]
         public void Grid_WithTheFrameworkExportButton_WritesAReferenceThatAdmitsPagingAndExport()
         {
-            var listVm = new LayuiFrameworkExportSchoolListVM { Wtm = MockWtmContext.CreateWtmContext(usercode: "alice", dataProtection: _provider) };
+            var listVm = NewVm<LayuiFrameworkExportSchoolListVM>("/_Framework/GetExportExcel");
             var name = GenericEndpointGuard.GetViewModelName(typeof(LayuiFrameworkExportSchoolListVM));
 
             var reference = ReferenceIn(RenderGrid(listVm));
@@ -77,7 +113,7 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
         [TestMethod]
         public void GridInTheSelectorPopup_WritesAReferenceForPagingOnly_EvenWhenTheViewModelHasExportButtons()
         {
-            var listVm = new LayuiExportSchoolListVM { Wtm = MockWtmContext.CreateWtmContext(usercode: "alice", dataProtection: _provider) };
+            var listVm = NewVm<LayuiExportSchoolListVM>("/School/ExportExcel");
             var name = GenericEndpointGuard.GetViewModelName(typeof(LayuiExportSchoolListVM));
 
             var reference = ReferenceIn(RenderGrid(listVm, inSelector: true));
