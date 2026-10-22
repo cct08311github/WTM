@@ -524,7 +524,6 @@ HEADED=1 dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build   # 顯示�
 - `wt:slider` 不依綁定欄位的值設定把手位置（只看 `default-value`）（#281）
 - `wt:multiupload` 的刪除鈕呼叫的 `/api/_file/DeletedFile/{id}` 沒有任何 controller 提供（#282）
 - `ff.clearSelector` 找不到 selector 的隱藏 id 欄位（容器名稱寫成 `id_Container`）（#283）
-- `_Framework/UpdateModelProperty` 回傳 Success，但資料沒有存入（#284）
 - 匯出 Excel 會移除儲存格中看起來像 HTML 標籤的文字（#285）
 
 **JS 覆蓋率**（`framework_layui.js`，`/_js/framework_layui.js`）：Playwright for .NET 沒有 `page.Coverage`，所以測試經 CDP session 呼叫 `Profiler.startPreciseCoverage`／`takePreciseCoverage`（呼叫次數＋區塊範圍），在每個測試結束時收集，整個 run 彙總。函式只要有任何一個測試呼叫過就算涵蓋。輸出 `TestResults/e2e/js-coverage/framework_layui.report.md|json`（函式、具名函式、字元範圍三種數字，與未被呼叫的函式清單），CI 放進 step summary 與 artifact `e2e-js-coverage`。**只記錄基線，不因數字低而失敗。** 會整頁重新載入的測試（例如切換語言）要在重新載入前呼叫 `FlushJsCoverageAsync()`，否則舊文件的資料會遺失。目前基線：函式 86／95（90.5%），具名函式 65／69（94.2%），字元範圍 72.6%。沒有被呼叫的 9 個：舊瀏覽器用的 `String.startsWith` 補丁、`LoadPage` 開新視窗的分支、`OpenDialog2` 的失敗回呼、對話框內圖表縮放的三個回呼，以及舊的 `changeComboIcon`、`refreshcombobox`（後者依賴不在靜態檔內的 `layui.formSelects`）。
@@ -745,7 +744,7 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 | 連線 key | `GetPagingData`、`GetExportExcel`、`Selector`：請求的 `_DONOT_USE_CS`／`_DONOT_USE_CURRENTCS` 必須與頁面的連線 key 相同，並以設定中該連線的拼法執行；`ExemptViewModels` 內的 view model 沒有參考可比對，忽略請求帶的 key，使用伺服器為該請求選的連線（設定 `AllowRequestConnectionKey=true` 時才採用請求的 key；`Legacy` 模式維持原行為）（比較時去掉讀取副本的後綴：`x_1` 與 `x` 視為同一個連線，因為讀取時副本是隨機挑的）；`GetEmptyData`、`UpdateModelProperty`、`GetExcelTemplate` 沒有連線參數，改為在參考綁定的連線上執行：該 key 是頁面產生時由伺服器決定、並受簽章保護的，所以使用 `[FixConnection]` 或非預設資料庫的頁面（包括匯入頁的範本按鈕）照常運作。參考綁定的 key 必須仍是設定中的連線，否則拒絕；參考的 key 為空（頁面使用預設連線）時沿用伺服器為該請求選的連線；寫入（`UpdateModelProperty`）一律用基底連線，不用讀取副本；不在 `Connections` 內的請求 key 一律拒絕 |
 | 連線由伺服器決定 | 動作的連線由 `[FixConnection]`、連線函式、預設連線決定。查詢字串的 `DONOTUSECSName` 預設不再影響連線（參考記錄的連線 key 因此就是伺服器為頁面選定的連線）。框架內沒有使用這個參數的程式（`PagedListExtension` 中相關的一行早已註解） |
 | `RemoveUserCacheByAccount`／`ByRole`／`ByGroup` | 要求呼叫者具有管理員角色（角色代碼 `001`，與 `_WorkflowController`、資料權限範圍使用的判斷相同）；其他已登入者得到「沒有權限」的回應（帶 `Authorization` 標頭者得到 403）。框架與 `_Admin` 範本清除快取是在伺服器端直接呼叫 `WTMContext.RemoveUserCache*`，不經過這些 HTTP 端點 |
-| `UpdateModelProperty` | 需要 `Update` 目的的參考，且 `field` 必須在參考列出的可編輯屬性內；在參考綁定連線的基底連線上執行 |
+| `UpdateModelProperty` | 需要 `Update` 目的的參考，且 `field` 必須在參考列出的可編輯屬性內；在參考綁定連線的基底連線上執行並真的儲存（#284）；失敗回 400。不論模式與屬性清單，`ID`、`TenantCode`（`ITenant`）、`IsValid`（`IPersistPoco`）、`CreateTime`／`CreateBy`／`UpdateTime`／`UpdateBy` 與非純量、`[NotMapped]`、`[CanNotEdit]` 的屬性一律拒絕，文字無法嚴格轉型也拒絕；`Mode=Legacy` 下此端點現在會真的寫入（原本是空操作）。細節見 docs/security/generic-endpoint-authz.md 第 8 節 |
 | 沒有 Data Protection | TagHelper 不寫參考，頁面仍可顯示；端點拒絕沒有有效參考的請求 |
 
 **設定 `GenericEndpoints`**（預設安全，不設定就是下列預設值）：
