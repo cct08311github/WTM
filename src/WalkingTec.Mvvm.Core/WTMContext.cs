@@ -1188,6 +1188,41 @@ params string[] groupcode)
         }
 
         /// <summary>
+        /// Creates a short-lived reference that is not bound to a user (a capability): whoever holds it can do what <paramref name="purposes"/> allows
+        /// with that one file until it expires (<c>FileEndpoints:ReferenceLifetimeMinutes</c>), signed in or not. For pages that show files in
+        /// elements which cannot send credentials, such as the <c>img</c> tag of a single page application. The reference is bound to the file, the
+        /// connection and the tenant of the signed-in user; <see cref="FilePurpose.Delete"/> and <see cref="FilePurpose.Upload"/> are never granted.
+        /// </summary>
+        /// <param name="fileId">id of the file</param>
+        /// <param name="purposes">what the reference allows (default: view, download and name)</param>
+        /// <param name="connectionKey">connection key of the page (default: <see cref="CurrentCS"/>)</param>
+        /// <returns>the reference, or null when none can be created</returns>
+        public string CreateFileCapability(string fileId, FilePurpose purposes = FilePurpose.Read, string connectionKey = null)
+        {
+            try
+            {
+                purposes &= FilePurpose.Read;
+                if (purposes == FilePurpose.None)
+                {
+                    return null;
+                }
+                return FileEndpointGuard.Issue(FileEndpointProtector(), ConfigInfo?.FileEndpoints, fileId, purposes,
+                    connectionKey ?? CurrentCS, null, LoginUserInfo?.CurrentTenant, DateTimeOffset.UtcNow);
+            }
+            catch (Exception ex)
+            {
+                _loggerFactory?.CreateLogger<WTMContext>().LogWarning("A file reference could not be created: {ExceptionType}", ex.GetType().Name);
+                return null;
+            }
+        }
+
+        /// <summary>Same as <see cref="CreateFileCapability(string, FilePurpose, string)"/> for a guid id.</summary>
+        public string CreateFileCapability(Guid fileId, FilePurpose purposes = FilePurpose.Read, string connectionKey = null)
+        {
+            return CreateFileCapability(fileId.ToString(), purposes, connectionKey);
+        }
+
+        /// <summary>
         /// The url of the file endpoint for one purpose, with a reference for the current user:
         /// <see cref="FilePurpose.View"/> shows the file (<c>GetFile</c> with <c>stream=true</c>), <see cref="FilePurpose.Download"/> downloads it,
         /// <see cref="FilePurpose.Name"/> returns its name (<c>GetFileName</c>).
@@ -1218,7 +1253,22 @@ params string[] groupcode)
             return GetFileUrl(fileId.ToString(), purpose, connectionKey);
         }
 
-        private FileEndpointRequestContext CreateFileRequest(string fileId, FilePurpose purpose, string reference, Func<FileEndpointFileInfo> getFileInfo)
+        /// <summary>
+        /// The address of a file endpoint that is not one of the framework's (for example the file API of a single page application), with a
+        /// reference. The address is <c>{path}/{id}?1=1</c> plus the connection key as <paramref name="connectionParameter"/> and the reference as
+        /// <see cref="FileEndpointGuard.ReferenceParameter"/>.
+        /// </summary>
+        /// <param name="path">address of the endpoint without the id, for example <c>/api/_file/GetFile</c></param>
+        /// <param name="capability">true: the reference is a capability (<see cref="CreateFileCapability(string, FilePurpose, string)"/>), usable by any caller; false: bound to the signed-in user</param>
+        public string GetFileUrl(string fileId, FilePurpose purpose, string connectionKey, string path, string connectionParameter = "_DONOT_USE_CS", bool capability = false)
+        {
+            var key = connectionKey ?? CurrentCS;
+            var purposes = purpose == FilePurpose.None ? FilePurpose.Read : purpose;
+            var reference = capability ? CreateFileCapability(fileId, purposes, key) : CreateFileReference(fileId, purposes, key);
+            return FileEndpointGuard.BuildUrl(path, fileId, connectionParameter, key, reference);
+        }
+
+        private FileEndpointRequestContext CreateFileRequest(string fileId, FilePurpose purpose, string reference, Func<FileEndpointFileInfo> getFileInfo, Func<bool> isAvatar = null)
         {
             var protector = FileEndpointProtector();
             return new FileEndpointRequestContext
@@ -1232,8 +1282,35 @@ params string[] groupcode)
                 HomeTenant = LoginUserInfo?.TenantCode,
                 Now = DateTimeOffset.UtcNow,
                 OpenReference = r => FileEndpointGuard.Unprotect(protector, r),
-                GetFileInfo = getFileInfo
+                GetFileInfo = getFileInfo,
+                IsAvatar = isAvatar
             };
+        }
+
+        /// <summary>
+        /// Opens a data context for the connection <see cref="ResolveFileConnection"/> chose. A caller who is not signed in has no tenant of its own:
+        /// when it was admitted by a reference that names a tenant (a capability), the data is read in that tenant (its own database when it has
+        /// one). Anyone else gets what <see cref="CreateDC"/> gives.
+        /// </summary>
+        public IDataContext CreateFileDC(FileConnectionDecision connection)
+        {
+            var tenantCode = connection?.Tenant;
+            if (LoginUserInfo == null && string.IsNullOrEmpty(tenantCode) == false)
+            {
+                if (string.IsNullOrEmpty(connection.Key))
+                {
+                    var tenant = GlobaInfo?.AllTenant?.FirstOrDefault(x => x.TCode == tenantCode);
+                    var tenantDc = tenant?.CreateDC(this);
+                    if (tenantDc != null)
+                    {
+                        return tenantDc;
+                    }
+                }
+                var dc = CreateDC(cskey: connection.Key);
+                dc.SetTenantCode(tenantCode);
+                return dc;
+            }
+            return CreateDC(cskey: connection?.Key);
         }
 
         /// <summary>
@@ -1259,7 +1336,34 @@ params string[] groupcode)
         /// <param name="getFileInfo">reads the file's data on the connection of the request (null result: there is no such file)</param>
         public FileEndpointDecision AuthorizeFileRequest(string endpoint, string fileId, FilePurpose purpose, string reference, Func<FileEndpointFileInfo> getFileInfo)
         {
-            var decision = FileEndpointGuard.Authorize(CreateFileRequest(fileId, purpose, reference, getFileInfo));
+            return AuthorizeFileRequest(endpoint, fileId, purpose, reference, getFileInfo, null);
+        }
+
+        /// <summary>
+        /// Same as the overload without <paramref name="isAvatar"/>; the extra callback tells whether the file is the photo of a user the request may
+        /// see. It is asked only for a request that carries no valid reference, and only after the embedded and upload time rules; true admits the
+        /// request as <see cref="FileEndpointAdmission.Avatar"/> in <see cref="FileEndpointMode.Audit"/> and <see cref="FileEndpointMode.Enforce"/>
+        /// (the access policy still decides).
+        /// </summary>
+        public FileEndpointDecision AuthorizeFileRequest(string endpoint, string fileId, FilePurpose purpose, string reference, Func<FileEndpointFileInfo> getFileInfo, Func<bool> isAvatar)
+        {
+            var decision = FileEndpointGuard.Authorize(CreateFileRequest(fileId, purpose, reference, getFileInfo, isAvatar));
+            return ApplyFilePolicy(endpoint, fileId, purpose, decision);
+        }
+
+        /// <summary>
+        /// Decides whether the signed-in user may delete the file: a <see cref="FilePurpose.Delete"/> reference that was issued to this user for this
+        /// file is required in every mode except <see cref="FileEndpointMode.Legacy"/> (<see cref="FileEndpointMode.Audit"/> does not serve a delete
+        /// without one). A refusal is logged. The application's <see cref="IFileAccessPolicy"/> is asked as for a read.
+        /// </summary>
+        public FileEndpointDecision AuthorizeFileDeletion(string endpoint, string fileId, string reference)
+        {
+            var decision = FileEndpointGuard.AuthorizeDeletion(CreateFileRequest(fileId, FilePurpose.Delete, reference, null));
+            return ApplyFilePolicy(endpoint, fileId, FilePurpose.Delete, decision);
+        }
+
+        private FileEndpointDecision ApplyFilePolicy(string endpoint, string fileId, FilePurpose purpose, FileEndpointDecision decision)
+        {
             // what a request carries is shortened and stripped of control characters before it is logged
             string Referer()
             {
