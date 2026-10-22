@@ -17,6 +17,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Models;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
@@ -109,6 +110,70 @@ namespace WalkingTec.Mvvm.Core
         [JsonIgnore]
         public bool ByPassBaseValidation { get; set; }
 
+        // true when Entity was read from the store by SetEntityById (and not filled from a request)
+        private bool _entityFromStore;
+
+        /// <summary>
+        /// For a single page application: a short-lived reference (a capability, see <see cref="WTMContext.CreateFileCapability(string, FilePurpose, string)"/>)
+        /// for every file the loaded record refers to (single attachments and <see cref="ISubFile"/> lists), keyed by file id, so that the page can show
+        /// and download the files without sending credentials from an <c>img</c> tag. Only a record that was read from the store has any; null when
+        /// there are none. It is computed when read and has no setter: a request cannot set it.
+        /// </summary>
+        [BindNever]
+        public Dictionary<string, string> FileRefs
+        {
+            get { return BuildFileRefs(); }
+        }
+
+        private Dictionary<string, string> BuildFileRefs()
+        {
+            if (_entityFromStore == false || Entity == null || Wtm == null)
+            {
+                return null;
+            }
+            try
+            {
+                var ids = new List<Guid>();
+                var pros = typeof(TModel).GetAllProperties();
+                foreach (var f in pros.Where(x => x.PropertyType == typeof(FileAttachment)))
+                {
+                    var fname = DC?.GetFKName2<TModel>(f.Name);
+                    var fk = string.IsNullOrEmpty(fname) ? null : typeof(TModel).GetSingleProperty(fname)?.GetValue(Entity);
+                    if (fk != null && Guid.TryParse(fk.ToString(), out var fid))
+                    {
+                        ids.Add(fid);
+                    }
+                    else if (f.GetValue(Entity) is FileAttachment attachment && attachment.ID != Guid.Empty)
+                    {
+                        ids.Add(attachment.ID);
+                    }
+                }
+                foreach (var f in pros.Where(x => typeof(IEnumerable<ISubFile>).IsAssignableFrom(x.PropertyType)))
+                {
+                    if (f.GetValue(Entity) is IEnumerable<ISubFile> subs)
+                    {
+                        ids.AddRange(subs.Where(x => x != null && x.FileId != Guid.Empty).Select(x => x.FileId));
+                    }
+                }
+                Dictionary<string, string> rv = null;
+                foreach (var id in ids.Distinct())
+                {
+                    var capability = Wtm.CreateFileCapability(id, FilePurpose.Read);
+                    if (capability != null)
+                    {
+                        rv ??= new Dictionary<string, string>();
+                        rv[id.ToString()] = capability;
+                    }
+                }
+                return rv;
+            }
+            catch (Exception)
+            {
+                // the references are an addition to the answer, never a reason to fail it
+                return null;
+            }
+        }
+
         //保存读取时Include的内容
         private List<Expression<Func<TModel, object>>> _toInclude { get; set; }
 
@@ -160,6 +225,7 @@ namespace WalkingTec.Mvvm.Core
         public void SetEntityById(object id)
         {
             this.Entity = GetById(id);
+            _entityFromStore = this.Entity != null;
         }
 
         /// <summary>
@@ -169,6 +235,7 @@ namespace WalkingTec.Mvvm.Core
         public void SetEntity(object entity)
         {
             this.Entity = entity as TModel;
+            _entityFromStore = false;
         }
 
         /// <summary>

@@ -110,6 +110,25 @@ namespace WalkingTec.Mvvm.Core.Extensions
             return rv;
         }
 
+        /// <summary>The file a column format points at when it is a download or view button (the first one when there are several); null otherwise.</summary>
+        private static Guid? GetFormatFileId(object info)
+        {
+            if (info is ColumnFormatInfo single)
+            {
+                return IsFileFormat(single) ? single.FileID : null;
+            }
+            if (info is List<ColumnFormatInfo> list)
+            {
+                return list.FirstOrDefault(x => x != null && IsFileFormat(x))?.FileID;
+            }
+            return null;
+        }
+
+        private static bool IsFileFormat(ColumnFormatInfo info)
+        {
+            return (info.FormatType == ColumnFormatTypeEnum.Download || info.FormatType == ColumnFormatTypeEnum.ViewPic) && info.FileID != null && info.FileID != Guid.Empty;
+        }
+
         /// <summary>
         /// 生成单条数据的Json格式
         /// </summary>
@@ -139,6 +158,8 @@ namespace WalkingTec.Mvvm.Core.Extensions
             bool addHiddenID = false;
             bool encodeHtml = (self as BaseVM)?.ConfigInfo?.UIOptions?.EncodeHtmlContent == true;
             Dictionary<string, (string, string)> colorcolumns = new Dictionary<string, (string, string)>();
+            // plain text rows only: a reference per file column, for a page that cannot send credentials from the elements that show a file
+            Dictionary<string, string> filerefs = null;
             foreach (var baseCol in self.GetHeaders())
             {
                 foreach (var col in baseCol.BottomChildren)
@@ -219,6 +240,19 @@ namespace WalkingTec.Mvvm.Core.Extensions
                             if (returnColumnObject == true)
                             {
                                 html = col.GetText(sou, false).ToString();
+                                if (col.HasFormat() && (self as BaseVM)?.Wtm != null)
+                                {
+                                    var fileId = GetFormatFileId(col.GetText(sou));
+                                    if (fileId != null)
+                                    {
+                                        var fileref = (self as BaseVM).Wtm.CreateFileCapability(fileId.Value, FilePurpose.Read, (self as BaseVM).CurrentCS);
+                                        if (string.IsNullOrEmpty(fileref) == false)
+                                        {
+                                            filerefs ??= new Dictionary<string, string>();
+                                            filerefs[col.Field] = fileref;
+                                        }
+                                    }
+                                }
                             }
                             else
                             {
@@ -339,6 +373,13 @@ namespace WalkingTec.Mvvm.Core.Extensions
                 }
             }
             sb.Append($"\"TempIsSelected\":\"{ (isSelected == true ? "1" : "0") }\"");
+            if (filerefs != null)
+            {
+                foreach (var fr in filerefs)
+                {
+                    sb.Append($",\"{fr.Key}__fref\":\"{fr.Value.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"");
+                }
+            }
             foreach (var cc in colorcolumns)
             {
                 if (string.IsNullOrEmpty(cc.Value.Item1) == false)
