@@ -156,7 +156,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 var item = listItems[i];
                 var selected = item.Selected ? " checked" : " ";
                 output.PostContent.AppendHtml($@"
-<input type=""checkbox"" name=""{Field.Name}"" value=""{HtmlAttributeEncoder.Encode(item.Value)}"" title=""{HtmlAttributeEncoder.Encode(item.Text)}"" {selected} {(Disabled ? "disabled" : string.Empty)}/>");
+<input type=""checkbox"" name=""{Field.Name}"" value=""{HtmlAttributeEncoder.Encode(item.Value)}"" title=""{HtmlAttributeEncoder.Encode(HtmlAttributeEncoder.EncodeOnce(item.Text))}"" {selected} {(Disabled ? "disabled" : string.Empty)}/>");
             }
             output.PostElement.AppendHtml($@"
 <input type=""hidden"" name=""_DONOTUSE_{Field.Name}"" value=""1"" />

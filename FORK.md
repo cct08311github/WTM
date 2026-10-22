@@ -439,10 +439,30 @@ demo（`demo/WalkingTec.Mvvm.Vue3Demo`）的 `AccountController.Reg` 是匿名�
 | 輸出 | 一般資料（不含上述五個字元）的 HTML 字串與修改前**逐字相同**：元素、屬性與屬性順序都不變，`form.render()` 看到的 DOM 與修改前一致 |
 | 做法 | 維持字串串接並加上編碼，不改用 DOM API，以免改變屬性順序與輸出字串 |
 
-- **未處理（不屬於選項輸出）**：`combo`、`tree`、`transfer` 的選項以資料物件交給 xm-select、tree、transfer 元件，由元件自行輸出，不在本節範圍；`Download`／`PostForm` 之類組隱藏欄位的程式、頁面片段載入（`LoadPage` 等以 `.html(data)` 放入伺服器回傳的頁面內容，屬設計用途）另案評估
+- **未處理**：`Download`／`PostForm` 之類組隱藏欄位的程式、頁面片段載入（`LoadPage` 等以 `.html(data)` 放入伺服器回傳的頁面內容，屬設計用途）另案評估；`combo`、`tree`、`transfer` 的選項文字見下一小節（#279）
 - **影響範圍**：隨 NuGet 發佈的 `WalkingTec.Mvvm.Mvc`（`framework_layui.js`）；使用 LayUI checkbox／radio 連動與 `LoadComboItems` 的頁面。已快取舊版 `framework_layui.js` 的瀏覽器需要重新載入
 - **下游提醒**：自行用 JavaScript 串接選項 HTML 的頁面，請對 `value`、`title` 與文字內容使用 `ff.EncodeHtml`
 - **測試**：`test/WalkingTec.Mvvm.Core.Test/JsTests/option-encoding.test.js`（node，不需瀏覽器與網路）由 `OptionEncodingTests` 呼叫；找不到 `node` 時該測試標示為 Inconclusive
+
+### 顯示文字的編碼（#279）
+
+checkbox／radio 的選項標題、combobox／tree（xm-select）的選項與節點文字、transfer 的項目標題、treecontainer 的節點文字，最後都由 layui／xm-select 以 HTML 寫入頁面，之前沒有編碼；`wt:panel` 的 `Title` 沒有套用 card、tab、fieldset、按鈕標題已有的編碼；可編輯表格把儲存格的值寫回快取 HTML 時沒有編碼。現在文字在**框架把它交給元件的地方**編碼，一般文字（不含 `& < > " '`）的輸出與修改前逐字相同。
+
+| 元件 | 編碼位置 | 做法 | 一般文字的輸出 |
+|---|---|---|---|
+| checkbox／radio（TagHelper、`ff.ChainChange`、`ff.LoadComboItems`、`LayuiUIService.MakeCheckBox`／`MakeRadio`） | `title` 屬性 | `title` 先被瀏覽器解析成屬性，再被 layui 當 HTML 寫入選項，所以編碼兩層（`HtmlAttributeEncoder.EncodeOnce` 再 `Encode`；JS 為 `ff.EncodeTitle`）；`value` 不變 | 逐字相同 |
+| combobox、tree（xm-select） | 元件的 `template` 函式（選項、單選標籤、多選標籤） | 回傳 `ff.EncodeHtmlOnce(item.name)`，圖示 class 用 `ff.EncodeHtml`；交給元件的資料（`name`、`value`）維持原值，搜尋與 `value` 不受影響。`template` 是每個實例的設定，`linkto`／`item-url` 重新載入資料時同樣生效 | 逐字相同 |
+| transfer | 交給元件的資料與預選值 | 資料經 `ff.encodeTransferItems`（`value` 以 `ff.EncodeHtml` 編碼，`title` 以 `ff.EncodeTitle`），`linkto`／`item-url` 重新載入處對 `ff.getTransferItems` 的結果同樣處理（`ff.getTransferItems` 本身的輸出不變）；預選值（`value:`）以 `ff.EncodeHtml` 編碼，與資料一致 | 逐字相同 |
+| treecontainer | 伺服器輸出的節點資料 | `title` 以 `HtmlAttributeEncoder.EncodeOnce` 編碼（layui tree 把它當 HTML 寫入） | 逐字相同 |
+| `wt:panel` | `Title` | 與 card、tab、fieldset 相同：`UIOptions:EncodeHtmlContent=true` 時編碼，預設（false）原樣輸出 | 兩種設定都逐字相同 |
+| 可編輯表格 | `ff.gridcellchange` | 新值以 `ff.EncodeHtml` 編碼後寫入快取的單引號 `value='…'`，並用函式取代（值內的 `$&` 之類不會被當成取代樣式）；下拉儲存格比對 `<option value>` 時同樣先編碼 | 逐字相同 |
+
+- **`EncodeOnce` 語意**：選項、節點文字先 HTML 解碼一層再編碼（`HtmlAttributeEncoder.EncodeOnce`、`ff.EncodeHtmlOnce`，語意同第 23 節）。經表單存入的文字在資料庫裡已被綁定器編碼（`A&B` 存成 `A&amp;B`），之前因為被當 HTML 寫入而剛好顯示正確，現在仍顯示為 `A&B`，不會變成 `A&amp;B`；輸出永遠是編碼器的結果，不含未編碼的 `< > " '`。取捨同第 23 節：原始資料若本身含看起來像實體的文字（例如字面的 `&amp;`），會顯示為解碼後的字元；JavaScript 版只解碼 `& < > " '` 的實體與數字參考（綁定器寫出的），伺服器版（treecontainer、checkbox／radio 的 TagHelper）另外解碼其他具名實體
+- **選項文字不受 `UIOptions:EncodeHtmlContent` 影響**：選項與節點文字多半來自資料，一律編碼（與 #262 對 `title`、`value` 屬性的處理一致）；只有 `wt:panel` 的標題與其他標題一樣依該設定。需要在選項裡顯示圖示的，請用選項的 `Icon`
+- **transfer 的送出值**：`wt:transfer` 以前用 layui 的 `getData()` 取得右側清單，它不含被右側搜尋框隱藏的項目；現在直接讀右側清單的全部項目（值是還原後的原值），搜尋條件不會讓項目從送出的值中消失。含 `& < > " '` 的 `value` 仍會正確送出；已知限制：layui 對這類項目的內部比對（傳給 `ChangeFunc` 的項目資料、`value` 的選取標記）使用編碼後的值，傳給 `ChangeFunc` 的 `title`、`value` 也是編碼後的文字（一般文字相同）；transfer 的搜尋比對的是編碼後的標題，搜尋詞含這五個字元時比對不到
+- **未修改**：layui 與 xm-select 沒有升級也沒有修改；`wt:grid` 唯讀儲存格的文字依第 23 節
+- **影響範圍**：`WalkingTec.Mvvm.Mvc`（`framework_layui.js`，已快取舊版的瀏覽器需要重新載入）與 `WalkingTec.Mvvm.TagHelpers.LayUI`（LayUI 受保護路徑，第 3 節）；自行用 JavaScript 組選項或呼叫 `layui.transfer`／xm-select 的頁面，請對顯示文字使用 `ff.EncodeHtmlOnce`，對 transfer 的資料使用 `ff.encodeTransferItems`
+- **測試**：Core.Test 的 `DisplayTextEncodingTests`、`OptionEncodingTests`（`option-encoding.test.js`）；E2E 的 `LayUiChoiceTests`、`LayUiTreeTests`、`LayUiLayoutTests`、`LayUiEditableGridTests`（#279 的 `[Ignore]` 已移除）
 
 ## 21. E2E 測試（#270）
 

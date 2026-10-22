@@ -652,7 +652,7 @@ window.ff = {
                     }
                     if (controltype === "transfer") {
                         layui.transfer.reload(targetid, {
-                            data: ff.getTransferItems(data.Data)
+                            data: ff.encodeTransferItems(ff.getTransferItems(data.Data))
                         });
                     }
 
@@ -670,18 +670,18 @@ window.ff = {
                                 var df = [];
                                 df = window[comboid + "defaultvalues"]; 
                                 if (df.indexOf(item.Value) > -1) {
-                                    target.append("<input type='checkbox'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "' checked />");
+                                    target.append("<input type='checkbox'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeTitle(item.Text) + "' checked />");
                                 }
                                 else {
-                                    target.append("<input type='checkbox' name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "'  />");
+                                    target.append("<input type='checkbox' name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeTitle(item.Text) + "'  />");
                                 }
                            }
                             else {
                                 if (item.Selected === true) {
-                                    target.append("<input type='checkbox'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "' checked />");
+                                    target.append("<input type='checkbox'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeTitle(item.Text) + "' checked />");
                                 }
                                 else {
-                                    target.append("<input type='checkbox' name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "'  />");
+                                    target.append("<input type='checkbox' name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeTitle(item.Text) + "'  />");
                                 }
                             }
                         }
@@ -694,18 +694,18 @@ window.ff = {
                                 var df = [];
                                 df = window[comboid + "defaultvalues"];
                                 if (df.indexOf(item.Value) > -1) {
-                                    target.append("<input type='radio'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "' checked />");
+                                    target.append("<input type='radio'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeTitle(item.Text) + "' checked />");
                                 }
                                 else {
-                                    target.append("<input type='radio' name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "'  />");
+                                    target.append("<input type='radio' name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeTitle(item.Text) + "'  />");
                                 }
                            }
                             else {
                                 if (item.Selected === true) {
-                                    target.append("<input type='radio'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "' checked />");
+                                    target.append("<input type='radio'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeTitle(item.Text) + "' checked />");
                                 }
                                 else {
-                                    target.append("<input type='radio' name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "'  />");
+                                    target.append("<input type='radio' name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeTitle(item.Text) + "'  />");
                                 }
                             }
                         }
@@ -742,7 +742,7 @@ window.ff = {
                }
                if (controltype == "transfer") {
                    layui.transfer.reload(controlid, {
-                       data: ff.getTransferItems(data.Data, svals)
+                       data: ff.encodeTransferItems(ff.getTransferItems(data.Data, svals))
                    });
                }
                if (controltype === "combo") {
@@ -761,7 +761,7 @@ window.ff = {
                        if (disabled==true) {
                            dis = " disabled ";
                        }
-                       target.append("<input type='checkbox'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "'" + che + dis+"/>");
+                       target.append("<input type='checkbox'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeTitle(item.Text) + "'" + che + dis+"/>");
 
                    }
                    layui.form.render('checkbox', targetfilter + "div");
@@ -770,10 +770,10 @@ window.ff = {
                    for (i = 0; i < data.Data.length; i++) {
                        item = data.Data[i];
                        if (item.Selected === true || svals.indexOf(item.Value) > -1) {
-                           target.append("<input type='radio'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "' checked />");
+                           target.append("<input type='radio'  name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeTitle(item.Text) + "' checked />");
                        }
                        else {
-                           target.append("<input type='radio' name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeHtml(item.Text) + "'  />");
+                           target.append("<input type='radio' name = '" + ff.EncodeHtml(targetname) + "' value = '" + ff.EncodeHtml(item.Value) + "' title = '" + ff.EncodeTitle(item.Text) + "'  />");
                        }
                    }
                    layui.form.render('radio', targetfilter + "div");
@@ -1152,11 +1152,12 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
     gridcellchange: function (ele, gridid, row, col, celltype) {
         var loaddata = layui.table.cache[gridid];
         if (celltype === 0) {
-            loaddata[row][col] = loaddata[row][col].replace(/value\s*=\s*'.*?'/i, "value='" + ele.value + "'");
+            // the value goes into a single quoted attribute of the cached cell html: encoded, and not read as a replacement pattern
+            loaddata[row][col] = loaddata[row][col].replace(/value\s*=\s*'.*?'/i, function () { return "value='" + ff.EncodeHtml(ele.value) + "'"; });
         }
         if (celltype === 1) {
             loaddata[row][col] = loaddata[row][col].replace(/(<option .*?) selected\s*>/ig, "$1>");
-            var escapedValue = String(ele.value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            var escapedValue = ff.EncodeHtml(ele.value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             var re = new RegExp("(<option\\s*value\\s*=\\s*[\"']" + escapedValue + "[\"'])\\s*>", "ig");
             loaddata[row][col] = loaddata[row][col].replace(re, "$1 selected>");
         }
@@ -1238,6 +1239,31 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
         });
     },
 
+    // Encodes text that is shown as text but written into markup by a widget (an item title, a node text, an option text).
+    // One level of HTML entities (the five characters the framework encodes, and numeric references) is decoded first, so text
+    // that was HTML-encoded when it was saved and plain text both show as the text they stand for; the result is always the
+    // output of EncodeHtml, so it never contains a markup character that is not encoded. Text without & < > " ' is unchanged.
+    EncodeHtmlOnce: function (str) {
+        if (str === null || str === undefined) {
+            return '';
+        }
+        var named = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+        var decoded = String(str).replace(/&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|(amp|lt|gt|quot|apos));/g, function (m, dec, hex, name) {
+            if (name) {
+                return named[name];
+            }
+            var code = dec ? parseInt(dec, 10) : parseInt(hex, 16);
+            return code > 0 && code <= 0x10FFFF && !(code >= 0xD800 && code <= 0xDFFF) ? String.fromCodePoint(code) : m;
+        });
+        return ff.EncodeHtml(decoded);
+    },
+
+    // For the title attribute of an element that layui renders (check box, radio, transfer item): the attribute is parsed once by the
+    // browser and its value is then written to the page as HTML by layui, so the text is encoded for both steps.
+    EncodeTitle: function (str) {
+        return ff.EncodeHtml(ff.EncodeHtmlOnce(str));
+    },
+
     getTreeItems: function (data,svals) {
         var rv = [];
         if (svals == undefined || svals == null) {
@@ -1294,6 +1320,19 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
             item.title = data[i].Text;
             item.disabled = data[i].Disabled;
             //item.checked = data[i].Selected || svals.indexOf(data[i].Value) > -1;
+            rv.push(item);
+        }
+        return rv;
+    },
+
+    // Items given to layui.transfer are written into markup by the widget (value and title as attributes, the title again as HTML),
+    // so the value and the title are encoded here (after ff.getTransferItems, which keeps the text as it is); the values posted by the form are read back from the rendered list (decoded).
+    encodeTransferItems: function (items) {
+        var rv = [];
+        for (var i = 0; i < items.length; i++) {
+            var item = $.extend({}, items[i]);
+            item.value = ff.EncodeHtml(item.value);
+            item.title = ff.EncodeTitle(item.title);
             rv.push(item);
         }
         return rv;

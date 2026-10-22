@@ -30,7 +30,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 var inside = await output.GetChildContentAsync();
                 output.Content.SetHtmlContent($@"
 <div class=""layui-colla-item"">
-    <h2 class=""layui-colla-title"">{Title ?? ""}</h2>
+    <h2 class=""layui-colla-title"">{HtmlText(Title) ?? ""}</h2>
     <div class=""layui-colla-content {(Collapsed == true ? "" : "layui-show")}"">
         {inside.GetContent()}
     </div>
@@ -42,7 +42,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 output.Attributes.SetAttribute("class", "layui-card");
                 var inside = await output.GetChildContentAsync();
                 output.Content.SetHtmlContent($@"
-<div class=""layui-card-header"">{Title ?? ""}</div>
+<div class=""layui-card-header"">{HtmlText(Title) ?? ""}</div>
 <div class=""layui-card-body"">
     {inside.GetContent()}
 </div>

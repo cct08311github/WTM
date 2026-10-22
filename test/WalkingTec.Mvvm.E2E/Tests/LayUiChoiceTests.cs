@@ -72,7 +72,6 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("#279: after layui renders a check box / radio, the item title (attribute value) is inserted as HTML, so markup characters in the text become elements.")]
         public async Task CheckBoxAndRadio_ItemText_IsShownAsText()
         {
             await Expect(CheckBoxItem("Flags", "A&B").Locator("span")).ToHaveTextAsync(LabData.SpecialItem);
@@ -174,7 +173,26 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("#279: xm-select writes the option text into its label as HTML, so markup characters in the text of a combo box item become elements.")]
+        public async Task LoadComboItems_FromUrl_ItemText_IsShownAsTextAndTheValueIsPostedAsIs()
+        {
+            // the items of the three controls come from /Lab/Remote; the second item has markup characters in its text and as its value
+            await Expect(CheckBoxItem("RemoteCheck", "A&B").Locator("span")).ToHaveTextAsync(LabData.SpecialItem);
+            await Expect(RadioItem("RemoteRadio", "A&B").Locator("div")).ToHaveTextAsync(LabData.SpecialItem);
+            await CheckBoxItem("RemoteCheck", "A&B").ClickAsync();
+            await RadioItem("RemoteRadio", "A&B").ClickAsync();
+            await Combo("Remote").ClickAsync();
+            await Expect(Combo("Remote").Locator(".xm-option", new() { HasTextString = "A&B" }).Locator(".xm-option-content")).ToHaveTextAsync(LabData.SpecialItem);
+            await ExpectNoProbeElementsAsync();
+
+            await Lab.SubmitAsync("Save", "/Lab/Save");
+            await AcceptAlertAsync("Saved Choices");
+
+            var form = await Lab.LastPostAsync("Choices");
+            CollectionAssert.AreEqual(new[] { LabData.SpecialItem }, Values(form, "RemoteCheck"));
+            CollectionAssert.AreEqual(new[] { LabData.SpecialItem }, Values(form, "RemoteRadio"));
+        }
+
+        [TestMethod]
         public async Task ComboBox_ItemText_IsShownAsText()
         {
             await Expect(Combo("MultiCombo").Locator(".xm-label-block span")).ToHaveTextAsync(LabData.SpecialItem);
@@ -271,13 +289,29 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("#280: once any item is moved, the transfer posts only the items moved since the page was shown; the values that were preselected are dropped.")]
         public async Task Transfer_PreselectedValues_AreKeptWhenAnotherItemIsMoved()
         {
             var transfer = Body.Locator("#LabFormVM_Picked");
             await transfer.Locator(".layui-transfer-box").First.Locator("li", new() { HasTextString = "First item" }).Locator(".layui-form-checkbox").ClickAsync();
             await transfer.Locator(".layui-transfer-active .layui-btn[data-index='0']").ClickAsync();
             await Expect(transfer.Locator(".layui-transfer-box").Nth(1).Locator("li")).ToHaveCountAsync(2);
+
+            await Lab.SubmitAsync("Save", "/Lab/Save");
+            await AcceptAlertAsync("Saved Choices");
+
+            CollectionAssert.AreEquivalent(new[] { "p1", "p2" }, Values(await Lab.LastPostAsync("Choices"), "Picked"));
+        }
+
+        [TestMethod]
+        public async Task Transfer_ItemsHiddenByTheSearchOfTheRightList_AreStillPosted()
+        {
+            var transfer = Body.Locator("#LabFormVM_Picked");
+            var right = transfer.Locator(".layui-transfer-box").Nth(1);
+            // the filter of the right list hides its item (the preselected one), then another item is moved over
+            await right.Locator(".layui-transfer-search input").PressSequentiallyAsync("zzz");
+            await transfer.Locator(".layui-transfer-box").First.Locator("li", new() { HasTextString = "First item" }).Locator(".layui-form-checkbox").ClickAsync();
+            await transfer.Locator(".layui-transfer-active .layui-btn[data-index='0']").ClickAsync();
+            await Expect(right.Locator("li")).ToHaveCountAsync(2);
 
             await Lab.SubmitAsync("Save", "/Lab/Save");
             await AcceptAlertAsync("Saved Choices");
@@ -294,7 +328,6 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("#279: layui transfer writes the item title as HTML, so markup characters in the text of an item become elements.")]
         public async Task Transfer_ItemText_IsShownAsText()
         {
             var right = Body.Locator("#LabFormVM_Picked .layui-transfer-box").Nth(1);
