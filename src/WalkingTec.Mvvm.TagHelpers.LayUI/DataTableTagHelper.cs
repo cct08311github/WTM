@@ -334,11 +334,32 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
         private string _genericEndpointReference;
 
-        /// <summary>True when the grid offers an export: the export button of the generic endpoint of the framework or an action marked as export.</summary>
+        /// <summary>
+        /// True when the grid offers an export to this user: the export button of the generic endpoint of the framework or an action marked
+        /// as export, at the top level or inside a button group, and not hidden for the user (the same visibility rule as
+        /// <see cref="AddSubButton"/>). An action marked as export counts although it posts to its own controller, because the standard
+        /// export flow of the grid relies on it.
+        /// </summary>
         private bool HasExportAction()
         {
+            var vm = Vm.Model as BaseVM;
             var actions = ListVM?.GetGridActions();
-            return actions != null && actions.Any(x => x.IsExport || (string.IsNullOrEmpty(x.Area) && x.ControllerName == "_Framework" && x.ActionName == "GetExportExcel"));
+            return actions != null && actions.Any(x => OffersExport(x, vm));
+        }
+
+        private static bool OffersExport(GridAction item, BaseVM vm)
+        {
+            var visible = string.IsNullOrEmpty(item.Url) || vm?.Wtm?.IsUrlPublic(item.Url) == true || vm?.Wtm?.IsAccessable(item.Url) == true
+                || item.ParameterType == GridActionParameterTypesEnum.AddRow || item.ParameterType == GridActionParameterTypesEnum.RemoveRow;
+            if (visible == false || (item.ShowInRow == false && item.HideOnToolBar))
+            {
+                return false;
+            }
+            if (item.IsExport || (string.IsNullOrEmpty(item.Area) && item.ControllerName == "_Framework" && item.ActionName == "GetExportExcel"))
+            {
+                return true;
+            }
+            return item.ActionName == "ActionsGroup" && item.SubActions != null && item.SubActions.Any(x => OffersExport(x, vm));
         }
 
         public override void Process(TagHelperContext context, TagHelperOutput output)
