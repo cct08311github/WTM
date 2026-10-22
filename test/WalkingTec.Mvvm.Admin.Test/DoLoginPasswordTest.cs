@@ -27,6 +27,8 @@ namespace WalkingTec.Mvvm.Admin.Test
         private SqliteConnection _keepAlive;
         // true: EF InMemory (no set based updates, so the rehash takes its fallback path); LoadBasicInfoAsync cannot run there, see TryLogin
         private bool _memory;
+        // the token service of the context created last: counts the tokens that were issued
+        private Mock<ITokenService> _tokens;
 
         private string SqliteCs => $"Data Source=file:{_seed}?mode=memory&cache=shared";
 
@@ -116,6 +118,7 @@ namespace WalkingTec.Mvvm.Admin.Test
             var tokenService = new Mock<ITokenService>();
             tokenService.Setup(x => x.IssueTokenAsync(It.IsAny<LoginUserInfo>())).Returns(Task.FromResult(new Token { AccessToken = "token" }));
             Mock.Get(wtm.HttpContext.RequestServices).Setup(x => x.GetService(typeof(ITokenService))).Returns(tokenService.Object);
+            _tokens = tokenService;
             if (hasher != null)
             {
                 wtm.PasswordHasher = hasher;
@@ -194,17 +197,91 @@ namespace WalkingTec.Mvvm.Admin.Test
             Assert.IsNull(CreateContext().DoLogin("admin", "000000", null));
         }
 
+        private void AssertNoTokenIssued() => _tokens.Verify(x => x.IssueTokenAsync(It.IsAny<LoginUserInfo>()), Times.Never);
+
         [TestMethod]
-        public void AuthenticatedRequestSkipsPasswordCheck()
+        public void AuthenticatedRequest_StillVerifiesTheSuppliedCredentials()
         {
             AddUser("authuser", Utils.GetMD5String("000000"));
-            var user = CreateContext(authenticated: true).DoLogin("ignored", null, null);
+
+            // the caller is already signed in as authuser, but the credentials of the request are the ones that count
+            var wrong = CreateContext(authenticated: true);
+            Assert.IsNull(wrong.DoLogin("authuser", "wrong", null));
+            Assert.IsNull(wrong.DoLogin("authuser", "", null));
+            Assert.IsNull(wrong.DoLogin("authuser", null, null));
+            Assert.IsNull(wrong.DoLogin("ignored", null, null), "an account the request names is looked up, not the one of the sign-in");
+            AssertNoTokenIssued();
+
+            var right = CreateContext(authenticated: true);
+            var user = right.DoLogin("authuser", "000000", null);
             Assert.IsNotNull(user);
             Assert.AreEqual("authuser", user.ITCode);
+            Assert.AreEqual("token", user.RemoteToken);
+        }
+
+        [TestMethod]
+        public void AuthenticatedRequest_CannotGetTheTokenOfAnotherAccountWithoutItsPassword()
+        {
+            AddUser("authuser", Utils.GetMD5String("000000"));
+            AddUser("admin", Utils.GetMD5String("secret"));
+
+            var wtm = CreateContext(authenticated: true);
+            Assert.IsNull(wtm.DoLogin("admin", null, null));
+            Assert.IsNull(wtm.DoLogin("admin", "000000", null), "the password of the signed-in account is not the one of the other account");
+            AssertNoTokenIssued();
+
+            var user = wtm.DoLogin("admin", "secret", null);
+            Assert.IsNotNull(user, "a caller that signs in again with the credentials of another account gets that account, as an anonymous caller would");
+            Assert.AreEqual("admin", user.ITCode);
+        }
+
+        [TestMethod]
+        public void AuthenticatedRequest_UsesTheSameTenantRulesAsAnAnonymousOne()
+        {
+            AddUser("admin", Utils.GetMD5String("main"));
+            AddUser("admin", Utils.GetMD5String("other"), tenant: "t1");
+            var wtm = CreateContext(authenticated: true);
+            Mock.Get(wtm.HttpContext).Setup(x => x.User).Returns(new ClaimsPrincipal(new ClaimsIdentity(new[]
+            {
+                new Claim(AuthConstants.JwtClaimTypes.Subject, "admin"), new Claim(AuthConstants.JwtClaimTypes.TenantCode, "t1")
+            }, "test")));
+            wtm.GlobaInfo.SetTenantGetFunc(() => new List<FrameworkTenant> { new FrameworkTenant { TCode = "t1", TName = "t1", TDb = SqliteCs, TDbType = DBTypeEnum.SQLite, DbContext = "DataContext" } });
+
+            // no tenant in the request: the tenant of the sign-in is not borrowed for the check
+            Assert.IsNull(wtm.DoLogin("admin", "other", null));
+            Assert.IsNotNull(wtm.DoLogin("admin", "main", null));
+            _tokens.Verify(x => x.IssueTokenAsync(It.IsAny<LoginUserInfo>()), Times.Once);
+        }
+
+        [TestMethod]
+        public void ReloadUser_ForASignedInRequest_LoadsTheUserOfTheSignInWithoutAPassword()
+        {
+            AddUser("authuser", Utils.GetMD5String("000000"));
+            var wtm = CreateContext(authenticated: true);
+
+            var user = wtm.ReloadUser("ignored");
+
+            Assert.IsNotNull(user);
+            Assert.AreEqual("authuser", user.ITCode, "the account of the (verified) sign-in is reloaded");
+            Assert.AreEqual("token", user.RemoteToken, "the reloaded user keeps carrying a token for calls the application makes on its behalf");
+
             AddUser("authinvalid", "x", isValid: false);
             var invalid = CreateContext(authenticated: true);
             Mock.Get(invalid.HttpContext).Setup(x => x.User).Returns(new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim(AuthConstants.JwtClaimTypes.Subject, "authinvalid") }, "test")));
-            Assert.IsNull(invalid.DoLogin("ignored", null, null), "the account must still exist and be valid");
+            Assert.IsNull(invalid.ReloadUser("ignored"), "the account must still exist and be valid");
+        }
+
+        [TestMethod]
+        public void LoginUserInfo_OfASignedInRequestWithoutCache_IsLoadedFromTheDatabase()
+        {
+            AddUser("authuser", Utils.GetMD5String("000000"));
+            var wtm = CreateContext(authenticated: true);
+            wtm.LoginUserInfo = null;
+
+            var user = wtm.LoginUserInfo;
+
+            Assert.IsNotNull(user);
+            Assert.AreEqual("authuser", user.ITCode);
         }
 
         [TestMethod]
@@ -501,9 +578,9 @@ namespace WalkingTec.Mvvm.Admin.Test
             AddUser("admin", md5);
             AddUser("legacy", "");
 
-            // (a) authenticated request, e.g. after external sign-in: no password is involved
+            // (a) authenticated request, e.g. after external sign-in: the user is reloaded from the sign-in, no password is involved
             var authenticated = CreateContext(authenticated: true, hasher: hasher);
-            var user = authenticated.DoLogin("ignored", null, null);
+            var user = authenticated.ReloadUser("ignored");
             Assert.IsNotNull(user);
             Assert.AreEqual("authuser", user.ITCode);
             Assert.AreEqual(md5, StoredPassword("authuser"));

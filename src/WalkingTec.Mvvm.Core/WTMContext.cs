@@ -321,7 +321,9 @@ namespace WalkingTec.Mvvm.Core
             {
                 return null;
             }
-            var user = DoLogin(itcode, null, null);
+            // a request that is signed in (cookie or token, already verified by the authentication middleware) is reloaded from that sign-in;
+            // any other request goes through the sign-in check, which verifies the (here empty) password
+            var user = HttpContext?.User?.Identity?.IsAuthenticated == true ? LoadSignedInUser(itcode) : DoLogin(itcode, null, null);
             return user;
         }
 
@@ -399,20 +401,41 @@ namespace WalkingTec.Mvvm.Core
             this._serviceProvider = sp;
         }
 
+        /// <summary>
+        /// Signs a user in: the account and password of the request are always verified (for the tenant of the request or the given one) before a user
+        /// is returned and a token is issued, whether or not the caller is already signed in. A signed-in caller that sends credentials is
+        /// treated like any other: it gets the user of the credentials it sent, or null when they do not match.
+        /// To reload the signed-in user without credentials see <see cref="ReloadUser"/>.
+        /// </summary>
         public LoginUserInfo DoLogin(string username, string password, string tenant)
+        {
+            return DoLoginCore(username, password, tenant, useSignedInIdentity: false);
+        }
+
+        /// <summary>
+        /// Loads the user of the current (already verified) sign-in: the account, tenant and remote token come from the claims of the signed-in
+        /// request, not from credentials, so no password is involved. Used to rebuild the user after its cache entry is gone. It does not
+        /// sign anybody in: the identity is the one the authentication middleware has verified for this request.
+        /// </summary>
+        private LoginUserInfo LoadSignedInUser(string itcode)
+        {
+            return DoLoginCore(itcode, null, null, useSignedInIdentity: true);
+        }
+
+        private LoginUserInfo DoLoginCore(string username, string password, string tenant, bool useSignedInIdentity)
         {
             if(string.IsNullOrEmpty(tenant))
             {
                 tenant = DC.TenantCode;               
             }
-            if (tenant == null && HttpContext.User.Identity.IsAuthenticated)
+            if (tenant == null && useSignedInIdentity)
             {
                 tenant = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault() ?? tenant;
             }
             if (ConfigInfo.HasMainHost && string.IsNullOrEmpty(tenant) == true)
             {
-                var remoteToken = _loginUserInfo?.RemoteToken ?? HttpContext?.Request.Query?.Where(x => x.Key == "_remotetoken").Select(x => x.Value.First()).FirstOrDefault();
-                if (HttpContext.User.Identity.IsAuthenticated)
+                var remoteToken = (useSignedInIdentity ? _loginUserInfo?.RemoteToken : null) ?? HttpContext?.Request.Query?.Where(x => x.Key == "_remotetoken").Select(x => x.Value.First()).FirstOrDefault();
+                if (useSignedInIdentity)
                 {
                     remoteToken = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.RToken).Select(x => x.Value).FirstOrDefault();
                 }
@@ -462,7 +485,10 @@ namespace WalkingTec.Mvvm.Core
             else
             {
                 bool exist = false;
-                username = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault() ?? username;
+                if (useSignedInIdentity)
+                {
+                    username = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault() ?? username;
+                }
                 var ct = GlobaInfo.AllTenant.Where(x => x.TCode == tenant).FirstOrDefault();
                 //如果找不到指定的tenant，说明租户不存在，直接返回null
                 if(ct == null && string.IsNullOrEmpty(tenant) == false)
@@ -473,7 +499,7 @@ namespace WalkingTec.Mvvm.Core
                 {
                     _dc = ct.CreateDC(this);
                 }
-                if (HttpContext.User.Identity.IsAuthenticated)
+                if (useSignedInIdentity)
                 {
                     exist = BaseUserQuery.IgnoreQueryFilters().Any(x => x.ITCode == username && x.TenantCode == tenant && x.IsValid==true);
                 }

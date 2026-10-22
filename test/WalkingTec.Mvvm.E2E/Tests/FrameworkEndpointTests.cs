@@ -253,6 +253,25 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
+        public async Task Login_WhenAlreadySignedIn_StillVerifiesThePassword()
+        {
+            // the session of the test is the signed-in administrator: posting the login form again must check the credentials it carries
+            var wrong = await Api.PostAsync("/Login/Login", new APIRequestContextOptions
+            {
+                Form = Api.CreateFormData().Set("ITCode", Site.AdminAccount).Set("Password", "not-the-password"),
+                MaxRedirects = 0
+            });
+            Assert.AreEqual(200, wrong.Status, "The login page is shown again.");
+
+            var right = await Api.PostAsync("/Login/Login", new APIRequestContextOptions
+            {
+                Form = Api.CreateFormData().Set("ITCode", Site.AdminAccount).Set("Password", Site.AdminPassword),
+                MaxRedirects = 0
+            });
+            Assert.AreEqual(302, right.Status);
+        }
+
+        [TestMethod]
         public async Task SetTenant_Anonymous_IsSentToTheSignInPage_AndNothingIsSwitched()
         {
             await using var anonymous = await AnonymousAsync();
