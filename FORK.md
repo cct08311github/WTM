@@ -711,11 +711,11 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 | 項目 | 行為 |
 |---|---|
 | 渲染 view model 的頁面 | LayUI TagHelper 在 `_DONOT_USE_VMNAME` 旁寫入 `_DONOT_USE_VMREF`：`wt:grid`（隨 `where` 一起送出，匯出連結也帶上）、`wt:selector`（ffilter）、`wt:downloadTemplateButton`（連結）。範本產生的頁面不需修改 |
-| 參考的內容 | 以 ASP.NET Core Data Protection 保護的不透明字串，綁定：view model、目的（列表、選擇器、匯出、範本、更新）、使用者與租戶、連線 key、頁面的選單權限 url、到期時間。表格的參考包含「列表」；只有表格有匯出按鈕（`_Framework/GetExportExcel` 或標記為匯出的動作）且不在 Selector 彈窗內時才加上「匯出」。Selector 的參考只有「選擇器」，彈窗內的表格只有「列表」 |
-| 端點 | 先驗證參考（簽章、到期、使用者與租戶、view model、目的、連線 key、使用者目前仍能開啟該頁面）才建立 view model；沒有有效參考的請求被拒絕（形式同 `PrivilegeFilter`：帶 `layuisearch` 標頭回 `{"Code":403}`，其他回「沒有權限」文字） |
+| 參考的內容 | 以 ASP.NET Core Data Protection 保護的不透明字串，綁定：view model、目的（列表、選擇器、匯出、範本、更新）、使用者與租戶、連線 key、頁面的選單權限 url、到期時間。表格的參考包含「列表」；只有表格對該使用者有匯出按鈕（`_Framework/GetExportExcel` 或標記為匯出的動作，含按鈕組內的按鈕，且按鈕沒有因權限被隱藏）且不在 Selector 彈窗內時才加上「匯出」；標記為匯出的動作雖然送到自己的 controller 也算，因為表格的標準匯出流程依賴它。使用本地資料的表格（`use-local-data`）不寫參考。Selector 的參考只有「選擇器」，彈窗內的表格只有「列表」 |
+| 端點 | 先驗證參考（簽章、到期、使用者與租戶、view model、目的、連線 key、使用者目前仍能開啟該頁面）才建立 view model；沒有有效參考的請求被拒絕（一律回 HTTP 200：帶 `layuisearch` 標頭回 `{"Code":403}`，其他回「沒有權限」文字，包括帶 `Authorization` 標頭的呼叫者；與 `PrivilegeFilter` 對 API 呼叫者回 401/403 狀態碼的做法不同） |
 | 語意 | 與功能頁相同：頁面本身已通過 `PrivilegeFilter`（選單權限、`[Public]`、`[AllRights]`、管理員角色、租戶）；`[AllRights]` 頁面上的 view model，任何已登入者可用；選單權限的頁面，使用者失去權限後參考立即失效 |
 | `Selector` | 維持 `[Public]`，但必須帶有效參考；匿名者只能使用公開頁面寫出的參考。Selector 內的表格沿用原頁面的權限 |
-| 連線 key | `GetPagingData`、`GetExportExcel`、`Selector`：請求的 `_DONOT_USE_CS`／`_DONOT_USE_CURRENTCS` 必須與頁面的連線 key 相同（比較時去掉讀取副本的後綴：`x_1` 與 `x` 視為同一個連線，因為讀取時副本是隨機挑的）；`GetEmptyData`、`UpdateModelProperty`、`GetExcelTemplate` 沒有連線參數，改為在參考綁定的連線上執行：該 key 是頁面產生時由伺服器決定、並受簽章保護的，所以使用 `[FixConnection]` 或非預設資料庫的頁面（包括匯入頁的範本按鈕）照常運作。參考綁定的 key 必須仍是設定中的連線，否則拒絕；參考的 key 為空（頁面使用預設連線）時沿用伺服器為該請求選的連線；寫入（`UpdateModelProperty`）一律用基底連線，不用讀取副本；不在 `Connections` 內的請求 key 一律拒絕 |
+| 連線 key | `GetPagingData`、`GetExportExcel`、`Selector`：請求的 `_DONOT_USE_CS`／`_DONOT_USE_CURRENTCS` 必須與頁面的連線 key 相同，並以設定中該連線的拼法執行；`ExemptViewModels` 內的 view model 沒有參考可比對，忽略請求帶的 key，使用伺服器為該請求選的連線（設定 `AllowRequestConnectionKey=true` 時才採用請求的 key；`Legacy` 模式維持原行為）（比較時去掉讀取副本的後綴：`x_1` 與 `x` 視為同一個連線，因為讀取時副本是隨機挑的）；`GetEmptyData`、`UpdateModelProperty`、`GetExcelTemplate` 沒有連線參數，改為在參考綁定的連線上執行：該 key 是頁面產生時由伺服器決定、並受簽章保護的，所以使用 `[FixConnection]` 或非預設資料庫的頁面（包括匯入頁的範本按鈕）照常運作。參考綁定的 key 必須仍是設定中的連線，否則拒絕；參考的 key 為空（頁面使用預設連線）時沿用伺服器為該請求選的連線；寫入（`UpdateModelProperty`）一律用基底連線，不用讀取副本；不在 `Connections` 內的請求 key 一律拒絕 |
 | 連線由伺服器決定 | 動作的連線由 `[FixConnection]`、連線函式、預設連線決定。查詢字串的 `DONOTUSECSName` 預設不再影響連線（參考記錄的連線 key 因此就是伺服器為頁面選定的連線）。框架內沒有使用這個參數的程式（`PagedListExtension` 中相關的一行早已註解） |
 | `RemoveUserCacheByAccount`／`ByRole`／`ByGroup` | 要求呼叫者具有管理員角色（角色代碼 `001`，與 `_WorkflowController`、資料權限範圍使用的判斷相同）；其他已登入者得到「沒有權限」的回應（帶 `Authorization` 標頭者得到 403）。框架與 `_Admin` 範本清除快取是在伺服器端直接呼叫 `WTMContext.RemoveUserCache*`，不經過這些 HTTP 端點 |
 | `UpdateModelProperty` | 需要 `Update` 目的的參考，且 `field` 必須在參考列出的可編輯屬性內；在參考綁定連線的基底連線上執行 |
@@ -728,15 +728,21 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 | `Mode` | `Enforce` | `Legacy`：恢復原本的行為（不檢查），啟動時輸出 Warning。僅供升級期間暫用 |
 | `ExemptViewModels` | 空 | 在 `Enforce` 下，列出的 view model（完整型別名稱，結尾 `*` 為前綴）可由已登入者不帶參考使用，只限這些 view model。不含 `Update`、不含匿名者。啟動時輸出 Warning |
 | `ReferenceLifetimeMinutes` | `480` | 參考的有效分鐘數 |
-| `AllowRequestConnectionKey` | `false` | `true`：允許查詢字串 `DONOTUSECSName` 為沒有 `[FixConnection]`、連線函式也沒有回傳的動作指定連線（舊行為）。預設由伺服器決定連線 |
+| `AllowRequestConnectionKey` | `false` | `true`：允許查詢字串 `DONOTUSECSName` 為沒有 `[FixConnection]`、連線函式也沒有回傳的動作指定連線（舊行為），也允許 `ExemptViewModels` 內的 view model 採用請求帶的連線 key。預設由伺服器決定連線；啟用時啟動輸出 Warning |
 
 - **誰會受影響**：(1) 「自行用 script 呼叫上述端點」的頁面（沒有 TagHelper 會呼叫 `GetEmptyData`、`UpdateModelProperty`）；(2) 自己的頁面在查詢字串帶 `DONOTUSECSName` 選擇連線的網站（需設定 `AllowRequestConnectionKey=true`，或改用 `[FixConnection]`／連線函式）；(3) 非管理員角色以 HTTP 呼叫 `RemoveUserCacheBy*` 的網站（改由管理員帳號呼叫，或在伺服器端直接呼叫 `WTMContext.RemoveUserCache*`）。使用 LayUI TagHelper 與範本產生頁面的網站不需任何修改
 - **升級方式**：
   1. 一般 LayUI 網站：不需動作。升級當下已經打開的頁面要重新整理一次；頁面開著超過 `ReferenceLifetimeMinutes` 也要重新整理（表格會顯示沒有權限）
   2. 自行呼叫端點的頁面：在伺服器端用 `Wtm.CreateGenericEndpointReference(typeof(MyListVM), GenericEndpointPurpose.List)`（`Update` 另需 `editableFields`）取得參考，隨 `_DONOT_USE_VMNAME` 以 `_DONOT_USE_VMREF` 送出；或把該 view model 列入 `GenericEndpoints:ExemptViewModels`
-  3. 多實例部署需要共用 Data Protection 金鑰（cookie 驗證本來就需要）
+  3. Data Protection 金鑰必須持久化，多實例部署還要共用（cookie 驗證本來就需要）。金鑰是暫時的（容器重啟、IIS 沒有保存金鑰環）時，重啟後已經打開的頁面需要重新整理
   4. 由範本產生、已複製到下游專案的 `_Admin` controller 不在這一節的範圍；範本更新後，下游的複本可能需要套用相同的修改
   5. 有用到查詢字串 `DONOTUSECSName` 的頁面：在 `appsettings` 設定 `GenericEndpoints:AllowRequestConnectionKey=true`（或改成 `[FixConnection]`／連線函式）
 - **回滾方式**：設定 `GenericEndpoints:Mode` 為 `Legacy`（連線與 `RemoveUserCacheBy*` 的變更另外用 `AllowRequestConnectionKey` 與退回版本處理），或退回前一個 fork 版本（`Core`、`Mvc`、`TagHelpers.LayUI` 一起退回）
+- **已知限制**：
+  1. `Update` 的參考由頁面作者透過 `CreateGenericEndpointReference(..., editableFields)` 簽發，可編輯屬性的清單只會和作者列的一樣窄
+  2. `ExemptViewModels` 支援前綴（結尾 `*`），太短的前綴會讓底下所有 view model 都免參考；建議只寫完整型別名稱
+  3. 參考綁定帳號與租戶，不綁定登入工作階段；在到期（預設 480 分鐘）或頁面權限被移除之前一直有效
+  4. 檔案端點（`GetFile` 等）的連線參數，以及 `UpdateModelProperty` 的紀錄層級資料權限，不在這次變更內，另行處理
+  5. 使用本地資料的表格（`use-local-data`）不寫參考，所以它的 `_Framework/GetExportExcel` 匯出按鈕不會被通過
 - **不受影響**：`DataPrivilege`／`DPWhere`、匯出 API、`CreateVM`、`BaseImportVM`、`EncodeHtmlContent`、沒有 `HttpContext` 的 `WTMContext`；各功能頁自己的 `Search`、`ExportExcel` 等 action 不經過這些端點
 - **測試**：Core.Test 的 `GenericEndpointGuardTest`、`GenericEndpointReferenceTagHelperTests`、`RequestConnectionKeyTest`、`FrameworkCacheEndpointAdministratorTest`；E2E 的 `GenericEndpointAuthorizationTests`（用 `ReportController` 這個只有管理員角色能開的頁面，以匿名／無角色／受限角色／管理員的真實請求驗證；另有連線由伺服器決定、Selector 彈窗的參考不能匯出、受限角色與無角色的表格與 Selector 照常可用；`OtherDbController` 是帶 `[FixConnection]` 的測試頁，測試主機另設第二個連線 `other` 與它的讀取副本 `other_1`，驗證範本下載、`GetEmptyData`、`UpdateModelProperty` 在固定連線上運作且寫入不進副本，以及未設定的連線或被改動的參考被拒絕）；`RemoveUserCacheBy*` 的權限矩陣列；權限矩陣的六個端點期望值改為「沒有參考即拒絕」（`exempt` 說明見表格）
