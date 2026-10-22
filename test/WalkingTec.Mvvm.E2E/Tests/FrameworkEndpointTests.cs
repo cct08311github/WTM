@@ -90,7 +90,6 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("#284: UpdateModelProperty answers Success but the value is not saved: the view model loads the record without change tracking and the controller saves its own context.")]
         public async Task UpdateModelProperty_ChangesOneFieldOfARecord()
         {
             var gadget = await CreateGadgetAsync("Q");
@@ -102,6 +101,52 @@ namespace WalkingTec.Mvvm.E2E.Tests
             });
 
             Assert.AreEqual("Q-2", await FindGadgetAsync(gadget.Name, "Code"));
+        }
+
+        private async Task<IAPIResponse> UpdateGadgetAsync(string id, string field, string value, string reference)
+        {
+            return await Api.PostAsync("/_Framework/UpdateModelProperty", new APIRequestContextOptions
+            {
+                Form = Api.CreateFormData().Set("_DONOT_USE_VMNAME", GadgetVm).Set("id", id).Set("field", field).Set("value", value).Set("_DONOT_USE_VMREF", reference)
+            });
+        }
+
+        [TestMethod]
+        public async Task UpdateModelProperty_AnswersAnErrorAndKeepsTheRecord_WhenTheValueIsNotAccepted()
+        {
+            var gadget = await CreateGadgetAsync("R");
+            var reference = await ReferenceAsync(GadgetVm, "Update", "Code,Name");
+
+            var tooLong = await UpdateGadgetAsync(gadget.Id, "Code", new string('x', 21), reference);
+            var missing = await UpdateGadgetAsync(gadget.Id, "Name", "", reference);
+
+            Assert.AreEqual(400, tooLong.Status, "A value the property does not accept is not answered with Success.");
+            Assert.AreEqual(400, missing.Status, "A required value cannot be cleared.");
+            Assert.AreEqual("R-1", await FindGadgetAsync(gadget.Name, "Code"));
+        }
+
+        [TestMethod]
+        public async Task UpdateModelProperty_AnswersAnError_ForARecordThatDoesNotExist()
+        {
+            var reference = await ReferenceAsync(GadgetVm, "Update", "Code");
+
+            var response = await UpdateGadgetAsync(Guid.NewGuid().ToString(), "Code", "S-2", reference);
+
+            Assert.AreEqual(400, response.Status);
+        }
+
+        [TestMethod]
+        public async Task UpdateModelProperty_AnswersAnError_ForAFieldThatCannotBeChanged()
+        {
+            var gadget = await CreateGadgetAsync("T");
+            var reference = await ReferenceAsync(GadgetVm, "Update", "ID,Nothing");
+
+            var key = await UpdateGadgetAsync(gadget.Id, "ID", Guid.NewGuid().ToString(), reference);
+            var unknown = await UpdateGadgetAsync(gadget.Id, "Nothing", "x", reference);
+
+            Assert.AreEqual(400, key.Status, "The key of a record is not changed.");
+            Assert.AreEqual(400, unknown.Status, "A field the record does not have is not answered with Success.");
+            Assert.AreEqual(gadget.Id, await FindGadgetAsync(gadget.Name, "ID"));
         }
 
         private async Task<string> FindGadgetAsync(string name, string column)

@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -302,7 +305,41 @@ namespace WalkingTec.Mvvm.Mvc
                 value = string.Empty;
             }
             var vm = Wtm.CreateVM(_DONOT_USE_VMNAME, id, null, true) as IBaseCRUDVM<TopBasePoco>;
-            vm.Entity.SetPropertyValue(field, value);
+            // the view model loads the record without change tracking: set the value on the loaded record and mark only that column (and the
+            // update stamp) as modified, the way an edit of single fields is saved (BaseCRUDVM.DoEdit), so that the save below writes it
+            var entity = vm.Entity;
+            var property = entity.GetType().GetSingleProperty(field);
+            if (property == null || property.CanWrite == false || property.Name == "ID" || property.PropertyType.IsList()
+                || property.GetCustomAttribute<NotMappedAttribute>() != null || property.GetCustomAttribute<CanNotEditAttribute>() != null)
+            {
+                return BadRequest((string)MvcProgram._localizer["Sys.EditFailed"]);
+            }
+            try
+            {
+                property.SetMemberValue(entity, value.Replace("\\", "/"));
+            }
+            catch
+            {
+                return BadRequest((string)MvcProgram._localizer["Sys.EditFailed"]);
+            }
+            var invalid = new List<ValidationResult>();
+            if (Validator.TryValidateProperty(property.GetValue(entity), new ValidationContext(entity) { MemberName = property.Name }, invalid) == false)
+            {
+                return BadRequest(invalid[0].ErrorMessage);
+            }
+            vm.Validate();
+            if (vm.MSD.IsValid == false)
+            {
+                return BadRequest(vm.MSD.GetFirstError());
+            }
+            DC.UpdateProperty((dynamic)entity, property.Name);
+            if (entity is IBasePoco stamped)
+            {
+                stamped.UpdateTime = DateTime.Now;
+                stamped.UpdateBy = Wtm.LoginUserInfo?.ITCode;
+                DC.UpdateProperty((dynamic)entity, nameof(IBasePoco.UpdateTime));
+                DC.UpdateProperty((dynamic)entity, nameof(IBasePoco.UpdateBy));
+            }
             DC.SaveChanges();
             return JsonMore("Success");
         }
