@@ -364,6 +364,21 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
+        public async Task UEditorUpload_AnswersWithValidJson_ForAFileNameWithQuotesAndBackslashes()
+        {
+            var response = await Api.PostAsync("/_Framework/UploadForLayUIUEditor", new APIRequestContextOptions
+            {
+                Multipart = Api.CreateFormData().Set("upfile", File("we'ird,{x}:1.png", Png, "image/png"))
+            });
+
+            Assert.AreEqual(200, response.Status);
+            var data = JsonDocument.Parse(await response.TextAsync()).RootElement.GetProperty("Data");
+            StringAssert.Contains(data.GetProperty("FileName").GetString(), "ird");
+            Assert.AreEqual(JsonValueKind.String, data.GetProperty("src").ValueKind);
+            Assert.AreEqual(2, data.EnumerateObject().Count(), "No property was added by the file name.");
+        }
+
+        [TestMethod]
         public async Task UEditorTag_Renders_AContainerAndAnEscapedInitialContent()
         {
             // the editor scripts are not part of the shared static files, so only the markup the tag helper writes is checked

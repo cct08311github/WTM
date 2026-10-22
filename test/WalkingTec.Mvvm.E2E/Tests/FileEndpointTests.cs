@@ -341,6 +341,22 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
+        public async Task ViewFile_Width_IsWrittenAsANumberOnly()
+        {
+            var id = (await UploadAsync("w.png", "image bytes")).GetProperty("Id").GetString();
+            var reference = await FileRefAsync(id);
+
+            var numeric = await (await Api.GetAsync($"/_Framework/ViewFile/{id}?width=120&_DONOT_USE_FREF={reference}")).TextAsync();
+            var text = await (await Api.GetAsync($"/_Framework/ViewFile/{id}?width=100%25;color:red&_DONOT_USE_FREF={reference}")).TextAsync();
+            var none = await (await Api.GetAsync($"/_Framework/ViewFile/{id}?_DONOT_USE_FREF={reference}")).TextAsync();
+
+            StringAssert.Contains(numeric, "style='flex:auto;width:120px'");
+            StringAssert.Contains(text, "style='flex:auto;'", "A width that is not a number is left out.");
+            Assert.IsFalse(text.Contains("color"));
+            StringAssert.Contains(none, "style='flex:auto;'");
+        }
+
+        [TestMethod]
         public async Task ViewFile_WritesALinkThatCarriesItsOwnReference()
         {
             var id = (await UploadAsync("pic.png", "image bytes")).GetProperty("Id").GetString();

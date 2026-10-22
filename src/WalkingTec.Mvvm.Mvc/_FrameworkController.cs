@@ -678,7 +678,8 @@ namespace WalkingTec.Mvvm.Mvc
             }
             // the file is shown through GetFile: the link the page gets carries a reference of its own
             var src = HtmlAttributeEncoder.Encode(Wtm.GetFileUrl(file.GetID(), FilePurpose.View, connection.Key));
-            var widthStyle = string.IsNullOrEmpty(width) ? "" : $"width:{HtmlAttributeEncoder.Encode(width)}px";
+            // only a number is written; anything else is left out, as if no width had been given
+            var widthStyle = int.TryParse(width, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var widthPixels) && widthPixels > 0 ? $"width:{widthPixels}px" : "";
             string html = string.Empty;
             var ext = file.FileExt.ToLower();
             if (ext == "pdf")
@@ -828,6 +829,16 @@ namespace WalkingTec.Mvvm.Mvc
             return rv;
         }
 
+        /// <summary>
+        /// The answer of a successful UEditor upload. Built by the serializer, so a file name with quotes or backslashes cannot change the structure
+        /// of the answer; ordinary values give the same members as before.
+        /// </summary>
+        public static string BuildUEditorSuccess(string url, string fileName)
+        {
+            return JsonSerializer.Serialize(new { Code = 200, Msg = "success", Data = new { src = url, FileName = fileName } },
+                new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        }
+
         [AllRights]
         [HttpPost]
         [ActionDescription("UploadForLayUIUEditor")]
@@ -859,7 +870,7 @@ namespace WalkingTec.Mvvm.Mvc
             if (file != null)
             {
                 string url = EmbeddedFileUrl(file, connection.Key);
-                return Content($"{{\"Code\": 200 , \"Msg\": \"success\", \"Data\": {{\"src\": \"{url}\",\"FileName\":\"{file.FileName}\"}}}}");
+                return Content(BuildUEditorSuccess(url, file.FileName));
 
             }
             else
