@@ -334,6 +334,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
         private string _genericEndpointReference;
 
+        /// <summary>True when the grid offers an export: the export button of the generic endpoint of the framework or an action marked as export.</summary>
+        private bool HasExportAction()
+        {
+            var actions = ListVM?.GetGridActions();
+            return actions != null && actions.Any(x => x.IsExport || (string.IsNullOrEmpty(x.Area) && x.ControllerName == "_Framework" && x.ActionName == "GetExportExcel"));
+        }
+
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
             _genericEndpointReference = null;
@@ -414,7 +421,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 Filter.Add("_DONOT_USE_VMNAME", vmQualifiedName);
                 Filter.Add("_DONOT_USE_CS", ListVM.CurrentCS);
                 // the generic data endpoints serve this view model only to a request that carries this reference
-                _genericEndpointReference = (Vm.Model as BaseVM)?.Wtm?.CreateGenericEndpointReference(Vm.Model.GetType(), GenericEndpointPurpose.List | GenericEndpointPurpose.Export, ListVM.CurrentCS);
+                // the grid inside the selector pop-up only lists rows; a grid that has no export button does not need the right to export either
+                var referencePurposes = GenericEndpointPurpose.List;
+                if (IsInSelector != true && HasExportAction())
+                {
+                    referencePurposes |= GenericEndpointPurpose.Export;
+                }
+                _genericEndpointReference = (Vm.Model as BaseVM)?.Wtm?.CreateGenericEndpointReference(Vm.Model.GetType(), referencePurposes, ListVM.CurrentCS);
                 if (_genericEndpointReference != null)
                 {
                     Filter[GenericEndpointGuard.ReferenceParameter] = _genericEndpointReference;
