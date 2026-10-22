@@ -116,6 +116,56 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
+        public async Task MainTenantUser_SwitchingToAnExistingTenant_Works()
+        {
+            var controller = CreateController(userTenant: null);
+
+            var result = await controller.SetTenant("t2");
+
+            StringAssert.Contains(Script(result), "location.reload();");
+            Assert.AreEqual("t2", controller.Wtm.LoginUserInfo.CurrentTenant);
+        }
+
+        [TestMethod]
+        public async Task MainTenantUser_SwitchingToATenantThatDoesNotExist_ChangesNothing()
+        {
+            var controller = CreateController(userTenant: null);
+            controller.Wtm.LoginUserInfo.CurrentTenant = "t2";
+
+            var result = await controller.SetTenant("nowhere");
+
+            Assert.AreEqual("t2", controller.Wtm.LoginUserInfo.CurrentTenant);
+            AssertNoNewCookie();
+            Assert.IsFalse(Script(result).Contains("location.reload();"));
+        }
+
+        [TestMethod]
+        public async Task MainTenantUser_SwitchingToADisabledTenant_ChangesNothing()
+        {
+            var controller = CreateController(userTenant: null);
+            controller.Wtm.GlobaInfo.SetTenantGetFunc(() => new List<FrameworkTenant> { new FrameworkTenant { TCode = "off", TName = "off", Enabled = false } });
+
+            var result = await controller.SetTenant("off");
+
+            Assert.IsNull(controller.Wtm.LoginUserInfo.CurrentTenant);
+            AssertNoNewCookie();
+            Assert.IsFalse(Script(result).Contains("location.reload();"));
+        }
+
+        [TestMethod]
+        public async Task MainTenantUser_WhenTenantsAreNotEnabled_OnlyTheEmptyTargetIsAccepted()
+        {
+            var controller = CreateController(userTenant: null);
+            controller.Wtm.GlobaInfo.SetTenantGetFunc(() => new List<FrameworkTenant>());
+
+            StringAssert.Contains(Script(await controller.SetTenant("")), "location.reload();");
+            var refused = await controller.SetTenant("anything");
+
+            Assert.IsNull(controller.Wtm.LoginUserInfo.CurrentTenant);
+            Assert.IsFalse(Script(refused).Contains("location.reload();"));
+        }
+
+        [TestMethod]
         public async Task SignedInUser_SwitchingToATenantOfSomeoneElse_ChangesNothing()
         {
             var controller = CreateController(userTenant: "t1");

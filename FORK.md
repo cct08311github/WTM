@@ -799,11 +799,11 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 |---|---|
 | 未登入的請求 | 與其他需要登入的 action 相同，由 `PrivilegeFilter` 處理（MVC 回登入頁導向的 script，API／帶 `Authorization` 的請求回 401）。原先為 `[Public]` |
 | 已登入的使用者 | 控制器仍為 `[AllRights]`，不需要選單權限 |
-| 目標租戶 | 由 `WTMContext.SetCurrentTenant` 既有規則檢查（主租戶使用者可選任何值；租戶使用者只能選自己的租戶或其子租戶）。通過：更新登入 cookie 並回 `location.reload();`，與之前相同 |
+| 目標租戶 | 由 `WTMContext.SetCurrentTenant` 檢查。主租戶使用者（沒有租戶代碼）：目標為空（回到無租戶）或為存在且啟用的租戶；租戶使用者維持原規則（只能選自己的租戶或其子租戶）。未啟用多租戶（`EnableTenant=false`）時沒有租戶，只接受空目標，行為與之前相同。通過：更新登入 cookie 並回 `location.reload();`，與之前相同 |
 | 不通過 | 不改變當前租戶、不更新 cookie，回「沒有權限」提示（`FFResult().Alert`），不含 `location.reload();` |
 | 請求方式 | 維持 GET（下游版面以 GET 呼叫）；路由與參數不變；action 回傳型別改為 `Task<IActionResult>` |
 
-- **誰會受影響**：把 `/_Framework/SetTenant` 登記為公開位址（`IsUrlPublic`）的網站，匿名請求現在得到 401 提示（原為例外）。下游版面對已登入使用者呼叫 `SetTenant?tenant=…`（包含 `tenant=` 空值切回主租戶）不需修改
+- **誰會受影響**：切換到不存在或已停用租戶的呼叫（主租戶使用者原本不會被擋，現在回「沒有權限」，不改變狀態；`Vue3Demo` 的 `/api/_account/SetTenant` 同樣回 `false`）；把 `/_Framework/SetTenant` 登記為公開位址（`IsUrlPublic`）的網站，匿名請求現在得到 401 提示（原為例外）。下游版面對已登入使用者呼叫 `SetTenant?tenant=…`（包含 `tenant=` 空值切回主租戶）不需修改
 - **回滾方式**：退回前一個 fork 版本
 - **測試**：Core.Test 的 `FrameworkSetTenantTest`；E2E 的 `FrameworkEndpointTests`（匿名、已登入）；兩份權限矩陣表 `_framework/settenant GET`（LayUI：匿名 `redirect-login`；Vue3Demo：匿名 `redirect-login`、Bearer 身分 `401`、cookie 管理員 `ok`）
 

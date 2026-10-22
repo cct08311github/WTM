@@ -918,11 +918,20 @@ params string[] groupcode)
         }
 
 
+        /// <summary>
+        /// Switches the tenant the signed-in user works in. A user of the main tenant (no tenant code) may switch to no tenant (null or empty)
+        /// or to an existing, enabled tenant; a user that belongs to a tenant may switch to the own tenant or to one of its sub tenants.
+        /// Any other target is refused and nothing changes.
+        /// </summary>
         public bool SetCurrentTenant(string tenant)
         {
             if (LoginUserInfo != null)
             {
-                if (LoginUserInfo.TenantCode == null || LoginUserInfo.TenantCode == tenant || GlobaInfo.AllTenant.Any(x => x.TCode == tenant && x.TenantCode == LoginUserInfo.TenantCode))
+                var tenants = GlobaInfo.AllTenant ?? new List<FrameworkTenant>();
+                bool allowed = LoginUserInfo.TenantCode == null
+                    ? string.IsNullOrEmpty(tenant) || tenants.Any(x => x.TCode == tenant && x.Enabled)
+                    : LoginUserInfo.TenantCode == tenant || tenants.Any(x => x.TCode == tenant && x.TenantCode == LoginUserInfo.TenantCode);
+                if (allowed)
                 {
                     LoginUserInfo.CurrentTenant = tenant;
                     LoginUserInfo = LoginUserInfo;
