@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
 using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
@@ -301,10 +302,68 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 value = string.Empty;
             }
-            var vm = Wtm.CreateVM(_DONOT_USE_VMNAME, id, null, true) as IBaseCRUDVM<TopBasePoco>;
-            vm.Entity.SetPropertyValue(field, value);
-            DC.SaveChanges();
+            // the view model loads the record without change tracking: set the value on the loaded record and mark only that column (and the
+            // update stamp) as modified, the way an edit of single fields is saved (BaseCRUDVM.DoEdit), so that the save below writes it.
+            // Whatever goes wrong answers an error, never Success; the log names the kind of exception only
+            try
+            {
+                if (Wtm.CreateVM(_DONOT_USE_VMNAME, id, null, true) is not IBaseCRUDVM<TopBasePoco> vm)
+                {
+                    return UpdateModelPropertyRefused(null);
+                }
+                var entity = vm.Entity;
+                // what this endpoint never writes (key, tenant, validity flag, create/update stamps, non-scalar or non-editable members) is
+                // refused whatever the reference lists and in every GenericEndpoints:Mode
+                var property = ModelPropertyUpdateRules.FindWritableProperty(entity.GetType(), field);
+                if (property == null)
+                {
+                    return UpdateModelPropertyRefused(null);
+                }
+                if ((DC as Microsoft.EntityFrameworkCore.DbContext)?.Model.FindEntityType(entity.GetType()) is { } mapped
+                    && (mapped.FindProperty(property.Name) is not { } column || column.IsPrimaryKey() || column.IsShadowProperty()))
+                {
+                    return UpdateModelPropertyRefused(null);
+                }
+                if (ModelPropertyUpdateRules.TryConvert(property.PropertyType, value, out var converted) == false)
+                {
+                    return UpdateModelPropertyRefused(null);
+                }
+                property.SetValue(entity, converted);
+                var invalid = new List<ValidationResult>();
+                if (Validator.TryValidateProperty(converted, new ValidationContext(entity) { MemberName = property.Name }, invalid) == false)
+                {
+                    return BadRequest(invalid[0].ErrorMessage);
+                }
+                vm.Validate();
+                if (vm.MSD.IsValid == false)
+                {
+                    return BadRequest(vm.MSD.GetFirstError());
+                }
+                DC.UpdateProperty((dynamic)entity, property.Name);
+                if (entity is IBasePoco stamped)
+                {
+                    stamped.UpdateTime = DateTime.Now;
+                    stamped.UpdateBy = Wtm.LoginUserInfo?.ITCode;
+                    DC.UpdateProperty((dynamic)entity, nameof(IBasePoco.UpdateTime));
+                    DC.UpdateProperty((dynamic)entity, nameof(IBasePoco.UpdateBy));
+                }
+                DC.SaveChanges();
+            }
+            catch (Exception ex)
+            {
+                return UpdateModelPropertyRefused(ex);
+            }
             return JsonMore("Success");
+        }
+
+        private IActionResult UpdateModelPropertyRefused(Exception ex)
+        {
+            if (ex != null)
+            {
+                HttpContext.RequestServices.GetService<ILoggerFactory>()?.CreateLogger<_FrameworkController>()
+                    .LogWarning("UpdateModelProperty did not save: {Reason} (user {User})", ex.GetType().Name, Wtm.LoginUserInfo?.ITCode);
+            }
+            return BadRequest((string)MvcProgram._localizer["Sys.EditFailed"]);
         }
 
         #region Import/Export Excel
