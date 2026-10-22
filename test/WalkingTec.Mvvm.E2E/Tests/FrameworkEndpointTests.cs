@@ -253,6 +253,30 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
+        public async Task SetTenant_Anonymous_IsSentToTheSignInPage_AndNothingIsSwitched()
+        {
+            await using var anonymous = await AnonymousAsync();
+            var response = await anonymous.GetAsync("/_Framework/SetTenant?tenant=t1");
+
+            Assert.AreEqual(200, response.Status);
+            var body = await response.TextAsync();
+            StringAssert.Contains(body, "window.location.href=", "The caller is sent to the sign-in page.");
+            Assert.IsFalse(body.Contains("location.reload();"), "An anonymous caller must not get the answer of a successful switch.");
+            Assert.IsFalse(response.Headers.ContainsKey("set-cookie"), "No cookie is issued.");
+        }
+
+        [TestMethod]
+        public async Task SetTenant_SignedIn_StaysAGetAndAnswersWithAReloadScript()
+        {
+            // downstream layouts call it with a GET and the tenant of the signed-in user (empty for the main tenant)
+            var response = await Api.GetAsync("/_Framework/SetTenant?tenant=");
+
+            Assert.AreEqual(200, response.Status);
+            StringAssert.Contains(await response.TextAsync(), "location.reload();");
+            Assert.IsTrue(response.Headers.ContainsKey("set-cookie"), "The sign-in cookie is refreshed.");
+        }
+
+        [TestMethod]
         public async Task LanguageMenu_ChoosingALanguage_StoresTheCultureAndReloadsThePage()
         {
             await new HomeFrame(Page).GotoAsync();

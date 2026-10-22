@@ -791,12 +791,24 @@ namespace WalkingTec.Mvvm.Mvc
             return FFResult().AddCustomScript("location.reload();");
         }
 
-        [Public]
-        public IActionResult SetTenant(string tenant)
+        /// <summary>
+        /// Switches the tenant the signed-in user works in. Not public: an anonymous caller is sent to the sign-in page by the framework's
+        /// privilege filter (like any other signed-in only action), and the action itself still refuses a caller without a user.
+        /// The target is checked by <see cref="WTMContext.SetCurrentTenant"/>; a refused target changes nothing (the user, the cookie)
+        /// and is answered with a message instead of the reload script. Stays a GET: pages of existing applications call it that way.
+        /// </summary>
+        public async Task<IActionResult> SetTenant(string tenant)
         {
-            Wtm.SetCurrentTenant(tenant == "" ? null : tenant);
+            if (Wtm.LoginUserInfo == null)
+            {
+                return new ContentResult() { Content = MvcProgram._localizer["Sys.NeedLogin"], ContentType = "text/html", StatusCode = StatusCodes.Status401Unauthorized };
+            }
+            if (Wtm.SetCurrentTenant(tenant == "" ? null : tenant) == false)
+            {
+                return FFResult().Alert(MvcProgram._localizer["Sys.NoPrivilege"]);
+            }
             var principal = Wtm.LoginUserInfo.CreatePrincipal();
-            HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, null);
+            await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, null);
             return FFResult().AddCustomScript("location.reload();");
         }
 
