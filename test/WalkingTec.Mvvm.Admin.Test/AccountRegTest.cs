@@ -119,5 +119,19 @@ namespace WalkingTec.Mvvm.Admin.Test
             var withNew = Body(c2.Reg(Reg("brandnew", password: null)), 400);
             Assert.AreEqual(withNew, withExisting);
         }
+
+        [TestMethod]
+        public void RegIgnoresAPhotoThatTheCallerSupplies()
+        {
+            // the photo of a user can be shown without a reference, so an anonymous caller must not be able to name any file as one
+            var someonesFile = Guid.NewGuid();
+            var rv = _controller.Reg(new SimpleReg { ITCode = "withphoto", Name = "name", Password = "Passw0rd!", PhotoId = someonesFile });
+            Assert.IsInstanceOfType(rv, typeof(OkResult));
+            using (var dc = new WalkingTec.Mvvm.Vue3Demo.DataContext(_seed, DBTypeEnum.Memory))
+            {
+                var user = dc.Set<FrameworkUser>().Single(x => x.ITCode == "withphoto");
+                Assert.IsNull(user.PhotoId);
+            }
+        }
     }
 }

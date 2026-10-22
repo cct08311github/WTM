@@ -3,6 +3,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Local, Session } from '/@/utils/storage';
 import qs from 'qs';
 import { i18n } from '/@/i18n/index';
+import { collect, forgetDeleteIn } from '/@/utils/fileRefs';
 
 
 // 配置新建一个 axios 实例
@@ -40,6 +41,14 @@ service.interceptors.response.use(
 			response.data.contentDisposition = response.headers['content-disposition']
 		}
 		console.log(response.data);
+		// the references of the files the answer names (FileRefs, Field__fref)
+		if (response.data && typeof response.data === 'object' && !(response.data instanceof Blob)) collect(response.data);
+		// a saved form owns its files now: the delete references of the uploads it names are dropped
+		const method = (response.config?.method ?? '').toLowerCase();
+		const url = (response.config?.url ?? '').toLowerCase();
+		if ((method === 'put' || method === 'post') && url.includes('/api/_file/') === false && url.includes('search') === false) {
+			forgetDeleteIn(response.config?.data);
+		}
 		return response.data;
 	},
 	(error) => {

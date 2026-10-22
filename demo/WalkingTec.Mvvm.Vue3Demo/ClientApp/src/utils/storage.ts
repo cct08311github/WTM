@@ -1,4 +1,5 @@
 import Cookies from 'js-cookie';
+import { clearFileRefs } from '/@/utils/fileRefs';
 
 /**
  * window.localStorage 浏览器永久缓存
@@ -60,5 +61,6 @@ export const Session = {
 	clear() {
 		Cookies.remove('token');
 		window.sessionStorage.clear();
+		clearFileRefs();
 	},
 };

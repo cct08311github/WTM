@@ -402,6 +402,188 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.IsNull(forDefault.Key, "a reference for the default connection keeps the server's choice");
         }
 
+        // ---- delete, capabilities and avatars (single page application file API) -----------------------------------------------------
+
+        private string Capability(string id = null, FilePurpose purposes = FilePurpose.Read, string tenant = null, string connection = null)
+        {
+            return FileEndpointGuard.Issue(_protector, new FileEndpointOptions(), id ?? FileId, purposes, connection, null, tenant, Now);
+        }
+
+        [TestMethod]
+        public void Delete_IsNotPartOfRead_AndIsADistinctPurpose()
+        {
+            Assert.AreEqual(FilePurpose.None, FilePurpose.Read & FilePurpose.Delete);
+            Assert.AreNotEqual(FilePurpose.None, FilePurpose.Delete);
+            foreach (var other in new[] { FilePurpose.View, FilePurpose.Download, FilePurpose.Name, FilePurpose.Upload })
+            {
+                Assert.AreEqual(FilePurpose.None, FilePurpose.Delete & other);
+            }
+        }
+
+        [TestMethod]
+        public void AReadReference_DoesNotAdmitADelete_AndADeleteReferenceDoesNotRead()
+        {
+            var read = Issue(purposes: FilePurpose.Read);
+            var refused = FileEndpointGuard.AuthorizeDeletion(Request(read, FilePurpose.Delete));
+            Assert.IsFalse(refused.Allowed);
+            Assert.AreEqual(FileEndpointRefusal.PurposeMismatch, refused.Refusal);
+
+            var delete = Issue(purposes: FilePurpose.Delete);
+            Assert.IsTrue(FileEndpointGuard.AuthorizeDeletion(Request(delete, FilePurpose.Delete)).Allowed);
+            Assert.IsFalse(FileEndpointGuard.Authorize(Request(delete, FilePurpose.View, file: Plain())).Allowed);
+        }
+
+        [TestMethod]
+        public void ADeleteReference_IsForOneUserOneFileAndOneTenant_AndExpires()
+        {
+            var reference = Issue(purposes: FilePurpose.Delete, user: "alice", tenant: "t1");
+            Assert.IsTrue(FileEndpointGuard.AuthorizeDeletion(Request(reference, user: "alice", tenant: "t1")).Allowed);
+
+            Assert.AreEqual(FileEndpointRefusal.UserMismatch, FileEndpointGuard.AuthorizeDeletion(Request(reference, user: "bob", tenant: "t1")).Refusal);
+            Assert.AreEqual(FileEndpointRefusal.UserMismatch, FileEndpointGuard.AuthorizeDeletion(Request(reference, user: "alice", tenant: "t2")).Refusal);
+            Assert.AreEqual(FileEndpointRefusal.FileMismatch, FileEndpointGuard.AuthorizeDeletion(Request(reference, user: "alice", tenant: "t1", id: Guid.NewGuid().ToString())).Refusal);
+
+            var late = Request(reference, user: "alice", tenant: "t1");
+            late.Now = Now.AddDays(2);
+            Assert.AreEqual(FileEndpointRefusal.ExpiredReference, FileEndpointGuard.AuthorizeDeletion(late).Refusal);
+        }
+
+        [TestMethod]
+        public void ADeleteReference_CannotBeIssuedForNobody_AndAHandMadeOneIsRefused()
+        {
+            Assert.IsNull(Issue(purposes: FilePurpose.Delete, user: null));
+            Assert.IsNull(Issue(purposes: FilePurpose.Delete, user: ""));
+            Assert.IsNull(Issue(purposes: FilePurpose.Read | FilePurpose.Delete, user: null));
+            Assert.IsNull(FileEndpointGuard.Issue(_protector, new FileEndpointOptions(), "", FilePurpose.Delete, null, "alice", null, Now), "a delete reference names its file");
+
+            // a reference of this application that grants delete to nobody in particular is not honoured either
+            var handMade = _protector.Protect(System.Text.Json.JsonSerializer.Serialize(new FileEndpointReference
+            {
+                FileId = FileId,
+                Purposes = FilePurpose.Delete,
+                User = string.Empty,
+                ExpiresAt = Now.AddMinutes(5).ToUnixTimeSeconds()
+            }));
+            var refused = FileEndpointGuard.AuthorizeDeletion(Request(handMade, user: "alice"));
+            Assert.IsFalse(refused.Allowed);
+            Assert.AreEqual(FileEndpointRefusal.UserMismatch, refused.Refusal);
+        }
+
+        [TestMethod]
+        public void Deletion_NeedsASignedInUser_AndAReference_InEveryModeButLegacy()
+        {
+            foreach (var mode in new[] { FileEndpointMode.Audit, FileEndpointMode.Enforce })
+            {
+                var none = FileEndpointGuard.AuthorizeDeletion(Request(null, FilePurpose.Delete, mode: mode));
+                Assert.IsFalse(none.Allowed, mode.ToString());
+                Assert.AreEqual(FileEndpointRefusal.MissingReference, none.Refusal);
+
+                var anonymous = FileEndpointGuard.AuthorizeDeletion(Request(Issue(purposes: FilePurpose.Delete), FilePurpose.Delete, user: null, mode: mode));
+                Assert.IsFalse(anonymous.Allowed, mode.ToString());
+
+                var ok = FileEndpointGuard.AuthorizeDeletion(Request(Issue(purposes: FilePurpose.Delete), FilePurpose.Delete, mode: mode));
+                Assert.IsTrue(ok.Allowed, mode.ToString());
+                Assert.AreEqual(FileEndpointAdmission.Reference, ok.Admission);
+            }
+            var legacy = FileEndpointGuard.AuthorizeDeletion(Request(null, FilePurpose.Delete, mode: FileEndpointMode.Legacy));
+            Assert.IsTrue(legacy.Allowed);
+            Assert.AreEqual(FileEndpointAdmission.Legacy, legacy.Admission);
+            Assert.IsFalse(FileEndpointGuard.AuthorizeDeletion(Request(null, FilePurpose.Delete, user: null, mode: FileEndpointMode.Legacy)).Allowed, "Legacy still needs a signed-in user");
+        }
+
+        [TestMethod]
+        public void ACapability_AdmitsAnyCaller_ForTheFileAndPurposesItWasIssuedFor()
+        {
+            var capability = Capability(purposes: FilePurpose.Read, tenant: "t1");
+            foreach (var user in new string[] { null, "alice", "bob" })
+            {
+                foreach (var purpose in new[] { FilePurpose.View, FilePurpose.Download, FilePurpose.Name })
+                {
+                    var decision = FileEndpointGuard.Authorize(Request(capability, purpose, user: user, tenant: user == null ? null : "t1", file: Plain()));
+                    Assert.IsTrue(decision.Allowed, user + " " + purpose);
+                    Assert.AreEqual(FileEndpointAdmission.Reference, decision.Admission);
+                }
+            }
+            Assert.AreEqual(FileEndpointRefusal.FileMismatch, FileEndpointGuard.Authorize(Request(capability, id: Guid.NewGuid().ToString(), user: null, file: Plain())).Refusal);
+            Assert.AreEqual(FileEndpointRefusal.PurposeMismatch, FileEndpointGuard.Authorize(Request(Capability(purposes: FilePurpose.View), FilePurpose.Download, user: null, file: Plain())).Refusal);
+        }
+
+        [TestMethod]
+        public void ACapability_IsRefusedForASignedInCallerOfAnotherTenant()
+        {
+            var capability = Capability(tenant: "t1");
+            Assert.IsTrue(FileEndpointGuard.Authorize(Request(capability, user: "alice", tenant: "t1", file: Plain())).Allowed);
+            var other = FileEndpointGuard.Authorize(Request(capability, user: "alice", tenant: "t2", file: Plain()));
+            Assert.IsFalse(other.Allowed);
+            Assert.AreEqual(FileEndpointRefusal.UserMismatch, other.Refusal);
+            Assert.IsFalse(FileEndpointGuard.Authorize(Request(capability, user: "alice", tenant: null, file: Plain())).Allowed);
+
+            // a capability of the main tenant carries no tenant and is not tied to one
+            Assert.IsTrue(FileEndpointGuard.Authorize(Request(Capability(tenant: null), user: "alice", tenant: "t2", file: Plain())).Allowed);
+        }
+
+        [TestMethod]
+        public void ResolveConnection_OfACapability_NamesItsTenant_AndOfAUserReference_DoesNot()
+        {
+            var configs = Configs();
+            var capability = FileEndpointGuard.Unprotect(_protector, Capability(tenant: "t1", connection: "other"));
+            var decision = FileEndpointGuard.ResolveConnection(null, capability, configs, null);
+            Assert.AreEqual("other", decision.Key);
+            Assert.AreEqual("t1", decision.Tenant);
+
+            var bound = FileEndpointGuard.Unprotect(_protector, Issue(tenant: "t1", connection: "other"));
+            Assert.IsNull(FileEndpointGuard.ResolveConnection(null, bound, configs, null).Tenant);
+            Assert.IsNull(FileEndpointGuard.ResolveConnection(null, null, configs, null).Tenant);
+            Assert.IsNull(FileEndpointGuard.ResolveConnection(null, FileEndpointGuard.Unprotect(_protector, Capability(tenant: null)), configs, null).Tenant);
+        }
+
+        [TestMethod]
+        public void AnAvatar_IsAdmittedWithoutAReference_InAuditAndEnforce_AfterTheOtherRules()
+        {
+            foreach (var mode in new[] { FileEndpointMode.Audit, FileEndpointMode.Enforce })
+            {
+                var ctx = Request(null, mode: mode, file: Plain(), user: null);
+                ctx.IsAvatar = () => true;
+                var decision = FileEndpointGuard.Authorize(ctx);
+                Assert.IsTrue(decision.Allowed, mode.ToString());
+                Assert.AreEqual(FileEndpointAdmission.Avatar, decision.Admission);
+                Assert.AreEqual(FileEndpointRefusal.None, decision.Refusal);
+
+                var notAvatar = Request(null, mode: mode, file: Plain(), user: null);
+                notAvatar.IsAvatar = () => false;
+                Assert.AreEqual(mode == FileEndpointMode.Audit, FileEndpointGuard.Authorize(notAvatar).Allowed);
+            }
+
+            var embedded = Request(null, file: new FileEndpointFileInfo { ExtraInfo = FileEndpointGuard.MarkEmbedded("x"), UploadTime = DateTime.Now });
+            embedded.IsAvatar = () => throw new InvalidOperationException("not asked: the file is embedded");
+            Assert.AreEqual(FileEndpointAdmission.Embedded, FileEndpointGuard.Authorize(embedded).Admission);
+        }
+
+        [TestMethod]
+        public void TheAvatarCheck_IsNotAsked_WhenAReferenceAdmits_WhenTheFileIsMissing_OrInLegacy()
+        {
+            Func<bool> mustNotRun = () => throw new InvalidOperationException("must not be asked");
+            var withReference = Request(Issue(), file: Plain());
+            withReference.IsAvatar = mustNotRun;
+            Assert.AreEqual(FileEndpointAdmission.Reference, FileEndpointGuard.Authorize(withReference).Admission);
+
+            var missing = Request(null, file: null);
+            missing.IsAvatar = mustNotRun;
+            Assert.IsFalse(FileEndpointGuard.Authorize(missing).Allowed);
+
+            var legacy = Request(null, mode: FileEndpointMode.Legacy);
+            legacy.IsAvatar = mustNotRun;
+            Assert.AreEqual(FileEndpointAdmission.Legacy, FileEndpointGuard.Authorize(legacy).Admission);
+        }
+
+        [TestMethod]
+        public void BuildUrl_PutsTheConnectionAndTheReferenceInTheQuery()
+        {
+            Assert.AreEqual("/api/_file/GetFile/abc?1=1", FileEndpointGuard.BuildUrl("/api/_file/GetFile", "abc", "csName", null, null));
+            Assert.AreEqual("/api/_file/GetFile/abc?1=1&csName=a%20b&_DONOT_USE_FREF=x%2By", FileEndpointGuard.BuildUrl("/api/_file/GetFile/", "abc", "csName", "a b", "x+y"));
+            Assert.AreEqual("/f/abc?1=1&_DONOT_USE_CS=k", FileEndpointGuard.BuildUrl("/f", "abc", null, "k", null));
+        }
+
         [TestMethod]
         public void ANotConfiguredConnection_IsRefusedCleanly()
         {

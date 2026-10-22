@@ -60,7 +60,7 @@ const state = reactive({
 		readOnly:props.disabled,
 		MENU_CONF: {
 			uploadImage:{
-				server: '/api/_file/uploadImage',
+				server: '/api/_file/UploadForEditor',
 				fieldName: 'file',
 				maxFileSize: 10 * 1024 * 1024, 
 				headers: {
