@@ -195,6 +195,32 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region Generic endpoint options
+
+        private GenericEndpointOptions _genericEndpoints;
+
+        /// <summary>
+        /// Settings of the check applied by the generic data endpoints (<c>/_Framework/GetPagingData</c> and the like) to the view model
+        /// a request names. Secure by default; see <see cref="GenericEndpointOptions"/>.
+        /// </summary>
+        public GenericEndpointOptions GenericEndpoints
+        {
+            get
+            {
+                if (_genericEndpoints == null)
+                {
+                    _genericEndpoints = new GenericEndpointOptions();
+                }
+                return _genericEndpoints;
+            }
+            set
+            {
+                _genericEndpoints = value;
+            }
+        }
+
+        #endregion
+
         #region Workflow options
 
         private WorkflowOption _workflowOptions;

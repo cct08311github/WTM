@@ -288,6 +288,11 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Form
                 { "Ids", list },
                     {"SelectorValueField",  ValBind == null ? "ID" : ValBind?.Metadata.PropertyName}
             };
+                var vmReference = (listVM as BaseVM)?.Wtm?.CreateGenericEndpointReference(ListVM.Metadata.ModelType, GenericEndpointPurpose.Selector, listVM?.CurrentCS);
+                if (vmReference != null)
+                {
+                    Filter.Add(GenericEndpointGuard.ReferenceParameter, vmReference);
+                }
                 if (!string.IsNullOrEmpty(SubmitFunc))
                 {
                     Filter.Add("_DONOT_USE_SUBMIT", SubmitFunc);

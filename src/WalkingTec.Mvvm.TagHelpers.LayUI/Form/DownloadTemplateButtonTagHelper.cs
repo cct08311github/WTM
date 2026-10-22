@@ -1,4 +1,6 @@
+using System;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
+using WalkingTec.Mvvm.Core;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 
 namespace WalkingTec.Mvvm.TagHelpers.LayUI
@@ -17,7 +19,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             output.TagName = "a";
             output.TagMode = TagMode.StartTagAndEndTag;
 
-            output.Attributes.SetAttribute("href", $"/_Framework/GetExcelTemplate?_DONOT_USE_VMNAME={vmQualifiedName}");
+            var href = $"/_Framework/GetExcelTemplate?_DONOT_USE_VMNAME={vmQualifiedName}";
+            var vmReference = (Vm.Model as BaseVM)?.Wtm?.CreateGenericEndpointReference(Vm.Model.GetType(), GenericEndpointPurpose.Template);
+            if (vmReference != null)
+            {
+                href += $"&{GenericEndpointGuard.ReferenceParameter}={Uri.EscapeDataString(vmReference)}";
+            }
+            output.Attributes.SetAttribute("href", href);
             Text = THProgram._localizer["Sys.DownloadTemplate"];
             base.Process(context, output);
         }

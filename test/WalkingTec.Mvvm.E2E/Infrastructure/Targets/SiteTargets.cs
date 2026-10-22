@@ -12,7 +12,8 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
             AssemblyName = "WalkingTec.Mvvm.LayUI.E2EHost",
             RouteExclusionFile = "layui-e2ehost.route-exclusions.json",
             ReadyPath = "/Login/Login",
-            CollectJsCoverage = true
+            CollectJsCoverage = true,
+            ConfigureEnvironment = LayUiSetup.ConfigureEnvironment
         };
 
         /// <summary>
@@ -45,7 +46,8 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
             AssemblyName = LayUI.AssemblyName,
             RouteExclusionFile = LayUI.RouteExclusionFile,
             ReadyPath = LayUI.ReadyPath,
-            ReportRouteCoverage = false
+            ReportRouteCoverage = false,
+            ConfigureEnvironment = LayUiSetup.ConfigureEnvironment
         };
 
         /// <summary>A second instance of the Vue3Demo for the permission matrix (workflow feature off, the default).</summary>

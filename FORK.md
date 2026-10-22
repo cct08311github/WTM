@@ -181,6 +181,13 @@ git merge --no-ff upstream/dotnet10
 | `src/WalkingTec.Mvvm.TagHelpers.LayUI/**`（Form、Tree、LinkButton、DataTable、Chart、`BaseButton`、`BaseFieldTag`、`BaseElementTag`、`LayuiUIService`…） | 嵌入 JS 字串的值改用 `JsStringEncoder` 轉義；HTML 屬性值改用 `HtmlAttributeEncoder` 編碼；選用的 HTML 內容編碼（`UIOptions:EncodeHtmlContent`；`wt:display` 對已編碼的值只編碼一次） | #24、#25、#286 |
 | `src/WalkingTec.Mvvm.Core/ConfigOptions/UIOptions.cs`、`src/WalkingTec.Mvvm.Core/Extensions/ListVMExtension.cs`、`src/WalkingTec.Mvvm.Core/Support/HtmlAttributeEncoder.cs` | `EncodeHtmlContent` 選項、表格儲存格的一般值依設定編碼（已編碼的值只編碼一次） | #24、#286 |
 | `src/WalkingTec.Mvvm.Mvc/Filters/PrivilegeFilter.cs`、`FrameworkFilter.cs` | 嵌入 JS 字串的值改用 `JsStringEncoder` 轉義 | #24 |
+| `src/WalkingTec.Mvvm.Mvc/Filters/PrivilegeFilter.cs` | 需要選單權限的 action 通過後，把頁面 url 記到 `WTMContext.PagePrivilegeUrl`（供通用資料端點的參考使用，3 行） | 第 24 節 |
+| `src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs` | `Selector`、`GetPagingData`、`GetEmptyData`、`GetExportExcel`、`GetExcelTemplate`、`UpdateModelProperty` 先檢查請求所指的 view model（`CheckGenericEndpoint`）；`RemoveUserCacheByAccount`／`ByRole`／`ByGroup` 要求管理員角色 | 第 24 節 |
+| `src/WalkingTec.Mvvm.Mvc/Filters/DataContextFilter.cs` | 查詢字串 `DONOTUSECSName` 預設不再選擇連線（`GetRequestedConnectionKey`，設定 `GenericEndpoints:AllowRequestConnectionKey`） | 第 24 節 |
+| `src/WalkingTec.Mvvm.TagHelpers.LayUI/DataTableTagHelper.cs`、`Form/SelectorTagHelper.cs`、`Form/DownloadTemplateButtonTagHelper.cs` | 在表格 `where`／匯出連結、Selector 的 ffilter、範本連結中加入 `_DONOT_USE_VMREF` | 第 24 節 |
+| `src/WalkingTec.Mvvm.Core/WTMContext.cs`、`ConfigOptions/Configs.cs` | `PagePrivilegeUrl`、`CreateGenericEndpointReference`、`AuthorizeGenericEndpoint`；設定 `GenericEndpoints` | 第 24 節 |
+| `src/WalkingTec.Mvvm.Mvc/Helper/FrameworkServiceExtension.cs` | 啟動時，`GenericEndpoints` 放寬時輸出 Warning（1 行） | 第 24 節 |
+| `test/WalkingTec.Mvvm.Test.Mock/MockWtmContext.cs` | 選用參數 `dataProtection` | 第 24 節 |
 | `src/WalkingTec.Mvvm.Mvc/Helper/FResultExtension.cs` | 訊息轉義；修正 `RedirectUrl` | #25 |
 | `src/WalkingTec.Mvvm.Mvc/framework_layui.js` | 全域變數查找改用 `window[...]` | #25 |
 | `test/WalkingTec.Mvvm.Test.Mock/MockWtmContext.cs` | 選用參數 `remoteToken` | #1 |
@@ -192,7 +199,7 @@ git merge --no-ff upstream/dotnet10
 | `README.md`、`README.zh-CN.md` | 開頭多一段 fork 說明（其餘內容不動，降低同步衝突） | #19 |
 | Dependabot 的依賴升級 | 各 csproj／`package-lock.json` 的版本號 | 見各 `dependencies` PR |
 
-fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder}.cs`、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270、#272）、`test/WalkingTec.Mvvm.E2E.Instrumentation/`（E2E 的路由覆蓋與 hosting startup，#272）。
+fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder,GenericEndpointGuard}.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/GenericEndpointOptions.cs`、`docs/security/generic-endpoint-authz.md`、`test/WalkingTec.Mvvm.LayUI.E2EHost/Controllers/ReportController.cs`（授權測試用頁面）、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270、#272）、`test/WalkingTec.Mvvm.E2E.Instrumentation/`（E2E 的路由覆蓋與 hosting startup，#272）。
 
 ## 7. CI、依賴更新與合併
 
@@ -713,3 +720,48 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
   - `StringLength` 等驗證是對**編碼後**的長度計算（一個 `&` 算 5 個字元，一個引號算 6 個）
 - **LayUI**：沒有修改 LayUI 受保護路徑（第 3 節）的檔案；表格的儲存格範本與 `framework_layui.js` 都沒有變動，預設值下的輸出逐字相同
 - **測試**：`HtmlContentEncodingTests`（儲存格已編碼／混合標記／實體字樣／預設值不變）、`DisplayTagHelper` 的對應案例、`HtmlAttributeEncoderTest`（`EncodeOnce`）；E2E `SpecialCharacterRoundTripTests.Grid_WithEncodeHtmlContentOn_ShowsTheSavedTextAsTyped`（已移除 `[Ignore]`）
+
+## 24. `_Framework` 通用資料端點會檢查所請求的 view model（Breaking（安全，對手寫呼叫的頁面））
+
+**範圍**：`/_Framework/GetPagingData`、`GetEmptyData`、`Selector`、`GetExportExcel`、`GetExcelTemplate`、`UpdateModelProperty`。這幾個 action 依請求中的 `_DONOT_USE_VMNAME` 建立 view model，現在會檢查該 view model 對呼叫者是否可用（`_FrameworkController` 類別層級仍是 `[AllRights]`）。同一節也涵蓋連線由伺服器決定，以及 `RemoveUserCacheBy*` 的管理員檢查。設計比較與取捨見 [docs/security/generic-endpoint-authz.md](docs/security/generic-endpoint-authz.md)。
+
+**變更**：
+
+| 項目 | 行為 |
+|---|---|
+| 渲染 view model 的頁面 | LayUI TagHelper 在 `_DONOT_USE_VMNAME` 旁寫入 `_DONOT_USE_VMREF`：`wt:grid`（隨 `where` 一起送出，匯出連結也帶上）、`wt:selector`（ffilter）、`wt:downloadTemplateButton`（連結）。範本產生的頁面不需修改 |
+| 參考的內容 | 以 ASP.NET Core Data Protection 保護的不透明字串，綁定：view model、目的（列表、選擇器、匯出、範本、更新）、使用者與租戶、連線 key、頁面的選單權限 url、到期時間。表格的參考包含「列表」；只有表格對該使用者有匯出按鈕（`_Framework/GetExportExcel` 或標記為匯出的動作，含按鈕組內的按鈕，且按鈕沒有因權限被隱藏）且不在 Selector 彈窗內時才加上「匯出」；標記為匯出的動作雖然送到自己的 controller 也算，因為表格的標準匯出流程依賴它。使用本地資料的表格（`use-local-data`）不寫參考。Selector 的參考只有「選擇器」，彈窗內的表格只有「列表」 |
+| 端點 | 先驗證參考（簽章、到期、使用者與租戶、view model、目的、連線 key、使用者目前仍能開啟該頁面）才建立 view model；沒有有效參考的請求被拒絕（一律回 HTTP 200：帶 `layuisearch` 標頭回 `{"Code":403}`，其他回「沒有權限」文字，包括帶 `Authorization` 標頭的呼叫者；與 `PrivilegeFilter` 對 API 呼叫者回 401/403 狀態碼的做法不同） |
+| 語意 | 與功能頁相同：頁面本身已通過 `PrivilegeFilter`（選單權限、`[Public]`、`[AllRights]`、管理員角色、租戶）；`[AllRights]` 頁面上的 view model，任何已登入者可用；選單權限的頁面，使用者失去權限後參考立即失效 |
+| `Selector` | 維持 `[Public]`，但必須帶有效參考；匿名者只能使用公開頁面寫出的參考。Selector 內的表格沿用原頁面的權限 |
+| 連線 key | `GetPagingData`、`GetExportExcel`、`Selector`：請求的 `_DONOT_USE_CS`／`_DONOT_USE_CURRENTCS` 必須與頁面的連線 key 相同，並以設定中該連線的拼法執行；`ExemptViewModels` 內的 view model 沒有參考可比對，忽略請求帶的 key，使用伺服器為該請求選的連線（設定 `AllowRequestConnectionKey=true` 時才採用請求的 key；`Legacy` 模式維持原行為）（比較時去掉讀取副本的後綴：`x_1` 與 `x` 視為同一個連線，因為讀取時副本是隨機挑的）；`GetEmptyData`、`UpdateModelProperty`、`GetExcelTemplate` 沒有連線參數，改為在參考綁定的連線上執行：該 key 是頁面產生時由伺服器決定、並受簽章保護的，所以使用 `[FixConnection]` 或非預設資料庫的頁面（包括匯入頁的範本按鈕）照常運作。參考綁定的 key 必須仍是設定中的連線，否則拒絕；參考的 key 為空（頁面使用預設連線）時沿用伺服器為該請求選的連線；寫入（`UpdateModelProperty`）一律用基底連線，不用讀取副本；不在 `Connections` 內的請求 key 一律拒絕 |
+| 連線由伺服器決定 | 動作的連線由 `[FixConnection]`、連線函式、預設連線決定。查詢字串的 `DONOTUSECSName` 預設不再影響連線（參考記錄的連線 key 因此就是伺服器為頁面選定的連線）。框架內沒有使用這個參數的程式（`PagedListExtension` 中相關的一行早已註解） |
+| `RemoveUserCacheByAccount`／`ByRole`／`ByGroup` | 要求呼叫者具有管理員角色（角色代碼 `001`，與 `_WorkflowController`、資料權限範圍使用的判斷相同）；其他已登入者得到「沒有權限」的回應（帶 `Authorization` 標頭者得到 403）。框架與 `_Admin` 範本清除快取是在伺服器端直接呼叫 `WTMContext.RemoveUserCache*`，不經過這些 HTTP 端點 |
+| `UpdateModelProperty` | 需要 `Update` 目的的參考，且 `field` 必須在參考列出的可編輯屬性內；在參考綁定連線的基底連線上執行 |
+| 沒有 Data Protection | TagHelper 不寫參考，頁面仍可顯示；端點拒絕沒有有效參考的請求 |
+
+**設定 `GenericEndpoints`**（預設安全，不設定就是下列預設值）：
+
+| 設定 | 預設 | 說明 |
+|---|---|---|
+| `Mode` | `Enforce` | `Legacy`：恢復原本的行為（不檢查），啟動時輸出 Warning。僅供升級期間暫用 |
+| `ExemptViewModels` | 空 | 在 `Enforce` 下，列出的 view model（完整型別名稱，結尾 `*` 為前綴）可由已登入者不帶參考使用，只限這些 view model。不含 `Update`、不含匿名者。啟動時輸出 Warning |
+| `ReferenceLifetimeMinutes` | `480` | 參考的有效分鐘數 |
+| `AllowRequestConnectionKey` | `false` | `true`：允許查詢字串 `DONOTUSECSName` 為沒有 `[FixConnection]`、連線函式也沒有回傳的動作指定連線（舊行為），也允許 `ExemptViewModels` 內的 view model 採用請求帶的連線 key。預設由伺服器決定連線；啟用時啟動輸出 Warning |
+
+- **誰會受影響**：(1) 「自行用 script 呼叫上述端點」的頁面（沒有 TagHelper 會呼叫 `GetEmptyData`、`UpdateModelProperty`）；(2) 自己的頁面在查詢字串帶 `DONOTUSECSName` 選擇連線的網站（需設定 `AllowRequestConnectionKey=true`，或改用 `[FixConnection]`／連線函式）；(3) 非管理員角色以 HTTP 呼叫 `RemoveUserCacheBy*` 的網站（改由管理員帳號呼叫，或在伺服器端直接呼叫 `WTMContext.RemoveUserCache*`）。使用 LayUI TagHelper 與範本產生頁面的網站不需任何修改
+- **升級方式**：
+  1. 一般 LayUI 網站：不需動作。升級當下已經打開的頁面要重新整理一次；頁面開著超過 `ReferenceLifetimeMinutes` 也要重新整理（表格會顯示沒有權限）
+  2. 自行呼叫端點的頁面：在伺服器端用 `Wtm.CreateGenericEndpointReference(typeof(MyListVM), GenericEndpointPurpose.List)`（`Update` 另需 `editableFields`）取得參考，隨 `_DONOT_USE_VMNAME` 以 `_DONOT_USE_VMREF` 送出；或把該 view model 列入 `GenericEndpoints:ExemptViewModels`
+  3. Data Protection 金鑰必須持久化，多實例部署還要共用（cookie 驗證本來就需要）。金鑰是暫時的（容器重啟、IIS 沒有保存金鑰環）時，重啟後已經打開的頁面需要重新整理
+  4. 由範本產生、已複製到下游專案的 `_Admin` controller 不在這一節的範圍；範本更新後，下游的複本可能需要套用相同的修改
+  5. 有用到查詢字串 `DONOTUSECSName` 的頁面：在 `appsettings` 設定 `GenericEndpoints:AllowRequestConnectionKey=true`（或改成 `[FixConnection]`／連線函式）
+- **回滾方式**：設定 `GenericEndpoints:Mode` 為 `Legacy`（連線與 `RemoveUserCacheBy*` 的變更另外用 `AllowRequestConnectionKey` 與退回版本處理），或退回前一個 fork 版本（`Core`、`Mvc`、`TagHelpers.LayUI` 一起退回）
+- **已知限制**：
+  1. `Update` 的參考由頁面作者透過 `CreateGenericEndpointReference(..., editableFields)` 簽發，可編輯屬性的清單只會和作者列的一樣窄
+  2. `ExemptViewModels` 支援前綴（結尾 `*`），太短的前綴會讓底下所有 view model 都免參考；建議只寫完整型別名稱
+  3. 參考綁定帳號與租戶，不綁定登入工作階段；在到期（預設 480 分鐘）或頁面權限被移除之前一直有效
+  4. 檔案端點（`GetFile` 等）的連線參數，以及 `UpdateModelProperty` 的紀錄層級資料權限，不在這次變更內，另行處理
+  5. 使用本地資料的表格（`use-local-data`）不寫參考，所以它的 `_Framework/GetExportExcel` 匯出按鈕不會被通過
+- **不受影響**：`DataPrivilege`／`DPWhere`、匯出 API、`CreateVM`、`BaseImportVM`、`EncodeHtmlContent`、沒有 `HttpContext` 的 `WTMContext`；各功能頁自己的 `Search`、`ExportExcel` 等 action 不經過這些端點
+- **測試**：Core.Test 的 `GenericEndpointGuardTest`、`GenericEndpointReferenceTagHelperTests`、`RequestConnectionKeyTest`、`FrameworkCacheEndpointAdministratorTest`；E2E 的 `GenericEndpointAuthorizationTests`（用 `ReportController` 這個只有管理員角色能開的頁面，以匿名／無角色／受限角色／管理員的真實請求驗證；另有連線由伺服器決定、Selector 彈窗的參考不能匯出、受限角色與無角色的表格與 Selector 照常可用；`OtherDbController` 是帶 `[FixConnection]` 的測試頁，測試主機另設第二個連線 `other` 與它的讀取副本 `other_1`，驗證範本下載、`GetEmptyData`、`UpdateModelProperty` 在固定連線上運作且寫入不進副本，以及未設定的連線或被改動的參考被拒絕）；`RemoveUserCacheBy*` 的權限矩陣列；權限矩陣的六個端點期望值改為「沒有參考即拒絕」（`exempt` 說明見表格）
