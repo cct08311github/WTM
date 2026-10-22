@@ -835,10 +835,45 @@ namespace WalkingTec.Mvvm.Mvc
             return $"<script>window.location.href='{JsStringEncoder.Escape(HttpUtility.UrlDecode(redirect))}'</script>";
         }
 
+        /// <summary>
+        /// The role code of the administrator role. Every site is created with it, and the framework's own administrator-only features
+        /// (the workflow designer page, the data privilege scope) recognise administrators by it.
+        /// </summary>
+        private const string AdministratorRoleCode = "001";
+
+        /// <summary>True when the signed-in user holds the administrator role (false when nobody is signed in).</summary>
+        public static bool IsAdministrator(LoginUserInfo user)
+        {
+            return user?.Roles != null && user.Roles.Any(x => x != null && x.RoleCode == AdministratorRoleCode);
+        }
+
+        /// <summary>
+        /// The cache of other accounts is cleared only on behalf of an administrator. Returns null when the caller may go on, otherwise the
+        /// answer to send (the same form as the privilege filter uses for an action the caller has no privilege for).
+        /// </summary>
+        private IActionResult RefuseUnlessAdministrator()
+        {
+            if (IsAdministrator(Wtm.LoginUserInfo))
+            {
+                return null;
+            }
+            if (Request.Headers.ContainsKey("Authorization"))
+            {
+                return Forbid(Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme);
+            }
+            return new ContentResult() { Content = MvcProgram._localizer["Sys.NoPrivilege"], ContentType = "text/html", StatusCode = 200 };
+        }
+
+        // these three are not pages of a menu: the privilege filter lets every signed-in user through the controller, so each checks the role itself
         [AllRights]
         [HttpPost]
         public async Task<ActionResult> RemoveUserCacheByAccount(string[] itcode)
         {
+            var refused = RefuseUnlessAdministrator();
+            if (refused != null)
+            {
+                return (ActionResult)refused;
+            }
             await Wtm.RemoveUserCache(itcode);
             return Ok();
         }
@@ -847,6 +882,11 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost]
         public async Task<ActionResult> RemoveUserCacheByRole(string[] rolecode)
         {
+            var refused = RefuseUnlessAdministrator();
+            if (refused != null)
+            {
+                return (ActionResult)refused;
+            }
             await Wtm.RemoveUserCacheByRole(rolecode);
             return Ok();
         }
@@ -855,9 +895,13 @@ namespace WalkingTec.Mvvm.Mvc
         [HttpPost]
         public async Task<ActionResult> RemoveUserCacheByGroup(string[] groupcode)
         {
+            var refused = RefuseUnlessAdministrator();
+            if (refused != null)
+            {
+                return (ActionResult)refused;
+            }
             await Wtm.RemoveUserCacheByGroup(groupcode);
             return Ok();
         }
     }
 }
-
