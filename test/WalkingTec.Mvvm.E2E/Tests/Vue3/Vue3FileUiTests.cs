@@ -140,7 +140,7 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
             {
                 await App.LoginAsync(account, password, "Face User");
                 var avatar = Page.Locator("img.layout-navbars-breadcrumb-user-link-photo");
-                StringAssert.Contains(await avatar.GetAttributeAsync("src"), "/api/_file/GetUserPhoto/");
+                StringAssert.Contains(await avatar.GetAttributeAsync("src"), "_DONOT_USE_FREF=", "the user info carries a reference for the photo");
                 Assert.IsTrue(await LoadsAsync(avatar));
             }
             finally
