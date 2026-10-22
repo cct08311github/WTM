@@ -392,11 +392,22 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>Html内容</returns>
         public virtual object GetText(object source, bool needFormat = true)
         {
+            return GetText(source, needFormat, out _);
+        }
+
+        /// <summary>
+        /// Same as <see cref="GetText(object, bool)"/>; also hands back what the format callback returned when it was run (null when it was not), so
+        /// that a caller that needs both does not run the callback twice.
+        /// </summary>
+        public virtual object GetText(object source, bool needFormat, out object formatResult)
+        {
             object rv = null;
+            formatResult = null;
             var col = CompiledCol?.Invoke(source as T);
             if(needFormat == false && Format != null)
             {
                 var test = Format.Invoke(source as T, col);
+                formatResult = test;
                 if(test is ColumnFormatInfo == false && test is List<ColumnFormatInfo> == false)
                 {
                     return test??"";
@@ -451,6 +462,7 @@ namespace WalkingTec.Mvvm.Core
             else
             {
                 rv = Format.Invoke(source as T, col);
+                formatResult = rv;
             }
             if (rv == null)
             {

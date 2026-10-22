@@ -239,10 +239,12 @@ namespace WalkingTec.Mvvm.Core.Extensions
                         {
                             if (returnColumnObject == true)
                             {
-                                html = col.GetText(sou, false).ToString();
+                                object formatted = null;
+                                html = (col is GridColumn<T> gridColumn ? gridColumn.GetText(sou, false, out formatted) : col.GetText(sou, false)).ToString();
                                 if (col.HasFormat() && (self as BaseVM)?.Wtm != null)
                                 {
-                                    var fileId = GetFormatFileId(col.GetText(sou));
+                                    // the format callback ran once, above; a column type of another kind is asked again
+                                    var fileId = GetFormatFileId(col is GridColumn<T> ? formatted : col.GetText(sou));
                                     if (fileId != null)
                                     {
                                         var fileref = (self as BaseVM).Wtm.CreateFileCapability(fileId.Value, FilePurpose.Read, (self as BaseVM).CurrentCS);

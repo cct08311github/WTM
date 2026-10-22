@@ -1329,17 +1329,83 @@ params string[] groupcode)
                 {
                     return false;
                 }
-                if (GetUserQuery(dc).Any(x => x.PhotoId == id && x.IsValid) == false)
+                // answers (positive and negative) are kept for a short time, per connection, tenant and file: the avatar of a page is asked for by every
+                // picture on it, and the lookup reads the users table
+                var key = (dc.CSName ?? string.Empty) + "|" + (dc.TenantCode ?? string.Empty) + "|" + id.ToString("N");
+                var now = DateTime.UtcNow;
+                if (_userPhotoCache.TryGetValue(key, out var cached) && now - cached.At < _userPhotoCacheTtl)
                 {
-                    return false;
+                    return cached.Value;
                 }
-                var ext = dc.Set<FileAttachment>().Where(x => x.ID == id).Select(x => x.FileExt).FirstOrDefault();
-                return ext != null && AvatarExtensions.Contains(ext.TrimStart('.').ToLowerInvariant());
+                var rv = GetUserQuery(dc).Any(x => x.PhotoId == id && x.IsValid) && IsPictureFile(dc, id);
+                if (_userPhotoCache.Count > UserPhotoCacheLimit)
+                {
+                    _userPhotoCache.Clear();
+                }
+                _userPhotoCache[key] = (rv, now);
+                return rv;
             }
             catch (Exception)
             {
                 return false;
             }
+        }
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (bool Value, DateTime At)> _userPhotoCache = new System.Collections.Concurrent.ConcurrentDictionary<string, (bool, DateTime)>();
+        private static TimeSpan _userPhotoCacheTtl = TimeSpan.FromSeconds(30);
+        private const int UserPhotoCacheLimit = 5000;
+
+        private static bool IsPictureFile(IDataContext dc, Guid id)
+        {
+            var ext = dc.Set<FileAttachment>().Where(x => x.ID == id).Select(x => x.FileExt).FirstOrDefault();
+            return ext != null && AvatarExtensions.Contains(ext.TrimStart('.').ToLowerInvariant());
+        }
+
+        /// <summary>
+        /// True when the file may be set as the photo of a user: it exists, is a picture a browser shows (not SVG), and no other record refers to it as
+        /// an attachment (a foreign key to <see cref="FileAttachment"/>, including <see cref="ISubFile"/> lists). The photo of a user is shown without a
+        /// reference, so a file that belongs to something else must not become one. Records of the user type itself are not counted.
+        /// </summary>
+        public bool IsPhotoAssignable(IDataContext dc, Guid fileId)
+        {
+            try
+            {
+                if (dc == null || IsPictureFile(dc, fileId) == false)
+                {
+                    return false;
+                }
+                foreach (var entityType in dc.Model.GetEntityTypes())
+                {
+                    var clr = entityType.ClrType;
+                    if (clr == typeof(FileAttachment) || typeof(FrameworkUserBase).IsAssignableFrom(clr))
+                    {
+                        continue;
+                    }
+                    foreach (var fk in entityType.GetForeignKeys().Where(x => x.PrincipalEntityType.ClrType == typeof(FileAttachment) && x.Properties.Count == 1))
+                    {
+                        var method = typeof(WTMContext).GetMethod(nameof(AnyReference), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static).MakeGenericMethod(clr);
+                        if ((bool)method.Invoke(null, new object[] { dc, fk.Properties[0].Name, fk.Properties[0].ClrType, fileId }))
+                        {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        private static bool AnyReference<T>(IDataContext dc, string property, Type propertyType, Guid id) where T : class
+        {
+            var set = dc.Set<T>().AsQueryable().IgnoreQueryFilters();
+            if (propertyType == typeof(Guid))
+            {
+                return set.Any(e => Microsoft.EntityFrameworkCore.EF.Property<Guid>(e, property) == id);
+            }
+            return set.Any(e => Microsoft.EntityFrameworkCore.EF.Property<Guid?>(e, property) == id);
         }
 
         /// <summary>

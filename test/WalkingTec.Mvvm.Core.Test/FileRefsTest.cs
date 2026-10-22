@@ -88,6 +88,16 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
+        public void TheFormatOfAColumn_RunsOncePerRow_EvenWhenItNamesAFile()
+        {
+            var calls = 0;
+            var vm = ListVm(e => { calls++; return DownloadAndView(e); });
+            var json = Row(vm, new Student { LoginName = "a", PhotoId = Photo });
+            StringAssert.Contains(json, "PhotoId__fref");
+            Assert.AreEqual(1, calls);
+        }
+
+        [TestMethod]
         public void ADownloadColumnAlone_AndAViewColumnAlone_CarryOneToo()
         {
             foreach (Func<Student, object> format in new Func<Student, object>[]
@@ -223,6 +233,24 @@ namespace WalkingTec.Mvvm.Core.Test
             var same = Guid.NewGuid();
             var twice = Load(seed, SeedAlbum(seed, same, same, same));
             Assert.AreEqual(1, twice.FileRefs.Count);
+        }
+
+        [TestMethod]
+        public void AfterTheLoad_ChangedIdsAndAReplacedEntity_GetNoCapabilities()
+        {
+            var seed = Guid.NewGuid().ToString();
+            var cover = Guid.NewGuid();
+            var vm = Load(seed, SeedAlbum(seed, cover, null));
+            var stranger = Guid.NewGuid();
+
+            // an id put into the loaded record afterwards is not one the record was read with
+            vm.Entity.ScanId = stranger;
+            vm.Entity.Photos = new List<AlbumPhoto> { new AlbumPhoto { FileId = stranger } };
+            CollectionAssert.AreEqual(new[] { cover.ToString() }, vm.FileRefs.Keys.ToList());
+
+            // and a record that replaces the loaded one has none
+            vm.Entity = new Album { CoverId = cover };
+            Assert.IsNull(vm.FileRefs);
         }
 
         [TestMethod]

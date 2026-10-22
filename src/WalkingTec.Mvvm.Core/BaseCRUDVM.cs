@@ -110,8 +110,9 @@ namespace WalkingTec.Mvvm.Core
         [JsonIgnore]
         public bool ByPassBaseValidation { get; set; }
 
-        // true when Entity was read from the store by SetEntityById (and not filled from a request)
-        private bool _entityFromStore;
+        // the entity that SetEntityById read from the store, and the files it referred to at that moment
+        private TModel _loadedEntity;
+        private List<Guid> _loadedFileIds;
 
         /// <summary>
         /// For a single page application: a short-lived reference (a capability, see <see cref="WTMContext.CreateFileCapability(string, FilePurpose, string)"/>)
@@ -127,7 +128,35 @@ namespace WalkingTec.Mvvm.Core
 
         private Dictionary<string, string> BuildFileRefs()
         {
-            if (_entityFromStore == false || Entity == null || Wtm == null)
+            // only for the record that was read, and only for the files it referred to when it was read
+            if (_loadedEntity == null || ReferenceEquals(Entity, _loadedEntity) == false || _loadedFileIds == null || Wtm == null)
+            {
+                return null;
+            }
+            try
+            {
+                Dictionary<string, string> rv = null;
+                foreach (var id in _loadedFileIds)
+                {
+                    var capability = Wtm.CreateFileCapability(id, FilePurpose.Read);
+                    if (capability != null)
+                    {
+                        rv ??= new Dictionary<string, string>();
+                        rv[id.ToString()] = capability;
+                    }
+                }
+                return rv;
+            }
+            catch (Exception)
+            {
+                // the references are an addition to the answer, never a reason to fail it
+                return null;
+            }
+        }
+
+        private List<Guid> CollectFileIds()
+        {
+            if (Entity == null)
             {
                 return null;
             }
@@ -155,21 +184,10 @@ namespace WalkingTec.Mvvm.Core
                         ids.AddRange(subs.Where(x => x != null && x.FileId != Guid.Empty).Select(x => x.FileId));
                     }
                 }
-                Dictionary<string, string> rv = null;
-                foreach (var id in ids.Distinct())
-                {
-                    var capability = Wtm.CreateFileCapability(id, FilePurpose.Read);
-                    if (capability != null)
-                    {
-                        rv ??= new Dictionary<string, string>();
-                        rv[id.ToString()] = capability;
-                    }
-                }
-                return rv;
+                return ids.Distinct().ToList();
             }
             catch (Exception)
             {
-                // the references are an addition to the answer, never a reason to fail it
                 return null;
             }
         }
@@ -225,7 +243,8 @@ namespace WalkingTec.Mvvm.Core
         public void SetEntityById(object id)
         {
             this.Entity = GetById(id);
-            _entityFromStore = this.Entity != null;
+            _loadedEntity = this.Entity;
+            _loadedFileIds = CollectFileIds();
         }
 
         /// <summary>
@@ -235,7 +254,8 @@ namespace WalkingTec.Mvvm.Core
         public void SetEntity(object entity)
         {
             this.Entity = entity as TModel;
-            _entityFromStore = false;
+            _loadedEntity = null;
+            _loadedFileIds = null;
         }
 
         /// <summary>
