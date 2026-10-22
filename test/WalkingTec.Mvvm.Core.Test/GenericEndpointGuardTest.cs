@@ -157,6 +157,89 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
+        public void ReadReplicaSuffix_IsIgnoredWhenComparingConnectionKeys()
+        {
+            // a replica is picked at random for every read: the page and the request may name different replicas of one connection
+            var reference = Issue(cs: "reports_2");
+
+            Assert.IsTrue(Authorize(reference, cs: "reports_1").Allowed);
+            Assert.IsTrue(Authorize(reference, cs: "reports").Allowed);
+            Assert.IsTrue(Authorize(Issue(cs: "reports"), cs: "reports_3").Allowed);
+            Assert.IsTrue(Authorize(Issue(cs: "REPORTS_1"), cs: "reports").Allowed);
+            Assert.AreEqual(GenericEndpointRefusal.ConnectionMismatch, Authorize(reference, cs: "other_2").Refusal);
+            Assert.AreEqual(GenericEndpointRefusal.ConnectionMismatch, Authorize(reference, cs: "default").Refusal);
+            Assert.AreEqual(GenericEndpointRefusal.ConnectionMismatch, Authorize(reference, cs: null).Refusal);
+            Assert.AreEqual(GenericEndpointRefusal.ConnectionMismatch, Authorize(Issue(cs: null), cs: "reports_1").Refusal);
+        }
+
+        [TestMethod]
+        [DataRow(null, "")]
+        [DataRow("", "")]
+        [DataRow("default", "default")]
+        [DataRow("reports_1", "reports")]
+        [DataRow("reports_12", "reports")]
+        [DataRow("a_b_2", "a_b")]
+        [DataRow("_x", "_x")]
+        public void NormalizeConnectionKey_RemovesTheReplicaSuffix(string key, string expected)
+        {
+            Assert.AreEqual(expected, GenericEndpointGuard.NormalizeConnectionKey(key));
+        }
+
+        [TestMethod]
+        public void Decision_CarriesTheConnectionTheReferenceWasIssuedFor()
+        {
+            Assert.AreEqual("reports_1", Authorize(Issue(cs: "reports_1"), checkConnection: false).Connection);
+            Assert.AreEqual(string.Empty, Authorize(Issue(cs: null), checkConnection: false).Connection);
+        }
+
+        private static Configs ConfigsWith(params string[] keys)
+        {
+            var configs = new Configs();
+            foreach (var key in keys)
+            {
+                configs.Connections.Add(new CS { Key = key, Value = "Data Source=" + key + ".db", DbType = DBTypeEnum.SQLite });
+            }
+            return configs;
+        }
+
+        [TestMethod]
+        public void PinnedConnection_ThatIsConfigured_IsUsed_AsReadReplicaOrAsWriteConnection()
+        {
+            var configs = ConfigsWith("default", "reports", "reports_1");
+
+            Assert.IsTrue(GenericEndpointGuard.TryResolveConnection("reports_1", configs, write: false, out var read));
+            Assert.IsTrue(GenericEndpointGuard.TryResolveConnection("reports_1", configs, write: true, out var write));
+            Assert.IsTrue(GenericEndpointGuard.TryResolveConnection("reports", configs, write: true, out var writeBase));
+
+            Assert.AreEqual("reports_1", read);
+            Assert.AreEqual("reports", write, "A write never goes to a replica.");
+            Assert.AreEqual("reports", writeBase);
+        }
+
+        [TestMethod]
+        public void PinnedConnection_OfTheDefault_LeavesTheChoiceToTheServer()
+        {
+            var configs = ConfigsWith("default", "reports");
+
+            Assert.IsTrue(GenericEndpointGuard.TryResolveConnection(null, configs, write: false, out var none));
+            Assert.IsTrue(GenericEndpointGuard.TryResolveConnection("", configs, write: true, out var empty));
+
+            Assert.IsNull(none);
+            Assert.IsNull(empty);
+        }
+
+        [TestMethod]
+        public void PinnedConnection_ThatIsNotConfigured_IsRefused()
+        {
+            var configs = ConfigsWith("default", "reports");
+
+            Assert.IsFalse(GenericEndpointGuard.TryResolveConnection("gone", configs, write: false, out _));
+            Assert.IsFalse(GenericEndpointGuard.TryResolveConnection("gone_1", configs, write: true, out _));
+            Assert.IsFalse(GenericEndpointGuard.TryResolveConnection("reports_9", configs, write: false, out _), "only configured keys, replicas included");
+            Assert.IsFalse(GenericEndpointGuard.TryResolveConnection("reports", null, write: false, out _));
+        }
+
+        [TestMethod]
         public void NullAndEmptyConnectionKey_AreTheSame()
         {
             var reference = Issue(cs: null);

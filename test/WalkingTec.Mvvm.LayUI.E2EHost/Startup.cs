@@ -97,6 +97,8 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost
             });
 
             app.UseWtmContext();
+            // test only: the second connection (and its replica) that some test runs configure
+            WalkingTec.Mvvm.LayUI.E2EHost.Fixtures.OtherConnection.Prepare(configs.CurrentValue);
             app.UseE2EInstrumentation();
         }
 

@@ -407,26 +407,116 @@ namespace WalkingTec.Mvvm.E2E.Tests.Security
             Assert.AreEqual(403, CodeOf(response.Body), "The reference of the page does not serve another connection.");
         }
 
-        [TestMethod]
-        public async Task GetEmptyData_UpdateModelProperty_AndTheTemplate_AreBoundToTheConnectionTheServerUses()
+        // ---- pages with a fixed connection: the endpoints that take no connection key run on the one the reference is bound to ------------------
+
+        private static async Task<string> OtherDbReferenceAsync(string vm, string purposes, string fields = null)
         {
-            // a reference pinned to a connection other than the one the request runs on (the default, an empty key) is not honoured
-            var pinnedList = await LabReferenceAsync(LabListVm, "List", cs: "default");
-            var pinnedUpdate = await LabReferenceAsync(GadgetVmName, "Update", "Name", "default");
-            var pinnedTemplate = await LabReferenceAsync(GadgetImportVm, "Template", cs: "default");
-            var okTemplate = await LabReferenceAsync(GadgetImportVm, "Template");
+            var url = "/OtherDb/Reference?vm=" + Uri.EscapeDataString(vm) + "&purposes=" + purposes + (fields == null ? "" : "&fields=" + fields);
+            var response = await SendAsync("admin", HttpMethod.Get, url);
+            Assert.IsTrue(response.Body.Length > 20, "No reference was issued.");
+            return response.Body;
+        }
 
-            var emptyUrl = "/_Framework/GetEmptyData?_DONOT_USE_VMNAME=" + Uri.EscapeDataString(LabListVm) + "&_DONOT_USE_VMREF=";
-            var templateUrl = "/_Framework/GetExcelTemplate?_DONOT_USE_VMNAME=" + Uri.EscapeDataString(GadgetImportVm) + "&_DONOT_USE_VMREF=";
+        private static async Task<List<(string Id, string Name)>> RowsAsync(string action)
+        {
+            var response = await SendAsync("admin", HttpMethod.Get, "/OtherDb/" + action);
+            return response.Body.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(x => (x.Split('|')[0], x.Split('|')[1])).ToList();
+        }
 
-            Assert.AreEqual(_noPrivilegeText, (await SendAsync("admin", HttpMethod.Get, emptyUrl + pinnedList)).Body.Trim());
-            Assert.AreEqual(_noPrivilegeText, (await SendAsync("admin", HttpMethod.Get, templateUrl + pinnedTemplate)).Body.Trim());
-            var update = await SendAsync("admin", HttpMethod.Post, "/_Framework/UpdateModelProperty", new Dictionary<string, string>
+        [TestMethod]
+        public async Task FixedConnectionPage_GridLoadsTheRowsOfItsConnection()
+        {
+            var page = await SendAsync("admin", HttpMethod.Get, "/OtherDb/Grid");
+            var filter = FilterIn(page.Body);
+            Assert.AreEqual("other", GenericEndpointKey(filter["_DONOT_USE_CS"]), "The page runs on its fixed connection (a read goes to a replica of it).");
+
+            var response = await SendAsync("admin", HttpMethod.Post, "/_Framework/GetPagingData", GridForm(filter["_DONOT_USE_VMNAME"], filter["_DONOT_USE_VMREF"], filter["_DONOT_USE_CS"]), gridRequest: true);
+
+            Assert.AreEqual(200, CodeOf(response.Body));
+            StringAssert.Contains(response.Body, "Replica Alpha Wrench");
+            Assert.IsFalse(response.Body.Contains("\"Alpha Wrench\""), "Not the rows of the default connection.");
+        }
+
+        private static string GenericEndpointKey(string key) => key.Contains('_') ? key.Substring(0, key.LastIndexOf('_')) : key;
+
+        [TestMethod]
+        public async Task FixedConnectionPage_TemplateDownload_AndEmptyData_Work()
+        {
+            var page = await SendAsync("admin", HttpMethod.Get, "/OtherDb/Import");
+            var link = System.Net.WebUtility.HtmlDecode(Regex.Match(page.Body, "href=\"(/_Framework/GetExcelTemplate\\?[^\"]+)\"").Groups[1].Value);
+            Assert.IsTrue(link.Contains("_DONOT_USE_VMREF="), "The template link carries a reference.");
+
+            var template = await SendAsync("admin", HttpMethod.Get, link);
+            var empty = await SendAsync("admin", HttpMethod.Get, "/_Framework/GetEmptyData?_DONOT_USE_VMNAME=" + Uri.EscapeDataString(GadgetListVm) + "&_DONOT_USE_VMREF=" + await OtherDbReferenceAsync(GadgetListVm, "List"));
+
+            Assert.AreEqual(HttpStatusCode.OK, template.Status);
+            StringAssert.Contains(template.ContentType, "ms-excel");
+            Assert.AreEqual("application/json", empty.ContentType);
+        }
+
+        [TestMethod]
+        public async Task FixedConnectionPage_UpdateModelProperty_RunsOnTheBaseConnection_NotOnAReplicaOrTheDefault()
+        {
+            // every database has its own rows (and ids): a row is found only on the connection the request runs on
+            var baseRow = (await RowsAsync("BaseGadgets")).First();
+            var replicaRow = (await RowsAsync("ReplicaGadgets")).First();
+            var reference = await OtherDbReferenceAsync(GadgetVmName, "Update", "Name");
+            Task<(HttpStatusCode Status, string Body, string ContentType)> Update(string id) => SendAsync("admin", HttpMethod.Post, "/_Framework/UpdateModelProperty", new Dictionary<string, string>
             {
-                ["_DONOT_USE_VMNAME"] = GadgetVmName, ["id"] = Guid.NewGuid().ToString(), ["field"] = "Name", ["value"] = "x", ["_DONOT_USE_VMREF"] = pinnedUpdate
+                ["_DONOT_USE_VMNAME"] = GadgetVmName, ["id"] = id, ["field"] = "Name", ["value"] = "renamed", ["_DONOT_USE_VMREF"] = reference
             });
-            Assert.AreEqual(_noPrivilegeText, update.Body.Trim());
-            StringAssert.Contains((await SendAsync("admin", HttpMethod.Get, templateUrl + okTemplate)).ContentType, "ms-excel");
+
+            var onBase = await Update(baseRow.Id);
+            var onReplica = await Update(replicaRow.Id);
+            var onNothing = await Update(Guid.NewGuid().ToString());
+
+            Assert.AreEqual(HttpStatusCode.OK, onBase.Status, "The row of the base connection is found: a write never goes to the replica the page was read from.");
+            StringAssert.Contains(onBase.Body, "\"Code\":\"200\"");
+            Assert.AreEqual(HttpStatusCode.BadRequest, onReplica.Status, "The row that exists only on the replica is not found.");
+            Assert.AreEqual(HttpStatusCode.BadRequest, onNothing.Status);
+        }
+
+        [TestMethod]
+        [DataRow("no-such-connection")]
+        [DataRow("other_9")]
+        public async Task ReferenceBoundToAConnectionThatIsNotConfigured_IsRefused_ByTheEndpointsWithoutAConnectionKey(string pinned)
+        {
+            var list = await LabReferenceAsync(LabListVm, "List", cs: pinned);
+            var update = await LabReferenceAsync(GadgetVmName, "Update", "Name", pinned);
+            var template = await LabReferenceAsync(GadgetImportVm, "Template", cs: pinned);
+
+            var empty = await SendAsync("admin", HttpMethod.Get, "/_Framework/GetEmptyData?_DONOT_USE_VMNAME=" + Uri.EscapeDataString(LabListVm) + "&_DONOT_USE_VMREF=" + list);
+            var downloaded = await SendAsync("admin", HttpMethod.Get, "/_Framework/GetExcelTemplate?_DONOT_USE_VMNAME=" + Uri.EscapeDataString(GadgetImportVm) + "&_DONOT_USE_VMREF=" + template);
+            var updated = await SendAsync("admin", HttpMethod.Post, "/_Framework/UpdateModelProperty", new Dictionary<string, string>
+            {
+                ["_DONOT_USE_VMNAME"] = GadgetVmName, ["id"] = Guid.NewGuid().ToString(), ["field"] = "Name", ["value"] = "x", ["_DONOT_USE_VMREF"] = update
+            });
+
+            Assert.AreEqual(_noPrivilegeText, empty.Body.Trim());
+            Assert.AreEqual(_noPrivilegeText, downloaded.Body.Trim());
+            Assert.AreEqual(_noPrivilegeText, updated.Body.Trim());
+        }
+
+        [TestMethod]
+        public async Task AlteredReference_IsRefused_ByTheEndpointsWithoutAConnectionKey()
+        {
+            var reference = await OtherDbReferenceAsync(LabListVm, "List");
+            var altered = reference.Substring(0, reference.Length - 4) + (reference.EndsWith("AAAA") ? "BBBB" : "AAAA");
+
+            var empty = await SendAsync("admin", HttpMethod.Get, "/_Framework/GetEmptyData?_DONOT_USE_VMNAME=" + Uri.EscapeDataString(LabListVm) + "&_DONOT_USE_VMREF=" + altered);
+
+            Assert.AreEqual(_noPrivilegeText, empty.Body.Trim());
+        }
+
+        [TestMethod]
+        public async Task ReferenceBoundToAConfiguredConnection_RunsTheEndpointOnThatConnection()
+        {
+            // the default connection, named explicitly, is a configured connection like any other
+            var reference = await LabReferenceAsync(LabListVm, "List", cs: "default");
+
+            var empty = await SendAsync("admin", HttpMethod.Get, "/_Framework/GetEmptyData?_DONOT_USE_VMNAME=" + Uri.EscapeDataString(LabListVm) + "&_DONOT_USE_VMREF=" + reference);
+
+            Assert.AreEqual("application/json", empty.ContentType);
         }
 
         // ---- a reference for the selector does not give the right to export ---------------------------------------------------------
