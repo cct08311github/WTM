@@ -122,4 +122,34 @@ namespace WalkingTec.Mvvm.E2E.Tests.Security
         [TestMethod]
         public async Task Table_FollowsTheDeclaredRules() => MatrixAssertions.AssertTableFollowsDeclaredRules(await MatrixSuite.GetAsync(MatrixSetups.Vue3WithWorkflow));
     }
+
+    /// <summary>
+    /// The Vue3Demo started with FileEndpoints:Mode=Enforce: a request to the file API that carries no reference is refused for everybody, signed in or not,
+    /// and deleting a file needs its delete reference in every mode. The table lists the differences to the default configuration (section "configurations").
+    /// </summary>
+    [TestClass]
+    [TestCategory("permission-matrix")]
+    [TestCategory("vue3demo")]
+    public class Vue3FileEnforcePermissionMatrixTests
+    {
+        public TestContext TestContext { get; set; }
+
+        public static IEnumerable<string> Identities => new[] { "anonymous", "norole", "limited", "admin", "admin-cookie" };
+
+        [TestMethod]
+        [DynamicData(nameof(Identities))]
+        public async Task Outcomes_MatchTheTable(string identity)
+        {
+            MatrixAssertions.AssertIdentityMatches(await MatrixSuite.GetAsync(MatrixSetups.Vue3FileEnforce), identity, TestContext);
+        }
+
+        [TestMethod]
+        public async Task Table_HasAnEntryForEveryAction() => MatrixAssertions.AssertEveryActionHasAnEntry(await MatrixSuite.GetAsync(MatrixSetups.Vue3FileEnforce));
+
+        [TestMethod]
+        public async Task Table_HasNoStaleEntries() => MatrixAssertions.AssertNoStaleEntries(await MatrixSuite.GetAsync(MatrixSetups.Vue3FileEnforce));
+
+        [TestMethod]
+        public async Task Table_FollowsTheDeclaredRules() => MatrixAssertions.AssertTableFollowsDeclaredRules(await MatrixSuite.GetAsync(MatrixSetups.Vue3FileEnforce));
+    }
 }
