@@ -6,7 +6,9 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Primitives;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -72,13 +74,28 @@ namespace WalkingTec.Mvvm.Core.Test
             public WtmFileProvider Provider;
             public CapturingLoggerFactory Logs;
             public Func<IDataContext> NewDc;
+            public RecordingResponseFeature Response;
+        }
+
+        /// <summary>Keeps what is registered to run when the response is complete (disposables), so a test can run it.</summary>
+        private sealed class RecordingResponseFeature : Microsoft.AspNetCore.Http.Features.HttpResponseFeature
+        {
+            private readonly List<(Func<object, Task> Callback, object State)> _completed = new List<(Func<object, Task>, object)>();
+            public override void OnCompleted(Func<object, Task> callback, object state) => _completed.Add((callback, state));
+            public System.Collections.Generic.IEnumerable<object> Registered => _completed.Select(x => x.State);
+            public void Complete() { foreach (var (callback, state) in _completed) { callback(state).GetAwaiter().GetResult(); } }
+        }
+
+        private sealed class TrackedContext : LoginTestContext
+        {
+            public TrackedContext(string seed) : base(seed) { }
         }
 
         private Harness Make(string user = "alice", FileEndpointMode mode = FileEndpointMode.Audit, bool filePublic = false, IFileAccessPolicy policy = null,
-            Action<Configs> configure = null, string requestContentType = null, IEnumerable<IFormFile> files = null, IDataProtectionProvider provider = null)
+            Action<Configs> configure = null, string requestContentType = null, IEnumerable<IFormFile> files = null, IDataProtectionProvider provider = null, Func<IDataContext> dcFactory = null)
         {
             var seed = _seed;
-            Func<IDataContext> newDc = () => new LoginTestContext(seed);
+            Func<IDataContext> newDc = dcFactory ?? (() => new LoginTestContext(seed));
             var configs = new Configs();
             configs.FileEndpoints.Mode = mode;
             configs.IsFilePublic = filePublic;
@@ -96,13 +113,15 @@ namespace WalkingTec.Mvvm.Core.Test
                 wtm.LoginUserInfo = null;
             }
             var http = new DefaultHttpContext();
+            var feature = new RecordingResponseFeature();
+            http.Features.Set<IHttpResponseFeature>(feature);
             if (files != null)
             {
                 http.Request.ContentType = requestContentType ?? "multipart/form-data; boundary=x";
                 http.Request.Form = new FormCollection(new Dictionary<string, StringValues>(), new FormFileCollection().Also(files));
             }
             var controller = new FileTestController { Wtm = wtm, ControllerContext = new ControllerContext { HttpContext = http } };
-            return new Harness { Controller = controller, Wtm = wtm, Provider = new WtmFileProvider(wtm), Logs = logs, NewDc = newDc };
+            return new Harness { Controller = controller, Wtm = wtm, Provider = new WtmFileProvider(wtm), Logs = logs, NewDc = newDc, Response = feature };
         }
 
         private Guid AddFile(string ext = "png", string extra = null, DateTime? uploaded = null, byte[] data = null, string name = null)
@@ -527,9 +546,102 @@ namespace WalkingTec.Mvvm.Core.Test
             var photo = AddUserWithPhoto();
             var h = Make(null, FileEndpointMode.Enforce, configure: c => c.Domains = new Dictionary<string, WalkingTec.Mvvm.Core.ConfigOptions.Domain> { { "mainhost", new WalkingTec.Mvvm.Core.ConfigOptions.Domain { Address = "https://main.example" } } });
             h.Controller.Request.Path = "/api/_file/GetUserPhoto/" + photo;
+            h.Controller.Request.QueryString = new QueryString("?width=5&_DONOT_USE_FREF=abc");
             var result = SpaFileApi.GetUserPhoto(h.Controller, h.Provider, photo.ToString(), null, null, null, null);
             Assert.IsInstanceOfType(result, typeof(RedirectResult));
-            Assert.AreEqual("https://main.example/api/_file/GetUserPhoto/" + photo, ((RedirectResult)result).Url);
+            Assert.AreEqual("https://main.example/api/_file/GetUserPhoto/" + photo + "?width=5&_DONOT_USE_FREF=abc", ((RedirectResult)result).Url, "the query string, with the reference, goes along");
+        }
+
+        [TestMethod]
+        public void IsUserPhoto_KeepsAnswersForAShortTime_PositiveAndNegative()
+        {
+            var photo = AddUserWithPhoto();
+            var h = Make(null, FileEndpointMode.Enforce);
+            Assert.IsTrue(h.Wtm.IsUserPhoto(h.NewDc(), photo.ToString()));
+            var nobody = AddFile();
+            Assert.IsFalse(h.Wtm.IsUserPhoto(h.NewDc(), nobody.ToString()));
+
+            // the data changes: the answers stay for now
+            using (var dc = new LoginTestContext(_seed))
+            {
+                dc.Set<LoginTestUser>().RemoveRange(dc.Set<LoginTestUser>().Where(x => x.PhotoId == photo));
+                dc.Set<LoginTestUser>().Add(new LoginTestUser { ITCode = "late", Name = "n", Password = "p", PhotoId = nobody, IsValid = true });
+                dc.SaveChanges();
+            }
+            Assert.IsTrue(h.Wtm.IsUserPhoto(h.NewDc(), photo.ToString()), "cached");
+            Assert.IsFalse(h.Wtm.IsUserPhoto(h.NewDc(), nobody.ToString()), "cached");
+
+            // and are read again after the time is up
+            var ttl = typeof(WTMContext).GetField("_userPhotoCacheTtl", BindingFlags.NonPublic | BindingFlags.Static);
+            var old = ttl.GetValue(null);
+            ttl.SetValue(null, TimeSpan.Zero);
+            try
+            {
+                Assert.IsFalse(h.Wtm.IsUserPhoto(h.NewDc(), photo.ToString()));
+                Assert.IsTrue(h.Wtm.IsUserPhoto(h.NewDc(), nobody.ToString()));
+            }
+            finally
+            {
+                ttl.SetValue(null, old);
+            }
+        }
+
+        [TestMethod]
+        public void TheReads_AreNotKeptByCaches_UnlessFilesArePublic()
+        {
+            var id = AddFile();
+            foreach (var action in new[] { "GetFile", "DownloadFile", "GetFileName", "GetFileInfo", "GetUserPhoto" })
+            {
+                var h = Make("alice", FileEndpointMode.Legacy);
+                Do(h, action, id, null);
+                Assert.AreEqual("private, no-store", h.Controller.Response.Headers["Cache-Control"].ToString(), action);
+
+                var open = Make("alice", FileEndpointMode.Legacy, filePublic: true);
+                Do(open, action, id, null);
+                Assert.IsFalse(open.Controller.Response.Headers.ContainsKey("Cache-Control"), "public files: " + action);
+            }
+        }
+
+        private sealed class OneWayStream : Stream
+        {
+            private readonly MemoryStream _inner;
+            public OneWayStream(byte[] data) { _inner = new MemoryStream(data); }
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+            public override void Flush() { }
+            public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        }
+
+        [TestMethod]
+        public void AStreamThatCannotSeek_IsPeekedAtAndPassedOn_NotCopiedFirst()
+        {
+            var id = AddFile("png");
+            var content = Enumerable.Range(0, 5000).Select(i => (byte)(i % 251)).ToArray();
+            var h = Make("alice", FileEndpointMode.Legacy);
+            var result = (FileStreamResult)SpaFileApi.GetFile(h.Controller, h.Provider, id.ToString(), null, 10, 10, null, (s, w, hh) => new SpaImageResult { Resized = new OneWayStream(content) });
+            Assert.IsFalse(result.FileStream is MemoryStream, "not buffered into memory as a whole");
+            using var ms = new MemoryStream();
+            result.FileStream.CopyTo(ms);
+            CollectionAssert.AreEqual(content, ms.ToArray(), "the part that was peeked at is not lost");
+            StringAssert.StartsWith(h.Controller.Response.Headers["Content-Disposition"].ToString(), "inline;");
+        }
+
+        [TestMethod]
+        public void TheDataContextOfARequest_IsDisposedWhenTheResponseIsDone()
+        {
+            var id = AddFile();
+            var seed = _seed;
+            var h = Make("alice", FileEndpointMode.Legacy, dcFactory: () => new TrackedContext(seed));
+            SpaFileApi.GetFile(h.Controller, h.Provider, id.ToString(), null, null, null, null);
+            // handed to the response, which disposes it when it is done (not while the answer is still being written)
+            Assert.IsTrue(h.Response.Registered.Any(x => x is TrackedContext));
+            h.Response.Complete();
         }
 
         // ---- uploads -----------------------------------------------------------------------------------------------------------------------

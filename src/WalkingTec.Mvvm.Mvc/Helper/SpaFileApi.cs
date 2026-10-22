@@ -66,7 +66,7 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 return refused;
             }
-            c.Response.Headers["X-Content-Type-Options"] = "nosniff";
+            Secure(c);
             return c.Ok(fp.GetFileName(id, dc));
         }
 
@@ -93,7 +93,7 @@ namespace WalkingTec.Mvvm.Mvc
         {
             if (c.ConfigInfo.HasMainHost && c.Wtm.LoginUserInfo?.CurrentTenant == null)
             {
-                return c.Redirect(c.Wtm.ConfigInfo.MainHost + c.Request.Path);
+                return c.Redirect(c.Wtm.ConfigInfo.MainHost + c.Request.Path + c.Request.QueryString);
             }
             return Serve(c, fp, "GetUserPhoto", id, FilePurpose.View, csName, width, height, reference, resize, attachment: false, embeddedForAnonymous: true, avatar: true);
         }
@@ -109,7 +109,7 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 return refused;
             }
-            c.Response.Headers["X-Content-Type-Options"] = "nosniff";
+            Secure(c);
             object info = null;
             try
             {
@@ -181,23 +181,27 @@ namespace WalkingTec.Mvvm.Mvc
 
         private static IActionResult Send(BaseApiController c, Stream data, string contentType, string fileName, string ext, bool attachment)
         {
-            // the browser must use the type the server states, never its own guess
-            c.Response.Headers["X-Content-Type-Options"] = "nosniff";
+            Secure(c);
             if (attachment)
             {
                 return new FileStreamResult(data, contentType) { FileDownloadName = fileName ?? (Guid.NewGuid().ToString() + ext) };
             }
-            if (data.CanSeek == false)
-            {
-                var copy = new MemoryStream();
-                data.CopyTo(copy);
-                data.Dispose();
-                copy.Position = 0;
-                data = copy;
-            }
+            // only the start of the file is looked at; a stream that cannot seek is passed on after it
             var head = new byte[512];
-            var read = data.Read(head, 0, head.Length);
-            data.Position = 0;
+            var read = 0;
+            int got;
+            while (read < head.Length && (got = data.Read(head, read, head.Length - read)) > 0)
+            {
+                read += got;
+            }
+            if (data.CanSeek)
+            {
+                data.Position = 0;
+            }
+            else
+            {
+                data = new PrefixedStream(head, read, data);
+            }
             // a file a browser would run as part of the site (HTML, SVG, XML, script) is sent as an attachment, never shown inline
             var active = FileServing.IsActiveContent(ext, head.AsSpan(0, read));
             if (ext == "mp4" && active == false)
@@ -205,7 +209,78 @@ namespace WalkingTec.Mvvm.Mvc
                 return new FileStreamResult(data, contentType) { EnableRangeProcessing = true };
             }
             c.Response.Headers["Content-Disposition"] = $"{(active ? "attachment" : "inline")}; filename=\"{HttpUtility.UrlEncode(fileName)}\"";
+            if (active)
+            {
+                c.Response.Headers["Content-Security-Policy"] = "sandbox";
+            }
             return new FileStreamResult(data, contentType);
+        }
+
+        /// <summary>The headers every read answer has: the browser uses the type the server states, and shared caches keep nothing unless the files are public.</summary>
+        private static void Secure(BaseApiController c)
+        {
+            c.Response.Headers["X-Content-Type-Options"] = "nosniff";
+            if (c.Wtm.ConfigInfo.IsFilePublic == false)
+            {
+                c.Response.Headers["Cache-Control"] = "private, no-store";
+            }
+        }
+
+        /// <summary>The data context of a request lives until the response is done (the provider keeps using it for the stream).</summary>
+        private static IDataContext Own(BaseApiController c, IDataContext dc)
+        {
+            if (dc is IDisposable disposable)
+            {
+                c.Response.RegisterForDispose(disposable);
+            }
+            return dc;
+        }
+
+        /// <summary>Reads the bytes that were peeked at first, then the rest of the stream.</summary>
+        private sealed class PrefixedStream : Stream
+        {
+            private readonly byte[] _prefix;
+            private readonly int _length;
+            private readonly Stream _rest;
+            private int _position;
+
+            public PrefixedStream(byte[] prefix, int length, Stream rest)
+            {
+                _prefix = prefix;
+                _length = length;
+                _rest = rest;
+            }
+
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+            public override void Flush() { }
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                if (_position < _length)
+                {
+                    var n = Math.Min(count, _length - _position);
+                    Buffer.BlockCopy(_prefix, _position, buffer, offset, n);
+                    _position += n;
+                    return n;
+                }
+                return _rest.Read(buffer, offset, count);
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing)
+                {
+                    _rest.Dispose();
+                }
+                base.Dispose(disposing);
+            }
         }
 
         /// <summary>
@@ -228,7 +303,7 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 return Refuse(c, endpoint, "the connection is not allowed");
             }
-            var context = wtm.CreateFileDC(connection);
+            var context = Own(c, wtm.CreateFileDC(connection));
             dc = context;
             var decision = wtm.AuthorizeFileRequest(endpoint, id, purpose, reference, () => ReadInfo(context, id), isAvatar == null ? null : (Func<bool>)(() => isAvatar(context)));
             if (decision.Allowed == false)
@@ -283,7 +358,7 @@ namespace WalkingTec.Mvvm.Mvc
             extra = FileEndpointGuard.StripEmbeddedMarker(extra);
             using (var data = form.OpenReadStream())
             {
-                var file = fp.Upload(form.FileName, form.Length, data, groupName, subdir, extra, sm, c.Wtm.CreateDC(cskey: connection.Key));
+                var file = fp.Upload(form.FileName, form.Length, data, groupName, subdir, extra, sm, Own(c, c.Wtm.CreateDC(cskey: connection.Key)));
                 return file == null ? c.BadRequest(Text(c, "Sys.UploadFailed", "Upload failed")) : UploadResult(c, file, connection.Key);
             }
         }
@@ -319,7 +394,7 @@ namespace WalkingTec.Mvvm.Mvc
             using (processed.Buffered)
             {
                 processed.Resized.Position = 0;
-                var file = fp.Upload(form.FileName, form.Length, processed.Resized, groupName, subdir, extra, sm, c.Wtm.CreateDC(cskey: connection.Key));
+                var file = fp.Upload(form.FileName, form.Length, processed.Resized, groupName, subdir, extra, sm, Own(c, c.Wtm.CreateDC(cskey: connection.Key)));
                 return file == null ? c.BadRequest(Text(c, "Sys.UploadFailed", "Upload failed")) : UploadResult(c, file, connection.Key);
             }
         }
@@ -338,7 +413,7 @@ namespace WalkingTec.Mvvm.Mvc
             extra = FileEndpointGuard.MarkEmbedded(FileEndpointGuard.StripEmbeddedMarker(extra));
             using (var data = form.OpenReadStream())
             {
-                var file = fp.Upload(form.FileName, form.Length, data, groupName, subdir, extra, sm, c.Wtm.CreateDC(cskey: connection.Key));
+                var file = fp.Upload(form.FileName, form.Length, data, groupName, subdir, extra, sm, Own(c, c.Wtm.CreateDC(cskey: connection.Key)));
                 if (file == null)
                 {
                     return c.BadRequest(Text(c, "Sys.UploadFailed", "Upload failed"));
@@ -417,7 +492,7 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 return Forbidden(c);
             }
-            fp.DeleteFile(id, c.Wtm.CreateDC(cskey: connection.Key));
+            fp.DeleteFile(id, Own(c, c.Wtm.CreateDC(cskey: connection.Key)));
             return c.Ok(true);
         }
 
