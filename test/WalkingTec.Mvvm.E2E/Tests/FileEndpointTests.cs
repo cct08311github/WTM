@@ -263,6 +263,66 @@ namespace WalkingTec.Mvvm.E2E.Tests
             Assert.AreEqual("", await response.TextAsync());
         }
 
+        // ---- how a file is presented ---------------------------------------------------------------------------------------------------
+
+        private async Task<IAPIResponse> StreamAsync(string name, string content)
+        {
+            var data = await UploadAsync(name, content);
+            var id = data.GetProperty("Id").GetString();
+            var reference = Uri.EscapeDataString(data.GetProperty("Ref").GetString());
+            return await Api.GetAsync($"/_Framework/GetFile/{id}?stream=true&_DONOT_USE_FREF={reference}");
+        }
+
+        [TestMethod]
+        public async Task GetFile_Stream_SendsActiveContentAsAnAttachment()
+        {
+            foreach (var (name, content, type) in new[]
+            {
+                ("page.html", "<html><body><script>1</script></body></html>", "text/html"),
+                ("PAGE.HTM", "<html></html>", "text/html"),
+                ("image.svg", "<svg xmlns='http://www.w3.org/2000/svg'><script>1</script></svg>", "image/svg+xml"),
+                ("data.xml", "<?xml version='1.0'?><a/>", "application/xml"),
+                ("code.js", "alert(1)", "text/javascript"),
+            })
+            {
+                var response = await StreamAsync(name, content);
+
+                Assert.AreEqual(200, response.Status, name);
+                StringAssert.StartsWith(response.Headers["content-disposition"], "attachment", name);
+                StringAssert.StartsWith(response.Headers["content-type"], type, name);
+                Assert.AreEqual("nosniff", response.Headers["x-content-type-options"], name);
+            }
+        }
+
+        [TestMethod]
+        public async Task GetFile_Stream_SendsAnUnknownTypeThatLooksLikeHtmlAsAnAttachment()
+        {
+            var response = await StreamAsync("notes.dat", "  <!DOCTYPE html><html><script>1</script></html>");
+
+            StringAssert.StartsWith(response.Headers["content-disposition"], "attachment");
+            Assert.AreEqual("nosniff", response.Headers["x-content-type-options"]);
+        }
+
+        [TestMethod]
+        public async Task GetFile_Stream_KeepsPassiveTypesInline_WithTheirContentType()
+        {
+            foreach (var (name, content, type) in new[]
+            {
+                ("note.txt", "plain text", "text/plain"),
+                ("doc.pdf", "%PDF-1.4 test", "application/pdf"),
+                ("shot.png", "not really a png", "image/png"),
+                ("blob.bin", "binary stuff", "application/octet-stream"),
+            })
+            {
+                var response = await StreamAsync(name, content);
+
+                Assert.AreEqual(200, response.Status, name);
+                StringAssert.StartsWith(response.Headers["content-disposition"], "inline", name);
+                StringAssert.StartsWith(response.Headers["content-type"], type, name);
+                Assert.AreEqual("nosniff", response.Headers["x-content-type-options"], name);
+            }
+        }
+
         // ---- ViewFile ------------------------------------------------------------------------------------------------------------------
 
         [TestMethod]

@@ -626,33 +626,29 @@ namespace WalkingTec.Mvvm.Mvc
             }
             catch { }
             var ext = file.FileExt.ToLower();
-            var contenttype = "application/octet-stream";
-            if (ext == "pdf")
-            {
-                contenttype = "application/pdf";
-            }
-            if (ext == "png" || ext == "bmp" || ext == "gif" || ext == "tif" || ext == "jpg" || ext == "jpeg")
-            {
-                contenttype = $"image/{ext}";
-            }
-            if (ext == "mp4")
-            {
-                contenttype = $"video/mpeg4";
-            }
+            var contenttype = FileServing.GetContentType(ext);
             rv.Position = 0;
+            // the browser must use the type the server states, never its own guess
+            Response.Headers["X-Content-Type-Options"] = "nosniff";
             if (stream == false)
             {
                 return File(rv, contenttype, file.FileName ?? (Guid.NewGuid().ToString() + ext));
             }
             else
             {
+                // a file a browser would run as part of the site (HTML, SVG, XML, script) is sent as an attachment, never shown inline
+                var head = new byte[512];
+                var read = rv.Read(head, 0, head.Length);
+                rv.Position = 0;
+                var active = FileServing.IsActiveContent(ext, head.AsSpan(0, read));
                 if (ext == "mp4")
                 {
                     return File(rv, contenttype, enableRangeProcessing: true);
                 }
                 else
                 {
-                    Response.Headers.TryAdd("Content-Disposition", $"inline; filename=\"{HttpUtility.UrlEncode(file.FileName)}\"");
+                    Response.ContentType = contenttype;
+                    Response.Headers.TryAdd("Content-Disposition", $"{(active ? "attachment" : "inline")}; filename=\"{HttpUtility.UrlEncode(file.FileName)}\"");
                     await rv.CopyToAsync(Response.Body);
                     rv.Dispose();
                     return new EmptyResult();
