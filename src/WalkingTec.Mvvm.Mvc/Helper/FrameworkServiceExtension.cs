@@ -916,6 +916,7 @@ namespace WalkingTec.Mvvm.Mvc
             //warn (never throw) when the check of the generic data endpoints is relaxed
             GenericEndpointGuard.LogRelaxedWarning(configs, securityLogger);
             FileEndpointGuard.LogRelaxedWarning(configs, securityLogger);
+            SpaFileApi.LogUnpatchedControllerWarning(Utils.GetAllAssembly(), securityLogger);
 
             var lg = app.ApplicationServices.GetRequiredService<LinkGenerator>();
             var gd = app.ApplicationServices.GetRequiredService<GlobalData>();

@@ -360,6 +360,201 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.AreEqual("other", wtm.ResolveFileConnection("other", FileId.ToString(), FilePurpose.View, null).Key);
         }
 
+        // ---- capabilities, deletion, avatars and the file API of a single page application ------------------------------------------------
+
+        [TestMethod]
+        public void ACapability_IsNotBoundToAUser_AndAdmitsAnAnonymousCaller()
+        {
+            var provider = new EphemeralDataProtectionProvider();
+            var alice = Create("alice", provider, FileEndpointMode.Enforce);
+            var capability = alice.CreateFileCapability(FileId);
+            Assert.IsNotNull(capability);
+            var opened = FileEndpointGuard.Unprotect(FileEndpointGuard.CreateProtector(provider), capability);
+            Assert.AreEqual(string.Empty, opened.User);
+            Assert.AreEqual(FilePurpose.Read, opened.Purposes);
+            Assert.AreEqual(FileId.ToString(), opened.FileId);
+
+            var anonymous = Create("alice", provider, FileEndpointMode.Enforce);
+            anonymous.LoginUserInfo = null;
+            foreach (var purpose in new[] { FilePurpose.View, FilePurpose.Download, FilePurpose.Name })
+            {
+                Assert.IsTrue(anonymous.AuthorizeFileRequest("GetFile", FileId.ToString(), purpose, capability, () => Plain()).Allowed, purpose.ToString());
+            }
+            Assert.IsTrue(Create("bob", provider, FileEndpointMode.Enforce).AuthorizeFileRequest("GetFile", FileId.ToString(), FilePurpose.View, capability, () => Plain()).Allowed, "any signed-in user too");
+            Assert.IsFalse(anonymous.AuthorizeFileRequest("GetFile", Guid.NewGuid().ToString(), FilePurpose.View, capability, () => Plain()).Allowed, "but for that one file only");
+        }
+
+        [TestMethod]
+        public void ACapability_NeverGrantsDeleteOrUpload_AndIsBoundToTheConnectionAndTenant()
+        {
+            var provider = new EphemeralDataProtectionProvider();
+            var wtm = Create("alice", provider, configure: c => TwoConnections(c));
+            wtm.LoginUserInfo = new LoginUserInfo { ITCode = "alice", TenantCode = "t1", CurrentTenant = "t1" };
+            var protector = FileEndpointGuard.CreateProtector(provider);
+
+            var all = FileEndpointGuard.Unprotect(protector, wtm.CreateFileCapability(FileId, FilePurpose.Read | FilePurpose.Delete | FilePurpose.Upload, "other"));
+            Assert.AreEqual(FilePurpose.Read, all.Purposes);
+            Assert.AreEqual("other", all.Connection);
+            Assert.AreEqual("t1", all.Tenant);
+            Assert.IsNull(wtm.CreateFileCapability(FileId, FilePurpose.Delete));
+            Assert.IsNull(wtm.CreateFileCapability(FileId, FilePurpose.None));
+            Assert.IsNull(Create("alice", null).CreateFileCapability(FileId), "no data protection, no capability");
+            Assert.IsNotNull(wtm.CreateFileCapability(FileId.ToString(), FilePurpose.View));
+        }
+
+        [TestMethod]
+        public void ACapability_OfOneTenant_IsRefusedForASignedInUserOfAnother()
+        {
+            var provider = new EphemeralDataProtectionProvider();
+            WTMContext In(string tenant)
+            {
+                var wtm = Create("alice", provider, FileEndpointMode.Enforce);
+                wtm.LoginUserInfo = new LoginUserInfo { ITCode = "alice", TenantCode = tenant, CurrentTenant = tenant };
+                return wtm;
+            }
+            var capability = In("t1").CreateFileCapability(FileId);
+            Assert.IsTrue(In("t1").AuthorizeFileRequest("GetFile", FileId.ToString(), FilePurpose.View, capability, () => Plain()).Allowed);
+            Assert.IsFalse(In("t2").AuthorizeFileRequest("GetFile", FileId.ToString(), FilePurpose.View, capability, () => Plain()).Allowed);
+        }
+
+        [TestMethod]
+        public void GetFileUrl_WithAPath_BuildsTheAddressOfAnotherEndpoint()
+        {
+            var provider = new EphemeralDataProtectionProvider();
+            var wtm = Create("alice", provider, FileEndpointMode.Enforce, configure: c => TwoConnections(c));
+            var protector = FileEndpointGuard.CreateProtector(provider);
+
+            var bound = wtm.GetFileUrl(FileId.ToString(), FilePurpose.View, "other", "/api/_file/GetFile", "csName");
+            StringAssert.StartsWith(bound, $"/api/_file/GetFile/{FileId}?1=1&csName=other&{FileEndpointGuard.ReferenceParameter}=");
+            Assert.AreEqual("alice", FileEndpointGuard.Unprotect(protector, ReferenceOf(bound)).User);
+
+            var capability = wtm.GetFileUrl(FileId.ToString(), FilePurpose.View, null, "/api/_file/GetFile", "csName", capability: true);
+            Assert.IsFalse(capability.Contains("csName="), "no connection key: none in the address");
+            var opened = FileEndpointGuard.Unprotect(protector, ReferenceOf(capability));
+            Assert.AreEqual(string.Empty, opened.User);
+            Assert.AreEqual(FilePurpose.View, opened.Purposes);
+
+            // the plain framework address is untouched
+            StringAssert.StartsWith(wtm.GetFileUrl(FileId, FilePurpose.Download), $"/_Framework/GetFile/{FileId}?1=1");
+            Assert.IsFalse(Create("alice", null).GetFileUrl(FileId.ToString(), FilePurpose.View, null, "/x").Contains(FileEndpointGuard.ReferenceParameter));
+        }
+
+        [TestMethod]
+        public void Deletion_NeedsADeleteReferenceIssuedToTheSameUser_InEveryModeButLegacy()
+        {
+            var provider = new EphemeralDataProtectionProvider();
+            var alice = Create("alice", provider, FileEndpointMode.Audit);
+            var deleteRef = alice.CreateFileReference(FileId, FilePurpose.Delete);
+            var readRef = alice.CreateFileReference(FileId, FilePurpose.Read);
+            Assert.IsNotNull(deleteRef);
+
+            foreach (var mode in new[] { FileEndpointMode.Audit, FileEndpointMode.Enforce })
+            {
+                var logs = new CapturingLoggerFactory();
+                var me = Create("alice", provider, mode, logs);
+                Assert.IsTrue(me.AuthorizeFileDeletion("DeletedFile", FileId.ToString(), deleteRef).Allowed, mode.ToString());
+                Assert.IsFalse(me.AuthorizeFileDeletion("DeletedFile", FileId.ToString(), null).Allowed, mode + " without a reference");
+                Assert.IsFalse(me.AuthorizeFileDeletion("DeletedFile", FileId.ToString(), readRef).Allowed, mode + " with a read reference");
+                Assert.IsFalse(me.AuthorizeFileDeletion("DeletedFile", Guid.NewGuid().ToString(), deleteRef).Allowed, mode + " for another file");
+                Assert.IsFalse(Create("bob", provider, mode).AuthorizeFileDeletion("DeletedFile", FileId.ToString(), deleteRef).Allowed, mode + " for another user");
+                Assert.AreEqual(3, logs.Entries.Count(x => x.Message.Contains("DeletedFile") && x.Message.Contains("refused")), "every refusal is logged");
+            }
+
+            var legacy = Create("alice", provider, FileEndpointMode.Legacy);
+            Assert.IsTrue(legacy.AuthorizeFileDeletion("DeletedFile", FileId.ToString(), null).Allowed);
+            legacy.LoginUserInfo = null;
+            Assert.IsFalse(legacy.AuthorizeFileDeletion("DeletedFile", FileId.ToString(), null).Allowed);
+        }
+
+        [TestMethod]
+        public void Deletion_AsksThePolicy_AndAnAnonymousCallerHasNoDeleteReference()
+        {
+            var provider = new EphemeralDataProtectionProvider();
+            var policy = new DenyingPolicy();
+            var wtm = Create("alice", provider, FileEndpointMode.Enforce, policy: policy);
+            var deleteRef = wtm.CreateFileReference(FileId, FilePurpose.Delete);
+            var decision = wtm.AuthorizeFileDeletion("DeletedFile", FileId.ToString(), deleteRef);
+            Assert.IsFalse(decision.Allowed);
+            Assert.AreEqual(FileEndpointRefusal.PolicyDenied, decision.Refusal);
+            Assert.AreEqual(FilePurpose.Delete, policy.Last.Purpose);
+
+            wtm.LoginUserInfo = null;
+            Assert.IsNull(wtm.CreateFileReference(FileId, FilePurpose.Delete), "nobody is signed in, so nobody can be given the right");
+        }
+
+        [TestMethod]
+        public void AnAvatarCheck_AdmitsARequestWithoutAReference_AndTheOldOverloadIsUnchanged()
+        {
+            var provider = new EphemeralDataProtectionProvider();
+            var wtm = Create("alice", provider, FileEndpointMode.Enforce);
+            wtm.LoginUserInfo = null;
+            var withAvatar = wtm.AuthorizeFileRequest("GetUserPhoto", FileId.ToString(), FilePurpose.View, null, () => Plain(), () => true);
+            Assert.IsTrue(withAvatar.Allowed);
+            Assert.AreEqual(FileEndpointAdmission.Avatar, withAvatar.Admission);
+            Assert.IsFalse(wtm.AuthorizeFileRequest("GetUserPhoto", FileId.ToString(), FilePurpose.View, null, () => Plain(), () => false).Allowed);
+            Assert.IsFalse(wtm.AuthorizeFileRequest("GetUserPhoto", FileId.ToString(), FilePurpose.View, null, () => Plain()).Allowed);
+        }
+
+        [TestMethod]
+        public void TheAvatarAdmission_StillGoesThroughThePolicy()
+        {
+            var policy = new DenyingPolicy();
+            var wtm = Create("alice", new EphemeralDataProtectionProvider(), FileEndpointMode.Enforce, policy: policy);
+            wtm.LoginUserInfo = null;
+            var decision = wtm.AuthorizeFileRequest("GetUserPhoto", FileId.ToString(), FilePurpose.View, null, () => Plain(), () => true);
+            Assert.IsFalse(decision.Allowed);
+            Assert.AreEqual(FileEndpointAdmission.Avatar, policy.Last.Admission);
+        }
+
+        private static WTMContext CreateRouting(IDataContext dc, bool signedIn, params FrameworkTenant[] tenants)
+        {
+            var wtm = MockWtmContext.CreateWtmContext(usercode: "alice", createDc: key => dc);
+            wtm.GlobaInfo.SetTenantGetFunc(() => tenants.ToList());
+            if (signedIn == false)
+            {
+                wtm.LoginUserInfo = null;
+            }
+            return wtm;
+        }
+
+        [TestMethod]
+        public void CreateFileDC_ForACapabilityOfAnAnonymousCaller_ReadsInTheTenantOfTheCapability()
+        {
+            var provider = new EphemeralDataProtectionProvider();
+            var issuer = Create("alice", provider, FileEndpointMode.Enforce, configure: c => TwoConnections(c));
+            issuer.LoginUserInfo = new LoginUserInfo { ITCode = "alice", TenantCode = "t1", CurrentTenant = "t1" };
+            var capability = issuer.CreateFileCapability(FileId);
+
+            var anonymousCheck = Create("alice", provider, FileEndpointMode.Enforce, configure: c => TwoConnections(c));
+            anonymousCheck.LoginUserInfo = null;
+            var connection = anonymousCheck.ResolveFileConnection(null, FileId.ToString(), FilePurpose.View, capability);
+            Assert.AreEqual("t1", connection.Tenant);
+
+            var dc = new EmptyContext(Guid.NewGuid().ToString(), DBTypeEnum.Memory);
+            var anonymous = CreateRouting(dc, false, new FrameworkTenant { TCode = "t1" });
+            Assert.AreSame(dc, anonymous.CreateFileDC(connection));
+            Assert.AreEqual("t1", dc.TenantCode, "the data is read in the tenant of the capability");
+        }
+
+        [TestMethod]
+        public void CreateFileDC_ForASignedInCallerOrWithoutATenant_IsTheOrdinaryOne()
+        {
+            var dc = new EmptyContext(Guid.NewGuid().ToString(), DBTypeEnum.Memory);
+            var signedIn = CreateRouting(dc, true, new FrameworkTenant { TCode = "t1" });
+            var provider = new EphemeralDataProtectionProvider();
+            var issuer = Create("alice", provider, FileEndpointMode.Enforce, configure: c => TwoConnections(c));
+            issuer.LoginUserInfo = new LoginUserInfo { ITCode = "alice", TenantCode = "t1", CurrentTenant = "t1" };
+            var connection = issuer.ResolveFileConnection(null, FileId.ToString(), FilePurpose.View, issuer.CreateFileCapability(FileId));
+            Assert.AreEqual("t1", connection.Tenant);
+            Assert.AreSame(dc, signedIn.CreateFileDC(connection));
+            Assert.IsNull(dc.TenantCode, "a signed-in caller keeps the tenant its own context gives");
+
+            var anonymous = CreateRouting(dc, false, new FrameworkTenant { TCode = "t1" });
+            Assert.AreSame(dc, anonymous.CreateFileDC(null));
+            Assert.AreSame(dc, anonymous.CreateFileDC(FileConnectionDecision.Server()));
+            Assert.IsNull(dc.TenantCode);
+        }
+
         // ---- the link buttons ----------------------------------------------------------------------------------------------------------
 
         private sealed class OldUiService : IUIService

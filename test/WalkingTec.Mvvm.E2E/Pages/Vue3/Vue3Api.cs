@@ -99,6 +99,25 @@ namespace WalkingTec.Mvvm.E2E.Pages.Vue3
             return doc.RootElement.GetProperty("Id").GetString();
         }
 
+        /// <summary>Uploads through <paramref name="endpoint"/> and returns the whole answer (<c>Id</c>, <c>Url</c>, <c>Ref</c>, <c>DeleteRef</c>, ...).</summary>
+        public async Task<JsonElement> UploadFullAsync(string fileName, string contentType, byte[] content, string endpoint = "/api/_file/Upload")
+        {
+            var form = _context.CreateFormData();
+            form.Set("file", new FilePayload { Name = fileName, MimeType = contentType, Buffer = content });
+            var res = await _context.PostAsync(endpoint, new() { Multipart = form });
+            var text = await res.TextAsync();
+            if (res.Ok == false)
+            {
+                throw new InvalidOperationException($"Upload of {fileName} failed: {res.Status} {text}");
+            }
+            using var doc = JsonDocument.Parse(text);
+            return doc.RootElement.Clone();
+        }
+
+        /// <summary>A client without credentials, like the <c>img</c> tags of the SPA.</summary>
+        public static Task<IAPIRequestContext> CreateAnonymousAsync(IPlaywright playwright, SiteProcess site) =>
+            playwright.APIRequest.NewContextAsync(new() { BaseURL = site.BaseUri.ToString() });
+
         private static async Task<JsonElement> ReadAsync(IAPIResponse res, string url, int expected)
         {
             var text = await res.TextAsync();

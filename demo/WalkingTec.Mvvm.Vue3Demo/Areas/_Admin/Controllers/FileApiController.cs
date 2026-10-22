@@ -3,20 +3,20 @@ using System;
 using System.IO;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Processing;
-using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.StaticFiles;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
 using WalkingTec.Mvvm.Mvc;
-using WalkingTec.Mvvm.Core.Extensions;
-using System.Linq;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace WalkingTec.Mvvm.Admin.Api
 {
+    /// <summary>
+    /// The file API of the single page application. Every action is one call of <see cref="SpaFileApi"/>, which owns the rules (references,
+    /// <c>FileEndpoints:Mode</c>, connections, response headers); only the decoding limits for pictures are the application's
+    /// (<see cref="ImageDecodeGuard"/>). Keep the <c>_DONOT_USE_FREF</c> parameters and the <see cref="FileEndpointAttribute"/> markers when you copy it.
+    /// </summary>
     [AuthorizeJwtWithCookie]
     [ApiController]
     [Route("api/_file")]
@@ -26,201 +26,91 @@ namespace WalkingTec.Mvvm.Admin.Api
     {
         [HttpPost("[action]")]
         [ActionDescription("UploadFile")]
-        public IActionResult Upload([FromServices] WtmFileProvider fp, string sm = null, string groupName = null, string subdir = null, string extra = null, string csName = null)
-        {
-            var FileData = Request.Form.Files[0];
-            var file = fp.Upload(FileData.FileName, FileData.Length, FileData.OpenReadStream(), groupName, subdir, extra, sm, Wtm.CreateDC(cskey: csName));
-            string rv = System.Text.Json.JsonSerializer.Serialize(new { Id = file.GetID(), Name = file.FileName, errno = 0, data = new { url = $"/api/_file/getfile/{file.GetID()}" } });
-            return Ok(rv);
-        }
+        [FileEndpoint]
+        public IActionResult Upload([FromServices] WtmFileProvider fp, string sm = null, string groupName = null, string subdir = null, string extra = null, string csName = null, string _DONOT_USE_FREF = null)
+            => SpaFileApi.Upload(this, fp, sm, groupName, subdir, extra, csName, _DONOT_USE_FREF);
 
         [HttpPost("[action]")]
         [ActionDescription("UploadPic")]
-        public IActionResult UploadImage([FromServices] WtmFileProvider fp, int? width = null, int? height = null, string sm = null, string groupName = null, string subdir = null, string extra = null, string csName = null)
-        {
-            if (width == null && height == null)
-            {
-                return Upload(fp, sm, groupName, subdir, extra, csName);
-            }
-            var FileData = Request.Form.Files[0];
+        [FileEndpoint]
+        public IActionResult UploadImage([FromServices] WtmFileProvider fp, int? width = null, int? height = null, string sm = null, string groupName = null, string subdir = null, string extra = null, string csName = null, string _DONOT_USE_FREF = null)
+            => SpaFileApi.UploadImage(this, fp, width, height, sm, groupName, subdir, extra, csName, _DONOT_USE_FREF, ResizeImage);
 
-            // Mitigation for ImageSharp advisories (#78): format allowlist + size/dimension limits before decoding
-            var limits = ImageDecodeLimits.FromConfiguration(HttpContext.RequestServices.GetService<IConfiguration>());
-            Image oimage;
-            string error;
-            using (var upstream = FileData.OpenReadStream())
-            {
-                if (!ImageDecodeGuard.TryLoad(upstream, limits, out oimage, out error) || oimage == null)
-                {
-                    LogImageRejected("UploadImage", error);
-                    return BadRequest(Localizer["Sys.UploadFailed"]);
-                }
-            }
-            WalkingTec.Mvvm.Core.Models.IWtmFile file;
-            using (oimage)
-            {
-                if (!ImageDecodeGuard.TryResolveSize(width, height, oimage.Width, oimage.Height, limits, out var tw, out var th))
-                {
-                    LogImageRejected("UploadImage", "Requested size out of range");
-                    return BadRequest(Localizer["Sys.UploadFailed"]);
-                }
-                using (var ms = new MemoryStream())
-                {
-                    oimage.Mutate(x => x.Resize(tw, th));
-                    oimage.SaveAsJpeg(ms);
-                    ms.Position = 0;
-                    file = fp.Upload(FileData.FileName, FileData.Length, ms, groupName, subdir, extra, sm, Wtm.CreateDC(cskey: csName));
-                }
-            }
-
-            if (file != null)
-            {
-                string rv = System.Text.Json.JsonSerializer.Serialize(new { Id = file.GetID(), Name = file.FileName, errno = 0, data = new { url = $"/api/_file/getfile/{file.GetID()}" } });
-                return Ok(rv);
-            }
-            return BadRequest(Localizer["Sys.UploadFailed"]);
-
-        }
-
-        private void LogImageRejected(string action, string reason)
-        {
-            // reason is a fixed string from the guard, never file content
-            HttpContext.RequestServices.GetService<ILoggerFactory>()?.CreateLogger<FileApiController>()
-                .LogWarning("{Action}: image rejected by upload guard: {Reason}", action, reason);
-        }
+        /// <summary>The upload of the rich text editor: the file is embedded in the content, so it stays reachable by its id.</summary>
+        [HttpPost("[action]")]
+        [ActionDescription("UploadPic")]
+        [FileEndpoint]
+        public IActionResult UploadForEditor([FromServices] WtmFileProvider fp, string sm = null, string groupName = null, string subdir = null, string extra = null, string csName = null, string _DONOT_USE_FREF = null)
+            => SpaFileApi.UploadForEditor(this, fp, sm, groupName, subdir, extra, csName, _DONOT_USE_FREF);
 
         [HttpGet("[action]/{id}")]
         [ActionDescription("GetFileName")]
         [Public]
-        public IActionResult GetFileName([FromServices] WtmFileProvider fp, string id, string csName = null)
-        {
-            return Ok(fp.GetFileName(id, Wtm.CreateDC(cskey: csName)));
-        }
+        [FileEndpoint(PublicWhenFilesPublic = true)]
+        public IActionResult GetFileName([FromServices] WtmFileProvider fp, string id, string csName = null, string _DONOT_USE_FREF = null)
+            => SpaFileApi.GetFileName(this, fp, id, csName, _DONOT_USE_FREF);
 
         [HttpGet("[action]/{id}")]
         [ActionDescription("GetFile")]
         [Public]
-        public async Task<IActionResult> GetFile([FromServices] WtmFileProvider fp, string id, string csName = null, int? width = null, int? height = null)
-        {
-            var file = fp.GetFile(id, true, Wtm.CreateDC(cskey: csName));
+        [FileEndpoint(PublicWhenFilesPublic = true)]
+        public IActionResult GetFile([FromServices] WtmFileProvider fp, string id, string csName = null, int? width = null, int? height = null, string _DONOT_USE_FREF = null)
+            => SpaFileApi.GetFile(this, fp, id, csName, width, height, _DONOT_USE_FREF, ResizeImage);
 
-
-            if (file == null)
-            {
-                return BadRequest(Localizer["Sys.FileNotFound"]);
-            }
-            Stream source = file.DataStream;
-            MemoryStream buffer = null;
-            try
-            {
-                if (width != null || height != null)
-                {
-                    // Mitigation for ImageSharp advisories (#78); on rejection fall through to the raw file below
-                    var limits = ImageDecodeLimits.FromConfiguration(HttpContext.RequestServices.GetService<IConfiguration>());
-                    var loaded = ImageDecodeGuard.TryLoad(file.DataStream, limits, out Image oimage, out buffer, out var error);
-                    if (buffer != null)
-                    {
-                        // the provider stream is consumed now; serve the fallback from the buffered copy
-                        source = buffer;
-                    }
-                    else if (file.DataStream != null && file.DataStream.CanSeek)
-                    {
-                        file.DataStream.Position = 0;
-                    }
-                    if (!loaded)
-                    {
-                        LogImageRejected("GetFile", error);
-                    }
-                    else
-                    {
-                        using (oimage)
-                        {
-                            if (ImageDecodeGuard.TryResolveSize(width, height, oimage.Width, oimage.Height, limits, out var tw, out var th))
-                            {
-                                using (var ms = new MemoryStream())
-                                {
-                                    oimage.Mutate(x => x.Resize(tw, th));
-                                    oimage.SaveAsJpeg(ms);
-                                    ms.Position = 0;
-                                    await ms.CopyToAsync(Response.Body);
-                                }
-                                file.DataStream?.Dispose();
-                                buffer?.Dispose();
-                                return new EmptyResult();
-                            }
-                            LogImageRejected("GetFile", "Requested size out of range");
-                        }
-                    }
-                }
-            }
-            catch { }
-
-            var ext = file.FileExt.ToLower();
-            if (ext == "mp4")
-            {
-                return File(source, "video/mpeg4", enableRangeProcessing: true);
-            }
-            else
-            {
-                await source?.CopyToAsync(Response.Body);
-                file.DataStream?.Dispose();
-                buffer?.Dispose();
-                return new EmptyResult();
-            }
-        }
-
+        /// <summary>The name, extension, length and upload time of a file; never its data, path or handler information.</summary>
         [HttpGet("[action]/{id}")]
         [ActionDescription("GetFileName")]
         [Public]
-        public IActionResult GetFileInfo([FromServices] WtmFileProvider fp, string id, string csName = null)
-        {
-            FileAttachment rv = new FileAttachment();
-            using (var dc = Wtm.CreateDC(cskey: csName))
-            {
-                rv = dc.Set<FileAttachment>().CheckID(id).FirstOrDefault();
-            }
-            return Ok(rv);
-        }
+        [FileEndpoint(PublicWhenFilesPublic = true)]
+        public IActionResult GetFileInfo(string id, string csName = null, string _DONOT_USE_FREF = null)
+            => SpaFileApi.GetFileInfo(this, id, csName, _DONOT_USE_FREF);
 
         [HttpGet("[action]/{id}")]
         [ActionDescription("GetUserPhoto")]
         [Public]
-        public async Task<IActionResult> GetUserPhoto([FromServices] WtmFileProvider fp, string id, string csName = null, int? width = null, int? height = null)
-        {
-            if (ConfigInfo.HasMainHost && Wtm.LoginUserInfo?.CurrentTenant == null)
-            {
-                return Redirect(Wtm.ConfigInfo.MainHost+ Request.Path);
-            }
-            return await this.GetFile(fp,id, csName, width, height);
-        }
-
+        [FileEndpoint(PublicWhenFilesPublic = true)]
+        public IActionResult GetUserPhoto([FromServices] WtmFileProvider fp, string id, string csName = null, int? width = null, int? height = null, string _DONOT_USE_FREF = null)
+            => SpaFileApi.GetUserPhoto(this, fp, id, csName, width, height, _DONOT_USE_FREF, ResizeImage);
 
         [HttpGet("[action]/{id}")]
         [ActionDescription("DownloadFile")]
         [Public]
-        public IActionResult DownloadFile([FromServices] WtmFileProvider fp, string id, string csName = null)
-        {
-            var file = fp.GetFile(id, true, Wtm.CreateDC(cskey:csName));
-            if (file == null)
-            {
-                return BadRequest(Localizer["Sys.FileNotFound"]);
-            }
-            var ext = file.FileExt.ToLower();
-            var provider = new FileExtensionContentTypeProvider();
-            string contentType;
-            if (!provider.TryGetContentType(file.FileName, out contentType))
-            {
-                contentType = "application/octet-stream";
-            }
-            return File(file.DataStream, contentType, file.FileName ?? (Guid.NewGuid().ToString() + ext));
-        }
+        [FileEndpoint(PublicWhenFilesPublic = true)]
+        public IActionResult DownloadFile([FromServices] WtmFileProvider fp, string id, string csName = null, string _DONOT_USE_FREF = null)
+            => SpaFileApi.DownloadFile(this, fp, id, csName, _DONOT_USE_FREF);
 
+        /// <summary>
+        /// Deletes a file the caller uploaded: needs the delete reference (<c>DeleteRef</c>) of the upload answer. GET is kept for older clients.
+        /// </summary>
         [HttpGet("[action]/{id}")]
+        [HttpPost("[action]/{id}")]
+        [HttpDelete("[action]/{id}")]
         [ActionDescription("DeleteFile")]
-        public IActionResult DeletedFile([FromServices] WtmFileProvider fp, string id, string csName = null)
+        [FileEndpoint]
+        public IActionResult DeletedFile([FromServices] WtmFileProvider fp, string id, string csName = null, string _DONOT_USE_FREF = null)
+            => SpaFileApi.DeleteFile(this, fp, id, csName, _DONOT_USE_FREF);
+
+        // Mitigation for ImageSharp advisories (#78): format allowlist and size/dimension limits before anything is decoded
+        private SpaImageResult ResizeImage(Stream source, int? width, int? height)
         {
-            fp.DeleteFile(id, Wtm.CreateDC(cskey: csName));
-            return Ok(true);
+            var limits = ImageDecodeLimits.FromConfiguration(HttpContext.RequestServices.GetService<IConfiguration>());
+            if (!ImageDecodeGuard.TryLoad(source, limits, out Image image, out MemoryStream buffer, out var error) || image == null)
+            {
+                return new SpaImageResult { Buffered = buffer, Error = error };
+            }
+            using (image)
+            {
+                if (!ImageDecodeGuard.TryResolveSize(width, height, image.Width, image.Height, limits, out var targetWidth, out var targetHeight))
+                {
+                    return new SpaImageResult { Buffered = buffer, Error = "Requested size out of range" };
+                }
+                var resized = new MemoryStream();
+                image.Mutate(x => x.Resize(targetWidth, targetHeight));
+                image.SaveAsJpeg(resized);
+                resized.Position = 0;
+                buffer?.Dispose();
+                return new SpaImageResult { Resized = resized };
+            }
         }
     }
 }

@@ -50,6 +50,12 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
             // the SPA and the API are served from the same origin; no cross origin access is needed (and the demo's wildcard setting is not wanted)
             env["CorsOptions__EnableAll"] = "false";
             env["IsQuickDebug"] = "false";
+            // the mode of the file endpoints can be chosen for a whole run: E2E_FILE_ENDPOINTS_MODE=Enforce (default of the product: Audit)
+            var fileMode = Environment.GetEnvironmentVariable(LayUiSetup.FileEndpointsModeVariable);
+            if (string.IsNullOrWhiteSpace(fileMode) == false)
+            {
+                env["FileEndpoints__Mode"] = fileMode.Trim();
+            }
         }
 
         /// <summary>

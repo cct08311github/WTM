@@ -14,7 +14,7 @@
 | `GetFileName` | 檔名 | `Name` |
 | `Upload`、`UploadImage`、`UploadForLayUIRichTextBox`、`UploadForLayUIUEditor` | 上傳 | 不要求參考；參考（目的 `Upload`）只用來帶頁面的連線 |
 
-**範圍只有框架的 `/_Framework` 檔案端點。** demo／範本的 `FileApiController`（`/api/_file/*`，包括它的 `GetFile`、`GetFileName`、`DownloadFile`、`UploadImage`）**不受 `FileEndpoints:Mode` 影響**，會另行處理。
+**本節的範圍是框架的 `/_Framework` 檔案端點。** demo／範本的 `FileApiController`（`/api/_file/*`）使用同一套機制，另見第 7 節。
 
 沒有變更的部分：`WtmFileProvider.GetFile/Upload/DeleteFile`（下游在伺服器端呼叫，例如自己的匯入 VM；內嵌標記只在 HTTP 端點處理）、`DeletedFileIds` 與匯入的 `UploadFileId` 的信任方式。
 
@@ -84,3 +84,18 @@
 ## 6. 測試
 
 Core.Test：`FileEndpointGuardTest`（簽發、驗證、竄改、到期、使用者、租戶與所屬租戶、目的、連線、模式、不存在的檔案、內嵌標記、截止日期）、`FileServingTest`（內容類型與 attachment 判斷）、`FileEndpointContextTest`（連結、記錄、政策、`IUIService` 相容、按鈕）。E2E：`FileEndpointTests`（預設 `Audit`；環境變數 `E2E_FILE_ENDPOINTS_MODE=Enforce|Legacy` 以其他模式跑整個 LayUI 測試站台）、`LayUiUploadTests`、`FrameworkEndpointTests`、權限矩陣（含以 `Enforce` 啟動的 `file-enforce` 設定）。
+
+## 7. 單頁應用程式的檔案 API（`/api/_file/*`）
+
+範本的 `FileApiController` 的每個 action 呼叫 `WalkingTec.Mvvm.Mvc.SpaFileApi` 一次，規則與第 3 節相同（參考、`FileEndpoints:Mode`、連線、`IFileAccessPolicy`），差別如下：
+
+- **讀取用 capability**：SPA 的 `<img>` 不能帶憑證，所以伺服器在資料旁寫一個不綁定使用者的短期參考（`Wtm.CreateFileCapability`，用途 `Read`，綁定檔案、連線、租戶與到期時間）。列表的純文字回應是 `<欄位>__fref`，詳細資料是 `FileRefs`（id → 參考），上傳回應是 `Ref`。持有它的人在到期前可以顯示、下載、取得該檔案的名稱；它不含刪除與上傳。已登入且租戶不同的呼叫者不能使用另一個租戶簽發的 capability；未登入的呼叫者依 capability 的租戶讀取資料（租戶有自己的資料庫時用該資料庫）。
+- **未登入且 `IsFilePublic=false`**：`Enforce` 只接受有效參考；另外，內嵌的檔案與 `LegacyUploadedBefore` 之前的檔案可以只用 id **顯示**（`GetFile`、`GetUserPhoto`），不能下載或查名稱；`Audit` 提供並記錄；`Legacy` 照舊。`IsFilePublic=true` 時依第 3.2 節。
+- **刪除**：需要登入與發給該使用者、該檔案的 `Delete` 參考（上傳回應的 `DeleteRef`，綁定使用者、租戶、到期）。沒有時拒絕並記錄，除 `Legacy` 外的所有模式（含 `Audit`）。
+- **頭像**：一個檔案若是租戶內可見、有效使用者的 `PhotoId` 且為圖片類型（不含 SVG），`GetUserPhoto` 不需參考即可顯示（`Avatar`，政策仍會被詢問，`FileAccessRequest.Admission` 為 `Avatar`，應用程式可據此限制）。結果快取 30 秒。範本在新增或變更使用者的 `PhotoId` 時，只接受存在、為圖片類型且沒有被其他記錄的 `FileAttachment` 外鍵使用的檔案（`Wtm.IsPhotoAssignable`），匿名註冊不採用客戶端的 `PhotoId`。
+- **`GetFileInfo`** 在所有模式只回傳 `Id`、`FileName`、`FileExt`、`Length`、`UploadTime`。
+- **上傳**：需要登入，移除 `extra` 的內嵌標記，連線依參考決定；`UploadForEditor` 由伺服器加內嵌標記。回應保留 `Id`、`Name`、`errno`、`data.url`，新增 `Url`、`Ref`、`DeleteRef`。
+- 拒絕為 HTTP 403。回應標頭見第 3.2 節（`nosniff`，內容類型來自 `FileServing`，會被瀏覽器執行的內容用 `attachment`，`DownloadFile` 一律 `attachment`）。
+- 未更新的副本：路由在 `api/_file` 的 controller 暴露 `DeletedFile`／`GetFileInfo` 而沒有 `[FileEndpoint]` 標記，啟動時輸出 Warning。更新方式見 [vue3-file-api-downstream.md](vue3-file-api-downstream.md)。
+
+
