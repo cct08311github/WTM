@@ -288,9 +288,10 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.Controllers
         /// </summary>
         [AllRights]
         [ActionDescription("GenericReference")]
-        public ActionResult GenericReference(string vm, string purposes, string fields)
+        public ActionResult GenericReference(string vm, string purposes, string fields, string cs)
         {
-            var reference = Wtm.CreateGenericEndpointReference(Type.GetType(vm), Enum.Parse<GenericEndpointPurpose>(purposes), null, string.IsNullOrEmpty(fields) ? null : fields.Split(','));
+            // cs: pins the reference to a connection key (empty: the connection the request itself runs on)
+            var reference = Wtm.CreateGenericEndpointReference(Type.GetType(vm), Enum.Parse<GenericEndpointPurpose>(purposes), string.IsNullOrEmpty(cs) ? null : cs, string.IsNullOrEmpty(fields) ? null : fields.Split(','));
             return Content(reference ?? "", "text/plain");
         }
 

@@ -33,17 +33,57 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
             return Uri.UnescapeDataString(m.Groups[1].Value);
         }
 
+        private static string RenderGrid(LayuiSchoolListVM listVm, bool inSelector = false)
+        {
+            return Render(new DataTableTagHelper { Vm = Self(listVm, "Vm"), Url = "/_Framework/GetPagingData", IsInSelector = inSelector }, "wt:grid");
+        }
+
         [TestMethod]
-        public void Grid_WritesAReferenceThatAdmitsItsPagingAndExportRequests()
+        public void Grid_WithoutAnExportButton_WritesAReferenceForPagingOnly()
         {
             var listVm = NewListVm();
 
-            var html = Render(new DataTableTagHelper { Vm = Self(listVm, "Vm"), Url = "/_Framework/GetPagingData" }, "wt:grid");
+            var reference = ReferenceIn(RenderGrid(listVm));
 
-            var reference = ReferenceIn(html);
             Assert.IsTrue(listVm.Wtm.AuthorizeGenericEndpoint(ListVmName, reference, GenericEndpointPurpose.List, true, listVm.CurrentCS).Allowed);
-            Assert.IsTrue(listVm.Wtm.AuthorizeGenericEndpoint(ListVmName, reference, GenericEndpointPurpose.Export, true, listVm.CurrentCS).Allowed);
+            Assert.IsFalse(listVm.Wtm.AuthorizeGenericEndpoint(ListVmName, reference, GenericEndpointPurpose.Export, true, listVm.CurrentCS).Allowed);
             Assert.IsFalse(listVm.Wtm.AuthorizeGenericEndpoint(ListVmName, reference, GenericEndpointPurpose.Update, false, field: "SchoolName").Allowed);
+        }
+
+        [TestMethod]
+        public void Grid_WithTheStandardExportButton_WritesAReferenceThatAdmitsPagingAndExport()
+        {
+            var listVm = new LayuiExportSchoolListVM { Wtm = MockWtmContext.CreateWtmContext(usercode: "alice", dataProtection: _provider) };
+            var name = GenericEndpointGuard.GetViewModelName(typeof(LayuiExportSchoolListVM));
+
+            var reference = ReferenceIn(RenderGrid(listVm));
+
+            Assert.IsTrue(listVm.Wtm.AuthorizeGenericEndpoint(name, reference, GenericEndpointPurpose.List, true, listVm.CurrentCS).Allowed);
+            Assert.IsTrue(listVm.Wtm.AuthorizeGenericEndpoint(name, reference, GenericEndpointPurpose.Export, true, listVm.CurrentCS).Allowed);
+        }
+
+        [TestMethod]
+        public void Grid_WithTheFrameworkExportButton_WritesAReferenceThatAdmitsPagingAndExport()
+        {
+            var listVm = new LayuiFrameworkExportSchoolListVM { Wtm = MockWtmContext.CreateWtmContext(usercode: "alice", dataProtection: _provider) };
+            var name = GenericEndpointGuard.GetViewModelName(typeof(LayuiFrameworkExportSchoolListVM));
+
+            var reference = ReferenceIn(RenderGrid(listVm));
+
+            Assert.IsTrue(listVm.Wtm.AuthorizeGenericEndpoint(name, reference, GenericEndpointPurpose.List, true, listVm.CurrentCS).Allowed);
+            Assert.IsTrue(listVm.Wtm.AuthorizeGenericEndpoint(name, reference, GenericEndpointPurpose.Export, true, listVm.CurrentCS).Allowed);
+        }
+
+        [TestMethod]
+        public void GridInTheSelectorPopup_WritesAReferenceForPagingOnly_EvenWhenTheViewModelHasExportButtons()
+        {
+            var listVm = new LayuiExportSchoolListVM { Wtm = MockWtmContext.CreateWtmContext(usercode: "alice", dataProtection: _provider) };
+            var name = GenericEndpointGuard.GetViewModelName(typeof(LayuiExportSchoolListVM));
+
+            var reference = ReferenceIn(RenderGrid(listVm, inSelector: true));
+
+            Assert.IsTrue(listVm.Wtm.AuthorizeGenericEndpoint(name, reference, GenericEndpointPurpose.List, true, listVm.CurrentCS).Allowed);
+            Assert.IsFalse(listVm.Wtm.AuthorizeGenericEndpoint(name, reference, GenericEndpointPurpose.Export, true, listVm.CurrentCS).Allowed);
         }
 
         [TestMethod]

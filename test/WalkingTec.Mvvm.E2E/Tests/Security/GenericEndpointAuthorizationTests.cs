@@ -96,9 +96,9 @@ namespace WalkingTec.Mvvm.E2E.Tests.Security
             return FilterIn(page.Body);
         }
 
-        private static async Task<string> LabReferenceAsync(string vm, string purposes, string fields = null)
+        private static async Task<string> LabReferenceAsync(string vm, string purposes, string fields = null, string cs = null)
         {
-            var url = "/Lab/GenericReference?vm=" + Uri.EscapeDataString(vm) + "&purposes=" + purposes + (fields == null ? "" : "&fields=" + fields);
+            var url = "/Lab/GenericReference?vm=" + Uri.EscapeDataString(vm) + "&purposes=" + purposes + (fields == null ? "" : "&fields=" + fields) + (cs == null ? "" : "&cs=" + cs);
             var response = await SendAsync("admin", HttpMethod.Get, url);
             Assert.IsTrue(response.Body.Length > 20, "No reference was issued.");
             return response.Body;
@@ -389,6 +389,95 @@ namespace WalkingTec.Mvvm.E2E.Tests.Security
             Assert.AreEqual(_noPrivilegeText, withoutReference.Body.Trim());
             Assert.AreEqual(_noPrivilegeText, otherUser.Body.Trim());
             Assert.AreEqual(_noPrivilegeText, listReference.Body.Trim());
+        }
+        // ---- the connection of a page is decided by the server ------------------------------------------------------------
+
+        [TestMethod]
+        [DataRow("default")]
+        [DataRow("no-such-connection")]
+        public async Task ConnectionKeyInTheQueryString_DoesNotChangeTheConnectionOfThePage(string requested)
+        {
+            var plain = await ReportFilterAsync();
+
+            var page = await SendAsync("admin", HttpMethod.Get, "/Report/Index?DONOTUSECSName=" + requested);
+            var asked = FilterIn(page.Body);
+
+            Assert.AreEqual(plain["_DONOT_USE_CS"], asked["_DONOT_USE_CS"], "The page runs on the connection the server decides.");
+            var response = await SendAsync("admin", HttpMethod.Post, "/_Framework/GetPagingData", GridForm(asked["_DONOT_USE_VMNAME"], asked["_DONOT_USE_VMREF"], requested), gridRequest: true);
+            Assert.AreEqual(403, CodeOf(response.Body), "The reference of the page does not serve another connection.");
+        }
+
+        [TestMethod]
+        public async Task GetEmptyData_UpdateModelProperty_AndTheTemplate_AreBoundToTheConnectionTheServerUses()
+        {
+            // a reference pinned to a connection other than the one the request runs on (the default, an empty key) is not honoured
+            var pinnedList = await LabReferenceAsync(LabListVm, "List", cs: "default");
+            var pinnedUpdate = await LabReferenceAsync(GadgetVmName, "Update", "Name", "default");
+            var pinnedTemplate = await LabReferenceAsync(GadgetImportVm, "Template", cs: "default");
+            var okTemplate = await LabReferenceAsync(GadgetImportVm, "Template");
+
+            var emptyUrl = "/_Framework/GetEmptyData?_DONOT_USE_VMNAME=" + Uri.EscapeDataString(LabListVm) + "&_DONOT_USE_VMREF=";
+            var templateUrl = "/_Framework/GetExcelTemplate?_DONOT_USE_VMNAME=" + Uri.EscapeDataString(GadgetImportVm) + "&_DONOT_USE_VMREF=";
+
+            Assert.AreEqual(_noPrivilegeText, (await SendAsync("admin", HttpMethod.Get, emptyUrl + pinnedList)).Body.Trim());
+            Assert.AreEqual(_noPrivilegeText, (await SendAsync("admin", HttpMethod.Get, templateUrl + pinnedTemplate)).Body.Trim());
+            var update = await SendAsync("admin", HttpMethod.Post, "/_Framework/UpdateModelProperty", new Dictionary<string, string>
+            {
+                ["_DONOT_USE_VMNAME"] = GadgetVmName, ["id"] = Guid.NewGuid().ToString(), ["field"] = "Name", ["value"] = "x", ["_DONOT_USE_VMREF"] = pinnedUpdate
+            });
+            Assert.AreEqual(_noPrivilegeText, update.Body.Trim());
+            StringAssert.Contains((await SendAsync("admin", HttpMethod.Get, templateUrl + okTemplate)).ContentType, "ms-excel");
+        }
+
+        // ---- a reference for the selector does not give the right to export ---------------------------------------------------------
+
+        [TestMethod]
+        public async Task SelectorPopup_GridReference_AdmitsPaging_ButNotExport()
+        {
+            var filter = await SelectorFilterAsync();
+            var popup = await SendAsync("admin", HttpMethod.Post, "/_Framework/Selector", filter);
+            var grid = FilterIn(popup.Body);
+
+            var paging = await SendAsync("admin", HttpMethod.Post, "/_Framework/GetPagingData", GridForm(grid["_DONOT_USE_VMNAME"], grid["_DONOT_USE_VMREF"], grid["_DONOT_USE_CS"]), gridRequest: true);
+            var export = await SendAsync("admin", HttpMethod.Post, "/_Framework/GetExportExcel", GridForm(grid["_DONOT_USE_VMNAME"], grid["_DONOT_USE_VMREF"], grid["_DONOT_USE_CS"]));
+            var viaSelectorReference = await SendAsync("admin", HttpMethod.Post, "/_Framework/GetExportExcel", GridForm(filter["_DONOT_USE_VMNAME"], filter["_DONOT_USE_VMREF"], filter["_DONOT_USE_CURRENTCS"]));
+
+            Assert.AreEqual(200, CodeOf(paging.Body));
+            Assert.AreEqual(_noPrivilegeText, export.Body.Trim());
+            Assert.AreEqual(_noPrivilegeText, viaSelectorReference.Body.Trim());
+        }
+
+        // ---- users with ordinary rights keep working ------------------------------------------------------------------------------
+
+        [TestMethod]
+        public async Task LimitedRole_OpensItsPage_AndItsGridLoadsRows()
+        {
+            var page = await SendAsync("limited", HttpMethod.Get, "/Gadget/Index");
+            Assert.AreEqual(HttpStatusCode.OK, page.Status);
+            Assert.AreNotEqual(_noPrivilegeText, page.Body.Trim());
+            var filter = FilterIn(page.Body);
+
+            var response = await SendAsync("limited", HttpMethod.Post, "/_Framework/GetPagingData", GridForm(filter["_DONOT_USE_VMNAME"], filter["_DONOT_USE_VMREF"], filter["_DONOT_USE_CS"]), gridRequest: true);
+
+            Assert.AreEqual(200, CodeOf(response.Body));
+            StringAssert.Contains(response.Body, "Alpha Wrench");
+        }
+
+        [TestMethod]
+        [DataRow("norole")]
+        [DataRow("limited")]
+        public async Task OrdinaryUser_UsesTheSelectorOfAPageOpenToEveryone(string identity)
+        {
+            var page = await SendAsync(identity, HttpMethod.Get, "/Lab/Pickers");
+            var filter = FilterIn(page.Body);
+
+            var popup = await SendAsync(identity, HttpMethod.Post, "/_Framework/Selector", filter);
+            Assert.AreEqual(HttpStatusCode.OK, popup.Status);
+            StringAssert.Contains(popup.Body, "/_Framework/GetPagingData");
+
+            var grid = FilterIn(popup.Body);
+            var rows = await SendAsync(identity, HttpMethod.Post, "/_Framework/GetPagingData", GridForm(grid["_DONOT_USE_VMNAME"], grid["_DONOT_USE_VMREF"], grid["_DONOT_USE_CS"]), gridRequest: true);
+            Assert.AreEqual(200, CodeOf(rows.Body));
         }
     }
 }
