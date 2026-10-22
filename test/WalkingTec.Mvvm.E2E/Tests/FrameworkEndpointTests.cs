@@ -190,6 +190,59 @@ namespace WalkingTec.Mvvm.E2E.Tests
             Assert.IsFalse(html.Contains("it's done"), "The quote must not end the string literal.");
         }
 
+        private async Task<string> SelectorDialogAsync(Func<string, string> value)
+        {
+            var reference = await ReferenceAsync(LabListVm, "Selector");
+            var form = Api.CreateFormData()
+                .Set("_DONOT_USE_VMNAME", LabListVm)
+                .Set("_DONOT_USE_VMREF", reference)
+                .Set("_DONOT_USE_KFIELD", value("Name"))
+                .Set("_DONOT_USE_VFIELD", "ID")
+                .Set("_DONOT_USE_FIELD", value("Entity.Items"))
+                .Set("_DONOT_USE_MULTI_SEL", "true")
+                .Set("_DONOT_USE_SEL_ID", value("Entity_Items"))
+                .Set("_DONOT_USE_SUBMIT", value("onPick"))
+                .Set("_DONOT_USE_LINK_FIELD", "Entity_Other")
+                .Set("_DONOT_USE_TRIGGER_URL", value("/Api/Changed"));
+            var response = await Api.PostAsync("/_Framework/Selector", new APIRequestContextOptions { Form = form });
+            Assert.AreEqual(200, response.Status);
+            return await response.TextAsync();
+        }
+
+        [TestMethod]
+        public async Task Selector_OrdinaryRequestValues_AreWrittenIntoTheDialogScriptAsTheyAre()
+        {
+            var html = await SelectorDialogAsync(v => v);
+
+            StringAssert.Contains(html, "multiSel = true");
+            StringAssert.Contains(html, "displayStrArr.push(selected[i]['Name']);");
+            StringAssert.Contains(html, "name='Entity.Items' value='\" + selected[i]['ID'] + \"' />");
+            StringAssert.Contains(html, "onPick(selected);");
+            StringAssert.Contains(html, "$(\"#Entity_Items_Display\").val(");
+            StringAssert.Contains(html, "var url = '/Api/Changed?t='");
+            StringAssert.Contains(html, "ff.ChainChange(url, $('#Entity_Items_Display')[0]);");
+        }
+
+        [TestMethod]
+        public async Task Selector_RequestValuesWithSpecialCharacters_StayInsideTheirStringInTheDialogScript()
+        {
+            // the model binder already HTML-encodes quotes and angle brackets of the request; a backslash, a line break and a line separator
+            // are not touched by it and would end or change a script string literal
+            const string probe = "\\\n\u2028Z";
+            var html = await SelectorDialogAsync(v => v + probe);
+
+            StringAssert.Contains(html, "displayStrArr.push(selected[i]['Name\\\\\\n\\u2028Z']);");
+            StringAssert.Contains(html, "var url = '/Api/Changed\\\\\\n\\u2028Z?t='");
+            StringAssert.Contains(html, "$('#Entity_Items\\\\\\n\\u2028Z_Display')");
+            StringAssert.Contains(html, "$('#Entity_Items\\\\\\n\\u2028Z_Container input[type=hidden]')");
+            StringAssert.Contains(html, "name='Entity.Items\\\\\\n\\u2028Z' value='");
+            Assert.IsFalse(html.Contains("\u2028"), "A line separator was written into the page.");
+            Assert.IsFalse(html.Contains("Name\\\n"), "A backslash was written in front of a line break inside a string literal.");
+            // a submit handler that is not a function name is not written as code at all
+            Assert.IsFalse(html.Contains("onPick"), "A submit handler value that is not a function name must not be written as code.");
+            Assert.IsFalse(html.Contains("(selected);;"), "No call is written for a submit handler that is not a function name.");
+        }
+
         [TestMethod]
         public async Task SetTenant_WithoutTenants_AnswersWithAReloadScript()
         {
