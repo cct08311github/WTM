@@ -197,7 +197,8 @@ git merge --no-ff upstream/dotnet10
 | `Dockerfile`、`alpine.Dockerfile`、`.dockerignore` | 改為建置 Vue3Demo，含前端建置 stage；刪除 `wtmdoc.Dockerfile` | #16 |
 | `demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/wtmbuild.ts`、`public/menu.json` | 路徑改為跨平台；輸出依 key 排序 | #35、#37 |
 | `README.md`、`README.zh-CN.md` | 開頭多一段 fork 說明（其餘內容不動，降低同步衝突） | #19 |
-| `src/WalkingTec.Mvvm.Mvc/Views/_Framework/Selector.cshtml`、`src/WalkingTec.Mvvm.Mvc/Helper/SelectorScript.cs`（新增） | 寫入內聯腳本的值依所在位置編碼；`SubmitFunc` 只接受函數名或成員路徑 | 第 25 節 |
+| `src/WalkingTec.Mvvm.Mvc/Views/_Framework/Selector.cshtml`、`src/WalkingTec.Mvvm.Mvc/Helper/SelectorScript.cs`（新增） | 寫入內聯腳本的值依所在位置編碼；`SubmitFunc` 只接受函數名或成員路徑；選取列的值寫入隱藏欄位前以 `ff.EncodeHtml` 編碼 | 第 25 節 |
+| `src/WalkingTec.Mvvm.Mvc/framework_layui.js` | 下載／匯出表單的隱藏欄位（名稱、值、`Ids`）以 `ff.EncodeHtml` 編碼 | 第 25 節 |
 | `src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs` | `SetTenant` 移除 `[Public]`，檢查 `SetCurrentTenant` 的結果，改為 `async Task<IActionResult>` | 第 26 節 |
 | `src/WalkingTec.Mvvm.Core/WTMContext.cs` | `DoLogin` 一律驗證請求的帳號、密碼與租戶；已登入請求的重建流程改為內部方法 `LoadSignedInUser` | 第 27 節 |
 | `src/WalkingTec.Mvvm.Core/Support/FileEndpointGuard.cs`、`ConfigOptions/FileEndpointOptions.cs`（新增）、`ConfigOptions/Configs.cs`、`WTMContext.cs`、`Utils.cs`、`IUIService.cs`、`Extensions/ListVMExtension.cs` | 檔案參考與模式（`FileEndpoints`）、`CreateFileReference`／`GetFileUrl`、`IFileAccessPolicy`；`IUIService` 新增有預設實作的 `MakeDownloadButtonWithReference`／`MakeViewButtonWithReference`；`Utils.GetUrlByFileAttachmentId` 新增帶 `WTMContext` 的多載 | 第 28 節 |
@@ -789,6 +790,7 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 
 普通值（識別字、欄位名、普通文字）輸出與修改前相同；`wt:selector` 的屬性（`submit-func`、`trigger-url` 等）用法不變。
 
+- **用戶端：選取列的值寫入隱藏欄位（觸及 LayUI 受保護路徑）**：選擇器彈窗的內聯 script（`Selector.cshtml`）與 `framework_layui.js` 的下載／匯出表單（`DownloadExcelOrPdf`、`Download`）原本把選取列的值（`selected[i][ValName]`、列 id、搜尋條件的名稱與值）直接串進隱藏 `<input>` 的 HTML。現在這些值經既有的 `ff.EncodeHtml` 編碼後再寫入；屬性解析後 POST 的仍是原值，顯示用的 `_Display` 欄位本來就以 `.val()` 設定文字。不含 `& < > " '` 的一般資料輸出與修改前逐位元組相同。附帶差異：值為 `null`／`undefined` 時原本寫成字串 `null`，現在寫成空字串。`UIOptions:EncodeHtmlContent=true` 時，表格列的資料本身已是編碼後的文字，POST 的是列所帶的值（以 ID 或數值為取值欄位的一般用法不受影響）。測試：`JsTests/selector-encoding.test.js`（由 `SelectorEncodingTests` 呼叫，找不到 `node` 時標示為 Inconclusive）、E2E 的 `LayUiSelectorTests.Selector_RowWithSpecialCharacters_IsShownAsTextAndPostedUnchanged`
 - **誰會受影響**：`SubmitFunc` 寫成函數名或成員路徑以外內容（例如整段運算式）的頁面，不再被呼叫。使用 TagHelper 並以函數名指定的網站不需修改
 - **回滾方式**：退回前一個 fork 版本（`Core`、`Mvc`、`TagHelpers.LayUI` 一起退回）
 - **測試**：Core.Test 的 `SelectorScriptTest`；E2E 的 `FrameworkEndpointTests`（`Selector_OrdinaryRequestValues_…`、`Selector_RequestValuesWithSpecialCharacters_…`），以及既有的 `LayUiSelectorTests`

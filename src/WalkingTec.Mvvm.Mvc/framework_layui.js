@@ -970,17 +970,17 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
         if (tempwhere[attr] != null) {
             if (Array.isArray(tempwhere[attr])) {
                 for (var i = 0; i < tempwhere[attr].length; i++) {
-                    form.append($('<input type="hidden" name="' + attr + '[' + i + ']" value="' + tempwhere[attr][i] + '">'));
+                    form.append($('<input type="hidden" name="' + ff.EncodeHtml(attr) + '[' + i + ']" value="' + ff.EncodeHtml(tempwhere[attr][i]) + '">'));
                 }
             }
             else {
-                form.append($('<input type="hidden" name="' + attr + '" value="' + tempwhere[attr] + '">'));
+                form.append($('<input type="hidden" name="' + ff.EncodeHtml(attr) + '" value="' + ff.EncodeHtml(tempwhere[attr]) + '">'));
             }
         }
     }
     if (ids !== undefined && ids !== null) {
         for (var i = 0; i < ids.length; i++) {
-            form.append($('<input type="hidden" name="Ids" value="' + ids[i] + '">'));
+            form.append($('<input type="hidden" name="Ids" value="' + ff.EncodeHtml(ids[i]) + '">'));
         }
     }
     $('body').append(form);
@@ -992,7 +992,7 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
         var form = $('<form method="POST" action="' + url + '">');
         if (ids !== undefined && ids !== null) {
             for (var i = 0; i < ids.length; i++) {
-                form.append($('<input type="hidden" name="Ids" value="' + ids[i] + '">'));
+                form.append($('<input type="hidden" name="Ids" value="' + ff.EncodeHtml(ids[i]) + '">'));
             }
         }
         $('body').append(form);

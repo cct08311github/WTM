@@ -141,6 +141,29 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
+        public async Task Selector_RowWithSpecialCharacters_IsShownAsTextAndPostedUnchanged()
+        {
+            // the value of this selector is the name of the row; the fixture row carries quotes, an ampersand and markup in it
+            await SetHtmlContentEncodingAsync(false);
+            await Lab.OpenAsync("Pickers");
+            await OpenSelectorAsync("ItemNames");
+            await CheckDialogRowAsync("Special 05");
+            await ConfirmDialogAsync();
+
+            var expected = "Special 05 " + LabData.SpecialItem;
+            await Expect(Body.Locator("#LabFormVM_ItemNames_Display")).ToHaveValueAsync(expected);
+            // the hidden field that was added for the choice is one element holding the value, and nothing was created from its characters
+            var hidden = Body.Locator("#LabFormVM_ItemNames_Container input[type=hidden]");
+            await Expect(hidden).ToHaveCountAsync(1);
+            await Expect(hidden).ToHaveValueAsync(expected);
+            await Expect(Body.Locator("#e2e-probe-item")).ToHaveCountAsync(0);
+
+            await Lab.SubmitAsync("Save", "/Lab/Save");
+            await AcceptAlertAsync("Saved Pickers");
+            CollectionAssert.AreEqual(new[] { expected }, (await Lab.LastPostAsync("Pickers"))["ItemNames"]);
+        }
+
+        [TestMethod]
         public async Task Selector_OpenedAgain_KeepsThePreviousSelectionChecked()
         {
             await OpenSelectorAsync("GadgetIds");

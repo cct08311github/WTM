@@ -216,7 +216,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
 
             StringAssert.Contains(html, "multiSel = true");
             StringAssert.Contains(html, "displayStrArr.push(selected[i]['Name']);");
-            StringAssert.Contains(html, "name='Entity.Items' value='\" + selected[i]['ID'] + \"' />");
+            StringAssert.Contains(html, "name='Entity.Items' value='\" + ff.EncodeHtml(selected[i]['ID']) + \"' />");
             StringAssert.Contains(html, "onPick(selected);");
             StringAssert.Contains(html, "$(\"#Entity_Items_Display\").val(");
             StringAssert.Contains(html, "var url = '/Api/Changed?t='");

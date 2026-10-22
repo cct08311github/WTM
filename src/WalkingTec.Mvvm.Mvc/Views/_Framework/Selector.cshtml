@@ -26,7 +26,7 @@
         }
         for (var i = 0; i < selected.length; i++) {
           displayStrArr.push(selected[i]['@Html.Raw(SelectorScript.JsString(ViewBag.TextName))']);
-          hiddenStrArr.push("<input type='hidden' wtm-tag='wtmselector' name='@Html.Raw(SelectorScript.HtmlAttributeInJsString(ViewBag.FieldName))' value='" + selected[i]['@Html.Raw(SelectorScript.JsString(ViewBag.ValName))'] + "' />");
+          hiddenStrArr.push("<input type='hidden' wtm-tag='wtmselector' name='@Html.Raw(SelectorScript.HtmlAttributeInJsString(ViewBag.FieldName))' value='" + ff.EncodeHtml(selected[i]['@Html.Raw(SelectorScript.JsString(ViewBag.ValName))']) + "' />");
         }
       }
       else {
