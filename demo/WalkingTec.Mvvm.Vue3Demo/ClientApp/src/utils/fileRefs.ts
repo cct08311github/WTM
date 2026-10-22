@@ -44,6 +44,18 @@ export function forgetDelete(id: any) {
 	deleteRefs.delete(norm(id));
 }
 
+const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/**
+ * After a form was saved, the files it names belong to the saved record: the delete references of the uploads in it are dropped, so a reference from
+ * an earlier save cannot delete a file that is now in use. `body` is the request body (a JSON string or an object).
+ */
+export function forgetDeleteIn(body: any) {
+	if (deleteRefs.size === 0 || body === undefined || body === null) return;
+	const text = typeof body === 'string' ? body : JSON.stringify(body);
+	(text.match(GUID) || []).forEach((id) => forgetDelete(id));
+}
+
 export function clearFileRefs() {
 	refs.clear();
 	deleteRefs.clear();
@@ -79,11 +91,19 @@ const query = (params: Record<string, any>) => {
 
 /** Address of a file for an <img>/<a>; without a known reference it is the bare address (which works while FileEndpoints:Mode is Audit). */
 export function fileUrl(id: any, opt: { width?: any; height?: any } = {}) {
-	return `/api/_file/GetFile/${id}` + query({ width: opt.width, height: opt.height, _DONOT_USE_FREF: refFor(id) });
+	return `/api/_file/GetFile/${encodeURIComponent(id)}` + query({ width: opt.width, height: opt.height, _DONOT_USE_FREF: refFor(id) });
 }
 
 export function downloadUrl(id: any) {
-	return `/api/_file/DownloadFile/${id}` + query({ _DONOT_USE_FREF: refFor(id) });
+	return `/api/_file/DownloadFile/${encodeURIComponent(id)}` + query({ _DONOT_USE_FREF: refFor(id) });
+}
+
+/** Address of the photo of a user: with a known reference the file itself, otherwise the photo endpoint (shown to everybody for a real user photo). */
+export function userPhotoUrl(id: any, opt: { width?: any; height?: any } = {}) {
+	if (refFor(id)) {
+		return fileUrl(id, opt);
+	}
+	return `/api/_file/GetUserPhoto/${encodeURIComponent(id)}` + query({ width: opt.width, height: opt.height });
 }
 
 /** Query parameters that name the reference of a file, for requests made through axios. */
@@ -92,4 +112,4 @@ export function refParams(id: any): Record<string, any> {
 	return r ? { _DONOT_USE_FREF: r } : {};
 }
 
-export default { remember, refFor, rememberDelete, deleteRefFor, forgetDelete, clearFileRefs, collect, fileUrl, downloadUrl, refParams };
+export default { forgetDeleteIn, remember, refFor, rememberDelete, deleteRefFor, forgetDelete, clearFileRefs, collect, fileUrl, downloadUrl, refParams };
