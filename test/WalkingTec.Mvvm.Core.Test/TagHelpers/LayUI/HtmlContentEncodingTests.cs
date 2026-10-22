@@ -109,6 +109,63 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
             AssertContains(on, ">" + Encoded + "</label>");
         }
 
+        // #286: a value saved through a form is already HTML-encoded by the model binder; wt:display must not encode it a second time
+        [TestMethod]
+        public void Display_OptionOn_AlreadyEncodedValueIsEncodedOnlyOnce()
+        {
+            var vm = NewVm();
+            vm.Memo = "A&amp;B &lt;i&gt; &quot;q&quot; &#39;q&#39;";
+
+            var html = Render(new DisplayTagHelper { Field = Field(vm, x => x.Memo), ConfigsMonitor = On() }, "wt:display");
+
+            AssertContains(html, ">A&amp;B &lt;i&gt; &quot;q&quot; &#39;q&#39;</label>");
+            AssertNotContains(html, "&amp;amp;", "&amp;lt;", "&amp;quot;", "&amp;#39;");
+        }
+
+        [TestMethod]
+        public void Display_OptionOn_TextTypedAsAnEntityIsStillShownAsTyped()
+        {
+            var vm = NewVm();
+            vm.Memo = "&amp;lt;";
+
+            var html = Render(new DisplayTagHelper { Field = Field(vm, x => x.Memo), ConfigsMonitor = On() }, "wt:display");
+
+            AssertContains(html, ">&amp;lt;</label>");
+        }
+
+        [TestMethod]
+        public void Display_OptionOn_MixOfEncodedAndRawMarkupIsStillSafe()
+        {
+            var vm = NewVm();
+            vm.Memo = "A&amp;B <script>alert(1)</script> \"x\" 'y' &#60;img&#62;";
+
+            var html = Render(new DisplayTagHelper { Field = Field(vm, x => x.Memo), ConfigsMonitor = On() }, "wt:display");
+
+            AssertContains(html, ">A&amp;B &lt;script&gt;alert(1)&lt;/script&gt; &quot;x&quot; &#39;y&#39; &lt;img&gt;</label>");
+            AssertNotContains(html, "<script", "<img", "&#60;", "\"x\"", "'y'");
+        }
+
+        [TestMethod]
+        public void Display_OptionOn_DisplayTextAlreadyEncodedIsEncodedOnlyOnce()
+        {
+            var vm = NewVm();
+
+            var html = Render(new DisplayTagHelper { Field = Field(vm, x => x.Memo), DisplayText = "A&amp;B", ConfigsMonitor = On() }, "wt:display");
+
+            AssertContains(html, ">A&amp;B</label>");
+        }
+
+        [TestMethod]
+        public void Display_Default_AlreadyEncodedValueIsEmittedAsIs()
+        {
+            var vm = NewVm();
+            vm.Memo = "A&amp;B &lt;i&gt;";
+
+            var html = Render(new DisplayTagHelper { Field = Field(vm, x => x.Memo), ConfigsMonitor = Off() }, "wt:display");
+
+            AssertContains(html, ">A&amp;B &lt;i&gt;</label>");
+        }
+
         [TestMethod]
         public void Display_EncodeHtmlAttribute_OverridesTheGlobalOption()
         {

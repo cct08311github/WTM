@@ -178,7 +178,7 @@ git merge --no-ff upstream/dotnet10
 | `src/WalkingTec.Mvvm.Mvc/Helper/WorkflowActivitiesGuard.cs`、`WorkflowActivitiesDescriber.cs` | 新增：Elsa `/v1/*` 端點的登入檢查；複製 Elsa `Activities.List` 的邏輯在程式內產生活動清單 JSON | #208、#216、#225、#256 |
 | `src/WalkingTec.Mvvm.Mvc/Filters/FrameworkFilter.cs` | 依 `ExposeExceptionDetails` 決定是否輸出例外細節 | #26 |
 | `src/WalkingTec.Mvvm.TagHelpers.LayUI/Form/{Upload,MultiUpload,UEditor}TagHelper.cs` | 安全取得表單的 model | #88 |
-| `src/WalkingTec.Mvvm.TagHelpers.LayUI/**`（Form、Tree、LinkButton、DataTable、Chart、`BaseButton`、`BaseFieldTag`、`BaseElementTag`、`LayuiUIService`…） | 嵌入 JS 字串的值改用 `JsStringEncoder` 轉義；HTML 屬性值改用 `HtmlAttributeEncoder` 編碼；選用的 HTML 內容編碼（`UIOptions:EncodeHtmlContent`） | #24、#25 |
+| `src/WalkingTec.Mvvm.TagHelpers.LayUI/**`（Form、Tree、LinkButton、DataTable、Chart、`BaseButton`、`BaseFieldTag`、`BaseElementTag`、`LayuiUIService`…） | 嵌入 JS 字串的值改用 `JsStringEncoder` 轉義；HTML 屬性值改用 `HtmlAttributeEncoder` 編碼；選用的 HTML 內容編碼（`UIOptions:EncodeHtmlContent`；`wt:display` 對已編碼的值只編碼一次） | #24、#25、#286 |
 | `src/WalkingTec.Mvvm.Core/ConfigOptions/UIOptions.cs`、`src/WalkingTec.Mvvm.Core/Extensions/ListVMExtension.cs`、`src/WalkingTec.Mvvm.Core/Support/HtmlAttributeEncoder.cs` | `EncodeHtmlContent` 選項、表格儲存格的一般值依設定編碼（已編碼的值只編碼一次） | #24、#286 |
 | `src/WalkingTec.Mvvm.Mvc/Filters/PrivilegeFilter.cs`、`FrameworkFilter.cs` | 嵌入 JS 字串的值改用 `JsStringEncoder` 轉義 | #24 |
 | `src/WalkingTec.Mvvm.Mvc/Helper/FResultExtension.cs` | 訊息轉義；修正 `RedirectUrl` | #25 |
@@ -702,13 +702,14 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 |---|---|
 | 綁定請求（`StringIgnoreLTGTBinder`） | **與此選項無關**：框架本來就會把表單送來的字串先做 HTML 編碼再存入（除非 action 標註 `StringNeedLTGT`）。所以經表單存入的值在資料庫裡是編碼過的（`A&B` 存成 `A&amp;B`）。本修正沒有改動 |
 | 顯示：LayUI TagHelper 的標題、label、按鈕文字等 | 以 HTML 內容輸出的文字一律編碼（第 6 節 #24，不變） |
+| 顯示：`wt:display`（欄位值與 `display-text`） | 同表格：先解碼一層再編碼一次（`EncodeOnce`）；`encode-html` 屬性明確指定 `true` 時同樣如此，指定 `false` 時原樣輸出（不變） |
 | 顯示：表格儲存格的一般值（`GetSingleDataJson`） | 先 HTML 解碼**一層**，再用 `HtmlAttributeEncoder.Encode` 編碼（`HtmlAttributeEncoder.EncodeOnce`）。修正前直接再編碼一次，表單存入的值在表格上會顯示成 `A&amp;B` |
 
 - **為什麼安全**：輸出永遠是 `HtmlAttributeEncoder.Encode(...)` 的結果，所以無論輸入是已編碼、未編碼（例如種子資料、匯入的資料）或兩者混合，輸出都不含未編碼的 `< > " '`，`&` 之後也只會接編碼器自己寫的實體。不是「含 `&` 就略過編碼」。解碼只做一層，因此使用者輸入的 `&lt;` 字樣（存成 `&amp;lt;`）仍如實顯示為 `&lt;`；數字實體（如 `&#60;`）解碼後同樣會再被編碼，不會變成標記
 - **語意上的取捨**：原始值（未經綁定器編碼、直接寫入資料庫的資料）若本身含有看起來像實體的文字（例如字面的 `&amp;`），表格會把它當成已編碼而顯示 `&`。這類資料在預設值（false）下本來就會被瀏覽器解成同樣的字元
-- **範圍**：只有表格儲存格的一般值。自訂格式（`SetFormat`）的輸出仍視為 HTML、不編碼（不變）；`wt:display` 顯示表單存入的值時，同樣會再編碼一次，不在本修正範圍，另案評估
+- **範圍**：表格儲存格的一般值與 `wt:display`。自訂格式（`SetFormat`）的輸出仍視為 HTML、不編碼（不變）。`wt:display` 的修改位於 LayUI 受保護路徑（`DisplayTagHelper.cs`）內，只有一行，且僅在編碼啟用時改變輸出；關閉（預設）時輸出逐字相同。其他以 HTML 內容輸出文字的 TagHelper（標題、label、按鈕、`wt:selector` 的已選文字等）的編碼方式不變
 - **已知且保留的行為**（不在本修正範圍，需要時另案處理）：
   - 搜尋條件含 `& < " '` 時，比對不到以綁定器編碼後存入的值（資料庫存的是編碼後的文字）
   - `StringLength` 等驗證是對**編碼後**的長度計算（一個 `&` 算 5 個字元，一個引號算 6 個）
 - **LayUI**：沒有修改 LayUI 受保護路徑（第 3 節）的檔案；表格的儲存格範本與 `framework_layui.js` 都沒有變動，預設值下的輸出逐字相同
-- **測試**：`HtmlContentEncodingTests`（儲存格已編碼／混合標記／實體字樣／預設值不變）、`HtmlAttributeEncoderTest`（`EncodeOnce`）；E2E `SpecialCharacterRoundTripTests.Grid_WithEncodeHtmlContentOn_ShowsTheSavedTextAsTyped`（已移除 `[Ignore]`）
+- **測試**：`HtmlContentEncodingTests`（儲存格已編碼／混合標記／實體字樣／預設值不變）、`DisplayTagHelper` 的對應案例、`HtmlAttributeEncoderTest`（`EncodeOnce`）；E2E `SpecialCharacterRoundTripTests.Grid_WithEncodeHtmlContentOn_ShowsTheSavedTextAsTyped`（已移除 `[Ignore]`）
