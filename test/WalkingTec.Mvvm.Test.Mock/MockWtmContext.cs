@@ -16,7 +16,7 @@ namespace WalkingTec.Mvvm.Test.Mock
 {
     public static class MockWtmContext
     {
-        public static WTMContext CreateWtmContext(IDataContext dataContext= null, string usercode = null, string remoteToken = null, Microsoft.AspNetCore.DataProtection.IDataProtectionProvider dataProtection = null, Microsoft.Extensions.Logging.ILoggerFactory loggerFactory = null, Configs configs = null, IFileAccessPolicy fileAccessPolicy = null)
+        public static WTMContext CreateWtmContext(IDataContext dataContext= null, string usercode = null, string remoteToken = null, Microsoft.AspNetCore.DataProtection.IDataProtectionProvider dataProtection = null, Microsoft.Extensions.Logging.ILoggerFactory loggerFactory = null, Configs configs = null, IFileAccessPolicy fileAccessPolicy = null, Func<string, IDataContext> createDc = null)
         {
             GlobalData gd = new GlobalData();
             gd.AllAccessUrls = new List<string>();
@@ -54,7 +54,9 @@ namespace WalkingTec.Mvvm.Test.Mock
                 configMonitor = new Mock<IOptionsMonitor<Configs>>();
                 configMonitor.Setup(x => x.CurrentValue).Returns(configs);
             }
-            var wtmcontext = new WTMContext(configMonitor?.Object, new GlobalData(), httpa, new DefaultUIService(), null,dataContext, res, loggerFactory: loggerFactory, cache:cache);
+            var wtmcontext = createDc == null
+                ? new WTMContext(configMonitor?.Object, new GlobalData(), httpa, new DefaultUIService(), null, dataContext, res, loggerFactory: loggerFactory, cache: cache)
+                : new FactoryWtmContext(createDc, configMonitor?.Object, new GlobalData(), httpa, new DefaultUIService(), null, dataContext, res, loggerFactory: loggerFactory, cache: cache);
             wtmcontext.MSD = new BasicMSD();
             wtmcontext.Session = new SessionServiceProvider(mockSession);
             if (dataContext == null)
@@ -71,6 +73,23 @@ namespace WalkingTec.Mvvm.Test.Mock
             wtmcontext.GlobaInfo.AllModule = new List<Core.Support.Json.SimpleModule>();
             mockService.Setup(x => x.GetService(typeof(WtmFileProvider))).Returns(new WtmFileProvider(wtmcontext));
             return wtmcontext;
+        }
+    }
+
+    /// <summary>A context whose data contexts come from a factory (called with the connection key), for tests that need to see which one is asked for.</summary>
+    public class FactoryWtmContext : WTMContext
+    {
+        private readonly Func<string, IDataContext> _factory;
+
+        public FactoryWtmContext(Func<string, IDataContext> factory, Microsoft.Extensions.Options.IOptionsMonitor<Configs> config, GlobalData gd, IHttpContextAccessor http, IUIService ui, System.Collections.Generic.List<IDataPrivilege> dp, IDataContext dc, Microsoft.Extensions.Localization.IStringLocalizerFactory localizer, Microsoft.Extensions.Logging.ILoggerFactory loggerFactory, Microsoft.Extensions.Caching.Distributed.IDistributedCache cache)
+            : base(config, gd, http, ui, dp, dc, localizer, loggerFactory, null, cache)
+        {
+            _factory = factory;
+        }
+
+        public override IDataContext CreateDC(bool isLog = false, string cskey = null, bool logerror = true)
+        {
+            return _factory(cskey);
         }
     }
 }

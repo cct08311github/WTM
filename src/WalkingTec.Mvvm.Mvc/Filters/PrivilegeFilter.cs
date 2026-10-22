@@ -91,10 +91,9 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                 {
                     isPublic = true;
                 }
-                if(ad.ControllerTypeInfo.FullName == "WalkingTec.Mvvm.Admin.Api.FileApiController" && (ad.MethodInfo.Name == "GetFileName" || ad.MethodInfo.Name == "GetFile" || ad.MethodInfo.Name == "DownloadFile"))
+                if (IsOpenFileApiAction(ad.ControllerTypeInfo, ad.MethodInfo))
                 {
                     isPublic = true;
-
                 }
             }
             if (isDebug)
@@ -266,6 +265,22 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                 }
             
             base.OnActionExecuting(context);
+        }
+
+        /// <summary>
+        /// True for an action of a single page application's file API that is open to callers who are not signed in while <c>IsFilePublic</c> is on: an
+        /// action marked <c>[FileEndpoint(PublicWhenFilesPublic = true)]</c> (on the action or its controller), and, as before, the three read actions
+        /// of the template's <c>WalkingTec.Mvvm.Admin.Api.FileApiController</c> by name (for copies that do not carry the marker).
+        /// </summary>
+        public static bool IsOpenFileApiAction(Type controllerType, System.Reflection.MethodInfo method)
+        {
+            if (controllerType.FullName == "WalkingTec.Mvvm.Admin.Api.FileApiController" && (method.Name == "GetFileName" || method.Name == "GetFile" || method.Name == "DownloadFile"))
+            {
+                return true;
+            }
+            var marker = method.GetCustomAttributes(typeof(FileEndpointAttribute), false).FirstOrDefault() as FileEndpointAttribute
+                ?? controllerType.GetCustomAttributes(typeof(FileEndpointAttribute), false).FirstOrDefault() as FileEndpointAttribute;
+            return marker?.PublicWhenFilesPublic == true;
         }
 
         private List<string> getAuthTypes(ControllerActionDescriptor ad)
