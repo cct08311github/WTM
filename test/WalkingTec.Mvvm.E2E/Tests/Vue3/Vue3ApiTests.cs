@@ -287,38 +287,7 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
             Assert.IsTrue((await api.GetAsync("/api/_DataPrivilege/GetPrivilegeByTableName?table=City")).ValueKind == JsonValueKind.Array);
         }
 
-        // ---- file API ----
-
-        [TestMethod]
-        public async Task File_Api_UploadReadDownloadAndDelete()
-        {
-            var api = await StartAsync();
-            var imageId = await api.UploadAsync("e2e-image.png", "image/png", Png);
-
-            // information, name, the image itself (also resized), and the download with the original name
-            var info = await api.GetAsync("/api/_file/GetFileInfo/" + imageId);
-            Assert.AreEqual("e2e-image.png", info.GetProperty("FileName").GetString());
-            Assert.AreEqual("e2e-image.png", (await api.GetAsync("/api/_file/GetFileName/" + imageId)).GetString());
-            var raw = await api.GetRawAsync("/api/_file/GetFile/" + imageId);
-            Assert.AreEqual(200, raw.Status);
-            Assert.IsTrue((await raw.BodyAsync()).Length > 0);
-            Assert.AreEqual(200, (await api.GetRawAsync("/api/_file/GetFile/" + imageId + "?width=10&height=10")).Status);
-            Assert.AreEqual(200, (await api.GetRawAsync("/api/_file/GetUserPhoto/" + imageId)).Status);
-            var download = await api.GetRawAsync("/api/_file/DownloadFile/" + imageId);
-            Assert.AreEqual(200, download.Status);
-            StringAssert.Contains(download.Headers["content-disposition"], "e2e-image.png");
-            CollectionAssert.AreEqual(Png, await download.BodyAsync());
-
-            // the image upload (resizes and returns the file id)
-            var form = api.Context.CreateFormData();
-            form.Set("file", new FilePayload { Name = "e2e-small.png", MimeType = "image/png", Buffer = Png });
-            var uploaded = await api.Context.PostAsync("/api/_file/UploadImage?width=1&height=1", new() { Multipart = form });
-            Assert.AreEqual(200, uploaded.Status, await uploaded.TextAsync());
-
-            // a file that is deleted can no longer be downloaded
-            await api.GetAsync("/api/_file/DeletedFile/" + imageId);
-            Assert.AreEqual(400, (await api.GetRawAsync("/api/_file/DownloadFile/" + imageId)).Status);
-        }
+        // ---- file API: see Vue3FileApiTests ----
 
         // ---- sample modules without a screen: Major and Student, plus the generated pages' exports ----
 
