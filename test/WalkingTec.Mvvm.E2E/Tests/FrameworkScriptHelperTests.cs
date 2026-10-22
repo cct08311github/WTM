@@ -168,7 +168,6 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("#283: clearSelector looks for the hidden id fields in a container named literally id_Container instead of the container of the selector, so the ids stay in the form and are posted.")]
         public async Task ClearSelector_RemovesTheStoredIds()
         {
             await Lab.OpenAsync("Pickers");
