@@ -331,6 +331,100 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
             Assert.AreEqual(0, check.Set<School>().Count());
         }
 
+        // #288: GetErrorJson opened the uploaded bytes through a fixed-size MemoryStream for writing and failed with
+        // "Memory stream is not expandable." as soon as the import had an invalid row.
+        [TestMethod]
+        public void Import_RowWithInvalidValue_GetErrorJsonReturnsErrorFileWithRowMessage()
+        {
+            var wtm = NewWtm(Guid.NewGuid().ToString());
+            var template = new SchoolImportVM().GenerateTemplate(out _);
+            // row 2 is valid, row 3 violates the 3-digit regular expression of School.SchoolCode
+            var filled = FillTemplate(template,
+                new[] { "101", "Good", "公立学校", "ok" },
+                new[] { "9", "Bad", "公立学校", "x" });
+            var vm = NewImportVm<SchoolImportVM>(wtm, filled);
+
+            Assert.IsFalse(vm.BatchSaveData());
+            var rowErrors = vm.ErrorListVM.EntityList.Where(x => x.Index > 0).ToList();
+            Assert.IsTrue(rowErrors.Count > 0);
+            Assert.IsTrue(rowErrors.All(x => x.Index == 3), "only the third sheet row is invalid");
+
+            ErrorObj error = null;
+            try
+            {
+                error = vm.GetErrorJson();
+            }
+            catch (NotSupportedException ex)
+            {
+                Assert.Fail("GetErrorJson must not throw: " + ex.Message);
+            }
+
+            Assert.IsTrue(error.Form.ContainsKey("Entity.Import"));
+            Assert.IsTrue(error.Form.ContainsKey("Entity.ErrorFileId"), "the error file is offered to the user");
+
+            // the error file is the uploaded workbook plus one message cell after the last column of each invalid row
+            var errorFile = new WtmFileProvider(wtm).GetFile(error.Form["Entity.ErrorFileId"], true, wtm.DC);
+            byte[] errorBytes;
+            using (var ms = new MemoryStream())
+            {
+                errorFile.DataStream.CopyTo(ms);
+                errorBytes = ms.ToArray();
+            }
+            var rows = XlsxTestHelper.ReadSheet(errorBytes);
+            Assert.AreEqual(3, rows.Count);
+            Assert.AreEqual(4, rows[0].Length, "header row is untouched");
+            Assert.AreEqual(4, rows[1].Length, "valid row is untouched");
+            Assert.AreEqual(5, rows[2].Length, "invalid row gets the message cell");
+            Assert.AreEqual(rowErrors[0].Message, rows[2][4]);
+            Assert.AreEqual("9", rows[2][0], "the original values are kept");
+        }
+
+        [TestMethod]
+        public void Import_SeveralInvalidRows_GetErrorJsonMarksEachRow()
+        {
+            var wtm = NewWtm(Guid.NewGuid().ToString());
+            var template = new SchoolImportVM().GenerateTemplate(out _);
+            var filled = FillTemplate(template,
+                new[] { "8", "Bad one", "公立学校", "x" },
+                new[] { "102", "Good", "私立学校", "ok" },
+                new[] { "7", "Bad two", "公立学校", "x" });
+            var vm = NewImportVm<SchoolImportVM>(wtm, filled);
+
+            Assert.IsFalse(vm.BatchSaveData());
+
+            var error = vm.GetErrorJson();
+
+            var errorFile = new WtmFileProvider(wtm).GetFile(error.Form["Entity.ErrorFileId"], true, wtm.DC);
+            byte[] errorBytes;
+            using (var ms = new MemoryStream())
+            {
+                errorFile.DataStream.CopyTo(ms);
+                errorBytes = ms.ToArray();
+            }
+            var rows = XlsxTestHelper.ReadSheet(errorBytes);
+            Assert.AreEqual(4, rows.Count);
+            Assert.AreEqual(4, rows[0].Length);
+            Assert.AreEqual(5, rows[1].Length, "row 2 is invalid");
+            Assert.AreEqual(4, rows[2].Length, "row 3 is valid");
+            Assert.AreEqual(5, rows[3].Length, "row 4 is invalid");
+        }
+
+        [TestMethod]
+        public void Import_NonRowError_GetErrorJsonReturnsMessageWithoutErrorFile()
+        {
+            var wtm = NewWtm(Guid.NewGuid().ToString());
+            var template = new MajorImportVM().GenerateTemplate(out _);
+            // a template of another type is a whole-file error (row index 0)
+            var vm = NewImportVm<SchoolImportVM>(wtm, FillTemplate(template, new[] { "101", "Name", null, "必修" }));
+
+            Assert.IsFalse(vm.BatchSaveData());
+
+            var error = vm.GetErrorJson();
+
+            Assert.IsTrue(error.Form.ContainsKey("Entity.Import"));
+            Assert.IsFalse(error.Form.ContainsKey("Entity.ErrorFileId"));
+        }
+
         [TestMethod]
         public void Import_UnknownEnumText_ReportsFormatError()
         {

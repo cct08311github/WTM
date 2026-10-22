@@ -1477,35 +1477,42 @@ namespace WalkingTec.Mvvm.Core
                     columnCount = columnCount + dynamicColumn.DynamicColumns.Count - 1;
                 }
                 byte[] newBytes;
-                using (var ms = new MemoryStream(excelData))
-                using (var doc = SpreadsheetDocument.Open(ms, true))
+                // new MemoryStream(byte[]) is fixed-size and cannot be opened for writing: the package has to grow when it is saved
+                using (var ms = new MemoryStream())
                 {
-                    var workbookPart = doc.WorkbookPart;
-                    var sheets = workbookPart.Workbook.GetFirstChild<Sheets>().Elements<Sheet>().ToList();
-                    if (sheets.Count > 0)
+                    ms.Write(excelData, 0, excelData.Length);
+                    ms.Position = 0;
+                    using (var doc = SpreadsheetDocument.Open(ms, true))
                     {
-                        var dataPart = (WorksheetPart)workbookPart.GetPartById(sheets[0].Id);
-                        var sheetData = dataPart.Worksheet.GetFirstChild<SheetData>();
-
-                        foreach (var e in ErrorListVM?.EntityList)
+                        var workbookPart = doc.WorkbookPart;
+                        var sheets = workbookPart.Workbook.GetFirstChild<Sheets>().Elements<Sheet>().ToList();
+                        if (sheets.Count > 0)
                         {
-                            if (e.Index > 0)
+                            var dataPart = (WorksheetPart)workbookPart.GetPartById(sheets[0].Id);
+                            var sheetData = dataPart.Worksheet.GetFirstChild<SheetData>();
+
+                            foreach (var e in ErrorListVM?.EntityList)
                             {
-                                uint rowIdx = (uint)(e.Index - 1);
-                                Row row = sheetData.Elements<Row>().FirstOrDefault(r => r.RowIndex == rowIdx);
-                                if (row != null)
+                                if (e.Index > 0)
                                 {
-                                    string colLetter = OpenXmlHelper.GetColumnLetter(columnCount);
-                                    string cellRef = $"{colLetter}{rowIdx}";
-                                    Cell errorCell = new Cell() { CellReference = cellRef };
-                                    errorCell.DataType = CellValues.InlineString;
-                                    errorCell.AppendChild(new InlineString(new Text(e.Message)));
-                                    row.AppendChild(errorCell);
+                                    // ErrorMessage.Index is the 1-based sheet row, the same as Row.RowIndex
+                                    uint rowIdx = (uint)e.Index;
+                                    Row row = sheetData.Elements<Row>().FirstOrDefault(r => r.RowIndex == rowIdx);
+                                    if (row != null)
+                                    {
+                                        string colLetter = OpenXmlHelper.GetColumnLetter(columnCount);
+                                        string cellRef = $"{colLetter}{rowIdx}";
+                                        Cell errorCell = new Cell() { CellReference = cellRef };
+                                        errorCell.DataType = CellValues.InlineString;
+                                        errorCell.AppendChild(new InlineString(new Text(e.Message)));
+                                        row.AppendChild(errorCell);
+                                    }
                                 }
                             }
                         }
+                        workbookPart.Workbook.Save();
                     }
-                    workbookPart.Workbook.Save();
+                    // read the bytes only after the document is disposed, which is when the changed parts are written into the stream
                     newBytes = ms.ToArray();
                 }
                 using (var uploadMs = new MemoryStream(newBytes))

@@ -13,6 +13,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 ## 未发布
 
 * **修复（安全）：**   API 响应不再包含用户的 `Password` 字段（#287）。框架的默认 JSON 设置（`UseWtmJsonOptions`）在**输出**时排除 `FrameworkUserBase.Password`（含其子类，例如各项目的 `FrameworkUser`）；读取输入不受影响，新增用户、修改密码照常。做法是在 `System.Text.Json` 的 type info resolver 上加一个只针对该属性的 modifier（`UserPasswordOutputExclusion`），不在模型上使用 `[JsonIgnore]`；`PocoConverter` 复制选项时保留 resolver，使经由它输出的实体同样适用。其他类型上的同名 `Password` 属性不受影响；框架发给其他服务的请求（`DefaultPostJsonOption`）不变。升级说明：修复在框架内，由范本产生的 `_Admin` controller 副本（`Get`、`Add`、`Edit`、`Password`）升级框架后即套用，**不需要修改**；响应中不再有该字段，下游若有读取响应中 `Password` 的脚本或客户端请改为不依赖它。仅在应用通过 `AddJsonOptions(o => o.UseWtmJsonOptions())` 套用框架的 JSON 设置时生效；自行配置 JSON 的应用可调用 `JsonSerializerOptions.ExcludeUserPasswordFromOutput()`。经 `CoreProgram.DefaultJsonOption`（与响应共用）写入分布式缓存的用户实体不会带出 `Password`，框架自身只缓存 `LoginUserInfo`，不受影响。LayUI 不读取 JSON 响应中的 `Password`，不受影响
+* **修复：**   导入的文件含无效数据行时，`BaseImportVM.GetErrorJson()` 抛出 `Memory stream is not expandable.`，导入返回 400，用户看不到逐行的错误说明，也拿不到错误文件（#288）。上游 10.0 将 NPOI 改写为 OpenXML SDK 后，错误文件改以固定大小的 `MemoryStream` 打开并写入；现改为可扩展的流，并在文档关闭之后才取出字节。同时修正错误说明写到错误行的上一行的问题（错误文件中的错误说明现在写在无效行末尾的新增列，而不是上一行）。受影响版本：10.0.0.4 至 10.0.0.8，涉及所有使用 `BaseImportVM` 的导入，包括 LayUI 页面（`_FrameworkController` 的导入流程）与 SPA 控制器的 `Import`。升级说明：修复在框架内，**下游不需要修改代码**，升级后即生效；`BaseImportVM` 的 public API 未变
 
 ## 10.0.0.8(2026-10-21)
 
