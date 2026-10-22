@@ -193,7 +193,6 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("#282: the delete button of a multi upload calls /api/_file/DeletedFile/{id}, which no controller of the framework or of the LayUI host provides; the file stays in the list.")]
         public async Task MultiUpload_Delete_RemovesTheFileFromTheList()
         {
             await ChooseFilesAsync("Files", MakeFile("drop.txt", Encoding.UTF8.GetBytes("x")));
@@ -202,6 +201,31 @@ namespace WalkingTec.Mvvm.E2E.Tests
             await Body.Locator("#LabFormVM_Fileslabel button").ClickAsync();
 
             await Expect(Body.Locator("#LabFormVM_Fileslabel label")).ToHaveCountAsync(0);
+        }
+
+        [TestMethod]
+        public async Task MultiUpload_Delete_DropsTheFileFromThePostedValuesAndRemembersItAsDeleted()
+        {
+            await ChooseFilesAsync("Files", MakeFile("keep.txt", Encoding.UTF8.GetBytes("k")), MakeFile("drop.txt", Encoding.UTF8.GetBytes("x")));
+            await Expect(Body.Locator("#LabFormVM_Fileslabel label")).ToHaveCountAsync(2);
+            var ids = await Body.Locator("input[name^='Files['][name$='].FileId']").EvaluateAllAsync<string[]>("els => els.map(e => e.value)");
+            Assert.AreEqual(2, ids.Length);
+
+            var dropLabel = Body.Locator("#LabFormVM_Fileslabel label", new() { HasTextString = "drop.txt" });
+            await dropLabel.Locator("button").ClickAsync();
+
+            await Expect(Body.Locator("#LabFormVM_Fileslabel label")).ToHaveCountAsync(1);
+            await Expect(Body.Locator("#LabFormVM_Fileslabel")).ToContainTextAsync("keep.txt");
+            await Expect(Body.Locator("#LabFormVM_Fileslabel")).Not.ToContainTextAsync("drop.txt");
+            await Lab.SubmitAsync("Save", "/Lab/Save");
+            await AcceptAlertAsync("Saved Pickers");
+            var form = await Lab.LastPostAsync("Pickers");
+            // only the remaining file is posted, and the form tells the server which file was removed (as the single upload does)
+            Assert.IsFalse(form.ContainsKey("Files[1].FileId"), "Keys: " + string.Join(",", form.Keys));
+            var kept = form["Files[0].FileId"].Single();
+            var removed = form["DeletedFileIds"].Single();
+            CollectionAssert.AreEquivalent(ids, new[] { kept, removed });
+            Assert.AreNotEqual(kept, removed);
         }
     }
 }

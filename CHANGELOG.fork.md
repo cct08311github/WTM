@@ -12,6 +12,8 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 
 ## 未发布
 
+* **修复（涉及 LayUI 受保护路径）：**   LayUI `wt:multiupload` 的删除按钮不再呼叫不存在的 `/api/_file/DeletedFile/{id}`（框架的 controller 与 LayUI 站台都没有提供，请求失败，文件仍留在列表中）。现在与 `wt:upload` 的做法一致：只在页面上处理，文件从列表与要送出的值（`Files[n].FileId`）中移除，并在表单加入 `DeletedFileIds`，由框架在保存 view model 时按既有机制删除文件。**没有新增任何服务器端点，`DeletedFileIds` 的信任方式不变；** 标签属性、路由与 `wt:upload` 的行为不变，生成的其余脚本与标记不变（只改了 `MultiUploadTagHelper.cs` 内的 `DoDelete` 函数）。影响：使用 `wt:multiupload` 的页面删除文件后，保存时会多送出 `DeletedFileIds`（`BaseCRUDVM` 的保存流程会删除这些文件，与 `wt:upload` 相同）；下游若不经 `BaseCRUDVM` 保存并想保留文件，可忽略该字段。回滚：退回上一个 fork 版本 (#282)
+* **修复（涉及 LayUI 受保护路径）：**   `ff.clearSelector(id)`（`framework_layui.js`）清空 selector 时，原先在字面名为 `#id_Container` 的容器里查找隐藏的 id 字段，而 `wt:selector` 渲染的容器是 `#<id>_Container`，所以清除后选中的 id 仍留在表单并被提交；现在改为在 `#<id>_Container` 中查找并移除。受影响的是调用 `ff.clearSelector` 的页面（例如自行在脚本里清空 selector）；显示文字与 `#<id>` 的清空逻辑不变，没有传入任何新参数，其他 JS 函数与 TagHelper 输出不变。回滚：退回上一个 fork 版本。(#283)
 * **修复：**   demo `WalkingTec.Mvvm.Vue3Demo` 的前端（`ClientApp`）多处与后端不一致的问题（#290）：用户管理的 get／add／edit／delete／export／import 请求改用实际路由 `/api/_FrameworkUser/*`（原为 `/api/_Admin/FrameworkUser/*`，新增等操作返回 405）；用户新增窗口的头像只有一个值，不再以多文件方式提交（原来提交的是数组，服务端返回 400），新增成功后列表会刷新；租户列表的名称列读取 `TName`；数据权限列表的“详情”按钮检查实际存在的 `/api/_DataPrivilege/Get`；City 与 SchoolVue3 页的“导出”按钮检查实际存在的 `/api/*/ExportExcel`；School、City、SchoolVue3 的“导出选中行”请求补上 `responseType: "blob"`，可以正常下载。只改 demo 的前端文件，不涉及 `src/**` 框架代码、后端接口与 LayUI 受保护路径，不影响下游；下游若复制了这些 Vue3 页面，可参照同样修改
 
 ## 10.0.0.11(2026-10-22)
