@@ -722,11 +722,15 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
         }
 
         private static DateImportVM ImportRow(Func<WorkbookPart, Cell[]> cells, bool date1904 = false)
+            => ImportRow<DateImportVM>(cells, date1904);
+
+        private static T ImportRow<T>(Func<WorkbookPart, Cell[]> cells, bool date1904 = false) where T : BaseVM, new()
         {
             var wtm = NewWtm(Guid.NewGuid().ToString());
-            var template = new DateImportVM().GenerateTemplate(out _);
-            var vm = NewImportVm<DateImportVM>(wtm, FillRowWithCells(template, cells, date1904));
-            vm.SetTemplateData();
+            dynamic generator = new T();
+            byte[] template = generator.GenerateTemplate(out string _);
+            var vm = NewImportVm<T>(wtm, FillRowWithCells(template, cells, date1904));
+            ((dynamic)vm).SetTemplateData();
             return vm;
         }
 
@@ -820,6 +824,70 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
         }
 
         [TestMethod]
+        public void Import_DateColumn_ElapsedTimeBuiltInFormat_IsNotConverted()
+        {
+            // built-in 46 is [h]:mm:ss, a duration rather than a point in time
+            var vm = ImportRow(wb => new[]
+            {
+                NumberCell(0, "7", null),
+                NumberCell(1, "45953.5", AddStyle(wb, 46)),
+                NumberCell(2, "45953.5", AddStyle(wb, 46)),
+            });
+
+            Assert.AreEqual(2, vm.ErrorListVM.EntityList.Count, "same format error as before #295");
+            Assert.IsTrue(vm.ErrorListVM.EntityList.All(e => e.Index == 2));
+        }
+
+        [TestMethod]
+        public void Import_DateColumn_ElapsedTimeCustomFormat_IsNotConverted()
+        {
+            var vm = ImportRow(wb => new[]
+            {
+                NumberCell(0, "7", null),
+                NumberCell(1, "45953.5", AddStyle(wb, 170, "[h]:mm:ss")),
+                NumberCell(2, "45953.5", AddStyle(wb, 171, "[mm]:ss")),
+            });
+
+            Assert.AreEqual(2, vm.ErrorListVM.EntityList.Count, "same format error as before #295");
+            Assert.IsTrue(vm.ErrorListVM.EntityList.All(e => e.Index == 2));
+        }
+
+        private class TextRow : BasePoco
+        {
+            [Display(Name = "Qty")]
+            public int Qty { get; set; }
+
+            [Display(Name = "Label")]
+            public string Label { get; set; }
+        }
+
+        private class TextTemplateVM : BaseTemplateVM
+        {
+            public ExcelPropety Qty = ExcelPropety.CreateProperty<TextRow>(x => x.Qty);
+            public ExcelPropety Label = ExcelPropety.CreateProperty<TextRow>(x => x.Label);
+        }
+
+        private class TextImportVM : BaseImportVM<TextTemplateVM, TextRow>
+        {
+            public List<TextTemplateVM> Rows => TemplateData;
+        }
+
+        [TestMethod]
+        public void Import_TextColumn_WithDateFormat_KeepsTheSerialString()
+        {
+            var vm = ImportRow<TextImportVM>(wb => new[]
+            {
+                NumberCell(0, "7", null),
+                NumberCell(1, "45953", AddStyle(wb, 14)),
+            });
+
+            Assert.AreEqual(0, vm.ErrorListVM.EntityList.Count, string.Join("; ", vm.ErrorListVM.EntityList.Select(e => e.Message)));
+            Assert.AreEqual(1, vm.Rows.Count);
+            Assert.AreEqual(7, vm.Rows[0].Qty.Value);
+            Assert.AreEqual("45953", vm.Rows[0].Label.Value);
+        }
+
+        [TestMethod]
         public void Import_DateColumn_TextCells_AreParsedAsBefore()
         {
             var vm = ImportRow(wb => new[]
@@ -883,28 +951,71 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
 
         [DataTestMethod]
         [DataRow(14u, null, true)]
+        [DataRow(15u, null, true)]
+        [DataRow(16u, null, true)]
+        [DataRow(17u, null, true)]
+        [DataRow(18u, null, true)]
+        [DataRow(19u, null, true)]
+        [DataRow(20u, null, true)]
+        [DataRow(21u, null, true)]
+        [DataRow(22u, null, true)]
+        [DataRow(27u, null, true)]
+        [DataRow(28u, null, true)]
+        [DataRow(29u, null, true)]
+        [DataRow(30u, null, true)]
         [DataRow(31u, null, true)]
+        [DataRow(32u, null, true)]
+        [DataRow(33u, null, true)]
+        [DataRow(34u, null, true)]
+        [DataRow(35u, null, true)]
+        [DataRow(36u, null, true)]
+        [DataRow(45u, null, true)]
         [DataRow(47u, null, true)]
+        [DataRow(50u, null, true)]
+        [DataRow(51u, null, true)]
+        [DataRow(52u, null, true)]
+        [DataRow(53u, null, true)]
+        [DataRow(54u, null, true)]
         [DataRow(55u, null, true)]
+        [DataRow(56u, null, true)]
+        [DataRow(57u, null, true)]
+        [DataRow(58u, null, true)]
+        [DataRow(46u, null, false)]
         [DataRow(0u, null, false)]
         [DataRow(2u, null, false)]
         [DataRow(10u, null, false)]
+        [DataRow(13u, null, false)]
+        [DataRow(23u, null, false)]
+        [DataRow(26u, null, false)]
+        [DataRow(37u, null, false)]
+        [DataRow(44u, null, false)]
+        [DataRow(48u, null, false)]
         [DataRow(49u, null, false)]
+        [DataRow(59u, null, false)]
+        [DataRow(163u, null, false)]
         [DataRow(170u, "yyyy-mm-dd", true)]
         [DataRow(170u, "yyyy/m/d", true)]
-        [DataRow(170u, "[h]:mm", true)]
-        [DataRow(170u, "mm:ss", true)]
-        [DataRow(170u, "h:mm AM/PM", true)]
+        [DataRow(170u, "yyyy-MM-dd HH:mm:ss", true)]
         [DataRow(170u, "m/d/yy;@", true)]
         [DataRow(170u, "[$-404]e/m/d", true)]
+        [DataRow(170u, "[$-F800]dddd, mmmm dd, yyyy", true)]
+        [DataRow(170u, "h:mm AM/PM", true)]
+        [DataRow(170u, "mm:ss", true)]
+        [DataRow(170u, "\"年\"yyyy", true)]
         [DataRow(170u, "0.00", false)]
+        [DataRow(170u, "#,##0", false)]
+        [DataRow(170u, "General", false)]
+        [DataRow(170u, "\"days\"0", false)]
+        [DataRow(170u, "[Red]0.00", false)]
+        [DataRow(170u, "[h]:mm:ss", false)]
+        [DataRow(170u, "[mm]:ss", false)]
+        [DataRow(170u, "[ss]", false)]
+        [DataRow(170u, "[hh]:mm", false)]
         [DataRow(170u, "#,##0.00_);[Red](#,##0.00)", false)]
         [DataRow(170u, "0.00E+00", false)]
         [DataRow(170u, "0.0%", false)]
-        [DataRow(170u, "General", false)]
         [DataRow(170u, "@", false)]
         [DataRow(170u, "#,##0 \"m\"", false)]
-        [DataRow(170u, "0 \"days\"", false)]
         [DataRow(170u, "0\\d", false)]
         [DataRow(171u, null, false)]
         public void IsDateFormattedCell_ClassifiesNumberFormats(uint formatId, string formatCode, bool expected)

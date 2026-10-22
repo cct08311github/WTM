@@ -255,7 +255,7 @@ namespace WalkingTec.Mvvm.Core
 
         /// <summary>
         /// 判断单元格套用的数字格式是否为日期／时间格式。
-        /// 内置格式按 ID 判断（14–22、27–36、45–47、50–58，含东亚语系的内置日期格式），
+        /// 内置格式按 ID 判断（14–22、27–36、45、47、50–58，含东亚语系的内置日期格式；46 即 [h]:mm:ss 为经过时间，不算），
         /// 自定义格式（ID &gt;= 164）按 FormatCode 判断。找不到样式时返回 false。
         /// </summary>
         public static bool IsDateFormattedCell(Cell cell, WorkbookPart workbookPart)
@@ -278,14 +278,17 @@ namespace WalkingTec.Mvvm.Core
             return IsDateFormatCode(numberingFormat?.FormatCode?.Value);
         }
 
+        // 46（[h]:mm:ss）是经过时间格式，代表一段时间长度而不是时间点，不转换成日期
         private static bool IsBuiltInDateFormatId(uint id)
         {
-            return (id >= 14 && id <= 22) || (id >= 27 && id <= 36) || (id >= 45 && id <= 47) || (id >= 50 && id <= 58);
+            return (id >= 14 && id <= 22) || (id >= 27 && id <= 36) || (id == 45) || (id == 47) || (id >= 50 && id <= 58);
         }
 
         /// <summary>
-/// 自定义格式代码是否表示日期／时间：先去掉 "..." 文字、[...] 条件与颜色（[h]、[mm]、[ss] 时间经过格式保留）
-        /// 以及反斜杠转义字符，剩余部分含 y、d、h、s、m 之一即视为日期／时间（数字格式如 0.00 不含这些字母）。
+        /// 自定义格式代码是否表示日期／时间：先去掉 "..." 文字、[...] 条件与颜色以及反斜杠转义字符，
+        /// 剩余部分含 y、d、h、s、m 之一即视为日期／时间（数字格式如 0.00 不含这些字母）。
+        /// 含 [h]、[mm]、[ss] 等经过时间代码的格式代表时间长度而不是时间点，不视为日期，
+        /// 单元格维持原值交给 ValueValidity，行为与 #295 之前相同。
         /// </summary>
         private static bool IsDateFormatCode(string formatCode)
         {
@@ -309,11 +312,11 @@ namespace WalkingTec.Mvvm.Core
                     }
                     else
                     {
-                        // [h]、[mm]、[ss] 是时间经过格式，属于时间；[Red]、[$-409]、[>100] 等不是
-                        string inner = formatCode.Substring(i + 1, end - i - 1).ToLowerInvariant();
-                        if (inner.Length > 0 && inner.All(ch => ch == 'h' || ch == 'm' || ch == 's'))
+                        // [h]、[mm]、[ss] 是经过时间格式（时间长度），整个格式不当作日期；[Red]、[$-409]、[>100] 等直接忽略
+                        string inner = formatCode.Substring(i + 1, end - i - 1);
+                        if (inner.Length > 0 && inner.All(ch => ch == 'h' || ch == 'H' || ch == 'm' || ch == 'M' || ch == 's' || ch == 'S'))
                         {
-                            sb.Append(inner);
+                            return false;
                         }
                         i = end;
                     }

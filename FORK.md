@@ -685,11 +685,12 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 `IsDateFormattedCell` 的判斷規則：
 
 - 依 `cell.StyleIndex` 找到 `CellFormats` 中的 `NumberFormatId`
-- 內建日期格式：14–22、27–36、45–47、50–58（含東亞語系的內建日期格式）
-- 自訂格式（ID 164 以上）：取 `NumberingFormats` 的 `FormatCode`，先去掉 `"..."` 文字、`[...]` 條件與顏色（`[h]`、`[mm]`、`[ss]` 時間經過格式保留）以及反斜線跳脫字元，剩下的部分含 `y`、`d`、`h`、`s`、`m` 之一（不分大小寫）即視為日期或時間；`0.00` 這類數字格式不含這些字母
+- 內建日期格式：14–22、27–36、45、47、50–58（含東亞語系的內建日期格式）；**46（`[h]:mm:ss`）不算**
+- 自訂格式（ID 164 以上）：取 `NumberingFormats` 的 `FormatCode`，先去掉 `"..."` 文字與反斜線跳脫字元；`[Red]`、`[$-409]`、`[>100]` 這類方括號內容直接忽略，剩下的部分含 `y`、`d`、`h`、`s`、`m` 之一（不分大小寫）即視為日期或時間；`0.00` 這類數字格式不含這些字母
+- **經過時間格式不轉換**：內建 46，以及含 `[h]`／`[hh]`／`[m]`／`[mm]`／`[s]`／`[ss]` 方括號經過時間代碼的自訂格式（去掉引號與跳脫字元後判斷，不分大小寫）。它們代表時間長度而不是時間點，儲存格維持原值交給 `ValueValidity`，行為與 #295 之前相同（#303）
 - 找不到樣式表、樣式索引或格式碼時回傳 false（行為與修改前相同）
 
 - **不變的行為**：文字儲存格（例如以字串存放的 `2026-10-22`）、非 Date／DateTime 欄位（數值欄、文字欄等）、沒有日期格式的數值（DateTime 欄位填入純數字仍然是格式錯誤）。`GetCellTextValue` 沒有修改
 - **影響範圍**：隨 NuGet 發佈的 `WalkingTec.Mvvm.Core`；LayUI 匯入（`_FrameworkController`）與 SPA／API 匯入共用 `BaseImportVM`，兩者一併生效。`BaseImportVM` 的 public API 沒有變動；新增 public 方法 `OpenXmlHelper.IsDateFormattedCell(Cell, WorkbookPart)`
 - **下游提醒**：自行覆寫 `SetTemplateData` 並呼叫 `GetCellTextValue` 的匯入類別不受影響，但不會自動取得這項轉換
-- **測試**：`test/WalkingTec.Mvvm.Core.Test/Excel/ExcelTemplateImportTests.cs`（`Import_DateColumn_*`、`Import_NumberColumn_*`、`IsDateFormattedCell_*`）：內建格式 14、東亞格式 31／57、WTM 範本的格式 165、自訂 `yyyy/m/d`、數值欄的 `0.00`、文字日期、沒有日期格式的純數字、1904 日期系統、超出範圍的序列值，以及各種格式碼的分類
+- **測試**：`test/WalkingTec.Mvvm.Core.Test/Excel/ExcelTemplateImportTests.cs`（`Import_DateColumn_*`、`Import_NumberColumn_*`、`IsDateFormattedCell_*`）：內建格式 14、東亞格式 31／57、WTM 範本的格式 165、自訂 `yyyy/m/d`、經過時間格式（46、`[h]:mm:ss`、`[mm]:ss`）不轉換、文字欄的日期格式數值維持序列值字串、逐一涵蓋所有內建格式 ID、數值欄的 `0.00`、文字日期、沒有日期格式的純數字、1904 日期系統、超出範圍的序列值，以及各種格式碼的分類
