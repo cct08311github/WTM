@@ -197,6 +197,9 @@ git merge --no-ff upstream/dotnet10
 | `Dockerfile`、`alpine.Dockerfile`、`.dockerignore` | 改為建置 Vue3Demo，含前端建置 stage；刪除 `wtmdoc.Dockerfile` | #16 |
 | `demo/WalkingTec.Mvvm.Vue3Demo/ClientApp/wtmbuild.ts`、`public/menu.json` | 路徑改為跨平台；輸出依 key 排序 | #35、#37 |
 | `README.md`、`README.zh-CN.md` | 開頭多一段 fork 說明（其餘內容不動，降低同步衝突） | #19 |
+| `src/WalkingTec.Mvvm.Mvc/Views/_Framework/Selector.cshtml`、`src/WalkingTec.Mvvm.Mvc/Helper/SelectorScript.cs`（新增） | 寫入內聯腳本的值依所在位置編碼；`SubmitFunc` 只接受函數名或成員路徑 | 第 25 節 |
+| `src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs` | `SetTenant` 移除 `[Public]`，檢查 `SetCurrentTenant` 的結果，改為 `async Task<IActionResult>` | 第 26 節 |
+| `src/WalkingTec.Mvvm.Core/WTMContext.cs` | `DoLogin` 一律驗證請求的帳號、密碼與租戶；已登入請求的重建流程改為內部方法 `LoadSignedInUser` | 第 27 節 |
 | Dependabot 的依賴升級 | 各 csproj／`package-lock.json` 的版本號 | 見各 `dependencies` PR |
 
 fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder,GenericEndpointGuard}.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/GenericEndpointOptions.cs`、`docs/security/generic-endpoint-authz.md`、`test/WalkingTec.Mvvm.LayUI.E2EHost/Controllers/ReportController.cs`（授權測試用頁面）、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270、#272）、`test/WalkingTec.Mvvm.E2E.Instrumentation/`（E2E 的路由覆蓋與 hosting startup，#272）。
@@ -765,3 +768,59 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
   5. 使用本地資料的表格（`use-local-data`）不寫參考，所以它的 `_Framework/GetExportExcel` 匯出按鈕不會被通過
 - **不受影響**：`DataPrivilege`／`DPWhere`、匯出 API、`CreateVM`、`BaseImportVM`、`EncodeHtmlContent`、沒有 `HttpContext` 的 `WTMContext`；各功能頁自己的 `Search`、`ExportExcel` 等 action 不經過這些端點
 - **測試**：Core.Test 的 `GenericEndpointGuardTest`、`GenericEndpointReferenceTagHelperTests`、`RequestConnectionKeyTest`、`FrameworkCacheEndpointAdministratorTest`；E2E 的 `GenericEndpointAuthorizationTests`（用 `ReportController` 這個只有管理員角色能開的頁面，以匿名／無角色／受限角色／管理員的真實請求驗證；另有連線由伺服器決定、Selector 彈窗的參考不能匯出、受限角色與無角色的表格與 Selector 照常可用；`OtherDbController` 是帶 `[FixConnection]` 的測試頁，測試主機另設第二個連線 `other` 與它的讀取副本 `other_1`，驗證範本下載、`GetEmptyData`、`UpdateModelProperty` 在固定連線上運作且寫入不進副本，以及未設定的連線或被改動的參考被拒絕）；`RemoveUserCacheBy*` 的權限矩陣列；權限矩陣的六個端點期望值改為「沒有參考即拒絕」（`exempt` 說明見表格）
+
+## 25. 選擇器彈窗視圖寫入腳本的值依位置編碼（安全強化）
+
+**範圍**：`/_Framework/Selector` 回傳的彈窗視圖（`src/WalkingTec.Mvvm.Mvc/Views/_Framework/Selector.cshtml`，LayUI 受保護路徑）。視圖把請求參數（`_DONOT_USE_KFIELD`、`_DONOT_USE_VFIELD`、`_DONOT_USE_FIELD`、`_DONOT_USE_SEL_ID`、`_DONOT_USE_SUBMIT`、`_DONOT_USE_TRIGGER_URL`、`_DONOT_USE_MULTI_SEL`）與已選資料寫進內聯 script。
+
+**變更**：由新的 `SelectorScript` 輔助類依位置處理，沿用既有的 `JsStringEncoder`、`HtmlAttributeEncoder`：
+
+| 位置 | 處理 |
+|---|---|
+| JavaScript 字串內（欄位名、取值欄位、Selector id、聯動位址、「只能選一筆」訊息） | `JsStringEncoder.Escape` |
+| 在腳本字串內組出的 HTML 屬性值（隱藏欄位的 `name`） | 先 `HtmlAttributeEncoder.Encode`，再 `JsStringEncoder.Escape` |
+| `multiSel` | 一律輸出 `true` 或 `false` |
+| `SubmitFunc` | 只接受函數名或成員路徑（例如 `onPick`、`MyPage.onPick`）；其他內容不輸出呼叫 |
+| 已選資料（JSON） | `<` 寫成等價的 `\u003C`，資料內容不變 |
+
+普通值（識別字、欄位名、普通文字）輸出與修改前相同；`wt:selector` 的屬性（`submit-func`、`trigger-url` 等）用法不變。
+
+- **誰會受影響**：`SubmitFunc` 寫成函數名或成員路徑以外內容（例如整段運算式）的頁面，不再被呼叫。使用 TagHelper 並以函數名指定的網站不需修改
+- **回滾方式**：退回前一個 fork 版本（`Core`、`Mvc`、`TagHelpers.LayUI` 一起退回）
+- **測試**：Core.Test 的 `SelectorScriptTest`；E2E 的 `FrameworkEndpointTests`（`Selector_OrdinaryRequestValues_…`、`Selector_RequestValuesWithSpecialCharacters_…`），以及既有的 `LayUiSelectorTests`
+
+## 26. `_Framework/SetTenant` 需要登入並檢查目標租戶（安全強化）
+
+**範圍**：`/_Framework/SetTenant`（GET，`tenant` 參數）。
+
+**變更**：
+
+| 項目 | 行為 |
+|---|---|
+| 未登入的請求 | 與其他需要登入的 action 相同，由 `PrivilegeFilter` 處理（MVC 回登入頁導向的 script，API／帶 `Authorization` 的請求回 401）。原先為 `[Public]` |
+| 已登入的使用者 | 控制器仍為 `[AllRights]`，不需要選單權限 |
+| 目標租戶 | 由 `WTMContext.SetCurrentTenant` 既有規則檢查（主租戶使用者可選任何值；租戶使用者只能選自己的租戶或其子租戶）。通過：更新登入 cookie 並回 `location.reload();`，與之前相同 |
+| 不通過 | 不改變當前租戶、不更新 cookie，回「沒有權限」提示（`FFResult().Alert`），不含 `location.reload();` |
+| 請求方式 | 維持 GET（下游版面以 GET 呼叫）；路由與參數不變；action 回傳型別改為 `Task<IActionResult>` |
+
+- **誰會受影響**：把 `/_Framework/SetTenant` 登記為公開位址（`IsUrlPublic`）的網站，匿名請求現在得到 401 提示（原為例外）。下游版面對已登入使用者呼叫 `SetTenant?tenant=…`（包含 `tenant=` 空值切回主租戶）不需修改
+- **回滾方式**：退回前一個 fork 版本
+- **測試**：Core.Test 的 `FrameworkSetTenantTest`；E2E 的 `FrameworkEndpointTests`（匿名、已登入）；兩份權限矩陣表 `_framework/settenant GET`（LayUI：匿名 `redirect-login`；Vue3Demo：匿名 `redirect-login`、Bearer 身分 `401`、cookie 管理員 `ok`）
+
+## 27. 登入一律驗證請求的憑證（安全強化）
+
+**範圍**：`WTMContext.DoLogin(username, password, tenant)`，以及呼叫它的登入入口（Vue3Demo `_Admin` 的 `POST /api/_account/login`、`/api/_account/loginjwt`、LayUI E2EHost 的 `/Login/Login`，以及下游同樣寫法的登入頁）。
+
+**變更**：
+
+| 項目 | 行為 |
+|---|---|
+| `DoLogin` | 無論呼叫者是否已登入，一律驗證請求的帳號、密碼與租戶，通過後才簽發 token。不再沿用目前登入狀態的帳號、租戶或 remote token；已登入的呼叫者以其他帳號的憑證登入，得到的是該帳號 |
+| 重建目前使用者 | `LoginUserInfo` 取值遇到快取失效時呼叫 `ReloadUser(itcode)`。已登入的請求（cookie 或 token 已由認證中介軟體驗證）改由內部方法 `LoadSignedInUser` 依登入狀態的 claims 讀取，不需要密碼，仍簽發供伺服器端呼叫使用的 `RemoteToken`，行為與之前相同；未登入的請求仍走 `DoLogin(itcode, null, null)`（只比對密碼為空的帳號），與之前相同 |
+| 公開簽章 | 不變（`DoLogin`、`ReloadUser`、`ReloadUserFunc`）。`RefreshToken()`、`ChangePassword`、`SetTenant`／`SetCurrentTenant` 不呼叫 `DoLogin`，不受影響 |
+
+呼叫端清查（`src`、`demo`、`test`、範本、文件）：`DoLogin` 只有兩個登入 action（Vue3Demo `AccountController.Login`／`LoginJwt`）與 LayUI E2EHost 的 `LoginController.Login`，皆為帶憑證的登入；`ReloadUser` 只有 `WTMContext` 內部的三處（`LoginUserInfo` 取值、遠端 token 解析、`HasMainHost` 的 `null` 帳號），皆維持原行為；`LoadUserFromDB` 不存在。
+
+- **誰會受影響**：在「已登入」的請求中呼叫 `Wtm.DoLogin(account, null, null)` 來取得目前使用者的下游程式碼（改用 `Wtm.ReloadUser(itcode)` 或 `Wtm.LoginUserInfo`）；正常的登入頁與登入 API 不需修改。`HasMainHost` 模式下，`DoLogin` 不再使用登入狀態內的 remote token，改為以帳號密碼向主站台驗證（請求自帶的 `_remotetoken` 查詢參數維持原行為）
+- **回滾方式**：退回前一個 fork 版本（`Core` 單獨即可）
+- **測試**：Admin.Test 的 `DoLoginPasswordTest`（已登入請求仍驗證密碼、不能取得他人帳號、租戶規則與匿名相同、`ReloadUser` 與 `LoginUserInfo` 重建行為不變）；E2E 的 `FrameworkEndpointTests.Login_WhenAlreadySignedIn_…`、`Vue3ApiTests.Account_SignedInCallers_…`；LayUI 權限矩陣的 `login/login POST`，已登入身分的探測請求（不帶有效憑證）原本回 302，現在重新顯示登入頁（`ok`）。`HasMainHost` 分支沒有單元或 E2E 測試（需要主站台）
