@@ -218,7 +218,17 @@ namespace WalkingTec.Mvvm.Admin.Api
                     forapi.Attributes.Add("IsMainHost", false);
                 }
                     forapi.Attributes.Add("IsDebug", Wtm.ConfigInfo.IsQuickDebug);
-                
+
+                // a reference for the photo of the user, for the picture in the navigation bar (an img tag sends no credentials)
+                forapi.Attributes.Remove("PhotoRef");
+                if (forapi.PhotoId != null)
+                {
+                    var photoRef = Wtm.CreateFileCapability(forapi.PhotoId.Value, FilePurpose.Read);
+                    if (photoRef != null)
+                    {
+                        forapi.Attributes["PhotoRef"] = photoRef;
+                    }
+                }
                 return Ok(forapi);
             }
         }
