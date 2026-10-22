@@ -34,6 +34,8 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost
         public void ConfigureServices(IServiceCollection services)
         {
             services.AddDistributedMemoryCache();
+            // test only: a rule for the file endpoints that the E2E tests switch per request (registered first, so the framework keeps it)
+            services.AddSingleton<WalkingTec.Mvvm.Core.IFileAccessPolicy, Fixtures.E2EFileAccessPolicy>();
             services.AddWtmSession(3600, ConfigRoot);
             services.AddWtmCrossDomain(ConfigRoot);
             services.AddWtmAuthentication(ConfigRoot);

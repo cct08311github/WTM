@@ -162,5 +162,13 @@
       { "key": "lab/search POST", "expect": { "anonymous": "200-json-401", "norole": "ok", "limited": "ok", "admin": "ok" } }
     ] }
   ],
-  "configurations": {}
+  "configurations": {
+    "file-enforce": {
+      "entries": [
+        { "key": "_framework/getfile GET", "expect": { "anonymous": "200-no-privilege-page", "norole": "200-no-privilege-page", "limited": "200-no-privilege-page", "admin": "200-no-privilege-page" }, "exempt": "the file endpoints (FileEndpoints:Mode=Enforce) refuse a request that carries no reference, for an id that does not exist as for one that does (see FORK.md section 28)" },
+        { "key": "_framework/getfilename GET", "expect": { "anonymous": "redirect-login", "norole": "200-no-privilege-page", "limited": "200-no-privilege-page", "admin": "200-no-privilege-page" }, "exempt": "the file endpoints (FileEndpoints:Mode=Enforce) refuse a request that carries no reference, for an id that does not exist as for one that does (see FORK.md section 28)" },
+        { "key": "_framework/viewfile GET", "expect": { "anonymous": "200-no-privilege-page", "norole": "200-no-privilege-page", "limited": "200-no-privilege-page", "admin": "200-no-privilege-page" }, "exempt": "the file endpoints (FileEndpoints:Mode=Enforce) refuse a request that carries no reference, for an id that does not exist as for one that does (see FORK.md section 28)" }
+      ]
+    }
+  }
 }

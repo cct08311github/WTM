@@ -208,6 +208,86 @@ namespace WalkingTec.Mvvm.E2E.Tests
             }
         }
 
+        [TestMethod]
+        public async Task TheEmbeddedMarker_CannotBeSetByTheImageUpload_WithOrWithoutResizing()
+        {
+            foreach (var query in new[] { "?width=1&height=1&extra=", "?extra=" })
+            {
+                // several prefixes, in mixed case
+                var response = await Api.PostAsync("/_Framework/UploadImage" + query + Uri.EscapeDataString("WTM:Embedded;wtm:EMBEDDED;note"), new APIRequestContextOptions
+                {
+                    Multipart = Api.CreateFormData().Set("file", Payload("marker.png", Png))
+                });
+                Assert.AreEqual(200, response.Status, query);
+                var id = JsonDocument.Parse(await response.TextAsync()).RootElement.GetProperty("Data").GetProperty("Id").GetString();
+
+                var bare = await Api.GetAsync("/_Framework/GetFile/" + id);
+
+                Assert.AreEqual(200, bare.Status, query);
+                if (Enforcing)
+                {
+                    Assert.IsTrue(await IsRefusedAsync(bare, "x"), "The image upload " + query + " must not produce an embedded file.");
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task TheEmbeddedMarker_InAnyCase_CannotBeSetByTheGenericUpload()
+        {
+            var content = "marker " + Unique();
+            var id = (await UploadAsync("marker2.txt", content, "?extra=" + Uri.EscapeDataString("Wtm:EMBEDDED;WTM:embedded;x"))).GetProperty("Id").GetString();
+
+            var bare = await Api.GetAsync("/_Framework/GetFile/" + id);
+
+            if (Enforcing)
+            {
+                Assert.IsTrue(await IsRefusedAsync(bare, content));
+            }
+        }
+
+        // ---- the application's rule ---------------------------------------------------------------------------------------------------------
+
+        [TestMethod]
+        public async Task AFailingOrDenyingAccessPolicy_RefusesTheRequest_EvenWithAValidReference()
+        {
+            if (Mode.Equals("Legacy", StringComparison.OrdinalIgnoreCase))
+            {
+                Assert.Inconclusive("Legacy is the behaviour from before the check: the rule is not asked.");
+            }
+            var content = "policy " + Unique();
+            var data = await UploadAsync("policy.txt", content);
+            var url = data.GetProperty("Url").GetString();
+
+            foreach (var policy in new[] { "throw", "deny" })
+            {
+                var response = await Api.GetAsync(url, new APIRequestContextOptions { Headers = new System.Collections.Generic.Dictionary<string, string> { ["X-E2E-File-Policy"] = policy } });
+                Assert.AreEqual(200, response.Status, policy);
+                Assert.IsTrue(await IsRefusedAsync(response, content), policy + " must refuse in " + Mode);
+            }
+            Assert.AreEqual(content, await (await Api.GetAsync(url)).TextAsync(), "Without the header the rule allows.");
+        }
+
+        // ---- the same refusal for a file that does not exist -------------------------------------------------------------------------------------
+
+        [TestMethod]
+        public async Task Enforce_AnswersAMissingFileAndAFileTheCallerMayNotHave_Alike()
+        {
+            if (Enforcing == false)
+            {
+                Assert.Inconclusive("Only Enforce refuses a request without a reference.");
+            }
+            var id = (await UploadAsync("exists.txt", "x")).GetProperty("Id").GetString();
+
+            var existing = await Api.GetAsync("/_Framework/GetFile/" + id);
+            var missing = await Api.GetAsync("/_Framework/GetFile/" + Guid.NewGuid());
+
+            Assert.AreEqual(existing.Status, missing.Status);
+            Assert.AreEqual(await existing.TextAsync(), await missing.TextAsync());
+            var existingView = await Api.GetAsync("/_Framework/ViewFile/" + id);
+            var missingView = await Api.GetAsync("/_Framework/ViewFile/" + Guid.NewGuid());
+            Assert.AreEqual(await existingView.TextAsync(), await missingView.TextAsync());
+        }
+
         // ---- the connection ---------------------------------------------------------------------------------------------------------------
 
         [TestMethod]
@@ -375,7 +455,15 @@ namespace WalkingTec.Mvvm.E2E.Tests
             var response = await Api.GetAsync("/_Framework/ViewFile/" + Guid.NewGuid());
 
             Assert.AreEqual(200, response.Status);
-            Assert.AreEqual("", await response.TextAsync());
+            // Enforce answers like it does for a file the caller may not have (nothing tells which ids exist)
+            if (Enforcing)
+            {
+                StringAssert.Contains(await response.TextAsync(), "not allowed to access this page");
+            }
+            else
+            {
+                Assert.AreEqual("", await response.TextAsync());
+            }
         }
     }
 }

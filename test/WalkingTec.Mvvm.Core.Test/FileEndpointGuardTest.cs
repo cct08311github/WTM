@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Collections.Generic;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -205,11 +206,60 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
-        public void AFileThatDoesNotExist_IsLeftToTheEndpoint()
+        public void AFileThatDoesNotExist_IsLeftToTheEndpoint_ExceptInEnforce()
         {
-            var decision = FileEndpointGuard.Authorize(Request(null, file: null));
-            Assert.IsTrue(decision.Allowed);
-            Assert.AreEqual(FileEndpointAdmission.FileMissing, decision.Admission);
+            foreach (var mode in new[] { FileEndpointMode.Legacy, FileEndpointMode.Audit })
+            {
+                var decision = FileEndpointGuard.Authorize(Request(null, mode: mode, file: null));
+                Assert.IsTrue(decision.Allowed, mode.ToString());
+            }
+            Assert.AreEqual(FileEndpointAdmission.FileMissing, FileEndpointGuard.Authorize(Request(null, mode: FileEndpointMode.Audit, file: null)).Admission);
+        }
+
+        [TestMethod]
+        public void Enforce_RefusesAMissingFileLikeAFileTheCallerMayNotHave()
+        {
+            var missing = FileEndpointGuard.Authorize(Request(null, file: null));
+            var existing = FileEndpointGuard.Authorize(Request(null, file: Plain()));
+
+            Assert.IsFalse(missing.Allowed);
+            Assert.AreEqual(existing.Allowed, missing.Allowed);
+            Assert.AreEqual(existing.Refusal, missing.Refusal, "the same reason, so the answer is the same");
+
+            // with a reference that is wrong the two cases are still alike
+            var wrongUser = Issue(user: "alice");
+            Assert.AreEqual(
+                FileEndpointGuard.Authorize(Request(wrongUser, user: "bob", file: Plain())).Refusal,
+                FileEndpointGuard.Authorize(Request(wrongUser, user: "bob", file: null)).Refusal);
+
+            // a valid reference needs no lookup: whether the file exists is for the endpoint to find out
+            Assert.IsTrue(FileEndpointGuard.Authorize(Request(Issue(), file: null)).Allowed);
+        }
+
+        [TestMethod]
+        public void TheReference_IsBoundToTheHomeTenantOfTheUser()
+        {
+            var reference = FileEndpointGuard.Issue(_protector, new FileEndpointOptions(), FileId, FilePurpose.Read, null, "alice", null, Now, "t1");
+
+            var same = Request(reference, file: Plain());
+            same.HomeTenant = "t1";
+            Assert.IsTrue(FileEndpointGuard.Authorize(same).Allowed);
+
+            var other = Request(reference, file: Plain());
+            other.HomeTenant = "t2";
+            var refused = FileEndpointGuard.Authorize(other);
+            Assert.IsFalse(refused.Allowed, "a user of the same name in another home tenant is another user");
+            Assert.AreEqual(FileEndpointRefusal.UserMismatch, refused.Refusal);
+
+            var main = Request(reference, file: Plain());
+            main.HomeTenant = null;
+            Assert.IsFalse(FileEndpointGuard.Authorize(main).Allowed);
+
+            // a reference of a user of the main tenant is not honoured for a user of a tenant either
+            var forMain = FileEndpointGuard.Issue(_protector, new FileEndpointOptions(), FileId, FilePurpose.Read, null, "alice", null, Now);
+            var tenantUser = Request(forMain, file: Plain());
+            tenantUser.HomeTenant = "t1";
+            Assert.IsFalse(FileEndpointGuard.Authorize(tenantUser).Allowed);
         }
 
         // ---- embedded files and the cut-off date ------------------------------------------------------------------------------------
@@ -232,7 +282,38 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.AreEqual("", FileEndpointGuard.StripEmbeddedMarker(FileEndpointGuard.EmbeddedMarker));
             Assert.IsNull(FileEndpointGuard.StripEmbeddedMarker(null));
             Assert.AreEqual("a" + FileEndpointGuard.EmbeddedMarker, FileEndpointGuard.StripEmbeddedMarker("a" + FileEndpointGuard.EmbeddedMarker), "only a leading marker counts");
+            Assert.AreEqual("n", FileEndpointGuard.StripEmbeddedMarker("WTM:Embedded;wtm:EMBEDDED;Wtm:embedded;n"), "repeated markers in any case");
+            Assert.AreEqual("n", FileEndpointGuard.StripEmbeddedMarker("wtm:embedded;wtm:embedded;wtm:embedded;wtm:embedded;n"));
+            Assert.IsFalse(FileEndpointGuard.IsEmbedded(FileEndpointGuard.StripEmbeddedMarker("WtM:EmBeDdEd;wTm:eMbEdDeD;")));
+            Assert.IsFalse(FileEndpointGuard.IsEmbedded(" " + FileEndpointGuard.EmbeddedMarker), "a marker after a space is not one");
             Assert.IsFalse(FileEndpointGuard.IsEmbedded(FileEndpointGuard.StripEmbeddedMarker(FileEndpointGuard.MarkEmbedded("x"))));
+        }
+
+        [TestMethod]
+        public void AnUploadTimeThatWasNeverSet_IsNotGrandfathered()
+        {
+            Action<FileEndpointOptions> cutoff = o => o.LegacyUploadedBefore = new DateTime(2026, 6, 1);
+            Assert.IsFalse(FileEndpointGuard.Authorize(Request(null, file: Plain(default(DateTime)), configure: cutoff)).Allowed);
+            Assert.IsFalse(FileEndpointGuard.Authorize(Request(null, file: Plain(DateTime.MinValue), configure: cutoff)).Allowed);
+            Assert.IsFalse(FileEndpointGuard.Authorize(Request(null, file: Plain(new DateTime(1, 1, 1, 12, 0, 0)), configure: cutoff)).Allowed);
+            Assert.IsTrue(FileEndpointGuard.Authorize(Request(null, file: Plain(new DateTime(2, 1, 1)), configure: cutoff)).Allowed);
+        }
+
+        [TestMethod]
+        public void ACutOffInTheFuture_IsReportedAtStartUp()
+        {
+            var logs = new WalkingTec.Mvvm.Test.Mock.CapturingLoggerFactory();
+            var future = new Configs();
+            future.FileEndpoints.LegacyUploadedBefore = DateTime.Now.AddDays(3);
+            FileEndpointGuard.LogRelaxedWarning(future, logs.CreateLogger("t"));
+            Assert.IsTrue(logs.Entries.Any(x => x.Level == Microsoft.Extensions.Logging.LogLevel.Warning && x.Message.Contains("LegacyUploadedBefore") && x.Message.Contains("future")));
+            StringAssert.Contains(logs.Entries.First(x => x.Message.Contains("LegacyUploadedBefore")).Message, "local time");
+
+            var past = new WalkingTec.Mvvm.Test.Mock.CapturingLoggerFactory();
+            var configs = new Configs();
+            configs.FileEndpoints.LegacyUploadedBefore = DateTime.Now.AddDays(-3);
+            FileEndpointGuard.LogRelaxedWarning(configs, past.CreateLogger("t"));
+            Assert.IsFalse(past.Entries.Any(x => x.Message.Contains("LegacyUploadedBefore")));
         }
 
         [TestMethod]

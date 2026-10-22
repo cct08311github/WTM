@@ -27,6 +27,20 @@ namespace WalkingTec.Mvvm.E2E.Security
             LimitedGrants = new[] { "gadget/index", "gadget/search", "gadget/details", "gadget/exportexcel" },
         };
 
+        /// <summary>The LayUI test host with FileEndpoints:Mode=Enforce; the table lists the differences to the default (section "configurations").</summary>
+        public static readonly MatrixSetup LayUiFileEnforce = new MatrixSetup
+        {
+            Site = SiteTargets.LayUIMatrixFileEnforce,
+            Configuration = "file-enforce",
+            TableFile = LayUi.TableFile,
+            OpenIdentities = LayUi.OpenIdentities,
+            LoginPaths = LayUi.LoginPaths,
+            Kinds = LayUi.Kinds,
+            QueryOverrides = LayUi.QueryOverrides,
+            SessionActions = LayUi.SessionActions,
+            LimitedGrants = LayUi.LimitedGrants,
+        };
+
         private static readonly IReadOnlyDictionary<string, IdentityKind> Vue3Kinds = new Dictionary<string, IdentityKind>
         {
             ["anonymous"] = IdentityKind.Anonymous,

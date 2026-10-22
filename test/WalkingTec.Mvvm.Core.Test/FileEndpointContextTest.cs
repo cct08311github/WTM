@@ -219,6 +219,104 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.AreEqual(0, policy.Calls);
         }
 
+        private sealed class ThrowingPolicy : IFileAccessPolicy
+        {
+            public bool IsAllowed(FileAccessRequest request) => throw new InvalidOperationException("the rule failed");
+        }
+
+        [TestMethod]
+        public void AThrowingPolicy_RefusesTheRequest_InAuditAndEnforce_AndIsLogged()
+        {
+            var provider = new EphemeralDataProtectionProvider();
+            foreach (var mode in new[] { FileEndpointMode.Audit, FileEndpointMode.Enforce })
+            {
+                var logs = new CapturingLoggerFactory();
+                var wtm = Create("alice", provider, mode, logs, new ThrowingPolicy());
+                var reference = ReferenceOf(wtm.GetFileUrl(FileId, FilePurpose.Download));
+
+                var decision = wtm.AuthorizeFileRequest("GetFile", FileId.ToString(), FilePurpose.Download, reference, () => Plain());
+
+                Assert.IsFalse(decision.Allowed, mode.ToString());
+                Assert.AreEqual(FileEndpointRefusal.PolicyDenied, decision.Refusal);
+                Assert.IsTrue(logs.Entries.Any(x => x.Level == Microsoft.Extensions.Logging.LogLevel.Error && x.Message.Contains("InvalidOperationException")));
+            }
+        }
+
+        [TestMethod]
+        public void WithoutADataProtectionProvider_AReferenceCannotBeOpened_SoEnforceRefusesAndAuditServes()
+        {
+            var issuer = Create("alice", new EphemeralDataProtectionProvider(), FileEndpointMode.Enforce);
+            var reference = ReferenceOf(issuer.GetFileUrl(FileId, FilePurpose.Download));
+
+            var enforce = Create("alice", null, FileEndpointMode.Enforce);
+            Assert.IsFalse(enforce.AuthorizeFileRequest("GetFile", FileId.ToString(), FilePurpose.Download, reference, () => Plain()).Allowed);
+            Assert.IsFalse(enforce.AuthorizeFileRequest("GetFile", FileId.ToString(), FilePurpose.Download, null, () => Plain()).Allowed);
+
+            var audit = Create("alice", null, FileEndpointMode.Audit);
+            var decision = audit.AuthorizeFileRequest("GetFile", FileId.ToString(), FilePurpose.Download, reference, () => Plain());
+            Assert.AreEqual(FileEndpointAdmission.Audited, decision.Admission);
+            Assert.AreEqual(FileEndpointRefusal.InvalidReference, decision.Refusal);
+        }
+
+        [TestMethod]
+        public void TwoUsersWithTheSameName_InDifferentHomeTenants_DoNotShareReferences()
+        {
+            var provider = new EphemeralDataProtectionProvider();
+            WTMContext As(string tenant)
+            {
+                var wtm = Create("alice", provider, FileEndpointMode.Enforce);
+                wtm.LoginUserInfo = new LoginUserInfo { ITCode = "alice", TenantCode = tenant };
+                return wtm;
+            }
+            var inT1 = As("t1");
+            var reference = ReferenceOf(inT1.GetFileUrl(FileId, FilePurpose.Download));
+
+            Assert.IsTrue(As("t1").AuthorizeFileRequest("GetFile", FileId.ToString(), FilePurpose.Download, reference, () => Plain()).Allowed);
+            Assert.IsFalse(As("t2").AuthorizeFileRequest("GetFile", FileId.ToString(), FilePurpose.Download, reference, () => Plain()).Allowed);
+            Assert.IsFalse(As(null).AuthorizeFileRequest("GetFile", FileId.ToString(), FilePurpose.Download, reference, () => Plain()).Allowed);
+        }
+
+        [TestMethod]
+        public void TheRefererInTheLog_IsShortenedAndHasNoControlCharacters()
+        {
+            var logs = new CapturingLoggerFactory();
+            var wtm = Create("alice", new EphemeralDataProtectionProvider(), FileEndpointMode.Audit, logs);
+            var referer = "http://x/" + new string('a', 600) + "\r\nforged: line\u2028more";
+            Moq.Mock.Get(wtm.HttpContext.Request).Setup(x => x.Headers).Returns(new Microsoft.AspNetCore.Http.HeaderDictionary { ["Referer"] = referer });
+
+            wtm.AuthorizeFileRequest("GetFile", FileId.ToString(), FilePurpose.Download, null, () => Plain());
+
+            var message = logs.Entries.Single().Message;
+            Assert.IsFalse(message.Contains("\r") || message.Contains("\n") || message.Contains("\u2028"));
+            Assert.IsTrue(message.Length < 700, message.Length.ToString());
+            StringAssert.Contains(message, "http://x/aaa");
+        }
+
+        [TestMethod]
+        public void ARequestOfACallerWhoIsNotSignedIn_IsLoggedAtInformation_ASignedInOneAtWarning()
+        {
+            var provider = new EphemeralDataProtectionProvider();
+            var anonymousLogs = new CapturingLoggerFactory();
+            var anonymous = Create("alice", provider, FileEndpointMode.Audit, anonymousLogs);
+            anonymous.LoginUserInfo = null;
+            anonymous.AuthorizeFileRequest("GetFile", FileId.ToString(), FilePurpose.Download, null, () => Plain());
+            Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Information, anonymousLogs.Entries.Single().Level);
+
+            var signedInLogs = new CapturingLoggerFactory();
+            Create("alice", provider, FileEndpointMode.Audit, signedInLogs).AuthorizeFileRequest("GetFile", FileId.ToString(), FilePurpose.Download, null, () => Plain());
+            Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Warning, signedInLogs.Entries.Single().Level);
+        }
+
+        [TestMethod]
+        public void LogText_ShortensAndCleans()
+        {
+            Assert.AreEqual("", LogText.Sanitize(null));
+            Assert.AreEqual("a b c d", LogText.Sanitize("a\nb\rc\td"));
+            Assert.AreEqual("abc...", LogText.Sanitize("abcdef", 3));
+            Assert.AreEqual("abc", LogText.Sanitize("abc", 3));
+            Assert.AreEqual("中文 text", LogText.Sanitize("中文 text"));
+        }
+
         [TestMethod]
         public void TheDefaultPolicy_AllowsEverything()
         {

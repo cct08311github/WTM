@@ -1172,7 +1172,7 @@ params string[] groupcode)
             try
             {
                 return FileEndpointGuard.Issue(FileEndpointProtector(), ConfigInfo?.FileEndpoints, fileId, purposes,
-                    connectionKey ?? CurrentCS, LoginUserInfo?.ITCode, LoginUserInfo?.CurrentTenant, DateTimeOffset.UtcNow);
+                    connectionKey ?? CurrentCS, LoginUserInfo?.ITCode, LoginUserInfo?.CurrentTenant, DateTimeOffset.UtcNow, LoginUserInfo?.TenantCode);
             }
             catch (Exception ex)
             {
@@ -1229,6 +1229,7 @@ params string[] groupcode)
                 Reference = reference,
                 User = LoginUserInfo?.ITCode,
                 Tenant = LoginUserInfo?.CurrentTenant,
+                HomeTenant = LoginUserInfo?.TenantCode,
                 Now = DateTimeOffset.UtcNow,
                 OpenReference = r => FileEndpointGuard.Unprotect(protector, r),
                 GetFileInfo = getFileInfo
@@ -1259,35 +1260,51 @@ params string[] groupcode)
         public FileEndpointDecision AuthorizeFileRequest(string endpoint, string fileId, FilePurpose purpose, string reference, Func<FileEndpointFileInfo> getFileInfo)
         {
             var decision = FileEndpointGuard.Authorize(CreateFileRequest(fileId, purpose, reference, getFileInfo));
+            // what a request carries is shortened and stripped of control characters before it is logged
             string Referer()
             {
-                try { return HttpContext?.Request?.Headers?["Referer"].ToString(); } catch { return null; }
+                try { return LogText.Sanitize(HttpContext?.Request?.Headers?["Referer"].ToString(), 256); } catch { return string.Empty; }
             }
+            var user = LogText.Sanitize(LoginUserInfo?.ITCode, 100);
+            // a caller who is not signed in (files are open to them with IsFilePublic) may be a crawler: those requests are logged at Information,
+            // the ones of signed-in users, which point at a link that was written without a reference, at Warning
+            var level = LoginUserInfo == null ? LogLevel.Information : LogLevel.Warning;
             if (decision.Allowed == false)
             {
-                _loggerFactory?.CreateLogger<WTMContext>().LogWarning("File endpoint {Endpoint} refused a request: {Reason} (user {User}, referer {Referer})",
-                    endpoint, decision.Refusal, LoginUserInfo?.ITCode, Referer());
+                _loggerFactory?.CreateLogger<WTMContext>().Log(level, "File endpoint {Endpoint} refused a request: {Reason} (user {User}, referer {Referer})",
+                    endpoint, decision.Refusal, user, Referer());
                 return decision;
             }
             if (decision.Admission == FileEndpointAdmission.Audited)
             {
-                _loggerFactory?.CreateLogger<WTMContext>().LogWarning("File endpoint {Endpoint} served a request without a valid file reference: {Reason} (user {User}, referer {Referer}). It is refused when FileEndpoints:Mode is Enforce.",
-                    endpoint, decision.Refusal, LoginUserInfo?.ITCode, Referer());
+                _loggerFactory?.CreateLogger<WTMContext>().Log(level, "File endpoint {Endpoint} served a request without a valid file reference: {Reason} (user {User}, referer {Referer}). It is refused when FileEndpoints:Mode is Enforce.",
+                    endpoint, decision.Refusal, user, Referer());
             }
             if (decision.Admission != FileEndpointAdmission.Legacy && decision.Admission != FileEndpointAdmission.FileMissing)
             {
-                var policy = ServiceProvider?.GetService<IFileAccessPolicy>();
-                if (policy != null && policy.IsAllowed(new FileAccessRequest
+                bool allowed;
+                try
                 {
-                    FileId = fileId,
-                    Purpose = purpose,
-                    Admission = decision.Admission,
-                    User = LoginUserInfo?.ITCode,
-                    Tenant = LoginUserInfo?.CurrentTenant,
-                    Wtm = this
-                }) == false)
+                    var policy = ServiceProvider?.GetService<IFileAccessPolicy>();
+                    allowed = policy == null || policy.IsAllowed(new FileAccessRequest
+                    {
+                        FileId = fileId,
+                        Purpose = purpose,
+                        Admission = decision.Admission,
+                        User = LoginUserInfo?.ITCode,
+                        Tenant = LoginUserInfo?.CurrentTenant,
+                        Wtm = this
+                    });
+                }
+                catch (Exception ex)
                 {
-                    _loggerFactory?.CreateLogger<WTMContext>().LogWarning("File endpoint {Endpoint} refused a request: the file access policy denied it (user {User})", endpoint, LoginUserInfo?.ITCode);
+                    // a policy that fails does not let the request through
+                    _loggerFactory?.CreateLogger<WTMContext>().LogError("The file access policy failed for {Endpoint}: {ExceptionType}; the request is refused", endpoint, ex.GetType().Name);
+                    allowed = false;
+                }
+                if (allowed == false)
+                {
+                    _loggerFactory?.CreateLogger<WTMContext>().Log(level, "File endpoint {Endpoint} refused a request: the file access policy denied it (user {User})", endpoint, user);
                     return FileEndpointDecision.Refuse(FileEndpointRefusal.PolicyDenied);
                 }
             }

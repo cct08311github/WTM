@@ -86,6 +86,9 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>The tenant the user acts in.</summary>
         [JsonPropertyName("n")] public string Tenant { get; set; }
 
+        /// <summary>The tenant the user belongs to (<c>LoginUserInfo.TenantCode</c>): two users with the same account name in different home tenants are different users.</summary>
+        [JsonPropertyName("h")] public string HomeTenant { get; set; }
+
         /// <summary>The database connection key of the page (empty: the default).</summary>
         [JsonPropertyName("c")] public string Connection { get; set; }
 
@@ -109,6 +112,9 @@ namespace WalkingTec.Mvvm.Core
         public string Reference { get; set; }
         public string User { get; set; }
         public string Tenant { get; set; }
+
+        /// <summary>The tenant the signed-in user belongs to.</summary>
+        public string HomeTenant { get; set; }
         public DateTimeOffset Now { get; set; }
         public Func<string, FileEndpointReference> OpenReference { get; set; }
 
@@ -245,7 +251,7 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>Builds a reference. Returns null when none can be built (no protector, or nothing to refer to).</summary>
         /// <param name="fileId">the file; null or empty for an upload reference</param>
         public static string Issue(IDataProtector protector, FileEndpointOptions options, string fileId, FilePurpose purposes,
-            string connectionKey, string user, string tenant, DateTimeOffset now)
+            string connectionKey, string user, string tenant, DateTimeOffset now, string homeTenant = null)
         {
             if (protector == null || purposes == FilePurpose.None)
             {
@@ -261,6 +267,7 @@ namespace WalkingTec.Mvvm.Core
                 Purposes = purposes,
                 User = user ?? string.Empty,
                 Tenant = tenant ?? string.Empty,
+                HomeTenant = homeTenant ?? string.Empty,
                 Connection = connectionKey ?? string.Empty,
                 ExpiresAt = now.Add((options ?? new FileEndpointOptions()).EffectiveLifetime).ToUnixTimeSeconds()
             };
@@ -384,13 +391,15 @@ namespace WalkingTec.Mvvm.Core
             var info = ctx.GetFileInfo?.Invoke();
             if (info == null)
             {
-                return FileEndpointDecision.Admit(FileEndpointAdmission.FileMissing);
+                // Enforce: a file that does not exist is refused like a file the caller may not have, so the answer does not tell which ids exist
+                return options.Mode == FileEndpointMode.Enforce ? FileEndpointDecision.Refuse(refusal) : FileEndpointDecision.Admit(FileEndpointAdmission.FileMissing);
             }
             if (IsEmbedded(info.ExtraInfo))
             {
                 return FileEndpointDecision.Admit(FileEndpointAdmission.Embedded);
             }
-            if (options.LegacyUploadedBefore != null && info.UploadTime < options.LegacyUploadedBefore.Value)
+            // an upload time that was never set (0001-01-01) is not "before the cut-off"
+            if (options.LegacyUploadedBefore != null && info.UploadTime.Year > 1 && info.UploadTime < options.LegacyUploadedBefore.Value)
             {
                 return FileEndpointDecision.Admit(FileEndpointAdmission.Grandfathered);
             }
@@ -424,7 +433,8 @@ namespace WalkingTec.Mvvm.Core
             // a link that was written for nobody (a page shown to an anonymous visitor) is open to the audience of that page
             if (string.IsNullOrEmpty(opened.User) == false
                 && (string.Equals(opened.User, ctx.User ?? string.Empty, StringComparison.Ordinal) == false
-                    || string.Equals(opened.Tenant ?? string.Empty, ctx.Tenant ?? string.Empty, StringComparison.Ordinal) == false))
+                    || string.Equals(opened.Tenant ?? string.Empty, ctx.Tenant ?? string.Empty, StringComparison.Ordinal) == false
+                    || string.Equals(opened.HomeTenant ?? string.Empty, ctx.HomeTenant ?? string.Empty, StringComparison.Ordinal) == false))
             {
                 return FileEndpointRefusal.UserMismatch;
             }
@@ -458,6 +468,10 @@ namespace WalkingTec.Mvvm.Core
             else if (options.Mode == FileEndpointMode.Audit)
             {
                 logger.LogInformation("FileEndpoints:Mode is Audit (the default): requests for a file without a valid reference are served and a warning is logged for each. Read the warnings, then set FileEndpoints:Mode to Enforce.");
+            }
+            if (options.LegacyUploadedBefore != null && options.LegacyUploadedBefore.Value > DateTime.Now)
+            {
+                logger.LogWarning("FileEndpoints:LegacyUploadedBefore ({Cutoff:s}) is in the future: every file uploaded until then, including new uploads, is served by its id in Enforce mode. The value is compared with the upload time in the local time of the server.", options.LegacyUploadedBefore.Value);
             }
             if (options.RequestConnectionKeys != null && options.RequestConnectionKeys.Count > 0)
             {

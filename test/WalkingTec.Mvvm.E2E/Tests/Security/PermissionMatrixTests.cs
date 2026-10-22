@@ -36,6 +36,35 @@ namespace WalkingTec.Mvvm.E2E.Tests.Security
         public async Task Table_FollowsTheDeclaredRules() => MatrixAssertions.AssertTableFollowsDeclaredRules(await MatrixSuite.GetAsync(MatrixSetups.LayUi));
     }
 
+    /// <summary>
+    /// The LayUI test host started with FileEndpoints:Mode=Enforce: a request for a file that carries no reference is refused for everybody, for an
+    /// id that does not exist as for one that does. The table lists the differences to the default configuration (section "configurations").
+    /// </summary>
+    [TestClass]
+    [TestCategory("permission-matrix")]
+    public class LayUiFileEnforcePermissionMatrixTests
+    {
+        public TestContext TestContext { get; set; }
+
+        public static IEnumerable<string> Identities => new[] { "anonymous", "norole", "limited", "admin" };
+
+        [TestMethod]
+        [DynamicData(nameof(Identities))]
+        public async Task Outcomes_MatchTheTable(string identity)
+        {
+            MatrixAssertions.AssertIdentityMatches(await MatrixSuite.GetAsync(MatrixSetups.LayUiFileEnforce), identity, TestContext);
+        }
+
+        [TestMethod]
+        public async Task Table_HasAnEntryForEveryAction() => MatrixAssertions.AssertEveryActionHasAnEntry(await MatrixSuite.GetAsync(MatrixSetups.LayUiFileEnforce));
+
+        [TestMethod]
+        public async Task Table_HasNoStaleEntries() => MatrixAssertions.AssertNoStaleEntries(await MatrixSuite.GetAsync(MatrixSetups.LayUiFileEnforce));
+
+        [TestMethod]
+        public async Task Table_FollowsTheDeclaredRules() => MatrixAssertions.AssertTableFollowsDeclaredRules(await MatrixSuite.GetAsync(MatrixSetups.LayUiFileEnforce));
+    }
+
     /// <summary>The same for the Vue3Demo API (bearer token; the cookie of the administrator is a fifth identity) with the workflow feature off.</summary>
     [TestClass]
     [TestCategory("permission-matrix")]
