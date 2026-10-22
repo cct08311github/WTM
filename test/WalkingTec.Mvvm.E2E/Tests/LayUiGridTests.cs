@@ -184,7 +184,6 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("#285: the export removes everything that looks like an HTML tag from every cell, so a value that contains such text is exported changed.")]
         public async Task Export_ValueThatLooksLikeATag_IsExportedUnchanged()
         {
             await SearchSpecialRowsAsync();
