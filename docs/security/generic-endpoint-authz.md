@@ -83,7 +83,7 @@
 
 1. `GenericEndpoints:Mode = Legacy`：放行（舊行為）。
 2. 沒有 view model 名稱：拒絕。
-3. 有參考：依序檢查格式與版本、到期、使用者與租戶、view model 名稱（逐字比對，不對來路不明的字串做 `Type.GetType`）、目的、連線 key、頁面權限、`Update` 的欄位清單。全部通過才放行。連線 key 的比對：`GetPagingData`、`GetExportExcel` 與 `Selector` 比對請求帶的 `_DONOT_USE_CS`／`_DONOT_USE_CURRENTCS`；`GetEmptyData`、`UpdateModelProperty`、`GetExcelTemplate` 比對伺服器為該請求決定的連線（`WTMContext.CurrentCS`）。
+3. 有參考：依序檢查格式與版本、到期、使用者與租戶、view model 名稱（逐字比對，不對來路不明的字串做 `Type.GetType`）、目的、連線 key、頁面權限、`Update` 的欄位清單。全部通過才放行。連線 key 的處理：`GetPagingData`、`GetExportExcel` 與 `Selector` 比對請求帶的 `_DONOT_USE_CS`／`_DONOT_USE_CURRENTCS`；`GetEmptyData`、`UpdateModelProperty`、`GetExcelTemplate` 沒有連線參數，改為在參考綁定的連線上執行（見 5.7）。比較時去掉讀取副本的後綴（`x_1` 與 `x` 是同一個連線）。
 4. 沒有有效參考時：view model 在 `ExemptViewModels` 內、呼叫者已登入、不是 `Update` 且型別確實是 `BaseVM` → 放行；否則拒絕。
 
 額外：連線 key 若不在 `Connections` 內，一律拒絕（所有模式）。
@@ -102,7 +102,13 @@ TagHelper 取不到 `IDataProtectionProvider` 時不寫參考（頁面仍可正�
 
 ### 5.7 連線由伺服器決定
 
-動作的資料庫連線由伺服器決定：`[FixConnection]`、連線函式（`DataContextFilter._csfunc`）、預設連線。查詢字串的 `DONOTUSECSName` 預設**不再**影響連線，因此頁面參考記錄的連線 key 就是伺服器為該頁面選定的連線。需要保留舊行為的應用程式可設定 `GenericEndpoints:AllowRequestConnectionKey = true`（見第 7 節）。`GetEmptyData`、`UpdateModelProperty`、`GetExcelTemplate` 不接受請求指定的連線 key，所以比對伺服器為該請求決定的連線（`WTMContext.CurrentCS`）。
+動作的資料庫連線由伺服器決定：`[FixConnection]`、連線函式（`DataContextFilter._csfunc`）、預設連線。查詢字串的 `DONOTUSECSName` 預設**不再**影響連線，因此頁面參考記錄的連線 key 就是伺服器為該頁面選定的連線。需要保留舊行為的應用程式可設定 `GenericEndpoints:AllowRequestConnectionKey = true`（見第 7 節）。`GetEmptyData`、`UpdateModelProperty`、`GetExcelTemplate` 不接受請求指定的連線 key，所以在參考綁定的連線上執行：該 key 是頁面產生時由伺服器決定、並受簽章保護的，因此使用 `[FixConnection]` 或非預設資料庫的頁面（包括匯入頁的範本按鈕）照常運作。規則（`GenericEndpointGuard.TryResolveConnection`）：
+
+- 參考的 key 必須仍是設定中的連線（`Connections`），否則拒絕；
+- 參考的 key 為空（頁面使用預設連線）：沿用伺服器為該請求選的連線；
+- 讀取（`GetEmptyData`、`GetExcelTemplate`）：基底連線或它的讀取副本，規則同 `[FixConnection]` 的動作；
+- 寫入（`UpdateModelProperty`）：一律用基底連線，不用讀取副本；
+- 比較請求與參考的連線 key 時，兩邊都去掉讀取副本的後綴（`GenericEndpointGuard.NormalizeConnectionKey`，規則同 `Utils.GetCS`），讀取時副本是隨機挑的，不會因此造成拒絕。
 
 ### 5.8 同一個 `_Framework` controller 的管理端點
 

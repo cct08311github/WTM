@@ -715,10 +715,10 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 | 端點 | 先驗證參考（簽章、到期、使用者與租戶、view model、目的、連線 key、使用者目前仍能開啟該頁面）才建立 view model；沒有有效參考的請求被拒絕（形式同 `PrivilegeFilter`：帶 `layuisearch` 標頭回 `{"Code":403}`，其他回「沒有權限」文字） |
 | 語意 | 與功能頁相同：頁面本身已通過 `PrivilegeFilter`（選單權限、`[Public]`、`[AllRights]`、管理員角色、租戶）；`[AllRights]` 頁面上的 view model，任何已登入者可用；選單權限的頁面，使用者失去權限後參考立即失效 |
 | `Selector` | 維持 `[Public]`，但必須帶有效參考；匿名者只能使用公開頁面寫出的參考。Selector 內的表格沿用原頁面的權限 |
-| 連線 key | `GetPagingData`、`GetExportExcel`、`Selector`：請求的 `_DONOT_USE_CS`／`_DONOT_USE_CURRENTCS` 必須與頁面的連線 key 相同；`GetEmptyData`、`UpdateModelProperty`、`GetExcelTemplate`：頁面的連線 key 必須與伺服器為該請求決定的連線（`WTMContext.CurrentCS`）相同；不在 `Connections` 內的 key 一律拒絕 |
+| 連線 key | `GetPagingData`、`GetExportExcel`、`Selector`：請求的 `_DONOT_USE_CS`／`_DONOT_USE_CURRENTCS` 必須與頁面的連線 key 相同（比較時去掉讀取副本的後綴：`x_1` 與 `x` 視為同一個連線，因為讀取時副本是隨機挑的）；`GetEmptyData`、`UpdateModelProperty`、`GetExcelTemplate` 沒有連線參數，改為在參考綁定的連線上執行：該 key 是頁面產生時由伺服器決定、並受簽章保護的，所以使用 `[FixConnection]` 或非預設資料庫的頁面（包括匯入頁的範本按鈕）照常運作。參考綁定的 key 必須仍是設定中的連線，否則拒絕；參考的 key 為空（頁面使用預設連線）時沿用伺服器為該請求選的連線；寫入（`UpdateModelProperty`）一律用基底連線，不用讀取副本；不在 `Connections` 內的請求 key 一律拒絕 |
 | 連線由伺服器決定 | 動作的連線由 `[FixConnection]`、連線函式、預設連線決定。查詢字串的 `DONOTUSECSName` 預設不再影響連線（參考記錄的連線 key 因此就是伺服器為頁面選定的連線）。框架內沒有使用這個參數的程式（`PagedListExtension` 中相關的一行早已註解） |
 | `RemoveUserCacheByAccount`／`ByRole`／`ByGroup` | 要求呼叫者具有管理員角色（角色代碼 `001`，與 `_WorkflowController`、資料權限範圍使用的判斷相同）；其他已登入者得到「沒有權限」的回應（帶 `Authorization` 標頭者得到 403）。框架與 `_Admin` 範本清除快取是在伺服器端直接呼叫 `WTMContext.RemoveUserCache*`，不經過這些 HTTP 端點 |
-| `UpdateModelProperty` | 需要 `Update` 目的的參考，且 `field` 必須在參考列出的可編輯屬性內 |
+| `UpdateModelProperty` | 需要 `Update` 目的的參考，且 `field` 必須在參考列出的可編輯屬性內；在參考綁定連線的基底連線上執行 |
 | 沒有 Data Protection | TagHelper 不寫參考，頁面仍可顯示；端點拒絕沒有有效參考的請求 |
 
 **設定 `GenericEndpoints`**（預設安全，不設定就是下列預設值）：
@@ -739,4 +739,4 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
   5. 有用到查詢字串 `DONOTUSECSName` 的頁面：在 `appsettings` 設定 `GenericEndpoints:AllowRequestConnectionKey=true`（或改成 `[FixConnection]`／連線函式）
 - **回滾方式**：設定 `GenericEndpoints:Mode` 為 `Legacy`（連線與 `RemoveUserCacheBy*` 的變更另外用 `AllowRequestConnectionKey` 與退回版本處理），或退回前一個 fork 版本（`Core`、`Mvc`、`TagHelpers.LayUI` 一起退回）
 - **不受影響**：`DataPrivilege`／`DPWhere`、匯出 API、`CreateVM`、`BaseImportVM`、`EncodeHtmlContent`、沒有 `HttpContext` 的 `WTMContext`；各功能頁自己的 `Search`、`ExportExcel` 等 action 不經過這些端點
-- **測試**：Core.Test 的 `GenericEndpointGuardTest`、`GenericEndpointReferenceTagHelperTests`、`RequestConnectionKeyTest`、`FrameworkCacheEndpointAdministratorTest`；E2E 的 `GenericEndpointAuthorizationTests`（用 `ReportController` 這個只有管理員角色能開的頁面，以匿名／無角色／受限角色／管理員的真實請求驗證；另有連線由伺服器決定、Selector 彈窗的參考不能匯出、受限角色與無角色的表格與 Selector 照常可用）；`RemoveUserCacheBy*` 的權限矩陣列；權限矩陣的六個端點期望值改為「沒有參考即拒絕」（`exempt` 說明見表格）
+- **測試**：Core.Test 的 `GenericEndpointGuardTest`、`GenericEndpointReferenceTagHelperTests`、`RequestConnectionKeyTest`、`FrameworkCacheEndpointAdministratorTest`；E2E 的 `GenericEndpointAuthorizationTests`（用 `ReportController` 這個只有管理員角色能開的頁面，以匿名／無角色／受限角色／管理員的真實請求驗證；另有連線由伺服器決定、Selector 彈窗的參考不能匯出、受限角色與無角色的表格與 Selector 照常可用；`OtherDbController` 是帶 `[FixConnection]` 的測試頁，測試主機另設第二個連線 `other` 與它的讀取副本 `other_1`，驗證範本下載、`GetEmptyData`、`UpdateModelProperty` 在固定連線上運作且寫入不進副本，以及未設定的連線或被改動的參考被拒絕）；`RemoveUserCacheBy*` 的權限矩陣列；權限矩陣的六個端點期望值改為「沒有參考即拒絕」（`exempt` 說明見表格）
