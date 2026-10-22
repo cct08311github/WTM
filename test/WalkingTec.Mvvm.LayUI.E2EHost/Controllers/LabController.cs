@@ -4,9 +4,11 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.LayUI.E2EHost.Fixtures;
+using WalkingTec.Mvvm.LayUI.E2EHost.Models;
 using WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.GadgetVMs;
 using WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs;
 using WalkingTec.Mvvm.Mvc;
@@ -305,6 +307,28 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.Controllers
         {
             var parsed = string.IsNullOrEmpty(purposes) ? FilePurpose.Read : Enum.Parse<FilePurpose>(purposes);
             return Content(Wtm.CreateFileReference(id, parsed, string.IsNullOrEmpty(cs) ? null : cs) ?? "", "text/plain");
+        }
+
+        /// <summary>
+        /// Test helper: the columns of a Gadget the tests of /_Framework/UpdateModelProperty compare, one "name=value" per line
+        /// (read without change tracking, so it shows what is stored).
+        /// </summary>
+        [AllRights]
+        [ActionDescription("GadgetRow")]
+        public ActionResult GadgetRow(Guid id)
+        {
+            var g = DC.Set<Gadget>().AsNoTracking().FirstOrDefault(x => x.ID == id);
+            if (g == null)
+            {
+                return NotFound();
+            }
+            var lines = new[]
+            {
+                "Name=" + g.Name, "Code=" + g.Code, "Category=" + g.Category, "Price=" + g.Price.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                "LaunchDate=" + g.LaunchDate?.ToString("o"), "InStock=" + g.InStock, "CreateBy=" + g.CreateBy, "CreateTime=" + g.CreateTime?.ToString("o"),
+                "UpdateBy=" + g.UpdateBy, "UpdateTime=" + g.UpdateTime?.ToString("o")
+            };
+            return Content(string.Join("\n", lines), "text/plain");
         }
 
         [AllRights]

@@ -90,7 +90,6 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("#284: UpdateModelProperty answers Success but the value is not saved: the view model loads the record without change tracking and the controller saves its own context.")]
         public async Task UpdateModelProperty_ChangesOneFieldOfARecord()
         {
             var gadget = await CreateGadgetAsync("Q");
@@ -102,6 +101,190 @@ namespace WalkingTec.Mvvm.E2E.Tests
             });
 
             Assert.AreEqual("Q-2", await FindGadgetAsync(gadget.Name, "Code"));
+        }
+
+        private async Task<IAPIResponse> UpdateGadgetAsync(string id, string field, string value, string reference)
+        {
+            var form = Api.CreateFormData().Set("_DONOT_USE_VMNAME", GadgetVm).Set("id", id).Set("field", field).Set("value", value);
+            if (reference != null)
+            {
+                form = form.Set("_DONOT_USE_VMREF", reference);
+            }
+            return await Api.PostAsync("/_Framework/UpdateModelProperty", new APIRequestContextOptions { Form = form });
+        }
+
+        [TestMethod]
+        public async Task UpdateModelProperty_AnswersAnErrorAndKeepsTheRecord_WhenTheValueIsNotAccepted()
+        {
+            var gadget = await CreateGadgetAsync("R");
+            var reference = await ReferenceAsync(GadgetVm, "Update", "Code,Name");
+
+            var tooLong = await UpdateGadgetAsync(gadget.Id, "Code", new string('x', 21), reference);
+            var missing = await UpdateGadgetAsync(gadget.Id, "Name", "", reference);
+
+            Assert.AreEqual(400, tooLong.Status, "A value the property does not accept is not answered with Success.");
+            Assert.AreEqual(400, missing.Status, "A required value cannot be cleared.");
+            Assert.AreEqual("R-1", await FindGadgetAsync(gadget.Name, "Code"));
+        }
+
+        [TestMethod]
+        public async Task UpdateModelProperty_AnswersAnError_ForARecordThatDoesNotExist()
+        {
+            var reference = await ReferenceAsync(GadgetVm, "Update", "Code");
+
+            var response = await UpdateGadgetAsync(Guid.NewGuid().ToString(), "Code", "S-2", reference);
+
+            Assert.AreEqual(400, response.Status);
+            Assert.IsFalse((await response.TextAsync()).Contains("数据不存在"), "The answer is the action's own, not the text of the exception.");
+        }
+
+        /// <summary>The columns of a Gadget as stored ("name=value" per line, from the Lab helper).</summary>
+        private async Task<Dictionary<string, string>> StoredGadgetAsync(string id)
+        {
+            var response = await Api.GetAsync("/Lab/GadgetRow?id=" + id);
+            Assert.AreEqual(200, response.Status);
+            return (await response.TextAsync()).Split('\n').Select(x => x.Split('=', 2)).ToDictionary(x => x[0], x => x[1]);
+        }
+
+        private static async Task<bool> SavedAsync(IAPIResponse response)
+        {
+            if (response.Status != 200)
+            {
+                return false;
+            }
+            try
+            {
+                return JsonDocument.Parse(await response.TextAsync()).RootElement.GetProperty("Data").GetString() == "Success";
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+        }
+
+        [TestMethod]
+        public async Task UpdateModelProperty_RefusesAFieldTheReferenceDoesNotList_AndAnotherSpellingOfAListedOne()
+        {
+            var gadget = await CreateGadgetAsync("U");
+            var before = await StoredGadgetAsync(gadget.Id);
+            var reference = await ReferenceAsync(GadgetVm, "Update", "Code");
+
+            var notListed = await UpdateGadgetAsync(gadget.Id, "Name", "other", reference);
+            var lower = await UpdateGadgetAsync(gadget.Id, "code", "U-2", reference);
+            var upper = await UpdateGadgetAsync(gadget.Id, "CODE", "U-2", reference);
+
+            Assert.IsFalse(await SavedAsync(notListed));
+            Assert.IsFalse(await SavedAsync(lower));
+            Assert.IsFalse(await SavedAsync(upper));
+            CollectionAssert.AreEquivalent(before, await StoredGadgetAsync(gadget.Id));
+        }
+
+        [TestMethod]
+        public async Task UpdateModelProperty_RefusesARequestWithoutAReferenceOfThePurpose()
+        {
+            var gadget = await CreateGadgetAsync("V");
+            var before = await StoredGadgetAsync(gadget.Id);
+            var listReference = await ReferenceAsync(GadgetVm, "List", "Code");
+
+            var none = await UpdateGadgetAsync(gadget.Id, "Code", "V-2", null);
+            var otherPurpose = await UpdateGadgetAsync(gadget.Id, "Code", "V-2", listReference);
+
+            Assert.IsFalse(await SavedAsync(none));
+            Assert.IsFalse(await SavedAsync(otherPurpose));
+            CollectionAssert.AreEquivalent(before, await StoredGadgetAsync(gadget.Id));
+        }
+
+        [TestMethod]
+        public async Task UpdateModelProperty_SetsTheUpdateStamp_AndLeavesOtherColumnsAlone()
+        {
+            var gadget = await CreateGadgetAsync("W");
+            var before = await StoredGadgetAsync(gadget.Id);
+            var reference = await ReferenceAsync(GadgetVm, "Update", "Code");
+
+            var response = await UpdateGadgetAsync(gadget.Id, "Code", "W-2", reference);
+            var after = await StoredGadgetAsync(gadget.Id);
+
+            Assert.IsTrue(await SavedAsync(response));
+            Assert.AreEqual("W-2", after["Code"]);
+            Assert.IsFalse(string.IsNullOrEmpty(after["UpdateTime"]), "The update time is set.");
+            Assert.IsTrue(Math.Abs((DateTime.Now - DateTime.Parse(after["UpdateTime"], null, System.Globalization.DateTimeStyles.RoundtripKind)).TotalMinutes) < 10, "The update time is current.");
+            Assert.AreEqual(before["CreateBy"], after["UpdateBy"], "The update is stamped with the user who made it.");
+            foreach (var column in new[] { "Name", "Category", "Price", "LaunchDate", "InStock", "CreateBy", "CreateTime" })
+            {
+                Assert.AreEqual(before[column], after[column], column + " is not changed.");
+            }
+        }
+
+        [TestMethod]
+        [DataRow("CreateBy", "someone")]
+        [DataRow("CreateTime", "2020-01-01T00:00:00")]
+        [DataRow("UpdateBy", "someone")]
+        [DataRow("UpdateTime", "2020-01-01T00:00:00")]
+        [DataRow("ID", "11111111-1111-1111-1111-111111111111")]
+        public async Task UpdateModelProperty_NeverWritesTheKeyOrTheStamps_EvenWhenTheReferenceListsThem(string field, string value)
+        {
+            var gadget = await CreateGadgetAsync("X");
+            var before = await StoredGadgetAsync(gadget.Id);
+            var reference = await ReferenceAsync(GadgetVm, "Update", field);
+
+            var response = await UpdateGadgetAsync(gadget.Id, field, value, reference);
+
+            Assert.AreEqual(400, response.Status);
+            CollectionAssert.AreEquivalent(before, await StoredGadgetAsync(gadget.Id));
+        }
+
+        [TestMethod]
+        [DataRow("Price", "abc")]
+        [DataRow("Price", "")]
+        [DataRow("Price", "1e5")]
+        [DataRow("LaunchDate", "not a date")]
+        [DataRow("InStock", "maybe")]
+        [DataRow("Category", "Nothing")]
+        [DataRow("Category", "99")]
+        public async Task UpdateModelProperty_AnswersAnError_WhenTheTextIsNotAValueOfTheProperty(string field, string value)
+        {
+            var gadget = await CreateGadgetAsync("Y");
+            var before = await StoredGadgetAsync(gadget.Id);
+            var reference = await ReferenceAsync(GadgetVm, "Update", field);
+
+            var response = await UpdateGadgetAsync(gadget.Id, field, value, reference);
+
+            Assert.AreEqual(400, response.Status, "The text is not turned into a default value.");
+            CollectionAssert.AreEquivalent(before, await StoredGadgetAsync(gadget.Id));
+        }
+
+        [TestMethod]
+        public async Task UpdateModelProperty_SavesValuesOfOtherTypes_AndEmptyForANullableOne()
+        {
+            var gadget = await CreateGadgetAsync("Z");
+            var reference = await ReferenceAsync(GadgetVm, "Update", "Price,LaunchDate,InStock,Category");
+
+            Assert.IsTrue(await SavedAsync(await UpdateGadgetAsync(gadget.Id, "Price", "12.5", reference)));
+            Assert.IsTrue(await SavedAsync(await UpdateGadgetAsync(gadget.Id, "LaunchDate", "2026-03-04T05:06:07", reference)));
+            Assert.IsTrue(await SavedAsync(await UpdateGadgetAsync(gadget.Id, "InStock", "true", reference)));
+            Assert.IsTrue(await SavedAsync(await UpdateGadgetAsync(gadget.Id, "Category", "Toy", reference)));
+            var stored = await StoredGadgetAsync(gadget.Id);
+            Assert.AreEqual("12.5", stored["Price"]);
+            StringAssert.StartsWith(stored["LaunchDate"], "2026-03-04T05:06:07");
+            Assert.AreEqual("True", stored["InStock"]);
+            Assert.AreEqual("Toy", stored["Category"]);
+
+            Assert.IsTrue(await SavedAsync(await UpdateGadgetAsync(gadget.Id, "LaunchDate", "", reference)));
+            Assert.AreEqual("", (await StoredGadgetAsync(gadget.Id))["LaunchDate"], "Empty text clears a nullable property.");
+        }
+
+        [TestMethod]
+        public async Task UpdateModelProperty_AnswersAnError_ForAFieldThatCannotBeChanged()
+        {
+            var gadget = await CreateGadgetAsync("T");
+            var reference = await ReferenceAsync(GadgetVm, "Update", "ID,Nothing");
+
+            var key = await UpdateGadgetAsync(gadget.Id, "ID", Guid.NewGuid().ToString(), reference);
+            var unknown = await UpdateGadgetAsync(gadget.Id, "Nothing", "x", reference);
+
+            Assert.AreEqual(400, key.Status, "The key of a record is not changed.");
+            Assert.AreEqual(400, unknown.Status, "A field the record does not have is not answered with Success.");
+            Assert.AreEqual(gadget.Id, await FindGadgetAsync(gadget.Name, "ID"));
         }
 
         private async Task<string> FindGadgetAsync(string name, string column)
