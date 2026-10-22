@@ -47,6 +47,15 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         public int ReferenceLifetimeMinutes { get; set; } = DefaultReferenceLifetimeMinutes;
 
+        /// <summary>
+        /// Whether a connection key sent with the request (query string <c>DONOTUSECSName</c>) may choose the database connection of an
+        /// action that has no <c>[FixConnection]</c> and for which the connection function returns nothing. Default <c>false</c>: the
+        /// connection is decided only by the server (<c>[FixConnection]</c>, the connection function, the default connection), so that the
+        /// connection key recorded in a page reference is the one the server chose for the page. Set it only for an application whose own
+        /// pages still pass the key in the query string.
+        /// </summary>
+        public bool AllowRequestConnectionKey { get; set; }
+
         /// <summary>The default of <see cref="ReferenceLifetimeMinutes"/>.</summary>
         public const int DefaultReferenceLifetimeMinutes = 480;
 

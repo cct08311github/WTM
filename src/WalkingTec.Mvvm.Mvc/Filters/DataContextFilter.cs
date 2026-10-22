@@ -18,6 +18,15 @@ namespace WalkingTec.Mvvm.Mvc.Filters
 
         }
 
+        /// <summary>
+        /// The connection key a request asks for in its query string (<c>DONOTUSECSName</c>), or null when the request has no say:
+        /// the connection is decided by the server unless <see cref="GenericEndpointOptions.AllowRequestConnectionKey"/> is on.
+        /// </summary>
+        public static string GetRequestedConnectionKey(string requested, Configs config)
+        {
+            return config?.GenericEndpoints?.AllowRequestConnectionKey == true ? requested : null;
+        }
+
         public override void OnActionExecuting(ActionExecutingContext context)
         {
             var controller = context.Controller as IBaseController;
@@ -65,7 +74,7 @@ namespace WalkingTec.Mvvm.Mvc.Filters
                     {
                         mode = "Write";
                     }
-                    cs = context.HttpContext.Request.Query["DONOTUSECSName"];
+                    cs = GetRequestedConnectionKey(context.HttpContext.Request.Query["DONOTUSECSName"], controller.Wtm.ConfigInfo);
                     cs = Utils.GetCS(cs, mode, controller.Wtm.ConfigInfo);
                 }
             }
