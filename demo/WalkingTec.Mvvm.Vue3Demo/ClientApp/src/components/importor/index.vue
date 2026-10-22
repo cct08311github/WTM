@@ -32,6 +32,7 @@ import request from '/@/utils/request';
 import other from '/@/utils/other';
 import { Local } from '/@/utils/storage';
 import fileApi from '/@/api/file';
+import { rememberDelete } from '/@/utils/fileRefs';
 
 const emit = defineEmits(['refresh','update:modelValue']);
 const uploadRef = ref();
@@ -56,6 +57,7 @@ const onDownload = ()=>{
 
 const onSuccess = (res: any, uploadFile: any, uploadFiles: any)=>{
 	uploadFile.fileID = res.Id;
+	rememberDelete(res.Id, res.DeleteRef);
 	emit('update:modelValue',res.Id);
 
 }

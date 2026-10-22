@@ -11,6 +11,7 @@
 import { ref, computed, watch } from 'vue';
 import { Local } from '/@/utils/storage';
 import fileApi from '/@/api/file';
+import { fileUrl, remember, rememberDelete } from '/@/utils/fileRefs';
 import { useI18n } from 'vue-i18n';
 
 
@@ -64,7 +65,7 @@ watch(filevalue, async () => {
       files.value = [];
       if (props.modelValue) {
         let filename = await fileApi().getName(props.modelValue);
-        files.value = [{ name: filename, url: '/api/_file/getfile/' + props.modelValue, FileId: props.modelValue }];
+        files.value = [{ name: filename, url: fileUrl(props.modelValue), FileId: props.modelValue }];
       }
     }
   }
@@ -72,7 +73,7 @@ watch(filevalue, async () => {
     for(let i = 0;i<props.modelValue.length;i++){
       if(files.value.length<= i || files.value[i].FileId != props.modelValue[i].FileId){
         let filename = await fileApi().getName(props.modelValue[i].FileId);
-        let nv = { name: filename, url: '/api/_file/getfile/' + props.modelValue[i].FileId, FileId: props.modelValue[i].FileId,keyID: props.modelValue[i].ID};
+        let nv = { name: filename, url: fileUrl(props.modelValue[i].FileId), FileId: props.modelValue[i].FileId,keyID: props.modelValue[i].ID};
         if(files.value.length <=i ){
           files.value.push(nv);
         }
@@ -92,6 +93,8 @@ const onDownload = (file: any) => {
 
 const onSuccess = (res: any, uploadFile: any, uploadFiles: any) => {
   uploadFile.FileId = res.Id;
+  remember(res.Id, res.Ref);
+  rememberDelete(res.Id, res.DeleteRef);
   if (props.multi == false) {    
     filevalue.value = res.Id;
     if (files.value.length > 1) {
