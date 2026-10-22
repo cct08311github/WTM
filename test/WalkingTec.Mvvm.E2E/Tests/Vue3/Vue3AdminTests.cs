@@ -216,7 +216,6 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
         }
 
         [TestMethod]
-        [Ignore("#291: a search that matches only a child group returns an empty list, the tree is built from the matching rows only")]
         public async Task Group_SearchByChildCode_FindsTheChild()
         {
             await SignInAsync();
@@ -232,6 +231,23 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
             await list.SearchAsync("GroupCode", childCode);
 
             await Expect(list.Row(childCode)).ToBeVisibleAsync();
+        }
+
+        [TestMethod]
+        public async Task Group_List_ShowsTheRemark()
+        {
+            await SignInAsync();
+            var api = await ApiAsync();
+            var code = UniqueDigits(8);
+            var remark = UniqueName("Remark ");
+            await api.PostAsync("/api/_FrameworkGroup/Add", new { Entity = new { GroupCode = code, GroupName = "r", GroupRemark = remark } });
+            var list = new ListPage(Page, "/_admin/frameworkgroup");
+            await list.OpenAsync(App);
+
+            await list.SearchAsync("GroupCode", code);
+
+            await Expect(list.Row(code)).ToContainTextAsync(remark);
+            await list.DeleteRowAsync(code);
         }
 
         [TestMethod]
