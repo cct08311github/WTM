@@ -3,6 +3,7 @@ import Cookies from 'js-cookie';
 import { Session,Local } from '/@/utils/storage';
 import loginapi from '/@/api/login';
 import fileapi from '/@/api/file';
+import { remember, userPhotoUrl } from '/@/utils/fileRefs';
 
 /**
  * 用户信息
@@ -53,7 +54,8 @@ export const useUserInfo = defineStore('userInfo', {
 					authBtnList: []
 				};
 				if(res.PhotoId !== undefined){
-					userInfos.photo = `/api/_file/getfile/${res.PhotoId}?width=25&height=25`;
+					remember(res.PhotoId, res.Attributes?.PhotoRef);
+					userInfos.photo = userPhotoUrl(res.PhotoId, { width: 25, height: 25 });
 				}
 				if(res.Roles !== undefined){
 					userInfos.roles = res.Roles;
