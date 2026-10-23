@@ -166,16 +166,6 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             return double.IsFinite(d) ? d.ToString(CultureInfo.InvariantCulture) : null;
         }
 
-        /// <summary>
-        /// The text of a number or of any other bound value for the hidden input, formatted with the invariant culture:
-        /// a decimal comma, a culture specific minus sign or digit grouping of the server must not reach the posted value
-        /// (layui writes the same invariant text when the handle is dragged). Non-numeric values keep their own text.
-        /// </summary>
-        private static string ToInputValue(object model)
-        {
-            return model == null ? null : Convert.ToString(model, CultureInfo.InvariantCulture);
-        }
-
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
             output.TagName = "div";
@@ -234,12 +224,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 }
             }
 
-            string value0 = ToInputValue(Field?.Model);
-            string value1 = ToInputValue(Field1?.Model);
+            // The hidden inputs keep the text of the request culture (a decimal comma on a de-DE host): the form is bound
+            // with the same culture, so the posted text of an untouched slider binds to the value that was rendered (#322).
+            string value0 = Field?.Model?.ToString();
+            string value1 = Field1?.Model?.ToString();
             if (Field?.Model != null || Field1?.Model != null)
             {
-                value0 = Field?.Model == null ? "0" : ToInputValue(Field.Model);
-                value1 = Field1?.Model == null ? "0" : ToInputValue(Field1.Model);
+                value0 = Field?.Model == null ? "0" : Field.Model.ToString();
+                value1 = Field1?.Model == null ? "0" : Field1.Model.ToString();
             }
             else if(string.IsNullOrEmpty(safeDefault) == false)
             {

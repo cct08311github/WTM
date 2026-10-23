@@ -7,9 +7,10 @@ using static WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI.TagHelperTestHarness;
 namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
 {
     /// <summary>
-    /// Issue #322: wt:slider writes the value of its hidden input(s) and the numbers of its script with the invariant culture,
-    /// so the posted text does not depend on the regional number format of the server (de-DE writes 30,5, sv-SE a U+2212 minus).
-    /// layui itself writes "30.5" into the hidden input when the handle is dragged; the rendered value has to match.
+    /// Issues #322 and #342. The numbers of the slider script (value, min, max, step, height) are JavaScript literals and are written with
+    /// the invariant culture whatever the culture of the request is (sv-SE writes a negative sign that is not valid JavaScript).
+    /// The hidden inputs keep the text of the request culture: the form is bound with the same culture, so the posted text of an untouched
+    /// slider binds to the rendered value (a de-DE host posts 30,5 and binds 30.5; an invariant 30.5 would bind as 305).
     /// </summary>
     [TestClass]
     public class SliderInvariantCultureTests : LayUITagHelperTestBase
@@ -41,67 +42,62 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
             }
         }
 
+        private static string ScriptOf(string html)
+        {
+            var start = html.IndexOf("<script>", StringComparison.Ordinal);
+            Assert.IsTrue(start >= 0, "no script in the output");
+            return html.Substring(start);
+        }
+
         [TestMethod]
-        public void Decimal_HiddenInput_UsesTheInvariantCulture()
+        public void Decimal_HiddenInputUsesTheRequestCulture_ScriptValueIsInvariant()
         {
             var vm = new SliderCultureVM { Price = 30.5m };
 
             var html = RenderWith("de-DE", () => Render(new SliderTagHelper { Field = Field(vm, x => x.Price) }, "wt:slider"));
 
-            AssertContains(html, "name='Price' value='30.5'", ",value:30.5\n");
-            AssertNotContains(html, "value='30,5'", ",value:30,5");
+            AssertContains(html, "name='Price' value='30,5'", ",value:30.5\n");
+            AssertNotContains(html, ",value:30,5");
         }
 
         [TestMethod]
-        public void NullableDecimal_HiddenInput_UsesTheInvariantCulture()
-        {
-            var vm = new SliderCultureVM { OptionalPrice = 7.25m };
-
-            var html = RenderWith("de-DE", () => Render(new SliderTagHelper { Field = Field(vm, x => x.OptionalPrice) }, "wt:slider"));
-
-            AssertContains(html, "name='OptionalPrice' value='7.25'");
-            AssertNotContains(html, "value='7,25'");
-        }
-
-        [TestMethod]
-        public void DoubleAndFloat_HiddenInput_UseTheInvariantCulture()
+        public void DoubleAndFloat_HiddenInputsUseTheRequestCulture_ScriptValuesAreInvariant()
         {
             var vm = new SliderCultureVM { Ratio = 0.25, Weight = 1.5f };
 
             var ratio = RenderWith("fr-FR", () => Render(new SliderTagHelper { Field = Field(vm, x => x.Ratio) }, "wt:slider"));
             var weight = RenderWith("fr-FR", () => Render(new SliderTagHelper { Field = Field(vm, x => x.Weight) }, "wt:slider"));
 
-            AssertContains(ratio, "name='Ratio' value='0.25'");
-            AssertContains(weight, "name='Weight' value='1.5'");
-            AssertNotContains(ratio, "value='0,25'");
-            AssertNotContains(weight, "value='1,5'");
+            AssertContains(ratio, "name='Ratio' value='0,25'", ",value:0.25\n");
+            AssertContains(weight, "name='Weight' value='1,5'", ",value:1.5\n");
         }
 
         [TestMethod]
-        public void NegativeValue_HiddenInputAndScript_UseTheInvariantCulture()
+        public void NegativeValue_ScriptIsInvariant_HiddenInputUsesTheRequestCulture()
         {
-            // sv-SE writes the negative sign as U+2212, which is neither a valid number for the model binder nor for JavaScript
+            // sv-SE writes the negative sign as U+2212: valid for the sv-SE model binder, not valid JavaScript
             var vm = new SliderCultureVM { Price = -1.5m, Level = -20 };
+            var sv = new CultureInfo("sv-SE");
 
             var price = RenderWith("sv-SE", () => Render(new SliderTagHelper { Field = Field(vm, x => x.Price), Min = -10, Max = 10 }, "wt:slider"));
             var level = RenderWith("sv-SE", () => Render(new SliderTagHelper { Field = Field(vm, x => x.Level), Min = -50, Max = 50 }, "wt:slider"));
 
-            AssertContains(price, "name='Price' value='-1.5'", ",value:-1.5\n");
-            AssertContains(level, "name='Level' value='-20'", ",value:-20\n");
-            AssertNotContains(price, "−");
-            AssertNotContains(level, "−");
+            AssertContains(price, $"name='Price' value='{(-1.5m).ToString(sv)}'", ",value:-1.5\n", ",min:-10\n", ",max:10\n");
+            AssertContains(level, $"name='Level' value='{(-20).ToString(sv)}'", ",value:-20\n", ",min:-50\n", ",max:50\n");
+            AssertNotContains(ScriptOf(price), "−");
+            AssertNotContains(ScriptOf(level), "−");
         }
 
         [TestMethod]
-        public void Range_HiddenInputs_UseTheInvariantCulture()
+        public void Range_HiddenInputsUseTheRequestCulture_ScriptValueIsInvariant()
         {
             var vm = new SliderCultureVM { Price = 10.5m, RatioMax = 80.75 };
 
             var html = RenderWith("de-DE", () => Render(
                 new SliderTagHelper { Field = Field(vm, x => x.Price), Field1 = Field(vm, x => x.RatioMax) }, "wt:slider"));
 
-            AssertContains(html, "name='Price' value='10.5'", "name='RatioMax' value='80.75'", ",range:true", ",value:[10.5,80.75]\n");
-            AssertNotContains(html, "value='10,5'", "value='80,75'", "10,5", "80,75");
+            AssertContains(html, "name='Price' value='10,5'", "name='RatioMax' value='80,75'", ",range:true", ",value:[10.5,80.75]\n");
+            AssertNotContains(ScriptOf(html), "10,5", "80,75");
         }
 
         [TestMethod]
@@ -112,7 +108,7 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
             var html = RenderWith("de-DE", () => Render(
                 new SliderTagHelper { Field = Field(vm, x => x.Price), Field1 = Field(vm, x => x.OptionalPrice) }, "wt:slider"));
 
-            AssertContains(html, "name='Price' value='10.5'", "name='OptionalPrice' value='0'", ",value:[10.5,0]\n");
+            AssertContains(html, "name='Price' value='10,5'", "name='OptionalPrice' value='0'", ",value:[10.5,0]\n");
         }
 
         [TestMethod]
@@ -124,7 +120,7 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
                 new SliderTagHelper { Field = Field(vm, x => x.Level), Min = -100, Max = 2000, Step = 5, SliderType = SliderTypeEnum.Vertical, SliderHeight = 250 }, "wt:slider"));
 
             AssertContains(html, ",min:-100\n", ",max:2000\n", ",step:5\n", ",height:250\n");
-            AssertNotContains(html, "−");
+            AssertNotContains(ScriptOf(html), "−");
         }
 
         [TestMethod]
@@ -147,7 +143,6 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
 
             AssertContains(level, "name='Level' value='30'", ",value:30\n");
             AssertContains(big, "name='Big' value='1234567890123'");
-            AssertNotContains(big, "1.234.567.890.123");
         }
 
         [TestMethod]
@@ -162,14 +157,14 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
         }
 
         [TestMethod]
-        public void OutputDoesNotDependOnTheCurrentCulture()
+        public void ScriptDoesNotDependOnTheCurrentCulture()
         {
-            // the same slider renders the same text under the default (invariant / en-US) culture and under cultures with other number formats
+            // the script of the same sliders is identical under the default (invariant / en-US) culture and under cultures with other number formats
             var vm = new SliderCultureVM { Price = 30.5m, Ratio = -0.125, Weight = 2.5f, PriceMax = 1234.5m, Level = -3 };
             string RenderAll() =>
-                Render(new SliderTagHelper { Field = Field(vm, x => x.Price), Min = -10, Max = 100, Step = 1 }, "wt:slider")
-                + Render(new SliderTagHelper { Field = Field(vm, x => x.Ratio), Field1 = Field(vm, x => x.Weight) }, "wt:slider")
-                + Render(new SliderTagHelper { Field = Field(vm, x => x.PriceMax), Field1 = Field(vm, x => x.Level), DefaultValue = "[5, 10]" }, "wt:slider");
+                ScriptOf(Render(new SliderTagHelper { Field = Field(vm, x => x.Price), Min = -10, Max = 100, Step = 1 }, "wt:slider"))
+                + ScriptOf(Render(new SliderTagHelper { Field = Field(vm, x => x.Ratio), Field1 = Field(vm, x => x.Weight) }, "wt:slider"))
+                + ScriptOf(Render(new SliderTagHelper { Field = Field(vm, x => x.PriceMax), Field1 = Field(vm, x => x.Level), DefaultValue = "[5, 10]" }, "wt:slider"));
 
             var invariant = RenderWith("", RenderAll);
             Assert.AreEqual(invariant, RenderWith("en-US", RenderAll));

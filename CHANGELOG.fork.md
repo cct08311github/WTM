@@ -12,7 +12,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 
 ## 未发布
 
-* **修复（涉及 LayUI 受保护路径）：**   `wt:slider` 写入隐藏 input 的值（以及脚本里的 `min`／`max`／`step`／`height`）不再依赖服务器的区域设置（#322）：原来用当前区域设置格式化，例如 `decimal` 30.5 在 de-DE 下写成 `30,5`、sv-SE 下负号是 U+2212，与拖动滑块时 layui 写入的 `30.5` 不一致，提交后模型绑定可能失败或绑定成错误的值。现在一律用 invariant culture 输出（范围滑块的两个隐藏 input 同样处理）。默认区域设置（en／zh、invariant）下输出的文字与之前完全相同，整数页面不受影响；字符串类型的绑定值仍按原文输出。已加入 de-DE／fr-FR／sv-SE 的单元测试（`SliderInvariantCultureTests`）与以 `Languages=de-DE` 启动的 E2E 测试（`LayUiSliderCultureTests`）
+* **修复（涉及 LayUI 受保护路径）：**   `wt:slider` 写入脚本的数值（`min`／`max`／`step`／`height`）不再依赖服务器的区域设置（#342）：原来用当前区域设置格式化，例如 sv-SE 下负数使用 U+2212 负号，不是有效的 JavaScript，滑块无法初始化。现在一律用 invariant culture 输出（脚本里的 `value:` 在 #281 之后已是 invariant）。隐藏 input 的值维持依请求区域设置输出（小数逗号的网站写成 `30,5`），因为表单以同一个区域设置做模型绑定，未拖动的滑块能绑定回渲染时的值（#322 经验证不是缺陷；若改成 `30.5`，在 de-DE 下会被绑定成 305）。默认区域设置（en／zh、invariant）下输出的文字与之前完全相同。已加入 de-DE／fr-FR／sv-SE 的单元测试（`SliderInvariantCultureTests`）与以 `Languages=de-DE` 启动的 E2E 测试（`LayUiSliderCultureTests`，含绑定后的值）。以脚本写入小数值时在小数逗号网站上的绑定另见 #343
 
 ## 10.0.0.13(2026-10-23)
 
