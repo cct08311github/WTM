@@ -224,6 +224,8 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 }
             }
 
+            // The hidden inputs keep the text of the request culture (a decimal comma on a de-DE host): the form is bound
+            // with the same culture, so the posted text of an untouched slider binds to the value that was rendered (#322).
             string value0 = Field?.Model?.ToString();
             string value1 = Field1?.Model?.ToString();
             if (Field?.Model != null || Field1?.Model != null)
@@ -266,16 +268,16 @@ layui.use(['slider'],function(){{
   var sliderIns = slider.render({{
     elem: '#'+_id
     {(SliderType == null ? string.Empty : $",type:'{SliderType.Value.ToString().ToLower()}'")}
-    {(Min == null ? string.Empty : $",min:{Min.Value}")}
-    {(Max == null ? string.Empty : $",max:{Max.Value}")}
+    {(Min == null ? string.Empty : $",min:{Min.Value.ToString(CultureInfo.InvariantCulture)}")}
+    {(Max == null ? string.Empty : $",max:{Max.Value.ToString(CultureInfo.InvariantCulture)}")}
     {(!range ? string.Empty : $",range:true")}
     {(scriptDefault == null ? string.Empty : $",value:{scriptDefault}")}
-    ,step:{Step}
+    ,step:{Step.ToString(CultureInfo.InvariantCulture)}
     {(!Disabled ? string.Empty : ",disabled:true")}
     ,showstep:{ShowStep.ToString().ToLower()}
     ,tips:{Tips.ToString().ToLower()}
     ,input:{Input.ToString().ToLower()}
-    {(SliderType == null || SliderType.Value == SliderTypeEnum.Default ? string.Empty : (SliderHeight == null ? string.Empty : $",height:{SliderHeight.Value}"))}
+    {(SliderType == null || SliderType.Value == SliderTypeEnum.Default ? string.Empty : (SliderHeight == null ? string.Empty : $",height:{SliderHeight.Value.ToString(CultureInfo.InvariantCulture)}"))}
     {(string.IsNullOrEmpty(Theme) ? string.Empty : $",theme: '{JsStringEncoder.Escape(Theme)}'")}
     ,change: function(value){{defaultFunc(value,sliderIns);
     {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $"{ChangeFunc}(value,sliderIns)")}

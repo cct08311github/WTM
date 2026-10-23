@@ -139,6 +139,17 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
+        public async Task Slider_DecimalValue_IsRenderedAndPostedUnchanged()
+        {
+            // Rate is a decimal view model property; layui snaps the handle to the step (1), the hidden input keeps the bound value
+            await Expect(Body.Locator("input[type=hidden][name=Rate]")).ToHaveValueAsync("30.5");
+
+            await Lab.SubmitAsync("Save", "/Lab/Save");
+            await AcceptAlertAsync("Saved Inputs");
+            CollectionAssert.AreEqual(new[] { "30.5" }, (await Lab.LastPostAsync("Inputs"))["Rate"]);
+        }
+
+        [TestMethod]
         public async Task Slider_InitialPosition_ShowsTheBoundValue()
         {
             // Level is 30 on a 0..100 scale; the handle is expected at 30 percent

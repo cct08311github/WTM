@@ -55,6 +55,9 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs
         [Display(Name = "High")]
         public int High { get; set; }
 
+        [Display(Name = "Rate")]
+        public decimal Rate { get; set; }
+
         [Display(Name = "Color")]
         public string Color { get; set; }
 
@@ -189,6 +192,7 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs
             Level = Level == 0 ? 30 : Level;
             Low = Low == 0 ? 20 : Low;
             High = High == 0 ? 70 : High;
+            Rate = Rate == 0 ? 30.5m : Rate;
         }
     }
 }
