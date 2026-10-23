@@ -1,3 +1,4 @@
+using System;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -47,6 +48,56 @@ namespace WalkingTec.Mvvm.E2E.Tests
             CollectionAssert.AreEqual(new[] { "30" }, posted["Level"]);
             CollectionAssert.AreEqual(new[] { "20" }, posted["Low"]);
             CollectionAssert.AreEqual(new[] { "70" }, posted["High"]);
+        }
+
+        // ---- what the model binder makes of the posted text (the request culture of the host is de-DE) -----------------------
+
+        private async Task<System.Collections.Generic.Dictionary<string, string[]>> SaveAsync()
+        {
+            await Lab.SubmitAsync("Save", "/Lab/Save");
+            await AcceptAlertAsync("Saved Inputs");
+            return await Lab.LastPostAsync("Inputs");
+        }
+
+        private static string Describe(System.Collections.Generic.Dictionary<string, string[]> posted) =>
+            $"posted Rate=[{string.Join("|", posted["Rate"])}] bound Rate=[{posted["bound:Rate"][0]}] error=[{string.Join("|", posted["bound:RateError"])}] culture=[{posted["bound:Culture"][0]}]";
+
+        [TestMethod]
+        public async Task Bound_Untouched_RateIsTheSeededValue()
+        {
+            var posted = await SaveAsync();
+
+            Console.WriteLine("UNTOUCHED: " + Describe(posted));
+            Assert.AreEqual("de-DE", posted["bound:Culture"][0]);
+            Assert.AreEqual("30.5", posted["bound:Rate"][0], Describe(posted));
+        }
+
+        [TestMethod]
+        public async Task Bound_Dragged_RateIsTheDraggedValue()
+        {
+            var track = Body.Locator("#_sliderLabFormVM_Rate .layui-slider");
+            var box = await track.BoundingBoxAsync();
+            await track.ClickAsync(new() { Position = new Microsoft.Playwright.Position { X = (float)(box.Width * 0.5), Y = box.Height / 2 } });
+            var hidden = await Body.Locator("input[type=hidden][name=Rate]").InputValueAsync();
+
+            var posted = await SaveAsync();
+
+            Console.WriteLine("DRAGGED (hidden=" + hidden + "): " + Describe(posted));
+            Assert.AreEqual(hidden, posted["Rate"][0]);
+            Assert.AreEqual(hidden, posted["bound:Rate"][0], Describe(posted));
+        }
+
+        [TestMethod]
+        public async Task Bound_FractionalScriptValue_RateIsTheWrittenValue()
+        {
+            // what layui writes for a fractional value: JavaScript number text, always with a decimal point
+            await Body.Locator("input[type=hidden][name=Rate]").EvaluateAsync("e => e.value = String(42.5)");
+
+            var posted = await SaveAsync();
+
+            Console.WriteLine("SCRIPT 42.5: " + Describe(posted));
+            Assert.AreEqual("42.5", posted["Rate"][0]);
+            Assert.AreEqual("42.5", posted["bound:Rate"][0], Describe(posted));
         }
     }
 }

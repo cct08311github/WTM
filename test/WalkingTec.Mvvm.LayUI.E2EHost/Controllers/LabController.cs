@@ -145,6 +145,7 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.Controllers
         public ActionResult Save(LabFormVM vm, string page = "Inputs")
         {
             Record(page);
+            RecordBound(page, vm);
             if (!ModelState.IsValid)
             {
                 vm.DoReInit();
@@ -347,6 +348,22 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.Controllers
         }
 
         // jQuery posts a list as name[]=a&name[]=b; keep the plain name so that tests read the values by property name
+        /// <summary>
+        /// Adds what the model binder made of the slider fields to the recorded form, as "bound:{Property}" (invariant text) and
+        /// "bound:RateError" (the binding error of Rate, if any), so that a test can tell the posted text from the bound value.
+        /// </summary>
+        private void RecordBound(string page, LabFormVM vm)
+        {
+            var form = LastPosts[page];
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            form["bound:Rate"] = new[] { vm.Rate.ToString(inv) };
+            form["bound:Level"] = new[] { vm.Level.ToString(inv) };
+            form["bound:RateError"] = ModelState.TryGetValue("Rate", out var entry)
+                ? entry.Errors.Select(e => e.ErrorMessage).ToArray()
+                : new string[0];
+            form["bound:Culture"] = new[] { System.Globalization.CultureInfo.CurrentCulture.Name };
+        }
+
         private void Record(string page)
         {
             LastPosts[page] = Request.Form.Where(x => x.Key != "FromView")
