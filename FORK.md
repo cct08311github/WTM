@@ -372,6 +372,7 @@ demo（`demo/WalkingTec.Mvvm.Vue3Demo`）的 `AccountController.Reg` 是匿名�
 - `layuiadmin/lib/extend/echarts.js` 是 demo 的範本檔，**不會隨 NuGet 套件發佈**，也沒有任何機制會把它帶到下游。自行複製 layuiadmin 的網站請**自行更新網站上的 echarts**（建議 ≥ 6.1.0，至少 ≥ 5.2.1 才修掉 zrender 那筆）
 - `framework_layui.js` 的圖表程式碼**需要 echarts ≥ 5.0**。網站仍是 4.x 時，`wt:chart` 的散點圖不會畫出任何資料（`t.count is not a function`），查詢後刷新也不會替換掉舊的 series（4.x 忽略 `replaceMerge`）。這是升級前就存在的問題，不是這次引入的
 - `framework_layui.js` 的 `RefreshChart` 使用的 `JSONfns` 不在本 repo 內，需由宿主網站提供
+- **載入時機**：`wt:chart` 輸出的 script 在頁面內容插入時就同步呼叫 `echarts.init(...)`，不會等待 echarts。全域 `echarts` 必須在開啟任何含圖表的頁面之前就已載入，建議在版面配置（`_Layout`）以同步 `<script>` 載入。若改以 layuiadmin extension 等非同步方式（例如 `layui.use('echarts')`）載入，含圖表的頁面在 echarts 載入完成前被開啟時（例如首頁剛載入就點選單，或重新整理時網址直接指向該頁）會出現 `ReferenceError: echarts is not defined`，圖表不會建立，之後也不會自動補建（#338）
 
 **echarts 6 的外觀變化**（升級 demo 後可見，`wt:chart` 的資料與互動行為相同）：
 
