@@ -76,10 +76,10 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("#279: the title of a panel is written to the page without the HTML encoding the other titles (card, tab, fieldset, button) get, so markup characters in it become elements.")]
         public async Task Panel_TitleWithSpecialCharacters_IsShownAsText()
         {
-            await Expect(Body.Locator("#lab-panel-collapse .layui-colla-title")).ToHaveTextAsync(LabData.Special);
+            // layui adds its collapse icon, an icon-font character, to the title element
+            await Expect(Body.Locator("#lab-panel-collapse .layui-colla-title")).ToHaveTextAsync(new Regex("^" + Regex.Escape(LabData.Special) + "[\\ue000-\\uf8ff]?$"));
             await ExpectNoProbeElementsAsync(Body.Locator("#lab-panel-collapse"));
         }
 

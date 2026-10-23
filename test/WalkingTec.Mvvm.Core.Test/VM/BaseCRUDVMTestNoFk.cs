@@ -216,6 +216,78 @@ namespace WalkingTec.Mvvm.Core.Test.VM
         }
 
         [TestMethod]
+        [Description("Persist单表删除：表单已带 Entity.IsValid 时仍可删除 (#332)")]
+        public void SingleTablePersistDelete_FormAlreadyHasIsValid()
+        {
+            StudentNoFK s = new StudentNoFK { LoginName = "a", Password = "b", Name = "ab" };
+            _studentvm.Entity = s;
+            _studentvm.DoAdd();
+
+            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            {
+                _studentvm.DC = context;
+                _studentvm.Entity = context.Set<StudentNoFK>().Where(x => x.ID == s.ID).FirstOrDefault();
+                // disabled 的表单控件仍会被收集进 FC
+                _studentvm.FC["Entity.IsValid"] = "true";
+                _studentvm.DoDelete();
+            }
+
+            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            {
+                var rv = context.Set<StudentNoFK>().IgnoreQueryFilters().Single();
+                Assert.AreEqual(false, rv.IsValid);
+                Assert.AreEqual("studentuser", rv.UpdateBy);
+            }
+        }
+
+        [TestMethod]
+        [Description("Persist单表异步删除")]
+        public async System.Threading.Tasks.Task SingleTablePersistDeleteAsync()
+        {
+            StudentNoFK s = new StudentNoFK { LoginName = "a", Password = "b", Name = "ab" };
+            _studentvm.Entity = s;
+            _studentvm.DoAdd();
+
+            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            {
+                _studentvm.DC = context;
+                _studentvm.Entity = context.Set<StudentNoFK>().Where(x => x.ID == s.ID).FirstOrDefault();
+                await _studentvm.DoDeleteAsync();
+            }
+
+            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            {
+                var rv = context.Set<StudentNoFK>().IgnoreQueryFilters().Single();
+                Assert.AreEqual(false, rv.IsValid);
+                Assert.AreEqual("studentuser", rv.UpdateBy);
+            }
+        }
+
+        [TestMethod]
+        [Description("Persist单表异步删除：表单已带 Entity.IsValid 时仍可删除 (#332)")]
+        public async System.Threading.Tasks.Task SingleTablePersistDeleteAsync_FormAlreadyHasIsValid()
+        {
+            StudentNoFK s = new StudentNoFK { LoginName = "a", Password = "b", Name = "ab" };
+            _studentvm.Entity = s;
+            _studentvm.DoAdd();
+
+            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            {
+                _studentvm.DC = context;
+                _studentvm.Entity = context.Set<StudentNoFK>().Where(x => x.ID == s.ID).FirstOrDefault();
+                _studentvm.FC["Entity.IsValid"] = "true";
+                await _studentvm.DoDeleteAsync();
+            }
+
+            using (var context = new DataContext(_seed, DBTypeEnum.Memory))
+            {
+                var rv = context.Set<StudentNoFK>().IgnoreQueryFilters().Single();
+                Assert.AreEqual(false, rv.IsValid);
+                Assert.AreEqual("studentuser", rv.UpdateBy);
+            }
+        }
+
+        [TestMethod]
         [Description("一对多主表删除")]
         public void One2ManyTableDelete()
         {

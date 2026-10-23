@@ -95,14 +95,14 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI.Common
         {
             var disable = isReadOnly ? " disabled='' class='layui-disabled'" : " ";
             var selected = ischeck ? " checked" : " ";
-            return $@"<input lay-skin='primary' type='checkbox' name='{HtmlAttributeEncoder.Encode(name)}' id='{HtmlAttributeEncoder.Encode(name == null ? "" : Utils.GetIdByName(name))}' value='{HtmlAttributeEncoder.Encode(value)}' title='{HtmlAttributeEncoder.Encode(text)}' {selected} {disable}/>";
+            return $@"<input lay-skin='primary' type='checkbox' name='{HtmlAttributeEncoder.Encode(name)}' id='{HtmlAttributeEncoder.Encode(name == null ? "" : Utils.GetIdByName(name))}' value='{HtmlAttributeEncoder.Encode(value)}' title='{HtmlAttributeEncoder.Encode(HtmlAttributeEncoder.EncodeOnce(text))}' {selected} {disable}/>";
         }
 
         public string MakeRadio(bool ischeck, string text = null, string name = null, string value = null, bool isReadOnly = false)
         {
             var selected = ischeck ? " checked" : " ";
             var disable = isReadOnly ? " disabled='' class='layui-disabled'" : " ";
-            return $@"<input lay-skin='primary' type='radio' name='{HtmlAttributeEncoder.Encode(name)}' id='{HtmlAttributeEncoder.Encode(name == null ? "" : Utils.GetIdByName(name))}' value='{HtmlAttributeEncoder.Encode(value)}' title='{HtmlAttributeEncoder.Encode(text)}' {selected} {disable}/>";
+            return $@"<input lay-skin='primary' type='radio' name='{HtmlAttributeEncoder.Encode(name)}' id='{HtmlAttributeEncoder.Encode(name == null ? "" : Utils.GetIdByName(name))}' value='{HtmlAttributeEncoder.Encode(value)}' title='{HtmlAttributeEncoder.Encode(HtmlAttributeEncoder.EncodeOnce(text))}' {selected} {disable}/>";
         }
 
         public string MakeCombo(string name = null, List<ComboSelectListItem> value = null, string selectedValue = null, string emptyText = null, bool isReadOnly = false)

@@ -161,10 +161,10 @@ var {Id} = xmSelect.render({{
 	filterable: {EnableSearch.ToString().ToLower()},
     template({{ item, sels, name, value }}){{
         if(item.icon !== undefined && item.icon != """"&& item.icon != null){{
-			return '<i class=""'+item.icon+'""></i>' + item.name;
+			return '<i class=""'+ff.EncodeHtml(item.icon)+'""></i>' + ff.EncodeHtmlOnce(item.name);
         }}
         else{{
-            return item.name;
+            return ff.EncodeHtmlOnce(item.name);
         }}
 	}},
     {(MultiSelect == false ? $@"
@@ -176,10 +176,10 @@ var {Id} = xmSelect.render({{
             abc: {{
                 template: function(item, sels){{
                     if(sels[0].icon !== undefined && sels[0].icon != """" && sels[0].icon != null){{
-                        return '<i class=""'+sels[0].icon+'""></i>' + sels[0].name;
+                        return '<i class=""'+ff.EncodeHtml(sels[0].icon)+'""></i>' + ff.EncodeHtmlOnce(sels[0].name);
                     }}
                     else{{
-                        return sels[0].name;
+                        return ff.EncodeHtmlOnce(sels[0].name);
                     }}
                 }}
             }}
@@ -194,10 +194,10 @@ var {Id} = xmSelect.render({{
 			block: {{
 				template: function(item, sels){{
                     if(item.icon !== undefined && item.icon != """"&& item.icon != null){{
-					    return '<i class=""'+item.icon+'""></i>' + item.name;
+					    return '<i class=""'+ff.EncodeHtml(item.icon)+'""></i>' + ff.EncodeHtmlOnce(item.name);
                     }}
                     else{{
-                        return item.name;
+                        return ff.EncodeHtmlOnce(item.name);
                     }}
 				}},
 			}},

@@ -147,13 +147,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
             if(selectVal.Count > 0)
             {
-                DefaultValue = $"[{string.Join(",", selectVal.Select(x => "'" + x + "'"))}]";
+                DefaultValue = $"[{string.Join(",", selectVal.Select(x => "'" + JsStringEncoder.Escape(x) + "'"))}]";
             }
             else
             {
                 if(string.IsNullOrEmpty(DefaultValue) == false)
                 {
-                    DefaultValue = $"[{string.Join(",", DefaultValue.Split(",").Select(x => "'" + x + "'"))}]";
+                    DefaultValue = $"[{string.Join(",", DefaultValue.Split(",").Select(x => "'" + JsStringEncoder.Escape(x) + "'"))}]";
                 }
             }
             if (string.IsNullOrEmpty(ItemUrl) == false)
@@ -189,7 +189,12 @@ layui.use(['transfer'],function(){{
   var _id = '{Id}';
   var container = $('#'+_id+""div"");
   function defaultFunc(data,index,transferIns) {{
-    var selectVals = transfer.getData('{Id}');
+    /* the posted values are all the items of the right list, read from the list: the items hidden by its search are included, and the
+       values are the ones of the data (the widget gets them encoded, see ff.encodeTransferItems) */
+    var selectVals = [];
+    $('#'+_id+' .layui-transfer-box').eq(1).find('.layui-transfer-data input[type=""checkbox""]').each(function(){{
+      selectVals.push(this.value);
+    }});
     /* remove old values */
     var inputs = $('#'+_id+'div input[name=""'+name+'""]')
     if(inputs!=null && inputs.length>0){{
@@ -199,15 +204,15 @@ layui.use(['transfer'],function(){{
     }}
     /* add new values */
     for (var i = 0; i < selectVals.length; i++) {{
-      container.append('<input type=""hidden"" name=""'+name+'"" value=""'+selectVals[i].value+'""/>');
+      container.append($('<input type=""hidden""/>').attr('name',name).attr('value',selectVals[i]));
     }}
   }}
   var defaultVal = {(string.IsNullOrEmpty(DefaultValue) ? "[]" : DefaultValue)};
   var transferIns = transfer.render({{
     elem: '#'+_id
     ,title:{title}
-    ,data:{JsonSerializer.Serialize(data,new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase})}
-    {(string.IsNullOrEmpty(DefaultValue) ? string.Empty : $",value:defaultVal")}
+    ,data:ff.encodeTransferItems({JsonSerializer.Serialize(data,new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase})})
+    {(string.IsNullOrEmpty(DefaultValue) ? string.Empty : $",value:$.map(defaultVal,function(v){{ return ff.EncodeHtml(v); }})")}
     ,id:'{Id}'
     ,text:{{none:'{JsStringEncoder.Escape(NonePlaceholder)}',searchNone:'{JsStringEncoder.Escape(SearchNonePlaceholder)}'}}
     {(!EnableSearch ? string.Empty : ",showSearch:true")}
@@ -220,7 +225,7 @@ layui.use(['transfer'],function(){{
   /* init default value */
   if(defaultVal!=null && defaultVal.length>0){{
     for (var i = 0; i < defaultVal.length; i++) {{
-      container.append('<input type=""hidden"" name=""'+name+'"" value=""'+defaultVal[i]+'""/>');
+      container.append($('<input type=""hidden""/>').attr('name',name).attr('value',defaultVal[i]));
     }}
   }}
   {(!Disabled?string.Empty: $@"
