@@ -2,7 +2,14 @@ using System;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using System.Collections.Generic;
+using System.IO;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
+using WalkingTec.Mvvm.Core.Extensions;
+using WalkingTec.Mvvm.Core.Models;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WalkingTec.Mvvm.Core.Json;
 using WalkingTec.Mvvm.Mvc;
@@ -28,6 +35,12 @@ namespace WalkingTec.Mvvm.Core.Test
         {
             public FileAttachment Photo { get; set; }
             public Student Entity { get; set; }
+        }
+
+        public class InterfaceHolder
+        {
+            public IWtmFile File { get; set; }
+            public List<IWtmFile> Files { get; set; }
         }
 
         public class OtherPathHolder
@@ -131,6 +144,44 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
+        public void Serialize_PropertyDeclaredAsIWtmFile_WritesNoStorageDetails()
+        {
+            var file = Stored();
+            file.DataStream = new MemoryStream(new byte[] { 5, 6, 7 });
+            var holder = new InterfaceHolder { File = file, Files = new List<IWtmFile> { Stored() } };
+
+            var json = JsonSerializer.Serialize(holder, WtmOptions());
+
+            using var doc = JsonDocument.Parse(json);
+            foreach (var item in new[] { doc.RootElement.GetProperty("File"), doc.RootElement.GetProperty("Files")[0] })
+            {
+                foreach (var name in Hidden.Concat(new[] { "DataStream" }))
+                {
+                    Assert.IsFalse(item.TryGetProperty(name, out _), name + " was written: " + item);
+                }
+                Assert.AreEqual("photo.png", item.GetProperty("FileName").GetString());
+                Assert.AreEqual("png", item.GetProperty("FileExt").GetString());
+                Assert.AreEqual(1234, long.Parse(item.GetProperty("Length").GetString()));
+                Assert.IsTrue(item.TryGetProperty("UploadTime", out _));
+            }
+            foreach (var value in new[] { "secret/dir", "extra-value", "handler-value", "local" })
+            {
+                Assert.IsFalse(json.Contains(value), json);
+            }
+        }
+
+        [TestMethod]
+        public void Serialize_ThroughAnObjectTypedProperty_WritesNoStorageDetails()
+        {
+            var json = JsonSerializer.Serialize(new { Value = (object)Stored() }, WtmOptions());
+
+            foreach (var name in Hidden)
+            {
+                Assert.IsFalse(json.Contains("\"" + name + "\""), json);
+            }
+        }
+
+        [TestMethod]
         public void Serialize_ThroughDefaultJsonOption_WritesNoStorageDetails()
         {
             WtmOptions();
@@ -141,6 +192,23 @@ namespace WalkingTec.Mvvm.Core.Test
             {
                 Assert.IsFalse(json.Contains("\"" + name + "\""), json);
             }
+        }
+
+        [TestMethod]
+        public void TheDistributedCache_UsesTheSameOptions_SoACachedFileAttachmentHasNoStorageDetailsEither()
+        {
+            // objects the framework or an application keeps in the cache are written with the shared options
+            WtmOptions();
+            var cache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
+
+            cache.Add("file-attachment-test", Stored());
+            var back = cache.Get<FileAttachment>("file-attachment-test");
+
+            Assert.AreEqual("photo.png", back.FileName);
+            Assert.AreEqual(1234, back.Length);
+            Assert.IsNull(back.Path);
+            Assert.IsNull(back.SaveMode);
+            Assert.IsNull(back.FileData);
         }
 
         [TestMethod]

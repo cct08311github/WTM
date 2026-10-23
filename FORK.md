@@ -998,4 +998,6 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 
 **行為變更**：回應裡 `FileAttachment` 物件不再有上述五個成員。
 
-**測試**：Core.Test 的 `FileAttachmentOutputTest`（輸出、子類、巢狀、輸入、伺服器端值、`DefaultPostJsonOption`、`GetById` 的詳細資料）。
+**補充**：(a) 宣告型別為 `IWtmFile` 的屬性（含 `List<IWtmFile>`）同樣不輸出這些成員與 `DataStream`；(b) 經共用 JSON 設定寫入的物件也一樣：例如以 `Cache.Add`／`Wtm.ReadFromCache<T>` 放進快取的 `FileAttachment`，快取裡不再有這些欄位，讀回來為空（需要這些欄位的快取內容請快取自己的型別，或只快取 id 再從資料庫讀）；讀取（反序列化）與 `CallAPI` 送出的請求內容（`DefaultPostJsonOption`）不受影響。
+
+**測試**：Core.Test 的 `FileAttachmentOutputTest`（輸出、子類、`IWtmFile` 型別、巢狀、輸入、伺服器端值、快取、`DefaultPostJsonOption`、`GetById` 的詳細資料）。

@@ -2,6 +2,7 @@ using System;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using WalkingTec.Mvvm.Core.Models;
 
 namespace WalkingTec.Mvvm.Core.Json
 {
@@ -32,12 +33,13 @@ namespace WalkingTec.Mvvm.Core.Json
         };
 
         /// <summary>
-        /// A <see cref="JsonTypeInfo"/> modifier: for <see cref="FileAttachment"/> and its subclasses, the members in <see cref="ExcludedMembers"/> are never
-        /// written. Other types (including other classes that have a <c>Path</c> property) are not touched.
+        /// A <see cref="JsonTypeInfo"/> modifier: for <see cref="FileAttachment"/> and its subclasses, and for a member declared as <see cref="IWtmFile"/>,
+        /// the members in <see cref="ExcludedMembers"/> (and the stream of the interface) are never written. Other types (including other classes that have a <c>Path</c> property) are not touched.
         /// </summary>
         public static void Modify(JsonTypeInfo typeInfo)
         {
-            if (typeInfo == null || typeInfo.Kind != JsonTypeInfoKind.Object || !typeof(FileAttachment).IsAssignableFrom(typeInfo.Type))
+            if (typeInfo == null || typeInfo.Kind != JsonTypeInfoKind.Object
+                || (typeInfo.Type != typeof(IWtmFile) && !typeof(FileAttachment).IsAssignableFrom(typeInfo.Type)))
             {
                 return;
             }
@@ -70,8 +72,16 @@ namespace WalkingTec.Mvvm.Core.Json
         {
             if (property.AttributeProvider is MemberInfo member)
             {
-                // only the members FileAttachment declares: a subclass' own property of the same name is the subclass' business
-                return member.DeclaringType == typeof(FileAttachment) && Array.IndexOf(ExcludedMembers, member.Name) >= 0;
+                // only the members FileAttachment (or the interface) declares: a subclass' own property of the same name is the subclass' business
+                if (member.DeclaringType == typeof(FileAttachment))
+                {
+                    return Array.IndexOf(ExcludedMembers, member.Name) >= 0;
+                }
+                if (member.DeclaringType == typeof(IWtmFile))
+                {
+                    return Array.IndexOf(ExcludedMembers, member.Name) >= 0 || member.Name == nameof(IWtmFile.DataStream);
+                }
+                return false;
             }
             return Array.Exists(ExcludedMembers, x => string.Equals(x, property.Name, StringComparison.OrdinalIgnoreCase));
         }
