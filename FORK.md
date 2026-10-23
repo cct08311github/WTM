@@ -206,6 +206,7 @@ git merge --no-ff upstream/dotnet10
 | `src/WalkingTec.Mvvm.TagHelpers.LayUI/Common/LayuiUIService.cs`、`ImageTagHelper.cs`、`Abstraction/BaseElementTag.cs`、`Form/{Upload,MultiUpload,Display,RichText}*.cs` | 檔案連結與上傳連結帶參考 | 第 28 節 |
 | `test/WalkingTec.Mvvm.Test.Mock/MockWtmContext.cs` | 選用參數 `loggerFactory`、`configs`、`fileAccessPolicy`；預設空的 `Request.Query` | 第 28 節 |
 | 圖片解碼限制 | `src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs`（`UploadImage`、`GetFile`）、`Helper/ImageDecodeGuard.cs`（新增）、`demo/WalkingTec.Mvvm.Vue3Demo/Areas/_Admin/ImageDecodeGuard.cs`、`Controllers/FileApiController.cs`（`ResizeImage`） | 縮略圖在解碼前先檢查格式、大小與尺寸，上限由 `ImageUploadLimits` 設定；規則移到框架，demo 保留原有的型別與方法 | 第 30 節 |
+| `src/WalkingTec.Mvvm.Core/Json/FileAttachmentOutputExclusion.cs`（新增）、`src/WalkingTec.Mvvm.Mvc/Helper/MvcOptionExtension.cs` | `UseWtmJsonOptions` 在輸出時排除 `FileAttachment` 的儲存細節（`Path`、`ExtraInfo`、`SaveMode`、`HandlerInfo`、`FileData`），輸入與伺服器端程式不受影響 | 第 31 節 |
 | Dependabot 的依賴升級 | 各 csproj／`package-lock.json` 的版本號 | 見各 `dependencies` PR |
 
 fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder,GenericEndpointGuard}.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/GenericEndpointOptions.cs`、`docs/security/generic-endpoint-authz.md`、`test/WalkingTec.Mvvm.LayUI.E2EHost/Controllers/ReportController.cs`（授權測試用頁面）、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270、#272）、`test/WalkingTec.Mvvm.E2E.Instrumentation/`（E2E 的路由覆蓋與 hosting startup，#272）。
@@ -977,3 +978,22 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 **行為變更**：(a) 帶尺寸的 `UploadImage` 對超出限制或無法解析的檔案不再儲存；(b) 帶尺寸的 `GetFile` 對這些檔案輸出原檔；(c) `GetFile` 不帶尺寸時不再讀取圖片內容。
 
 **測試**：Core.Test 的 `FrameworkImageEndpointsTest`（`UploadImage`、`GetFile`：一般圖片、超出限制、格式不允許、非圖片、尺寸超出上限、設定）、`FrameworkImageDecodeGuardTest`（設定的讀取、`Resize`、不可 seek 的來源）、`ImageDecodeGuardTest`（demo 的型別）。
+
+## 31. 回應不輸出檔案附件的儲存細節（安全強化）
+
+**範圍**：回應（`UseWtmJsonOptions` 的輸出）中的 `FileAttachment`，包含 `BaseCRUDVM.GetById` 填入的導覽屬性（例如 `Student.Photo`）。不變：`GetById` 的載入方式、伺服器端程式讀取這些屬性的行為（`WtmFileProvider`、檔案處理器、下游的匯入 view model）、JSON 輸入的繫結、`DefaultPostJsonOption`（框架發給其他服務的請求）、LayUI 與 Vue3 範本。
+
+**變更**：
+
+| 項目 | 行為 |
+|---|---|
+| 不輸出的成員 | `Path`、`ExtraInfo`、`SaveMode`、`HandlerInfo`、`FileData`（位元組） |
+| 照常輸出 | `ID`、`FileName`、`FileExt`、`Length`、`UploadTime`、`TenantCode` |
+| 做法 | `System.Text.Json` 的 type info resolver modifier（`FileAttachmentOutputExclusion`，擴充方法 `ExcludeFileStorageDetailsFromOutput`），做法與 `UserPasswordOutputExclusion` 相同：只影響輸出，模型上沒有 `[JsonIgnore]`；`FileAttachment` 的子類同樣適用，只處理 `FileAttachment` 自己宣告的成員；既有的 resolver 與 modifier 保留；`PocoConverter` 複製選項時保留 resolver |
+| 設定 | 無新設定 |
+
+**升級步驟**：一般應用不需要修改。下游的前端若讀取回應中的 `Photo.Path`、`ExtraInfo`、`SaveMode`，改用 `ID` 取得檔案（`/api/_file/GetFile/{id}` 或 `/_Framework/GetFile`）。回滾：退回前一個 fork 版本。
+
+**行為變更**：回應裡 `FileAttachment` 物件不再有上述五個成員。
+
+**測試**：Core.Test 的 `FileAttachmentOutputTest`（輸出、子類、巢狀、輸入、伺服器端值、`DefaultPostJsonOption`、`GetById` 的詳細資料）。

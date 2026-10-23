@@ -71,6 +71,9 @@ namespace WalkingTec.Mvvm.Mvc
             // output only: FrameworkUserBase.Password is never written to a response, a request body that has it still binds.
             // DefaultPostJsonOption below (requests the framework sends to other services) is deliberately left as it was.
             options.JsonSerializerOptions.ExcludeUserPasswordFromOutput();
+            // output only: the storage details of a FileAttachment (Path, ExtraInfo, SaveMode, HandlerInfo, FileData) are not written to a response either;
+            // server side code reads the same properties, and a request body that has them still binds.
+            options.JsonSerializerOptions.ExcludeFileStorageDetailsFromOutput();
             Core.CoreProgram.DefaultJsonOption = options.JsonSerializerOptions;
             JsonSerializerOptions jsonOptions2 = new JsonSerializerOptions();
             jsonOptions2.PropertyNamingPolicy = null;
