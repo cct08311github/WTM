@@ -34,13 +34,30 @@ namespace WalkingTec.Mvvm.E2E.Tests
         private ILocator Rows => Body.Locator(".layui-table-main tr");
         private ILocator Toolbar(string text) => Body.Locator(".layui-table-tool a.layui-btn", new() { HasTextString = text });
 
-        // when the grid is wider than the page the action column is fixed at the right and the buttons that can be clicked are the ones of
-        // the overlay table (the last in the page); otherwise they are the ones of the main table. Rows are in the order of the data.
-        private ILocator RowButton(string row, string text)
+        // The buttons of a row exist twice: in the main table and, when the action column is fixed at the right, in an overlay table that
+        // covers the main one. Which copy can be clicked depends on the layout, which is settled a moment after the rows appear (and
+        // differs between machines), so the click looks for a visible copy again whenever the one it found is covered or gone.
+        private async Task ClickRowButtonAsync(string row, string text)
         {
             var index = IndexOf(row);
-            return Body.Locator($".layui-table-main tr[data-index='{index}'] a.layui-btn, .layui-table-fixed-r tr[data-index='{index}'] a.layui-btn", new() { HasTextString = text })
-                .Filter(new() { Visible = true }).Last;
+            var buttons = Body.Locator($".layui-table-main tr[data-index='{index}'] a.layui-btn, .layui-table-fixed-r tr[data-index='{index}'] a.layui-btn", new() { HasTextString = text });
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    // the overlay table comes last in the page: when both copies are visible it is the one on top
+                    await buttons.Filter(new() { Visible = true }).Last.ClickAsync(new() { Timeout = 2000 });
+                    return;
+                }
+                catch (TimeoutException) when (attempt < 15)
+                {
+                    await Task.Delay(300);
+                }
+                catch (PlaywrightException) when (attempt < 15)
+                {
+                    await Task.Delay(300);
+                }
+            }
         }
 
         private static int IndexOf(string row) => row switch { "Key plain" => 0, "Key guid" => 1, "Key special" => 2, _ => throw new ArgumentException(row) };
@@ -90,12 +107,12 @@ namespace WalkingTec.Mvvm.E2E.Tests
         [TestMethod]
         public async Task RowButton_Dialog_OrdinaryIds_KeepTheAddressTheyAlwaysHad()
         {
-            await RowButton("Key plain", "Key dialog").ClickAsync();
+            await ClickRowButtonAsync("Key plain", "Key dialog");
             var seen = await ProbeAsync("KeyDialog");
             await CloseAlertAsync("KeyDialog");
             AssertRaw("?1=1&id=plain-1&Code=code-1", seen);
 
-            await RowButton("Key guid", "Key dialog").ClickAsync();
+            await ClickRowButtonAsync("Key guid", "Key dialog");
             seen = await ProbeAsync("KeyDialog");
             await CloseAlertAsync("KeyDialog");
             AssertRaw("?1=1&id=" + Guid + "&Code=code-2", seen);
@@ -104,7 +121,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         [TestMethod]
         public async Task RowButton_Dialog_IdAndFieldWithAddressCharacters_ReachTheServerWhole()
         {
-            await RowButton("Key special", "Key dialog").ClickAsync();
+            await ClickRowButtonAsync("Key special", "Key dialog");
 
             var seen = await ProbeAsync("KeyDialog");
             Assert.AreEqual(LabData.SpecialId, Id(seen));
@@ -117,7 +134,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         public async Task RowButton_Request_IdAndFieldWithAddressCharacters_ReachTheServerWhole()
         {
             // SingleIdWithNull without a dialog: a background request
-            await RowButton("Key special", "Key request").ClickAsync();
+            await ClickRowButtonAsync("Key special", "Key request");
 
             var seen = await ProbeAsync("KeyRequest");
             Assert.AreEqual(LabData.SpecialId, Id(seen));
@@ -128,7 +145,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         [TestMethod]
         public async Task RowButton_Request_OrdinaryIds_KeepTheAddressTheyAlwaysHad()
         {
-            await RowButton("Key guid", "Key request").ClickAsync();
+            await ClickRowButtonAsync("Key guid", "Key request");
 
             var seen = await ProbeAsync("KeyRequest");
             await CloseAlertAsync("KeyRequest");
@@ -140,7 +157,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         public async Task RowButton_Redirect_IdAndFieldWithAddressCharacters_ReachTheServerWhole()
         {
             // ff.LoadPage puts the address into the page hash, from where the frame loads the page
-            await RowButton("Key special", "Key page").ClickAsync();
+            await ClickRowButtonAsync("Key special", "Key page");
 
             var seen = await ProbeAsync("KeyGo");
             Assert.AreEqual(LabData.SpecialId, Id(seen));
@@ -152,7 +169,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         [TestMethod]
         public async Task RowButton_Redirect_OrdinaryIds_KeepTheAddressTheyAlwaysHad()
         {
-            await RowButton("Key guid", "Key page").ClickAsync();
+            await ClickRowButtonAsync("Key guid", "Key page");
 
             var seen = await ProbeAsync("KeyGo");
             AssertRaw("?1=1&id=" + Guid + "&Code=code-2", seen);
@@ -266,7 +283,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         [TestMethod]
         public async Task RowButton_Download_IdAndFieldWithAddressCharacters_ReachTheServerWhole()
         {
-            var download = await Page.RunAndWaitForDownloadAsync(async () => await RowButton("Key special", "Key file").ClickAsync());
+            var download = await Page.RunAndWaitForDownloadAsync(async () => await ClickRowButtonAsync("Key special", "Key file"));
             Assert.AreEqual("key.txt", download.SuggestedFilename);
 
             var seen = await ProbeAsync("KeyFile");
@@ -277,7 +294,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         [TestMethod]
         public async Task RowButton_Download_OrdinaryIds_KeepTheAddressTheyAlwaysHad()
         {
-            var download = await Page.RunAndWaitForDownloadAsync(async () => await RowButton("Key guid", "Key file").ClickAsync());
+            var download = await Page.RunAndWaitForDownloadAsync(async () => await ClickRowButtonAsync("Key guid", "Key file"));
             Assert.AreEqual("key.txt", download.SuggestedFilename);
 
             var seen = await ProbeAsync("KeyFile");
