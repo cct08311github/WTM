@@ -716,7 +716,7 @@ dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build --filter TestCategory
 
 #### 已知偏差
 
-觀察到的行為與預期不同、但本 Issue 不修改 `src`／`demo` 的項目，用 `knownDeviation` 標記（短而中性的描述加上各身分目前的結果）：測試照常通過並在報告中列出，修好後測試會要求移除標記。目前共 4 類，見追蹤 Issue。
+觀察到的行為與預期不同、但本 Issue 不修改 `src`／`demo` 的項目，用 `knownDeviation` 標記（短而中性的描述加上各身分目前的結果）：測試照常通過並在報告中列出，修好後測試會要求移除標記。目前共 3 類，見追蹤 Issue（原本的第 4 類，`EnableWorkflow=true` 時名稱以數字結尾的 controller 路由名稱被改變，已在 #294 修好並移除）。
 
 #### 設定切換：`EnableWorkflow`
 
