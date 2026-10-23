@@ -10,6 +10,10 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
+## 未发布
+
+* **修复：**   `EnableWorkflow=true` 时，名称以数字结尾的 controller 以去掉数字的名称注册路由（例如 `SchoolVue3Controller` 的路由是 `SchoolVue`），依原类名建立的菜单与权限对不到任何 action，管理员访问 `testvue/schoolvue3/*` 被拒绝（#294）。原因：`AddWtmWorkflow` 注册的 `AddElsaApiEndpoints()` 会加入 Asp.Versioning，其默认的 `IControllerNameConvention`（`DefaultControllerNameConvention`）会去掉应用中所有 `[ApiController]`（不只是 Elsa 的）名称结尾的数字。现在 `AddWtmWorkflow` 在 Elsa 注册之后，把它换成 `ControllerNameConvention.Grouped`（`WorkflowApiSecurity.KeepControllerNames`）：controller 名称原样保留，API 版本分组时仍忽略结尾数字。Elsa 自己的 controller 名称没有结尾数字，路由与 API 版本信息不变；`EnableWorkflow=false` 时不会调用 `AddWtmWorkflow`，行为不变；应用自行注册了 `IControllerNameConvention` 时不会被覆盖；LayUI（MVC controller，不是 `[ApiController]`）不受影响，未修改受保护路径。升级影响：`EnableWorkflow=true` 且有名称以数字结尾的 `[ApiController]`（如 Vue3 demo 的 `SchoolVue3`）的网站，路由与权限键恢复为带数字的名称（与 `EnableWorkflow=false` 时相同）；若曾为去掉数字的名称（如 `…/schoolvue/…`）配置了菜单或权限，请改回原类名。回滚：退回上一个 fork 版本。权限矩阵 `workflow-enabled` 配置中对应的已知偏差与差异列已移除
+
 ## 10.0.0.14(2026-10-23)
 
 * **修改（安全，涉及 LayUI 受保护路径）：**   `wt:grid` 动作按钮把数据行的 id 与动作指定的行字段（`whereStr`）接到请求网址时，改为依写入位置编码（#344，做法同 #326）：`SingleId`、`SingleIdWithNull` 两类按钮（行按钮、工具栏按钮、`ActionsGroup` 子按钮；弹出对话框、后台请求、下载、导出皆同）的 `&id=` 改用 `encodeURIComponent`，`ff.concatWhereStr` 对行字段的值同样编码（字段名照旧原样写入）。id 或字段值含 `& # + %`、空格、引号等字符时，服务器收到完整的值，不再被截断或改变。走 `ff.LoadPage`（`IsRedirect`）的按钮，因 `ff.LoadPage` 会先对网址解码一次再写入页面 hash，id 与字段值编码两次（`ff.concatWhereStr` 新增可选的第 4 个参数 `twice`），服务器同样收到完整的值。GUID、整数与一般文字的 id，网址与之前逐字相同，服务器收到的值不变；`MultiIds`／`MultiIdWithNull` 在请求主体送出的 `Ids`、`OnClickFunc` 收到的 `ids`、下载与导出送出的 `Ids` 都不受影响。下游影响：字段值中的空格、冒号、逗号等（例如日期时间文字）在网址里变成百分号编码（服务器照常解码，收到的值相同）；自行调用 `ff.concatWhereStr` 的页面，请传入原值（函数自己编码），不要先行编码。layui 与 xm-select 没有升级。回滚：退回上一个 fork 版本。详见 FORK.md 第 20 节

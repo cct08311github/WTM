@@ -4,6 +4,7 @@ using System.Linq;
 using System.Net;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Asp.Versioning.Conventions;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
@@ -11,6 +12,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.ApplicationModels;
 using Microsoft.AspNetCore.Mvc.Authorization;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Auth;
@@ -131,6 +133,22 @@ namespace WalkingTec.Mvvm.Mvc
             else
             {
                 services.Configure<Microsoft.AspNetCore.Mvc.MvcOptions>(mvc => mvc.Conventions.Add(new WorkflowApiStubRemovalConvention()));
+            }
+        }
+
+        /// <summary>
+        /// Elsa.Server.Api registers Asp.Versioning with its default <see cref="IControllerNameConvention"/>, which strips the trailing digits
+        /// of the name of every [ApiController] of the application, not only Elsa's (SchoolVue3Controller was routed as SchoolVue), so the
+        /// menus and privileges defined for the real name matched nothing (#294). Replaces it with the grouped convention: names are kept,
+        /// trailing digits are still ignored for grouping API versions. A convention the application registered itself is left alone.
+        /// Elsa's own controllers have no digit in their names, so their routes do not change.
+        /// </summary>
+        public static void KeepControllerNames(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+        {
+            var registered = services.LastOrDefault(x => x.ServiceType == typeof(IControllerNameConvention));
+            if (registered == null || registered.ImplementationType == typeof(DefaultControllerNameConvention))
+            {
+                services.Replace(ServiceDescriptor.Singleton<IControllerNameConvention>(ControllerNameConvention.Grouped));
             }
         }
 

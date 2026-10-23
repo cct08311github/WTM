@@ -659,6 +659,8 @@ namespace WalkingTec.Mvvm.Mvc
                 }
                 );
             services.AddElsaApiEndpoints();
+            // Elsa's API versioning strips the trailing digits of every [ApiController] name (SchoolVue3 -> SchoolVue); keep the names (#294)
+            WorkflowApiSecurity.KeepControllerNames(services);
             if (conf.Domains.ContainsKey("server"))
             {
                 services.AddHttpClient(nameof(SendHttpRequest)).ConfigureHttpClient((s,x) =>
