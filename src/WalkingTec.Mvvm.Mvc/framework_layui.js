@@ -1186,12 +1186,17 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
         return s4() + s4() + '-' + s4() + '-' + s4() + '-' + s4() + '-' + s4() + s4() + s4();
     },
 
-    concatWhereStr: function (tempUrl, whereStr, data) {
+    // Appends the named fields of a row to the address of a grid action. The values are data of the page: they are encoded for the query
+    // string (#344), so that a value with & # + % or a space reaches the server whole. The names are written as they are.
+    // twice: for an address that goes through ff.LoadPage, which decodes it once before it goes into the page hash.
+    concatWhereStr: function (tempUrl, whereStr, data, twice) {
         if (tempUrl == null) tempUrl = "";
         if (data == null) return tempUrl;
         if (whereStr != null && whereStr.length > 0) {
             for (var i = 0; i < whereStr.length; i++) {
-                tempUrl = tempUrl + '&' + whereStr[i] + '=' + data[whereStr[i]];
+                var v = encodeURIComponent(data[whereStr[i]]);
+                if (twice === true) v = encodeURIComponent(v);
+                tempUrl = tempUrl + '&' + whereStr[i] + '=' + v;
             }
         }
         return tempUrl;

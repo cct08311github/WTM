@@ -478,8 +478,23 @@ checkbox／radio 的選項標題、combobox／tree（xm-select）的選項與節
 | `wt:transfer` | `LeftTitle`、`RightTitle`、無資料與搜尋無結果的提示文字 | layui 以 HTML 寫入，與 card、tab、fieldset、panel 的標題一致：`UIOptions:EncodeHtmlContent=true` 時 HTML 編碼，預設（false）原樣輸出；再依 script 字串編碼 | 兩種設定都逐字相同 |
 
 - **下游提醒**：自行讀取 treecontainer 的 `layui.tree` 配置（`config.data`）中 `id` 的腳本，遇到含 `& < > " '` 的 id 會讀到屬性編碼後的文字；點擊回調的 `data.data.id` 不受影響。自行串接網址的頁面，請對值使用 `encodeURIComponent`
-- **未修改**：layui 與 xm-select 沒有升級也沒有修改；`wt:grid` 動作按鈕串接 `&id=` 的位置不在本節範圍
+- **未修改**：layui 與 xm-select 沒有升級也沒有修改；`wt:grid` 動作按鈕串接 `&id=` 的位置見下一小節（#344）
 - **測試**：Core.Test 的 `LinkedValueEncodingTests`、`LinkageEncodingTests`（`linkage-encoding.test.js`）；E2E 的 `LayUiChoiceTests`、`LayUiTreeTests`、`LayUiFrameworkScriptCoverageTests`（含特殊字元的 id、值與 icon）；`option-encoding.test.js`、`selector-encoding.test.js` 的測試字串改為中性的標記字元組合
+
+### 表格動作按鈕的 id 與行欄位（#344）
+
+延續 #326：`wt:grid` 的動作按鈕在瀏覽器端把資料列的 id、以及動作用 `whereStr` 指定的行欄位接到請求網址。這些值是頁面上的資料（不是伺服器寫進腳本字串的字面值，所以沒有 script 字串編碼的問題），現在依**網址查詢字串**編碼；一般 id（GUID、整數、一般文字）的網址與修改前逐字相同，伺服器收到的值不變。
+
+| 位置 | 值 | 編碼 | 一般值的輸出 |
+|---|---|---|---|
+| `SingleId`、`SingleIdWithNull` 的 `&id=`（行按鈕、工具列按鈕、`ActionsGroup` 子按鈕；對話框、背景請求、下載、匯出皆同） | 資料列 id、勾選列的 id | `encodeURIComponent` | 同值 |
+| `ff.concatWhereStr`（`whereStr` 指定的行欄位） | 行欄位的值 | `encodeURIComponent`；欄位名稱照舊原樣寫入 | 同值 |
+| 經 `ff.LoadPage` 的按鈕（`IsRedirect`，沒有 `OnClickFunc`、不是下載與匯出） | 同上 | `ff.LoadPage` 會先對網址 `decodeURIComponent` 一次再寫入頁面 hash，所以**編碼兩次**；`ff.concatWhereStr` 的第 4 個參數 `twice` 為 `true`。頁面 hash 保有一次編碼的值，伺服器收到完整的值 | 同值 |
+
+- **不受影響**：`MultiIds`、`MultiIdWithNull` 以請求主體送出的 `Ids`；`OnClickFunc` 收到的 `ids` 與選取的資料列（原值）；`ff.Download`、`ff.DownloadExcelOrPdf` 以表單送出的 `Ids`（已經是 `ff.EncodeHtml` 編碼的屬性）；`ff.LoadPage` 本身沒有修改
+- **下游提醒**：欄位值裡的空格、冒號、逗號等（例如日期時間文字）在網址中變成百分號編碼，伺服器照常解碼，收到的值相同；自行呼叫 `ff.concatWhereStr` 的頁面請傳入原值（函式自己編碼），不要先編碼，否則會編碼兩次
+- **未修改**：layui 與 xm-select 沒有升級也沒有修改；`GridAction` 等公開 API 沒有變動，`ff.concatWhereStr` 只新增一個可省略的參數
+- **測試**：Core.Test 的 `GridActionIdEncodingTests`（TagHelper 輸出與 `grid-action-encoding.test.js`）；E2E 的 `LayUiGridActionIdTests`（`/Lab/Keys`：資料列 id 為文字的測試專用表格，含一般 id、GUID、含網址分隔字元的 id 與欄位值，涵蓋列按鈕、工具列按鈕、`ActionsGroup` 子按鈕、對話框、背景請求、頁面跳轉、下載）。E2EHost 的實體 id 皆為 GUID，所以這個表格的資料由 `LabController.KeySearch` 以手寫 JSON 提供（只供測試）
 
 ## 21. E2E 測試（#270）
 
@@ -546,6 +561,7 @@ HEADED=1 dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build   # 顯示�
 | `Layout` | `wt:container`、`wt:row`、`wt:card`、`wt:panel`、`wt:quote`、`wt:code`、`wt:image`、`wt:tab` 與四個子標籤、`wt:button`、`wt:linkbutton`、`wt:flowinfo` |
 | `Charts` | `wt:chart`（長條、折線、圓餅、散點） |
 | `Trees` | `wt:tree`（單選、多選、`item-url`）、`wt:treecontainer`（點擊、展開、載入頁面） |
+| `Keys` | `wt:grid` 的動作按鈕（資料列 id 為文字的測試專用表格，資料由 `LabController.KeySearch` 提供；#344） |
 
 另有 Gadget 模組的批次修改、Excel 匯入與範本下載，以及 `/_Framework/*` 端點（`FrameworkEndpointTests`：沒有按鈕入口的端點用已登入或匿名的 HTTP 請求測）。`wt:ueditor` 只檢查伺服器輸出（UEditor 的 script 不在共用靜態檔內）。`wt:flowinfo` 在沒有 workflow 的 host 只能測到空的時間軸。
 

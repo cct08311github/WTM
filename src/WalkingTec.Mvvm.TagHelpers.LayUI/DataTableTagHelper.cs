@@ -899,6 +899,12 @@ setTimeout(function(){{
                     }
                 }
                 var script = new StringBuilder($"var tempUrl = '{JsStringEncoder.Escape(url)}',whereStr={JsonSerializer.Serialize(item.whereStr)};");
+                // The id of a row (and the fields of the row named by the action) are data of the page that the script appends to the address:
+                // they are encoded for the query string (#344). ff.LoadPage decodes the address once before it puts it into the page hash,
+                // so the buttons that go through it encode twice (ff.concatWhereStr gets the same flag).
+                var viaLoadPage = LoadsPage(item);
+                string IdPart(string expression) => viaLoadPage ? $"encodeURIComponent(encodeURIComponent({expression}))" : $"encodeURIComponent({expression})";
+                var whereFlag = viaLoadPage ? ",true" : string.Empty;
 
                 switch (item.ParameterType)
                 {
@@ -914,17 +920,17 @@ if(data==undefined||data==null||data.ID==undefined||data.ID==null){{
         layui.layer.msg('{THProgram._localizer["Sys.SelectOneRowMax"]}');
         return;
     }}else{{
-        tempUrl = tempUrl + '&id=' + ids[0];
+        tempUrl = tempUrl + '&id=' + {IdPart("ids[0]")};
         objs = ff.GetSelectionData('{Id}');
         if(objs!=null && objs.length > 0){{
-            tempUrl = ff.concatWhereStr(tempUrl,whereStr,objs[0]);
+            tempUrl = ff.concatWhereStr(tempUrl,whereStr,objs[0]{whereFlag});
         }}
     }}
 }}else{{
     ids = [data.ID];
     objs = [data];
-    tempUrl = tempUrl + '&id=' + data.ID;
-    tempUrl = ff.concatWhereStr(tempUrl,whereStr,data);
+    tempUrl = tempUrl + '&id=' + {IdPart("data.ID")};
+    tempUrl = ff.concatWhereStr(tempUrl,whereStr,data{whereFlag});
 }}
 ");
                         break;
@@ -944,19 +950,19 @@ var ids = [];
 var objs = [];
 if(data != null && data.ID != null){{
     ids.push(data.ID);
-    tempUrl = ff.concatWhereStr(tempUrl,whereStr,data);
+    tempUrl = ff.concatWhereStr(tempUrl,whereStr,data{whereFlag});
 }} else {{
     ids = ff.GetSelections('{Id}');
     objs = ff.GetSelectionData('{Id}');
     if(objs!=null && objs.length > 0){{
-        tempUrl = ff.concatWhereStr(tempUrl,whereStr,objs[0]);
+        tempUrl = ff.concatWhereStr(tempUrl,whereStr,objs[0]{whereFlag});
     }}
 }}
 if(ids.length > 1){{
     layui.layer.msg('{THProgram._localizer["Sys.SelectOneRowMax"]}');
     return;
 }}else if(ids.length == 1){{
-    tempUrl = tempUrl + '&id=' + ids[0];
+    tempUrl = tempUrl + '&id=' + {IdPart("ids[0]")};
 }}
 ");
                         break;
@@ -1055,6 +1061,27 @@ var isPost = false;
                 gridBtnEventStrBuilder.Append($@"}};break;
 ");
             }
+        }
+
+        /// <summary>
+        /// Whether the button hands its address to ff.LoadPage (a page in the frame or a new window) and not to a request, a download or a
+        /// handler of the page. Must follow the choice of the action script in <see cref="AddSubButton"/>.
+        /// </summary>
+        private static bool LoadsPage(GridAction item)
+        {
+            if (string.IsNullOrEmpty(item.OnClickFunc) == false || item.IsDownload == true)
+            {
+                return false;
+            }
+            if (item.ShowDialog == true)
+            {
+                return item.IsRedirect == true;
+            }
+            if ((item.Area == string.Empty && item.ControllerName == "_Framework" && item.ActionName == "GetExportExcel") || item.IsExport == true)
+            {
+                return false;
+            }
+            return item.IsRedirect == true;
         }
 
         /// <summary>
