@@ -10,7 +10,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
-## 未发布
+## 10.0.0.13(2026-10-23)
 
 * **修复：**   `BaseCRUDVM.DoDelete()`／`DoDeleteAsync()` 对 `PersistPoco` 设置 `Entity.IsValid` 时，若请求表单已带该字段（例如删除对话框含绑定 `Entity.IsValid` 的 disabled 控件，`ff.GetFormData` 会一并收集）会因重复 key 抛出 `ArgumentException`，请求得到 400；现在改为直接赋值，删除照常完成并将 `IsValid` 设为 false。没有表单字段时行为不变，`ff.GetFormData` 与 disabled 字段的处理不变，LayUI 文件未修改。回滚：退回上一个 fork 版本。(#332)
 * **修复（涉及 LayUI 受保护路径）：**   `wt:slider` 画把手时只使用 `default-value`、忽略绑定字段的值（隐藏 input 的值正确，但把手停在最小值）；现在绑定字段有值时，把手按该值显示（与写入隐藏 input 的值一致，范围滑块取 `field`／`field1` 两端），数字以不依赖当前区域设置的格式（invariant culture）写入脚本，不是数字的值（含文字、无穷大）不会写入脚本。绑定字段没有值（如 `int?` 为 `null`）时，`default-value` 照旧生效；值类型字段（如 `int`）的值为 0 时无法区分“未设置”，所以仍沿用 `default-value`，没有 `default-value` 且刻度从 0 起（默认）时输出与之前逐字节相同，只有 `min` 小于 0 时才会写入 `value:0`。受影响的是绑定了非零值的 `wt:slider`（原先把手停在最小值或 `default-value`，现在显示绑定值）；没有绑定值的页面输出不变。回滚：退回上一个 fork 版本。(#281)
@@ -18,7 +18,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * **修改（安全，涉及 LayUI 受保护路径）：**   部分 LayUI 元件的显示文字改为以纯文字显示，编码方式与其他元件一致（#279）：checkbox／radio 的选项标题（含 `item-url` 载入的选项与 `LayuiUIService.MakeCheckBox`／`MakeRadio`）、combobox 与 tree（xm-select）的选项与节点文字、transfer 的项目标题、treecontainer 的节点文字，以及 `wt:panel` 的 `Title`（与 card、tab、fieldset 相同：`UIOptions:EncodeHtmlContent=true` 时编码，默认值下输出不变）。文字在框架交给 layui／xm-select 的地方编码（xm-select 的 `template`、transfer 的资料与预选值、checkbox／radio 的 `title`、treecontainer 的节点资料），`linkto`／`item-url` 重新载入时同样生效；表单送出的 `value` 仍是原值。不含 `& < > " '` 的一般文字，输出与之前逐字相同；经表单存入、已被框架绑定器 HTML 编码的文字仍显示为原文（先解码一层再编码，语意同 FORK.md 第 23 节），不会变成 `&amp;`。**选项与节点文字不受 `UIOptions:EncodeHtmlContent` 影响（一律编码）：** 下游若在选项文字里放了 HTML 标记（例如图标），请改用选项的 `Icon`。layui 与 xm-select 没有升级。新增 `ff.EncodeHtmlOnce`、`ff.EncodeTitle`、`ff.encodeTransferItems`；`ChangeFunc` 收到的 transfer 项目的 `title`、`value` 是编码后的文字（一般文字相同）。详见 FORK.md 第 20 节
 * **修复：**   demo `WalkingTec.Mvvm.Vue3Demo` 的前端（`ClientApp`）多处与后端不一致的问题（#290）：用户管理的 get／add／edit／delete／export／import 请求改用实际路由 `/api/_FrameworkUser/*`（原为 `/api/_Admin/FrameworkUser/*`，新增等操作返回 405）；用户新增窗口的头像只有一个值，不再以多文件方式提交（原来提交的是数组，服务端返回 400），新增成功后列表会刷新；租户列表的名称列读取 `TName`；数据权限列表的“详情”按钮检查实际存在的 `/api/_DataPrivilege/Get`；City 与 SchoolVue3 页的“导出”按钮检查实际存在的 `/api/*/ExportExcel`；School、City、SchoolVue3 的“导出选中行”请求补上 `responseType: "blob"`，可以正常下载。只改 demo 的前端文件，不涉及 `src/**` 框架代码、后端接口与 LayUI 受保护路径，不影响下游；下游若复制了这些 Vue3 页面，可参照同样修改
 * **修复（涉及 LayUI 受保护路径）：**   可编辑表格（`ff.gridcellchange`）把储存格的新值写回缓存的 HTML 时现在会编码，并且不再把值当成取代样式：含单引号等字符的文字在新增或删除行后不再被截断；下拉储存格比对选项值时同样先编码。一般文字的输出不变 (#279)
-* **修复（涉及 LayUI 受保护路径）：**   `wt:transfer` 移动任一项目后，送出的值不再只剩页面显示后移动过的项目，预先选取的值不会丢失；送出的值现在是右侧清单的全部项目（直接读取清单，不再用 layui 的 `getData()`，所以被右侧搜索框隐藏的项目也包含在内）。该问题在预选项目的标题含有 `"` 等字符时出现，因为 layui 会把标题写进元素属性而破坏元素，上一条的编码一并修正了它。预选值与送出的值写进脚本与隐藏字段时同样编码。标题与值不含上述字符的一般页面，行为不变 (#280)
+* **修复（涉及 LayUI 受保护路径）：**   `wt:transfer` 移动任一项目后，送出的值不再只剩页面显示后移动过的项目，预先选取的值不会丢失；送出的值现在是右侧清单的全部项目（直接读取清单，不再用 layui 的 `getData()`，所以被右侧搜索框隐藏的项目也包含在内）。该问题在预选项目的标题含有 `"` 等字符时出现，因为 layui 会把标题写进元素属性而破坏元素，上一条的编码一并修正了它。预选值与送出的值写进脚本与隐藏字段时同样编码。标题与值不含上述字符的一般页面，行为不变 (#280、#323)
 * **修复：**   demo `WalkingTec.Mvvm.Vue3Demo` 的群组列表（#291）：搜索条件只命中子群组（上级群组不符合条件）时，列表不再是空的，命中的子群组会显示在最上层（`FrameworkGroupListVM.AfterDoSearcher` 原来只保留没有上级的行，前端 `components/table` 的树状列表同样只显示没有上级的行；现在上级不在结果中的行都当作顶层，上级都在结果中时输出与之前相同，不会补入不符合条件的上级群组）；备注栏显示群组备注（`GetSearchQuery` 补上 `GroupRemark` 的对应）。只改 demo 的 view model 与前端文件，不涉及 `src/**` 框架代码、接口路由与 LayUI 受保护路径，不影响下游
 
 ## 10.0.0.12(2026-10-23)
