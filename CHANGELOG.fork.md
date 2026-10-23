@@ -10,6 +10,10 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
+## 未发布
+
+* **修复（涉及 LayUI 受保护路径）：**   `wt:slider` 写入隐藏 input 的值（以及脚本里的 `min`／`max`／`step`／`height`）不再依赖服务器的区域设置（#322）：原来用当前区域设置格式化，例如 `decimal` 30.5 在 de-DE 下写成 `30,5`、sv-SE 下负号是 U+2212，与拖动滑块时 layui 写入的 `30.5` 不一致，提交后模型绑定可能失败或绑定成错误的值。现在一律用 invariant culture 输出（范围滑块的两个隐藏 input 同样处理）。默认区域设置（en／zh、invariant）下输出的文字与之前完全相同，整数页面不受影响；字符串类型的绑定值仍按原文输出。已加入 de-DE／fr-FR／sv-SE 的单元测试（`SliderInvariantCultureTests`）与以 `Languages=de-DE` 启动的 E2E 测试（`LayUiSliderCultureTests`）
+
 ## 10.0.0.13(2026-10-23)
 
 * **修复：**   `BaseCRUDVM.DoDelete()`／`DoDeleteAsync()` 对 `PersistPoco` 设置 `Entity.IsValid` 时，若请求表单已带该字段（例如删除对话框含绑定 `Entity.IsValid` 的 disabled 控件，`ff.GetFormData` 会一并收集）会因重复 key 抛出 `ArgumentException`，请求得到 400；现在改为直接赋值，删除照常完成并将 `IsValid` 设为 false。没有表单字段时行为不变，`ff.GetFormData` 与 disabled 字段的处理不变，LayUI 文件未修改。回滚：退回上一个 fork 版本。(#332)

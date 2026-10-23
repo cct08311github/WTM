@@ -38,6 +38,21 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
         // browser tests keep their data, the route coverage baseline stays what the tests of the feature reach, and the matrix instances
         // are started only when a matrix test runs.
 
+        /// <summary>
+        /// The LayUI test host with a request culture that has a decimal comma (Languages=de-DE), for the tests of values that are
+        /// written into pages and posted back whatever the regional number format of the server is (#322). The browser context stays en-US.
+        /// </summary>
+        public static readonly SiteTarget LayUIDecimalComma = new SiteTarget
+        {
+            Name = "layui-e2ehost-decimal-comma",
+            ProjectDir = LayUI.ProjectDir,
+            AssemblyName = LayUI.AssemblyName,
+            RouteExclusionFile = LayUI.RouteExclusionFile,
+            ReadyPath = LayUI.ReadyPath,
+            ReportRouteCoverage = false,
+            ConfigureEnvironment = (site, env) => { LayUiSetup.ConfigureEnvironment(site, env); env["Languages"] = "de-DE"; }
+        };
+
         /// <summary>A second instance of the LayUI test host for the permission matrix.</summary>
         public static readonly SiteTarget LayUIMatrix = new SiteTarget
         {

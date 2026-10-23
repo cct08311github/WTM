@@ -166,6 +166,16 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             return double.IsFinite(d) ? d.ToString(CultureInfo.InvariantCulture) : null;
         }
 
+        /// <summary>
+        /// The text of a number or of any other bound value for the hidden input, formatted with the invariant culture:
+        /// a decimal comma, a culture specific minus sign or digit grouping of the server must not reach the posted value
+        /// (layui writes the same invariant text when the handle is dragged). Non-numeric values keep their own text.
+        /// </summary>
+        private static string ToInputValue(object model)
+        {
+            return model == null ? null : Convert.ToString(model, CultureInfo.InvariantCulture);
+        }
+
         public override void Process(TagHelperContext context, TagHelperOutput output)
         {
             output.TagName = "div";
@@ -224,12 +234,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 }
             }
 
-            string value0 = Field?.Model?.ToString();
-            string value1 = Field1?.Model?.ToString();
+            string value0 = ToInputValue(Field?.Model);
+            string value1 = ToInputValue(Field1?.Model);
             if (Field?.Model != null || Field1?.Model != null)
             {
-                value0 = Field?.Model == null ? "0" : Field.Model.ToString();
-                value1 = Field1?.Model == null ? "0" : Field1.Model.ToString();
+                value0 = Field?.Model == null ? "0" : ToInputValue(Field.Model);
+                value1 = Field1?.Model == null ? "0" : ToInputValue(Field1.Model);
             }
             else if(string.IsNullOrEmpty(safeDefault) == false)
             {
@@ -266,16 +276,16 @@ layui.use(['slider'],function(){{
   var sliderIns = slider.render({{
     elem: '#'+_id
     {(SliderType == null ? string.Empty : $",type:'{SliderType.Value.ToString().ToLower()}'")}
-    {(Min == null ? string.Empty : $",min:{Min.Value}")}
-    {(Max == null ? string.Empty : $",max:{Max.Value}")}
+    {(Min == null ? string.Empty : $",min:{Min.Value.ToString(CultureInfo.InvariantCulture)}")}
+    {(Max == null ? string.Empty : $",max:{Max.Value.ToString(CultureInfo.InvariantCulture)}")}
     {(!range ? string.Empty : $",range:true")}
     {(scriptDefault == null ? string.Empty : $",value:{scriptDefault}")}
-    ,step:{Step}
+    ,step:{Step.ToString(CultureInfo.InvariantCulture)}
     {(!Disabled ? string.Empty : ",disabled:true")}
     ,showstep:{ShowStep.ToString().ToLower()}
     ,tips:{Tips.ToString().ToLower()}
     ,input:{Input.ToString().ToLower()}
-    {(SliderType == null || SliderType.Value == SliderTypeEnum.Default ? string.Empty : (SliderHeight == null ? string.Empty : $",height:{SliderHeight.Value}"))}
+    {(SliderType == null || SliderType.Value == SliderTypeEnum.Default ? string.Empty : (SliderHeight == null ? string.Empty : $",height:{SliderHeight.Value.ToString(CultureInfo.InvariantCulture)}"))}
     {(string.IsNullOrEmpty(Theme) ? string.Empty : $",theme: '{JsStringEncoder.Escape(Theme)}'")}
     ,change: function(value){{defaultFunc(value,sliderIns);
     {(string.IsNullOrEmpty(ChangeFunc) ? string.Empty : $"{ChangeFunc}(value,sliderIns)")}
