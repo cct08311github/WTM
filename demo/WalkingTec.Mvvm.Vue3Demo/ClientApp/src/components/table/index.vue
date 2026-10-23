@@ -350,7 +350,9 @@
                     element['children'] = datatemp.filter(x => x[parentKey] == element.ID);
 
                 });
-                state.data = datatemp.filter(x => !x[parentKey] || x[parentKey] == '')
+                // a row whose parent is not in the result (e.g. a search that only matches a child) is shown at the top level
+                const ids = new Set(datatemp.map(x => x.ID));
+                state.data = datatemp.filter(x => !x[parentKey] || x[parentKey] == '' || !ids.has(x[parentKey]))
                 props.config.total = 0;
                 props.config.loading = false;
             }

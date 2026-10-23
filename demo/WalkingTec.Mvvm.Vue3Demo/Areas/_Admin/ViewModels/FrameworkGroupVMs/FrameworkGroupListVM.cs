@@ -74,6 +74,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkGroupVMs
                      ParentId = a.group.ParentId,
                      GroupCode = a.group.GroupCode,
                      GroupName = a.group.GroupName,
+                     GroupRemark = a.group.GroupRemark,
                      Manager = a.group.Manager,
                      ManagerName = b.Name,
                  })
@@ -81,7 +82,12 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkGroupVMs
         }
         public override void AfterDoSearcher()
         {
-            var topdata = EntityList.MakeTree(x => x.GroupCode).FlatTree(x => x.GroupCode);
+            // MakeTree links every row to its parent but only returns the rows without a parent, so a matching row whose
+            // parent is not in the result (a search that only matches a child group) would be dropped. Rows whose parent
+            // is not in the result are listed at the top level instead.
+            var ids = EntityList.Select(x => x.ID).ToHashSet();
+            EntityList.MakeTree(x => x.GroupCode);
+            var topdata = EntityList.Where(x => x.ParentId == null || ids.Contains(x.ParentId.Value) == false).ToList().FlatTree(x => x.GroupCode);
             if (ControllerName.Contains("/api") == false)
             {
                 topdata.ForEach((x) => { int l = x.GetLevel(); for (int i = 0; i < l; i++) { x.GroupName = "&nbsp;&nbsp;&nbsp;&nbsp;" + x.GroupName; } });
