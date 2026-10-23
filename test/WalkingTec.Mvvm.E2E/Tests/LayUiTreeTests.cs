@@ -98,7 +98,6 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("#279: xm-select writes the node text into its label as HTML, so markup characters in the text of a tree node become elements.")]
         public async Task Tree_NodeText_IsShownAsText()
         {
             await Expect(TreeBox("Branch").Locator(".label-content")).ToHaveTextAsync(LabData.SpecialItem);
@@ -170,7 +169,6 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("#279: layui writes the title of a tree node as HTML, so markup characters in the text of a node of the tree container become elements.")]
         public async Task TreeContainer_NodeText_IsShownAsText()
         {
             await Expect(Node("leaf1b").Locator(".layui-tree-txt")).ToHaveTextAsync(LabData.SpecialItem);
