@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Primitives;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SixLabors.ImageSharp;
@@ -17,6 +18,7 @@ using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.Formats.Tiff;
 using SixLabors.ImageSharp.PixelFormats;
+using WalkingTec.Mvvm.Core.Models;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
 using WalkingTec.Mvvm.Mvc;
 using WalkingTec.Mvvm.Test.Mock;
@@ -43,7 +45,11 @@ namespace WalkingTec.Mvvm.Core.Test
             _oldHandlers = handlers.GetValue(null);
             _oldDefault = defaults.GetValue(null);
             var ctor = typeof(WtmDataBaseFileHandler).GetConstructor(new[] { typeof(WTMContext) });
-            handlers.SetValue(null, new Dictionary<string, ConstructorInfo> { { "database", ctor } });
+            handlers.SetValue(null, new Dictionary<string, ConstructorInfo>
+            {
+                { "database", ctor },
+                { "forward", typeof(ForwardOnlyHandler).GetConstructor(new[] { typeof(WTMContext) }) }
+            });
             defaults.SetValue(null, ctor);
         }
 
@@ -54,10 +60,28 @@ namespace WalkingTec.Mvvm.Core.Test
             typeof(WtmFileProvider).GetField("_defaultHandler", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, _oldDefault);
         }
 
+        /// <summary>A file handler whose streams cannot seek (like a remote store).</summary>
+        public sealed class ForwardOnlyHandler : WtmDataBaseFileHandler
+        {
+            public ForwardOnlyHandler(WTMContext wtm) : base(wtm) { }
+            public override Stream GetFileData(IWtmFile file) => new ForwardOnlyStream(((MemoryStream)base.GetFileData(file)).ToArray());
+        }
+
+        private sealed class ForwardOnlyStream : MemoryStream
+        {
+            public ForwardOnlyStream(byte[] data) : base(data) { }
+            public override bool CanSeek => false;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+            public override long Seek(long offset, SeekOrigin loc) => throw new NotSupportedException();
+        }
+
         private sealed class Harness
         {
             public _FrameworkController Controller;
             public WtmFileProvider Provider;
+            public CapturingLoggerFactory Logs;
+            public MemoryStream Body;
         }
 
         private Harness Make(Dictionary<string, string> limits = null, IEnumerable<IFormFile> files = null)
@@ -76,9 +100,12 @@ namespace WalkingTec.Mvvm.Core.Test
                     values["ImageUploadLimits:" + item.Key] = item.Value;
                 }
             }
+            var logs = new CapturingLoggerFactory();
+            services.AddSingleton<ILoggerFactory>(logs);
             services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(values).Build());
             var http = new DefaultHttpContext { RequestServices = services.BuildServiceProvider() };
-            http.Response.Body = new MemoryStream();
+            var body = new MemoryStream();
+            http.Response.Body = body;
             if (files != null)
             {
                 var form = new FormFileCollection();
@@ -90,7 +117,7 @@ namespace WalkingTec.Mvvm.Core.Test
                 http.Request.Form = new FormCollection(new Dictionary<string, StringValues>(), form);
             }
             var controller = new _FrameworkController(null) { Wtm = wtm, ControllerContext = new ControllerContext { HttpContext = http } };
-            return new Harness { Controller = controller, Provider = new WtmFileProvider(wtm) };
+            return new Harness { Controller = controller, Provider = new WtmFileProvider(wtm), Logs = logs, Body = body };
         }
 
         private static byte[] Make(int w, int h, string format)
@@ -109,7 +136,51 @@ namespace WalkingTec.Mvvm.Core.Test
             return ms.ToArray();
         }
 
-        private Guid AddFile(byte[] data, string ext = "png")
+        private static byte[] MakeAnimatedGif(int w, int h)
+        {
+            using var ms = new MemoryStream();
+            using (var img = new Image<Rgba32>(w, h, new Rgba32(255, 0, 0, 255)))
+            {
+                foreach (var color in new[] { new Rgba32(0, 0, 255, 255), new Rgba32(0, 255, 0, 255) })
+                {
+                    using var frame = new Image<Rgba32>(w, h, color);
+                    img.Frames.AddFrame(frame.Frames.RootFrame);
+                }
+                Assert.AreEqual(3, img.Frames.Count);
+                img.Save(ms, new GifEncoder());
+            }
+            return ms.ToArray();
+        }
+
+        // a 60x30 progressive JPEG (SOF2): red left half, blue right half; ImageSharp 3.1 cannot write one
+        private const string ProgressiveJpegBase64 =
+            "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wgARCAAeADwDASIAAhEBAxEB/8QAGAABAQEBAQAAAAAAAAAAAAAAAAIDBAb/xAAZAQACAwEAAAAAAAAAAAAAAAAABgMEBwX/2gAMAwEAAhADEAAAAfPjnOC4uaruGzNQDlCbqi4uaruGzNQD/8QAFxAAAwEAAAAAAAAAAAAAAAAAAiAxEP/aAAgBAQABBQLRrjXGuNT/xAAcEQAABgMAAAAAAAAAAAAAAAABAwQ0crEAECD/2gAIAQMBAT8Bxc2MiNcLmxkRrf8A/8QAGxEAAQQDAAAAAAAAAAAAAAAAAQIEM3EAECD/2gAIAQIBAT8BxvMmxw3mTY3/AP/EABQQAQAAAAAAAAAAAAAAAAAAAFD/2gAIAQEABj8CA//EABcQAQEBAQAAAAAAAAAAAAAAADEwECD/2gAIAQEAAT8h04HA4Hz/AP/aAAwDAQACAAMAAAAQ/q//AP6v/wD/xAAYEQACAwAAAAAAAAAAAAAAAABR8AAQIP/aAAgBAwEBPxCPSw9K/wD/xAAZEQACAwEAAAAAAAAAAAAAAAABUQAQ8CD/2gAIAQIBAT8QmoxxqMX/AP/EABcQAQEBAQAAAAAAAAAAAAAAALEwECD/2gAIAQEAAT8Q1RBRBRBRz//Z";
+
+        private static byte[] MakeProgressiveJpeg()
+        {
+            var data = Convert.FromBase64String(ProgressiveJpegBase64);
+            Assert.IsTrue(data.AsSpan().IndexOf(new byte[] { 0xFF, 0xC2 }) > 0, "the fixture is progressive");
+            return data;
+        }
+
+        /// <summary>A PNG whose header says another size than the data has (the checksum of the header is kept valid).</summary>
+        private static byte[] WithDeclaredSize(byte[] png, uint width, uint height)
+        {
+            var b = (byte[])png.Clone();
+            void Put(int at, uint v) { b[at] = (byte)(v >> 24); b[at + 1] = (byte)(v >> 16); b[at + 2] = (byte)(v >> 8); b[at + 3] = (byte)v; }
+            Put(16, width);
+            Put(20, height);
+            uint crc = 0xFFFFFFFF;
+            for (var i = 12; i < 29; i++)
+            {
+                crc ^= b[i];
+                for (var k = 0; k < 8; k++) crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1;
+            }
+            Put(29, ~crc);
+            return b;
+        }
+
+        private Guid AddFile(byte[] data, string ext = "png", string saveMode = "database")
         {
             using var dc = new LoginTestContext(_seed);
             var id = Guid.NewGuid();
@@ -120,7 +191,7 @@ namespace WalkingTec.Mvvm.Core.Test
                 FileExt = ext,
                 Length = data.Length,
                 UploadTime = new DateTime(2026, 1, 1),
-                SaveMode = "database",
+                SaveMode = saveMode,
                 FileData = data
             });
             dc.SaveChanges();
@@ -263,15 +334,172 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
-        public async Task GetFile_WithASize_TakesOnlyTheFirstFrameOfAnAnimation()
+        public async Task GetFile_WithASize_MakesOneFrameFromTheFirstFrameOfAnAnimatedGif()
         {
-            // an ordinary (single frame) gif still resizes
-            var id = AddFile(Make(40, 20, "gif"), "gif");
+            var animated = MakeAnimatedGif(40, 20);
+            var id = AddFile(animated, "gif");
+            var h = Make();
+
+            var bytes = Read(await h.Controller.GetFile(h.Provider, id.ToString(), false, null, 10, null));
+
+            using var thumbnail = Image.Load<Rgba32>(bytes);
+            Assert.AreEqual(1, thumbnail.Frames.Count);
+            Assert.AreEqual(10, thumbnail.Width);
+            var pixel = thumbnail[5, 2];
+            Assert.IsTrue(pixel.R > 200 && pixel.B < 60 && pixel.G < 60, "the first frame (red) is the thumbnail: " + pixel);
+        }
+
+        [TestMethod]
+        public async Task GetFile_WithASize_ResizesAProgressiveJpeg()
+        {
+            var id = AddFile(MakeProgressiveJpeg(), "jpg");
+            var h = Make();
+
+            var bytes = Read(await h.Controller.GetFile(h.Provider, id.ToString(), false, null, 20, null));
+
+            var info = Image.Identify(bytes);
+            Assert.AreEqual(20, info.Width);
+            Assert.AreEqual(10, info.Height);
+            using var thumbnail = Image.Load<Rgba32>(bytes);
+            Assert.IsTrue(thumbnail[3, 5].R > 150 && thumbnail[3, 5].B < 100, "left half is red");
+            Assert.IsTrue(thumbnail[16, 5].B > 150 && thumbnail[16, 5].R < 100, "right half is blue");
+        }
+
+        [TestMethod]
+        public async Task GetFile_WithASize_ServesTheFileAsItIs_WhenTheHeaderSaysMoreThanTheLimitsAllow()
+        {
+            var original = WithDeclaredSize(Make(40, 20, "png"), 50000, 50000);
+            var id = AddFile(original);
+            var h = Make();
+
+            var bytes = Read(await h.Controller.GetFile(h.Provider, id.ToString(), false, null, 10, null));
+
+            CollectionAssert.AreEqual(original, bytes);
+        }
+
+        [TestMethod]
+        public async Task GetFile_WithASize_DoesNotFail_WhenTheHeaderSaysMoreThanTheDataHas()
+        {
+            // a size inside the limits, but the data of such a picture is not there: the decoder may give up (the file is served as it is)
+            // or fill in what is missing (a thumbnail of the requested size); either way the request is answered
+            var original = WithDeclaredSize(Make(40, 20, "png"), 3000, 3000);
+            var id = AddFile(original);
+            var h = Make();
+
+            var bytes = Read(await h.Controller.GetFile(h.Provider, id.ToString(), false, null, 10, null));
+
+            if (bytes.Length == original.Length && bytes.SequenceEqual(original))
+            {
+                return;
+            }
+            Assert.AreEqual(10, Image.Identify(bytes).Width);
+        }
+
+        // ---- fallbacks: what is served, and how it is logged ------------------------------------------------------------------------------
+
+        [TestMethod]
+        public async Task GetFile_Fallback_IsLoggedAsInformation_NotAsAWarning()
+        {
+            var id = AddFile(Make(300, 300, "png"));
+            var h = Make(new Dictionary<string, string> { { "MaxPixels", "10000" } });
+
+            await h.Controller.GetFile(h.Provider, id.ToString(), false, null, 10, 10);
+
+            Assert.IsTrue(h.Logs.Entries.Any(x => x.Level == LogLevel.Information && x.Message.Contains("GetFile")), "logged");
+            Assert.IsFalse(h.Logs.Entries.Any(x => x.Level >= LogLevel.Warning), "a fallback is not a warning");
+        }
+
+        [TestMethod]
+        public void UploadImage_Rejection_IsLoggedAsAWarning_WithoutFileContent()
+        {
+            var h = Make(new Dictionary<string, string> { { "MaxPixels", "100" } }, new[] { Form("secret-name.png", Make(40, 20, "png")) });
+
+            h.Controller.UploadImage(h.Provider, width: 10);
+
+            var warning = h.Logs.Entries.Single(x => x.Level == LogLevel.Warning);
+            StringAssert.Contains(warning.Message, "UploadImage");
+            Assert.IsFalse(warning.Message.Contains("secret-name"));
+        }
+
+        [TestMethod]
+        public async Task GetFile_OfASvgWithASize_StaysAnAttachmentWithNosniff()
+        {
+            var svg = System.Text.Encoding.UTF8.GetBytes("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><script>1</script></svg>");
+            var id = AddFile(svg, "svg");
+            var h = Make();
+
+            var result = await h.Controller.GetFile(h.Provider, id.ToString(), true, null, 10, 10);
+
+            Assert.IsInstanceOfType(result, typeof(EmptyResult));
+            var response = h.Controller.Response;
+            Assert.AreEqual("nosniff", response.Headers["X-Content-Type-Options"].ToString());
+            StringAssert.StartsWith(response.Headers["Content-Disposition"].ToString(), "attachment;");
+            CollectionAssert.AreEqual(svg, h.Body.ToArray());
+        }
+
+        [TestMethod]
+        public async Task GetFile_OfAPictureWithASize_StaysInlineWithNosniff()
+        {
+            var id = AddFile(Make(40, 20, "png"));
+            var h = Make();
+
+            await h.Controller.GetFile(h.Provider, id.ToString(), true, null, 10, null);
+
+            var response = h.Controller.Response;
+            Assert.AreEqual("nosniff", response.Headers["X-Content-Type-Options"].ToString());
+            StringAssert.StartsWith(response.Headers["Content-Disposition"].ToString(), "inline;");
+            Assert.AreEqual(10, Image.Identify(h.Body.ToArray()).Width);
+        }
+
+        // ---- streams that cannot seek ----------------------------------------------------------------------------------------------------
+
+        [TestMethod]
+        public async Task GetFile_WithASize_ServesTheWholeFile_WhenTheStreamCannotSeekAndIsLargerThanMaxBytes()
+        {
+            var original = Make(300, 300, "png");
+            var id = AddFile(original, "png", "forward");
+            var h = Make(new Dictionary<string, string> { { "MaxBytes", "50" } });
+
+            var bytes = Read(await h.Controller.GetFile(h.Provider, id.ToString(), false, null, 10, 10));
+
+            CollectionAssert.AreEqual(original, bytes, "the part that was read to find out the size is not lost");
+        }
+
+        [TestMethod]
+        public async Task GetFile_WithASize_ServesTheWholeFile_WhenTheStreamCannotSeekAndIsNotAPicture()
+        {
+            var original = System.Text.Encoding.UTF8.GetBytes(new string('x', 5000));
+            var id = AddFile(original, "png", "forward");
+            var h = Make();
+
+            var bytes = Read(await h.Controller.GetFile(h.Provider, id.ToString(), false, null, 10, 10));
+
+            CollectionAssert.AreEqual(original, bytes);
+        }
+
+        [TestMethod]
+        public async Task GetFile_WithASize_ResizesAPicture_WhenTheStreamCannotSeek()
+        {
+            var id = AddFile(Make(40, 20, "png"), "png", "forward");
             var h = Make();
 
             var bytes = Read(await h.Controller.GetFile(h.Provider, id.ToString(), false, null, 10, null));
 
             Assert.AreEqual(10, Image.Identify(bytes).Width);
+        }
+
+        [TestMethod]
+        public async Task GetFile_Inline_ServesTheWholeFile_WhenTheStreamCannotSeek()
+        {
+            var original = Make(40, 20, "png");
+            var id = AddFile(original, "png", "forward");
+            var h = Make();
+
+            var result = await h.Controller.GetFile(h.Provider, id.ToString(), true, null, null, null);
+
+            Assert.IsInstanceOfType(result, typeof(EmptyResult));
+            CollectionAssert.AreEqual(original, h.Body.ToArray());
+            StringAssert.StartsWith(h.Controller.Response.Headers["Content-Disposition"].ToString(), "inline;");
         }
 
         // ---- UploadImage -------------------------------------------------------------------------------------------------------------

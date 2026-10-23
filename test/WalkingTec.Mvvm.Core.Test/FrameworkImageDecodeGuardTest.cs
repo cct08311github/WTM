@@ -1,8 +1,10 @@
 using System.Collections.Generic;
 using System.IO;
 using Microsoft.Extensions.Configuration;
+using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Gif;
 using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.Formats.Tiff;
 using SixLabors.ImageSharp.PixelFormats;
@@ -67,6 +69,76 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.AreEqual(3, limits.MaxFrames);
             Assert.AreEqual(500, limits.MaxResizeWidth);
             Assert.AreEqual(ImageDecodeLimits.DefaultMaxResizeHeight, limits.MaxResizeHeight);
+        }
+
+        [TestMethod]
+        [DataRow("MaxBytes")]
+        [DataRow("MaxWidth")]
+        [DataRow("MaxHeight")]
+        [DataRow("MaxPixels")]
+        [DataRow("MaxFrames")]
+        [DataRow("MaxResizeWidth")]
+        [DataRow("MaxResizeHeight")]
+        public void Limits_ZeroNegativeAndNonNumericValues_KeepTheDefault_ForEachKey(string key)
+        {
+            var defaults = new ImageDecodeLimits();
+            var property = typeof(ImageDecodeLimits).GetProperty(key);
+            foreach (var bad in new[] { "0", "-1", "-9999", "abc", "", " ", "1.5", "12abc", "99999999999999999999999" })
+            {
+                var limits = ImageDecodeLimits.FromConfiguration(Config(new Dictionary<string, string> { { "ImageUploadLimits:" + key, bad } }));
+                Assert.AreEqual(property.GetValue(defaults), property.GetValue(limits), key + " = '" + bad + "'");
+                foreach (var other in typeof(ImageDecodeLimits).GetProperties().Where(x => x.Name != key))
+                {
+                    Assert.AreEqual(other.GetValue(defaults), other.GetValue(limits), other.Name + " changed by " + key);
+                }
+            }
+            var good = ImageDecodeLimits.FromConfiguration(Config(new Dictionary<string, string> { { "ImageUploadLimits:" + key, "7" } }));
+            Assert.AreEqual(System.Convert.ChangeType(7, property.PropertyType), property.GetValue(good), key);
+        }
+
+        private static byte[] MakeAnimatedGif()
+        {
+            using var ms = new MemoryStream();
+            using (var img = new Image<Rgba32>(8, 8, new Rgba32(255, 0, 0, 255)))
+            {
+                foreach (var color in new[] { new Rgba32(0, 0, 255, 255), new Rgba32(0, 255, 0, 255) })
+                {
+                    using var frame = new Image<Rgba32>(8, 8, color);
+                    img.Frames.AddFrame(frame.Frames.RootFrame);
+                }
+                img.Save(ms, new GifEncoder());
+            }
+            return ms.ToArray();
+        }
+
+        [TestMethod]
+        public void MaxFrames_BoundsTheFramesThatAreDecoded()
+        {
+            var data = MakeAnimatedGif();
+            foreach (var (frames, expected) in new[] { (1, 1), (2, 2), (10, 3) })
+            {
+                using var source = new MemoryStream(data);
+                Assert.IsTrue(ImageDecodeGuard.TryLoad(source, new ImageDecodeLimits { MaxFrames = frames }, out var image, out var error), error);
+                using (image)
+                {
+                    Assert.AreEqual(expected, image.Frames.Count, "MaxFrames = " + frames);
+                }
+            }
+        }
+
+        [TestMethod]
+        public void Resize_OfAnAnimatedGif_MakesOneFrame()
+        {
+            using var source = new MemoryStream(MakeAnimatedGif());
+            var result = ImageDecodeGuard.Resize(source, 4, null, new ImageDecodeLimits());
+
+            Assert.IsNotNull(result.Resized);
+            using (result.Resized)
+            using (var thumbnail = Image.Load<Rgba32>(result.Resized))
+            {
+                Assert.AreEqual(1, thumbnail.Frames.Count);
+                Assert.IsTrue(thumbnail[1, 1].R > 200, "the first frame");
+            }
         }
 
         [TestMethod]

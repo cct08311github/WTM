@@ -603,14 +603,14 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         /// <summary>A picture that was not processed: logged with a fixed reason, never with file content.</summary>
-        private void LogImageRejected(string endpoint, string reason)
+        private void LogImageRejected(string endpoint, string reason, LogLevel level = LogLevel.Warning)
         {
             if (string.IsNullOrEmpty(reason))
             {
                 return;
             }
             HttpContext.RequestServices?.GetService<ILoggerFactory>()?.CreateLogger<_FrameworkController>()
-                .LogWarning("File endpoint {Endpoint} did not process a picture: {Reason} (user {User})", endpoint, reason, Wtm.LoginUserInfo?.ITCode);
+                .Log(level, "File endpoint {Endpoint} did not process a picture: {Reason} (user {User})", endpoint, reason, Wtm.LoginUserInfo?.ITCode);
         }
 
         [HttpPost]
@@ -696,7 +696,18 @@ namespace WalkingTec.Mvvm.Mvc
                             rv.Dispose();
                             rv = processed.Buffered;
                         }
-                        LogImageRejected("GetFile", processed.Error);
+                        else if (rv.CanSeek == false)
+                        {
+                            // too large to buffer, and a stream that cannot seek has been read in part: open the file again
+                            rv.Dispose();
+                            rv = fp.GetFile(id, true, dc)?.DataStream;
+                            if (rv == null)
+                            {
+                                return new EmptyResult();
+                            }
+                        }
+                        // not a failure of the request: the stored file is served
+                        LogImageRejected("GetFile", processed.Error, LogLevel.Information);
                     }
                 }
             }
@@ -718,7 +729,15 @@ namespace WalkingTec.Mvvm.Mvc
                 // a file a browser would run as part of the site (HTML, SVG, XML, script) is sent as an attachment, never shown inline
                 var head = new byte[512];
                 var read = rv.Read(head, 0, head.Length);
-                rv.Position = 0;
+                if (rv.CanSeek)
+                {
+                    rv.Position = 0;
+                }
+                else
+                {
+                    // a stream that cannot seek goes on after the bytes that were looked at
+                    rv = new SpaFileApi.PrefixedStream(head, read, rv);
+                }
                 var active = FileServing.IsActiveContent(ext, head.AsSpan(0, read));
                 if (ext == "mp4")
                 {

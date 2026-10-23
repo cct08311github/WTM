@@ -977,7 +977,9 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 
 **行為變更**：(a) 帶尺寸的 `UploadImage` 對超出限制或無法解析的檔案不再儲存；(b) 帶尺寸的 `GetFile` 對這些檔案輸出原檔；(c) `GetFile` 不帶尺寸時不再讀取圖片內容。
 
-**測試**：Core.Test 的 `FrameworkImageEndpointsTest`（`UploadImage`、`GetFile`：一般圖片、超出限制、格式不允許、非圖片、尺寸超出上限、設定）、`FrameworkImageDecodeGuardTest`（設定的讀取、`Resize`、不可 seek 的來源）、`ImageDecodeGuardTest`（demo 的型別）。
+**補充**：(a) `GetFile` 退回輸出原檔記錄在 Information（不是失敗），`UploadImage` 的拒絕記錄 Warning；(b) 帶尺寸的 TIFF 等不在允許列表的格式，以及只給高度（寬度）、按比例推算出的另一邊超過 `MaxResizeHeight`（`MaxResizeWidth`）的圖片，現在得到原檔而不是縮略圖；(c) `MaxFrames` 大於 1 時，影格數與每格像素數不會一起受限（`MaxPixels` 只限制單格），是否調大由維運決定；(d) 儲存串流不能 seek 且超過 `MaxBytes` 時，`GetFile` 重新開啟檔案並輸出完整內容；`stream=true` 時儲存串流不能 seek 也能輸出。
+
+**測試**：Core.Test 的 `FrameworkImageEndpointsTest`（`UploadImage`、`GetFile`：一般圖片、超出限制、格式不允許、非圖片、尺寸超出上限、設定、多影格 GIF、漸進式 JPEG、檔頭與資料不符、不可 seek 的串流、SVG 的標頭、記錄層級）、`FrameworkImageDecodeGuardTest`（每個設定鍵的預設值、`Resize`、多影格、不可 seek 的來源）、`ImageDecodeGuardTest`（demo 的型別）。
 
 ## 31. 回應不輸出檔案附件的儲存細節（安全強化）
 

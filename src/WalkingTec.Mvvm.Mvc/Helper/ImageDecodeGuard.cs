@@ -78,7 +78,7 @@ namespace WalkingTec.Mvvm.Mvc.Imaging
     {
         // Only the allowed formats are registered, so that Identify/Load never even parse TIFF, TGA, PBM, QOI...
         // (the default Configuration registers all of them).
-        // Note: allowed decoders can carry ICC profiles; never read IccProfile.Entries on untrusted images.
+        // Embedded colour profiles of uploaded images are not interpreted here.
         private static readonly Configuration RestrictedConfiguration = new Configuration(
             new JpegConfigurationModule(), new PngConfigurationModule(), new GifConfigurationModule(),
             new BmpConfigurationModule(), new WebpConfigurationModule());
