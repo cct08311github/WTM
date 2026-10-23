@@ -118,6 +118,15 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs
         [Display(Name = "Remote Branch")]
         public string RemoteBranch { get; set; }
 
+        [Display(Name = "Linked Branch")]
+        public string LinkedBranch { get; set; }
+
+        [Display(Name = "Tree City")]
+        public string TreeCity { get; set; }
+
+        /// <summary>The node the tree container with the special ids shows as selected (not a posted field).</summary>
+        public string SpecialNodeId { get; set; }
+
         // ---- selector and files
         [Display(Name = "Gadget")]
         public Guid? GadgetId { get; set; }
@@ -146,6 +155,7 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs
         public List<ComboSelectListItem> RegionItems { get; set; }
         public List<TreeSelectListItem> TreeItems { get; set; }
         public List<TreeSelectListItem> PageTreeItems { get; set; }
+        public List<TreeSelectListItem> SpecialTreeItems { get; set; }
         public List<string> PlainItems { get; set; }
         public GadgetListVM AllGadgets { get; set; }
 
@@ -170,10 +180,12 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs
             RegionItems = new List<ComboSelectListItem>
             {
                 new ComboSelectListItem { Value = "north", Text = "North" },
-                new ComboSelectListItem { Value = "south", Text = "South" }
+                new ComboSelectListItem { Value = "south", Text = "South" },
+                new ComboSelectListItem { Value = LabText.SpecialId, Text = "Special region" }
             };
             TreeItems = LabText.Tree();
             PageTreeItems = LabText.TreeWithPages();
+            SpecialTreeItems = LabText.TreeWithSpecialIds();
             PlainItems = new List<string> { "alpha", "beta", "gamma" };
             AllGadgets = new GadgetListVM();
             AllItems = new LabItemListVM();

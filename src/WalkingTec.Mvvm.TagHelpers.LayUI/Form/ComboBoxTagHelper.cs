@@ -324,7 +324,7 @@ var {Id} = xmSelect.render({{
                     u += ""?t="" + new Date().getTime();
                 }}
                 for (var i = 0; i < data.arr.length; i++) {{
-                    u += ""&id="" + data.arr[i].value;
+                    u += ""&id="" + encodeURIComponent(data.arr[i].value);
                 }}
                 ff.ChainChange(u, $('#{Id}')[0])
         }}" : FormatFuncName(ChangeFunc))}
@@ -339,7 +339,7 @@ var {Id} = xmSelect.render({{
                 }}
                 var {Id}data = {JsonSerializer.Serialize(selectVal)};
                 for (var i = 0; i < {Id}data.length; i++) {{
-                    {Id}u += ""&id="" + {Id}data[i];
+                    {Id}u += ""&id="" + encodeURIComponent({Id}data[i]);
                 }};
                 setTimeout(function(){{
                     ff.ChainChange({Id}u, $('#{Id}')[0], true);

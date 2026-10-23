@@ -1339,6 +1339,32 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
     },
 
 
+    // wt:treecontainer: layui writes the id of a tree node into data-id="..." without encoding it, so the framework hands layui the id
+    // encoded for an attribute (the browser reads the original id back from the attribute). A click gives the node data with that
+    // encoded id: this returns the same data with the original id (read from the element), so the handlers and ClickFunc of the page
+    // see the id of the node. The data of layui is not modified.
+    treeNodeData: function (data) {
+        if (data && data.elem != undefined && data.data) {
+            var id = data.elem.attr('data-id');
+            if (id !== undefined) {
+                var rv = $.extend({}, data);
+                rv.data = $.extend({}, data.data);
+                rv.data.id = id;
+                return rv;
+            }
+        }
+        return data;
+    },
+
+    // wt:treecontainer: the node element (inside root) of node data whose id is the one handed to layui (encoded for an attribute).
+    // The ids are compared, not put into a selector, so an id with quotes or brackets cannot change what is selected.
+    findTreeNode: function (root, data) {
+        var id = String(data.data.id);
+        return root.find('.layui-tree-set').filter(function () {
+            return ff.EncodeHtml($(this).attr('data-id')) === id;
+        });
+    },
+
     changeComboIcon: function (data) {
         for (var i = 0; i < data.elem.length; i++) {
             if (data.elem[i].value === data.value) {
@@ -1352,7 +1378,7 @@ DownloadExcelOrPdf: function (url, formId, defaultcondition, ids) {
                     $(comboInput).removeAttr("style");
                 }
                 if (iconFont !== undefined && iconFont !== null) {
-                    icon = $('<i class="_wtm-combo-icon ' + iconFont + '"></i>');
+                    icon = $('<i class="_wtm-combo-icon ' + ff.EncodeHtml(iconFont) + '"></i>');
 
                     comboTitle.prepend(icon);
                     $(comboInput).css({ "padding-left": "30px" });

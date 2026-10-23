@@ -293,6 +293,34 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
+        public async Task ChangeComboIcon_AnIconValueWithQuotes_StaysInTheClassAttribute()
+        {
+            await Lab.OpenAsync("Layout");
+            await Page.EvaluateAsync(@"async () => {
+                await new Promise(resolve => layui.use('form', resolve));
+                const host = document.createElement('div');
+                host.id = 'e2e-icon-host';
+                host.innerHTML = '<form class=""layui-form"" style=""width:300px;padding:10px""><select id=""e2e-icon-select"" lay-filter=""e2eIcon"">' +
+                    '<option value="""">choose</option>' +
+                    '<option value=""odd"" icon=""layui-icon-star&quot; data-e2e=&quot;1"">Odd</option></select></form>';
+                document.querySelector('#LAY_app_body .layadmin-tabsbody-item.layui-show').appendChild(host);
+                layui.form.on('select(e2eIcon)', ff.changeComboIcon);
+                layui.form.render('select');
+            }");
+            var combo = Body.Locator("#e2e-icon-host .layui-form-select");
+            var title = combo.Locator(".layui-select-title");
+
+            await title.ClickAsync();
+            await combo.Locator("dd[lay-value=odd]").ClickAsync();
+
+            // one icon element whose class holds the whole text of the attribute, and no attribute made from it
+            var icon = title.Locator("._wtm-combo-icon");
+            await Expect(icon).ToHaveCountAsync(1);
+            await Expect(icon).ToHaveAttributeAsync("class", "_wtm-combo-icon layui-icon-star\" data-e2e=\"1");
+            await Expect(icon).Not.ToHaveAttributeAsync("data-e2e", new Regex(".*"));
+        }
+
+        [TestMethod]
         public async Task Refreshcombobox_PassesTheSettingsAndTheItemsOnToFormSelects()
         {
             await Lab.OpenAsync("Layout");

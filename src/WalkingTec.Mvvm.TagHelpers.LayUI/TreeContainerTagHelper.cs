@@ -128,12 +128,13 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 List<LayuiTreeItem2> treeitems = GetLayuiTree(mm);
                 var onclick = $@"
                 ,click: function(data){{
+                    data = ff.treeNodeData(data);
                     var ele = null;
                     if(data.elem != undefined){{
                         ele = data.elem.find('.layui-tree-main:first');
                     }}
                     else{{
-                        ele = $('#div{Id}').find(""div[data-id='""+data.data.id+""']"").find('.layui-tree-main:first');
+                        ele = ff.findTreeNode($('#div{Id}'), data).find('.layui-tree-main:first');
                     }}
                     if(last{Id} != null){{
                         last{Id}.css('background-color','');
@@ -155,7 +156,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                         ele = data.elem.find('.layui-tree-main:first');
                     }}
                     else{{
-                        ele = $('#div{Id}').find(""div[data-id='""+data.data.id+""']"").find('.layui-tree-main:first');
+                        ele = ff.findTreeNode($('#div{Id}'), data).find('.layui-tree-main:first');
                     }}
                     if(last{Id} != null){{
                         last{Id}.css('background-color','');
@@ -184,7 +185,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 var top{Id}selected = {{}};
 {
     (selecteditem==null?"": @$"
-    top{Id}selected.{idfieldname} = '{selecteditem.Id}';
+    top{Id}selected.{idfieldname} = '{JsStringEncoder.Escape(IdField?.Model?.ToString())}';
     top{Id}selected.{levelfieldname} = {selecteditem.Level};
 ")
 }
@@ -198,7 +199,7 @@ layui.use(['tree'],function(){{
   {(selecteditem == null ? string.Empty : $@"treecontainer{Id}.config.setSelected({{
      data: {JsonSerializer.Serialize(selecteditem)}
     }});")}
-  {(string.IsNullOrEmpty(AutoLoadUrl) || selecteditem != null ? string.Empty : $"ff.LoadPage1('{AutoLoadUrl}','div_{Id}');")}
+  {(string.IsNullOrEmpty(AutoLoadUrl) || selecteditem != null ? string.Empty : $"ff.LoadPage1('{JsStringEncoder.Escape(AutoLoadUrl)}','div_{Id}');")}
 }})
 </script>
 ";
@@ -218,7 +219,9 @@ layui.use(['tree'],function(){{
             {
                 var news = new LayuiTreeItem2
                 {
-                    Id = s.Value.ToString(),
+                    // layui writes the id of a node into data-id="..." without encoding it: it gets the id encoded for an attribute
+                    // (the browser reads the original back, see ff.treeNodeData)
+                    Id = HtmlAttributeEncoder.Encode(s.Value.ToString()),
                     // layui writes the title of a node as HTML
                     Title = s.Text == null ? null : HtmlAttributeEncoder.EncodeOnce(s.Text),
                     Url = s.Url,
@@ -242,9 +245,12 @@ layui.use(['tree'],function(){{
 
         private LayuiTreeItem2 GetSelectedItem(List<LayuiTreeItem2> tree)
         {
+            var selectedId = IdField?.Model?.ToString();
+            // the ids of the nodes are encoded for an attribute (see GetLayuiTree)
+            var encodedSelectedId = selectedId == null ? null : HtmlAttributeEncoder.Encode(selectedId);
             foreach (var item in tree)
             {
-                if (item.Id == IdField?.Model?.ToString())
+                if (item.Id == encodedSelectedId)
                 {
                     return item;
                 }

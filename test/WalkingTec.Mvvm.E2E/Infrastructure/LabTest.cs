@@ -20,6 +20,9 @@ namespace WalkingTec.Mvvm.E2E.Infrastructure
         /// <summary>The same idea for the text of list items; the matching element id is "e2e-probe-item".</summary>
         public const string SpecialItem = "A&B <i id=\"e2e-probe-item\">x</i> \"q\" 'q'";
 
+        /// <summary>A value that cuts an address and holds quotes and an element-like fragment (id "e2e-probe-id"), see LabText.SpecialId in the host.</summary>
+        public const string SpecialId = "i&d#1 +%'\"]\\<i id=\"e2e-probe-id\">x</i>";
+
         /// <summary>Another value with the characters, used for typed input.</summary>
         public const string Typed = "Typed & \"two\" 'three' <b id=\"e2e-probe-typed\">four</b> \\ 100%";
     }
