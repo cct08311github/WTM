@@ -17,16 +17,33 @@ namespace WalkingTec.Mvvm.E2E.Tests
         [TestInitialize]
         public async Task OpenPage()
         {
-            // the chart tag helper uses the global echarts, which the host loads as a layuiadmin extension after the home page is up
-            await Page.GotoAsync("/");
-            await Expect(Page.Locator("#frontpage")).ToBeVisibleAsync();
+            await Lab.Frame.GotoAsync();
+            // the chart tag helper's script calls echarts.init when the page is inserted, and the host loads echarts (a layuiadmin
+            // extension) after the frame is up, so the page must be opened only once echarts is there (#337)
             await ExpectScriptAsync("() => typeof window.echarts !== 'undefined'");
-            await Lab.OpenAsync("Charts");
-            foreach (var id in new[] { "labchartbar", "labchartline", "labchartpie", "labchartscatter" })
+            await Lab.Frame.OpenMenuPageAsync("Lab", "Lab Charts");
+            await Expect(Body.Locator("#lab-charts")).ToBeAttachedAsync();
+            foreach (var id in ChartIds)
             {
-                // Lab.OpenAsync loads the home frame again, so window.echarts can be undefined again here: return false (keep polling) instead of throwing, which would fail WaitForFunction at once (#307)
-                await ExpectScriptAsync($"() => {{ if (!window.echarts) return false; const el = document.getElementById('{id}'); const c = el ? window.echarts.getInstanceByDom(el) : null; if (!c) return false; const series = c.getOption().series || []; return series.length > 0 && series[0].type !== undefined; }}");
+                try
+                {
+                    // keep polling (instead of throwing, which would fail WaitForFunction at once) while echarts or the chart is missing
+                    await ExpectScriptAsync($"() => {{ if (!window.echarts) return false; const el = document.getElementById('{id}'); const c = el ? window.echarts.getInstanceByDom(el) : null; if (!c) return false; const series = c.getOption().series || []; return series.length > 0 && series[0].type !== undefined; }}");
+                }
+                catch (System.TimeoutException ex)
+                {
+                    throw new System.TimeoutException($"Chart '{id}' was not created. Page state: {await ChartStateAsync()}. Page errors are in browser-console.log of the failure artifacts.", ex);
+                }
             }
+        }
+
+        private static readonly string[] ChartIds = { "labchartbar", "labchartline", "labchartpie", "labchartscatter" };
+
+        /// <summary>Compact page state for a failed chart wait: whether echarts is defined and, per chart, whether its element and instance exist.</summary>
+        private async Task<string> ChartStateAsync()
+        {
+            var ids = JsonSerializer.Serialize(ChartIds);
+            return await Page.EvaluateAsync<string>($"() => JSON.stringify({{ echarts: typeof window.echarts, charts: {ids}.map(id => {{ const el = document.getElementById(id); return {{ id, element: !!el, instance: !!(el && window.echarts && window.echarts.getInstanceByDom(el)) }}; }}) }})");
         }
 
         private async Task<JsonElement> OptionAsync(string id)
