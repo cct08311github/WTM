@@ -6,6 +6,8 @@
   <wt:tree field="Branch" items="TreeItems" enable-search="true" />
   <wt:tree field="Branches" items="TreeItems" />
   <wt:tree field="RemoteBranch" item-url="/Lab/RemoteTree" />
+  <wt:tree field="LinkedBranch" items="SpecialTreeItems" trigger-url="/Lab/Cities" link-field="TreeCity" />
+  <wt:combobox field="TreeCity" />
   <wt:row align="AlignEnum.Right">
     <wt:submitbutton text="Save" />
   </wt:row>
@@ -18,8 +20,17 @@
 <div style="height:200px;display:flex;flex-direction:column" id="lab-pagetree-host">
 <wt:treecontainer items="PageTreeItems" auto-load="true" />
 </div>
+<div style="height:200px;display:flex;flex-direction:column" id="lab-idtree-host">
+<wt:treecontainer id="idtree" items="SpecialTreeItems" click-func="labIdTreeClicked" id-field="SpecialNodeId">
+  <div id="lab-idtree-content">content area</div>
+</wt:treecontainer>
+</div>
 </div>
 <script>
+  window.labIdTreeClickedIds = [];
+  function labIdTreeClicked(data) {
+    window.labIdTreeClickedIds.push(data.data.id);
+  }
   window.labTreeClickedIds = [];
   function labTreeClicked(data) {
     window.labTreeClickedIds.push(data.data.id);

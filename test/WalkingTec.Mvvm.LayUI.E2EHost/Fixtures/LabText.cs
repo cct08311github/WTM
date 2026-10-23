@@ -16,6 +16,12 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.Fixtures
         /// <summary>Same idea for item lists (check boxes, radios, combo boxes, transfer, tree).</summary>
         public const string SpecialItem = "A&B <i id=\"e2e-probe-item\">x</i> \"q\" 'q'";
 
+        /// <summary>
+        /// A value (an item value, a tree node id) with the characters that cut an address (&amp; # + % space), both quote kinds, a bracket, a
+        /// backslash and an element-like fragment (id "e2e-probe-id"). The server must receive it whole and the page must not build anything from it.
+        /// </summary>
+        public const string SpecialId = "i&d#1 +%'\"]\\<i id=\"e2e-probe-id\">x</i>";
+
         public const string Plain = "plain";
 
         public static List<ComboSelectListItem> Items()
@@ -47,6 +53,23 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.Fixtures
                 new TreeSelectListItem { Value = "pa", Id = "pa", Text = "Pane A", Url = "/Lab/Pane?id=a" },
                 new TreeSelectListItem { Value = "pb", Id = "pb", Text = "Pane B", Url = "/Lab/Pane?id=b" },
                 new TreeSelectListItem { Value = "pc", Id = "pc", Text = "Broken pane", Url = "/Lab/Fail" }
+            };
+        }
+
+        /// <summary>Tree whose leaf has <see cref="SpecialId"/> as its id and value.</summary>
+        public static List<TreeSelectListItem> TreeWithSpecialIds()
+        {
+            return new List<TreeSelectListItem>
+            {
+                new TreeSelectListItem
+                {
+                    Value = "rootS", Id = "rootS", Text = "Special root", Expended = true,
+                    Children = new List<TreeSelectListItem>
+                    {
+                        new TreeSelectListItem { Value = "plainS", Id = "plainS", Text = "Plain node" },
+                        new TreeSelectListItem { Value = SpecialId, Id = SpecialId, Text = "Special node" }
+                    }
+                }
             };
         }
 

@@ -464,6 +464,23 @@ checkbox／radio 的選項標題、combobox／tree（xm-select）的選項與節
 - **影響範圍**：`WalkingTec.Mvvm.Mvc`（`framework_layui.js`，已快取舊版的瀏覽器需要重新載入）與 `WalkingTec.Mvvm.TagHelpers.LayUI`（LayUI 受保護路徑，第 3 節）；自行用 JavaScript 組選項或呼叫 `layui.transfer`／xm-select 的頁面，請對顯示文字使用 `ff.EncodeHtmlOnce`，對 transfer 的資料使用 `ff.encodeTransferItems`
 - **測試**：Core.Test 的 `DisplayTextEncodingTests`、`OptionEncodingTests`（`option-encoding.test.js`）；E2E 的 `LayUiChoiceTests`、`LayUiTreeTests`、`LayUiLayoutTests`、`LayUiEditableGridTests`（#279 的 `[Ignore]` 已移除）
 
+### 連動值與樹節點 id 的編碼（#326）
+
+延續 #279、#262：值依**寫入的位置**編碼，一般值（整數、GUID、一般文字）的輸出與修改前逐字相同，表單送出的值不變。
+
+| 位置 | 值 | 編碼 | 一般值的輸出 |
+|---|---|---|---|
+| `wt:treecontainer` 的 script 字串 | 選取節點的 id（`IdField` 的值）、`AutoLoadUrl` | `JsStringEncoder.Escape` | 逐字相同（網址含 `&` 時寫成 `\u0026`，語意相同） |
+| `wt:treecontainer` 的節點資料 | 節點 `id` | `HtmlAttributeEncoder.Encode`：layui 把 id 原樣寫進 `data-id="…"`，瀏覽器解析屬性後讀回原 id | 逐字相同 |
+| `wt:treecontainer` 點擊、預選時找節點 | 以前串成 `div[data-id='…']` 選擇器 | 改為比對 `data-id`（`ff.findTreeNode`，不組選擇器）；點擊時 `ff.treeNodeData` 從元素讀回原 id，`ClickFunc` 與頁面腳本收到的 `data.data.id` 仍是原 id | 行為相同 |
+| `wt:combobox`、`wt:tree` 連動（含預選值）、`wt:textbox` 自動完成的觸發網址 | 選中的值 | `encodeURIComponent`（`&id=` 參數、路徑段） | 同值（只有空白、非 ASCII 等會被百分號編碼，伺服器照常解碼） |
+| `ff.changeComboIcon` | 選項的 `icon` 屬性 | `ff.EncodeHtml`（`<i class="…">`） | 逐字相同 |
+| `wt:transfer` | `LeftTitle`、`RightTitle`、無資料與搜尋無結果的提示文字 | layui 以 HTML 寫入，與 card、tab、fieldset、panel 的標題一致：`UIOptions:EncodeHtmlContent=true` 時 HTML 編碼，預設（false）原樣輸出；再依 script 字串編碼 | 兩種設定都逐字相同 |
+
+- **下游提醒**：自行讀取 treecontainer 的 `layui.tree` 配置（`config.data`）中 `id` 的腳本，遇到含 `& < > " '` 的 id 會讀到屬性編碼後的文字；點擊回調的 `data.data.id` 不受影響。自行串接網址的頁面，請對值使用 `encodeURIComponent`
+- **未修改**：layui 與 xm-select 沒有升級也沒有修改；`wt:grid` 動作按鈕串接 `&id=` 的位置不在本節範圍
+- **測試**：Core.Test 的 `LinkedValueEncodingTests`、`LinkageEncodingTests`（`linkage-encoding.test.js`）；E2E 的 `LayUiChoiceTests`、`LayUiTreeTests`、`LayUiFrameworkScriptCoverageTests`（含特殊字元的 id、值與 icon）；`option-encoding.test.js`、`selector-encoding.test.js` 的測試字串改為中性的標記字元組合
+
 ## 21. E2E 測試（#270）
 
 fork 承諾 LayUI 持續可用（第 3 節），所以用真的瀏覽器測 LayUI 前端。兩個專案都只供測試，`IsPackable=false`，不會被打包或發佈，也不影響下游。

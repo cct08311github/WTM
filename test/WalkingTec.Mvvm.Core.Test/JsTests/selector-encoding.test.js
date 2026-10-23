@@ -10,7 +10,7 @@ const assert = require('assert');
 const source = fs.readFileSync(process.argv[2], 'utf8');
 const cshtml = fs.readFileSync(process.argv[3], 'utf8');
 
-const SPECIAL = `a&b<c>"d'e</script><img src=x onerror=1>`;
+const SPECIAL = `a&b<c>"d'e</b><i id="m1">x</i>`;
 
 // ---- framework_layui.js in a sandbox with a tiny jQuery stand-in: every markup string handed to $() is recorded ----------------
 function createEnv() {
@@ -64,7 +64,7 @@ function test(name, fn) {
 }
 
 // ---- the addresses written into attributes ---------------------------------------------------------------------------------------------
-const HOSTILE_URL = `/x?a=1&b="><script>1</script>'`;
+const HOSTILE_URL = `/x?a=1&b="><b>1</b>'`;
 function attributeOf(markup, name) {
     const m = new RegExp(name + '=(["\'])(.*?)\\1', 's').exec(markup);
     assert.ok(m, 'no ' + name + ' attribute in ' + markup);
@@ -95,7 +95,7 @@ test('LoadPage1: an ordinary external address gives the markup it always gave, a
     e.ff.LoadPage1('https://example.com/a/b', 'w');
     assert.deepStrictEqual(e.htmlSet, ["<iframe frameborder='no' border='0' height='100%' src='https://example.com/a/b'></iframe>"]);
     const h = createEnv();
-    h.ff.LoadPage1("https://example.com/a'onload='x\"><script>1</script>", 'w');
+    h.ff.LoadPage1("https://example.com/a'data-a='x\"><b>1</b>", 'w');
     const m = /^<iframe frameborder='no' border='0' height='100%' src='([^']*)'><\/iframe>$/.exec(h.htmlSet[0]);
     assert.ok(m, 'the address ended its attribute: ' + h.htmlSet[0]);
     assert.ok(!/[<>"]/.test(m[1]), 'raw special characters in the src: ' + h.htmlSet[0]);

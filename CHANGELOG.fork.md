@@ -10,6 +10,10 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
+## 未发布
+
+* **修改（安全，涉及 LayUI 受保护路径）：**   `wt:treecontainer`、`wt:combobox`／`wt:tree` 连动等处写进页面的值，改为依写入位置编码（#326，做法同 #279、#262）：`wt:treecontainer` 的选取节点 id 与 `AutoLoadUrl` 写入脚本字符串时以 `JsStringEncoder` 编码；节点 id 以属性编码交给 layui（layui 把它原样写入 `data-id`），点击与预选时改为比对 `data-id` 找节点（新增 `ff.treeNodeData`、`ff.findTreeNode`），不再用字符串串接的 `div[data-id='…']` 选择器；`ClickFunc` 与页面脚本收到的 `data.data.id` 仍是节点的原 id（由框架从元素读回）。`wt:combobox`、`wt:tree` 连动（含预选值）以及 `wt:textbox` 自动完成的触发地址，把选中的值接到网址时改用 `encodeURIComponent`，值含 `& # + %` 或空格时不再被截断；`ff.changeComboIcon` 把选项的 `icon` 值写进 `<i class>` 时以 `ff.EncodeHtml` 编码；`wt:transfer` 的 `LeftTitle`／`RightTitle` 与无数据提示文字（layui 以 HTML 写入）与 card、tab、fieldset、panel 的标题一致，`UIOptions:EncodeHtmlContent=true` 时编码，默认值下输出不变。不含 `& < > " '`、反斜线与换行的一般值，页面输出与之前逐字相同（`id` 为整数、GUID 或一般文字的页面不受影响），表单送出的值不变。下游影响：自行读取 `treecontainer` 的 `layui.tree` 配置资料（`config.data`）中 `id` 的脚本，遇到含上述字符的 id 时读到的是属性编码后的文字（点击回调的 `data.data.id` 不受影响）；连动网址中的值现在是百分号编码（服务器照常解码），`wt:textbox` 自动完成触发地址的路径段中，值含 `/` 时变为 `%2F`。layui 与 xm-select 没有升级。回滚：退回上一个 fork 版本。详见 FORK.md 第 20 节
+
 ## 10.0.0.13(2026-10-23)
 
 * **修复：**   `BaseCRUDVM.DoDelete()`／`DoDeleteAsync()` 对 `PersistPoco` 设置 `Entity.IsValid` 时，若请求表单已带该字段（例如删除对话框含绑定 `Entity.IsValid` 的 disabled 控件，`ff.GetFormData` 会一并收集）会因重复 key 抛出 `ArgumentException`，请求得到 400；现在改为直接赋值，删除照常完成并将 `IsValid` 设为 false。没有表单字段时行为不变，`ff.GetFormData` 与 disabled 字段的处理不变，LayUI 文件未修改。回滚：退回上一个 fork 版本。(#332)

@@ -273,7 +273,7 @@ layui.use(['autocomplete'],function(){{
     onselect: function (data) {{
       $('#{item.Id}').val(data.Value);
      {FormatFuncName(item.ChangeFunc)};
-     ff.ChainChange('{JsStringEncoder.Escape(item.TriggerUrl)}/'+data.Value, data.elem);
+     ff.ChainChange('{JsStringEncoder.Escape(item.TriggerUrl)}/'+encodeURIComponent(data.Value), data.elem);
     }}
   }});
 }})

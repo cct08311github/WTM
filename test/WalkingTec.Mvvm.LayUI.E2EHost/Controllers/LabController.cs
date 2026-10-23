@@ -187,6 +187,12 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.Controllers
             {
                 rv.Add(new ComboSelectListItem { Value = "s1", Text = "South city" });
             }
+            // answered only when the value arrives whole (a value with & or # is cut when it is not encoded in the address)
+            // (the model binder HTML-encodes posted text, so the value is decoded once to compare it with the one the page holds)
+            if (id != null && id.Any(x => System.Net.WebUtility.HtmlDecode(x) == LabText.SpecialId))
+            {
+                rv.Add(new ComboSelectListItem { Value = "sp1", Text = "Special city" });
+            }
             return JsonMore(rv);
         }
 
@@ -377,6 +383,7 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.Controllers
             vm.Picked = new List<string> { "p2" };
             vm.Branch = "leaf1b";
             vm.Branches = new List<string> { "leaf1a" };
+            vm.SpecialNodeId = LabText.SpecialId;
         }
     }
 }
