@@ -219,7 +219,8 @@ layui.use(['tree'],function(){{
                 var news = new LayuiTreeItem2
                 {
                     Id = s.Value.ToString(),
-                    Title = s.Text,
+                    // layui writes the title of a node as HTML
+                    Title = s.Text == null ? null : HtmlAttributeEncoder.EncodeOnce(s.Text),
                     Url = s.Url,
                     Expand = s.Expended,
                     Level = level,
