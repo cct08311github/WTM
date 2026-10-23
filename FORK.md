@@ -205,6 +205,7 @@ git merge --no-ff upstream/dotnet10
 | `src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs`、`Filters/PrivilegeFilter.cs`（註解）、`Helper/FrameworkServiceExtension.cs` | `Upload*`、`GetFile`、`ViewFile`、`GetFileName` 依第 28 節檢查並決定連線；`IFileAccessPolicy` 預設註冊與啟動記錄 | 第 28 節 |
 | `src/WalkingTec.Mvvm.TagHelpers.LayUI/Common/LayuiUIService.cs`、`ImageTagHelper.cs`、`Abstraction/BaseElementTag.cs`、`Form/{Upload,MultiUpload,Display,RichText}*.cs` | 檔案連結與上傳連結帶參考 | 第 28 節 |
 | `test/WalkingTec.Mvvm.Test.Mock/MockWtmContext.cs` | 選用參數 `loggerFactory`、`configs`、`fileAccessPolicy`；預設空的 `Request.Query` | 第 28 節 |
+| 圖片解碼限制 | `src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs`（`UploadImage`、`GetFile`）、`Helper/ImageDecodeGuard.cs`（新增）、`demo/WalkingTec.Mvvm.Vue3Demo/Areas/_Admin/ImageDecodeGuard.cs`、`Controllers/FileApiController.cs`（`ResizeImage`） | 縮略圖在解碼前先檢查格式、大小與尺寸，上限由 `ImageUploadLimits` 設定；規則移到框架，demo 保留原有的型別與方法 | 第 30 節 |
 | Dependabot 的依賴升級 | 各 csproj／`package-lock.json` 的版本號 | 見各 `dependencies` PR |
 
 fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder,GenericEndpointGuard}.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/GenericEndpointOptions.cs`、`docs/security/generic-endpoint-authz.md`、`test/WalkingTec.Mvvm.LayUI.E2EHost/Controllers/ReportController.cs`（授權測試用頁面）、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270、#272）、`test/WalkingTec.Mvvm.E2E.Instrumentation/`（E2E 的路由覆蓋與 hosting startup，#272）。
@@ -956,3 +957,23 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 
 
 **測試**：Core.Test 的 `FileEndpointGuardTest`、`FileEndpointContextTest`（刪除、capability、頭像、租戶路由、URL）、`FileRefsTest`、`SpaFileApiTest`（模式 × `IsFilePublic` × 登入與否、`GetFileInfo`、標頭、上傳、標記、連線、刪除、啟動檢查）；Admin.Test 的 `FileApiControllerTest`、`AccountRegTest`；E2E 的 `Vue3FileApiTests`、`Vue3FileUiTests`（`E2E_FILE_ENDPOINTS_MODE=Enforce` 以 `Enforce` 跑整個 Vue3Demo）與權限矩陣的 `vue3demo` `file-enforce` 設定。
+
+## 30. 圖片解碼的限制（安全強化）
+
+**範圍**：`/_Framework/UploadImage`（帶 `width`／`height`）與 `/_Framework/GetFile`（帶 `width`／`height`）產生縮略圖的路徑。demo 的 `/api/_file/*` 本來就有同樣的檢查（`ImageDecodeGuard`），現在規則放在框架（`WalkingTec.Mvvm.Mvc.Imaging.ImageDecodeGuard`、`ImageDecodeLimits`），兩邊用同一套。不變：不帶尺寸的上傳與讀取、`WtmFileProvider` 與各檔案處理器、LayUI 的標籤與腳本。
+
+**變更**：
+
+| 項目 | 行為 |
+|---|---|
+| 檢查順序 | 先把內容讀進記憶體（上限 `MaxBytes`），只讀檔頭（`Image.Identify`）檢查格式與尺寸，通過才解碼；解析器只註冊 JPEG／PNG／GIF／BMP／WebP，其他格式（TIFF 等）不會被解析；多影格圖片只解第一格 |
+| `UploadImage` | 只有帶 `width`／`height` 時才檢查與解碼（不帶時等同 `Upload`）。不通過（超出限制、格式不允許、無法解析、尺寸超過上限或不是正數）時不儲存，回應與原有的「讀不到圖片」相同（`Code` 404、`Data` 為空的 `Id`／`Name`），記錄 Warning（固定原因，不含檔案內容） |
+| `GetFile` | 只有帶 `width`／`height` 時才讀取圖片內容；不帶時輸出儲存的位元組。不通過時輸出原檔（記錄 Warning），不再有例外 |
+| 設定 | 配置節 `ImageUploadLimits`：`MaxBytes`（10485760）、`MaxWidth`（8192）、`MaxHeight`（8192）、`MaxPixels`（25000000）、`MaxFrames`（1）、`MaxResizeWidth`（4096）、`MaxResizeHeight`（4096）；缺省、0 或負數取預設值。與 demo 的 `/api/_file/*` 共用同一組鍵 |
+| 公開 API | 新增 `ImageDecodeLimits`、`ImageDecodeGuard`（`TryLoad`、`Validate`、`TryResolveSize`、`Resize`、`CreateResizer`），在新的命名空間 `WalkingTec.Mvvm.Mvc.Imaging`（避免與下游複製的同名型別衝突）。demo 的 `WalkingTec.Mvvm.Admin.Api.ImageDecodeGuard`／`ImageDecodeLimits` 保留原有成員，轉為呼叫框架；`SpaFileApi` 與 `SpaImageResizer` 不變 |
+
+**升級步驟**：一般應用不需要修改。需要同時上傳超過 2500 萬像素的原圖並要求縮略圖時，調大 `ImageUploadLimits` 的對應值（記憶體用量隨之增加）。下游複製的 `ImageDecodeGuard.cs` 照常運作；要共用框架的規則，把它換成範本的版本。回滾：把限制調到足夠大，或退回前一個 fork 版本。
+
+**行為變更**：(a) 帶尺寸的 `UploadImage` 對超出限制或無法解析的檔案不再儲存；(b) 帶尺寸的 `GetFile` 對這些檔案輸出原檔；(c) `GetFile` 不帶尺寸時不再讀取圖片內容。
+
+**測試**：Core.Test 的 `FrameworkImageEndpointsTest`（`UploadImage`、`GetFile`：一般圖片、超出限制、格式不允許、非圖片、尺寸超出上限、設定）、`FrameworkImageDecodeGuardTest`（設定的讀取、`Resize`、不可 seek 的來源）、`ImageDecodeGuardTest`（demo 的型別）。

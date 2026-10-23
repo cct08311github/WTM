@@ -16,6 +16,7 @@ using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Localization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SixLabors.Fonts;
@@ -28,6 +29,7 @@ using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Models;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
+using WalkingTec.Mvvm.Mvc.Imaging;
 
 namespace WalkingTec.Mvvm.Mvc
 {
@@ -574,28 +576,41 @@ namespace WalkingTec.Mvvm.Mvc
             extra = FileEndpointGuard.StripEmbeddedMarker(extra);
             var FileData = Request.Form.Files[0];
 
-            Image oimage = Image.Load(FileData.OpenReadStream());
-            if (oimage == null)
+            // the picture is identified first and decoded only within the limits of ImageUploadLimits (see ImageDecodeGuard)
+            SpaImageResult processed;
+            using (var upstream = FileData.OpenReadStream())
             {
+                processed = ImageDecodeGuard.Resize(upstream, width, height, ImageLimits());
+            }
+            if (processed.Resized == null)
+            {
+                processed.Buffered?.Dispose();
+                LogImageRejected("UploadImage", processed.Error);
                 return JsonMore(new { Id = string.Empty, Name = string.Empty }, StatusCodes.Status404NotFound);
             }
-            if (width == null)
+            using (processed.Resized)
+            using (processed.Buffered)
             {
-                width = height * oimage.Width / oimage.Height;
+                var file = fp.Upload(FileData.FileName, processed.Resized.Length, processed.Resized, groupName, subdir, extra, sm, Wtm.CreateDC(cskey: connection.Key));
+                return JsonMore(UploadResult(file, connection.Key));
             }
-            if (height == null)
-            {
-                height = width * oimage.Height / oimage.Width;
-            }
-            MemoryStream ms = new MemoryStream();
-            oimage.Mutate(x => x.Resize(width.Value, height.Value));
-            oimage.SaveAsJpeg(ms);
-            ms.Position = 0;
+        }
 
-            var file = fp.Upload(FileData.FileName, ms.Length, ms, groupName, subdir, extra, sm, Wtm.CreateDC(cskey: connection.Key));
-            oimage.Dispose();
-            ms.Dispose();
-            return JsonMore(UploadResult(file, connection.Key));
+        /// <summary>The limits for decoding pictures (configuration section <c>ImageUploadLimits</c>); the defaults when it is not there.</summary>
+        private ImageDecodeLimits ImageLimits()
+        {
+            return ImageDecodeLimits.FromConfiguration(HttpContext.RequestServices?.GetService<IConfiguration>());
+        }
+
+        /// <summary>A picture that was not processed: logged with a fixed reason, never with file content.</summary>
+        private void LogImageRejected(string endpoint, string reason)
+        {
+            if (string.IsNullOrEmpty(reason))
+            {
+                return;
+            }
+            HttpContext.RequestServices?.GetService<ILoggerFactory>()?.CreateLogger<_FrameworkController>()
+                .LogWarning("File endpoint {Endpoint} did not process a picture: {Reason} (user {User})", endpoint, reason, Wtm.LoginUserInfo?.ITCode);
         }
 
         [HttpPost]
@@ -662,32 +677,36 @@ namespace WalkingTec.Mvvm.Mvc
             try
             {
                 rv = file.DataStream;
-                Image oimage = Image.Load(rv);
-                if (oimage != null && (width != null || height != null))
+                // the file is looked at only when a size is asked for: identified first, decoded only within the limits of
+                // ImageUploadLimits (see ImageDecodeGuard); outside them (or when it is no picture) the stored file is served as it is
+                if (rv != null && (width != null || height != null))
                 {
-                    if (width == null)
+                    var processed = ImageDecodeGuard.Resize(rv, width, height, ImageLimits());
+                    if (processed.Resized != null)
                     {
-                        width = oimage.Width * height / oimage.Height;
+                        rv.Dispose();
+                        processed.Buffered?.Dispose();
+                        rv = processed.Resized;
                     }
-                    if (height == null)
+                    else
                     {
-                        height = oimage.Height * width / oimage.Width;
+                        if (processed.Buffered != null)
+                        {
+                            // the stream of the provider has been read to the end: serve the buffered copy
+                            rv.Dispose();
+                            rv = processed.Buffered;
+                        }
+                        LogImageRejected("GetFile", processed.Error);
                     }
-                    var ms = new MemoryStream();
-                    oimage.Mutate(x => x.Resize(width.Value, height.Value));
-                    oimage.SaveAsJpeg(ms);
-                    rv.Dispose();
-                    rv = ms;
-                }
-                else
-                {
-
                 }
             }
             catch { }
             var ext = file.FileExt.ToLower();
             var contenttype = FileServing.GetContentType(ext);
-            rv.Position = 0;
+            if (rv.CanSeek)
+            {
+                rv.Position = 0;
+            }
             // the browser must use the type the server states, never its own guess
             Response.Headers["X-Content-Type-Options"] = "nosniff";
             if (stream == false)
