@@ -38,7 +38,7 @@
       <WtmButton v-auth="'/api/SchoolVue3/Add'" icon='fa fa-plus' type='primary' :button-text="$t('message._system.common.vm.add')" @click="OnCreateClick()"/>
     <WtmButton v-auth="'/api/SchoolVue3/BatchDelete'"  icon='fa fa-trash' type='danger' :button-text="$t('message._system.common.vm.batchdelete')" :confirm="$t('message._system.common.vm.deletetip')" @click="onBatchDelete()"/>
     <WtmButton v-auth="'/api/SchoolVue3/Import'" icon='fa fa-tasks' type='primary' :button-text="$t('message._system.common.vm.import')" @click="OnImportClick()"/>
-    <WtmButton v-auth="'/api/SchoolVue3/SchoolVue3ExportExcel'"  icon='fa fa-arrow-circle-down' type='primary' :button-text="$t('message._system.common.vm.export')" @click="onExport()"/>
+    <WtmButton v-auth="'/api/SchoolVue3/ExportExcel'"  icon='fa fa-arrow-circle-down' type='primary' :button-text="$t('message._system.common.vm.export')" @click="onExport()"/>
 
   </div>
   <WtmTable ref="tableRefSchoolVue3" v-bind="tableDataSchoolVue3">

@@ -106,7 +106,7 @@ const getTableData = () => {
 };
 // 打开新增用户弹窗
 const onCreate = () => {
-	other.openDialog(t('message._system.common.vm.add'),createDialog);
+	other.openDialog(t('message._system.common.vm.add'),createDialog,null,getTableData);
 	//createDialogRef.value.openDialog();
 };
 // 打开修改用户弹窗

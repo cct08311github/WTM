@@ -73,7 +73,7 @@ const tableData = ref({
 	// 表头内容（必传，注意格式）
 	header: [
 		{ key: 'TCode', colWidth: '', title: ci.proxy.$t('message._admin.tenant.vm.TCode'), type: 'text', isCheck: true },
-		{ key: 'Name', colWidth: '', title: ci.proxy.$t('message._admin.tenant.vm.TName'), type: 'text', isCheck: true },
+		{ key: 'TName', colWidth: '', title: ci.proxy.$t('message._admin.tenant.vm.TName'), type: 'text', isCheck: true },
 		{ key: 'TDb', colWidth: '', title: ci.proxy.$t('message._admin.tenant.vm.TDb'), type: 'text', isCheck: true },
 		{ key: 'DbContext', colWidth: '', title: ci.proxy.$t('message._admin.tenant.vm.DbContext'), type: 'text', isCheck: true },
 		{ key: 'TDbType', colWidth: '', title: ci.proxy.$t('message._admin.tenant.vm.TDbType'), type: 'text', isCheck: true },
