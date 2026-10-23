@@ -110,6 +110,100 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.Controllers
             return vm.GetError();
         }
 
+        // ---- grid with text ids (/Lab/Keys): the actions record what the server received ---------------------------------
+
+        private static readonly ConcurrentDictionary<string, Dictionary<string, string[]>> KeyProbes = new();
+
+        [AllRights]
+        [ActionDescription("Keys")]
+        public ActionResult Keys()
+        {
+            var vm = Wtm.CreateVM<LabKeyListVM>();
+            return PartialView(vm);
+        }
+
+        /// <summary>The rows of the key grid: ids that are text, among them one with the characters that cut an address.</summary>
+        [AllRights]
+        [ActionDescription("KeySearch")]
+        [HttpPost]
+        public ContentResult KeySearch()
+        {
+            var rows = new[]
+            {
+                new { ID = "plain-1", Name = "Key plain", Code = "code-1" },
+                new { ID = "3f2504e0-4f89-11d3-9a0c-0305e82c3301", Name = "Key guid", Code = "code-2" },
+                new { ID = LabText.SpecialId, Name = "Key special", Code = "c&d#2 +%'\"]\\" },
+            };
+            var json = System.Text.Json.JsonSerializer.Serialize(new { Code = 200, Count = rows.Length, Data = rows, Msg = "success", Page = 1, PageCount = 1 });
+            return Content(json, "application/json");
+        }
+
+        private ActionResult RecordKeyProbe(string action)
+        {
+            var seen = Request.Query.ToDictionary(x => x.Key, x => x.Value.ToArray());
+            // the raw query string as the server received it, and the posted ids when there are any
+            seen["_raw"] = new[] { Request.QueryString.Value };
+            if (Request.HasFormContentType && Request.Form.ContainsKey("Ids"))
+            {
+                seen["_Ids"] = Request.Form["Ids"].ToArray();
+            }
+            KeyProbes[action] = seen;
+            return FFResult().Alert("Key probe " + action);
+        }
+
+        [AllRights]
+        [ActionDescription("KeyDialog")]
+        public ActionResult KeyDialog() => RecordKeyProbe("KeyDialog");
+
+        [AllRights]
+        [ActionDescription("KeyRequest")]
+        public ActionResult KeyRequest() => RecordKeyProbe("KeyRequest");
+
+        [AllRights]
+        [ActionDescription("KeyGroup")]
+        public ActionResult KeyGroup() => RecordKeyProbe("KeyGroup");
+
+        /// <summary>The page of the redirect action: records the query and shows the id it received.</summary>
+        [AllRights]
+        [ActionDescription("KeyGo")]
+        public ActionResult KeyGo()
+        {
+            RecordKeyProbe("KeyGo");
+            var id = Request.Query["id"].ToString();
+            return Content("<div id=\"lab-keygo\" style=\"padding:10px\">key page " + System.Web.HttpUtility.HtmlEncode(id) + "</div>", "text/html");
+        }
+
+        [AllRights]
+        [HttpPost]
+        [ActionDescription("KeyDownload")]
+        public ActionResult KeyDownload()
+        {
+            RecordKeyProbe("KeyDownload");
+            return File(System.Text.Encoding.UTF8.GetBytes("key download"), "text/plain", "keys.txt");
+        }
+
+        [AllRights]
+        [HttpPost]
+        [ActionDescription("KeyFile")]
+        public ActionResult KeyFile()
+        {
+            RecordKeyProbe("KeyFile");
+            return File(System.Text.Encoding.UTF8.GetBytes("key file"), "text/plain", "key.txt");
+        }
+
+        /// <summary>What the last request of a key action sent (query values as the server decoded them, the raw query string, the posted ids).</summary>
+        [AllRights]
+        [ActionDescription("KeyProbe")]
+        public ActionResult KeyProbe(string name, bool reset = false)
+        {
+            if (reset)
+            {
+                KeyProbes.Clear();
+                return Json(new Dictionary<string, string[]>());
+            }
+            return Json(KeyProbes.TryGetValue(name ?? "", out var seen) ? seen : new Dictionary<string, string[]>());
+        }
+
         /// <summary>Answers the posted ids as a small text file (target of the "Download selected" button of the Lab grid).</summary>
         [AllRights]
         [HttpPost]

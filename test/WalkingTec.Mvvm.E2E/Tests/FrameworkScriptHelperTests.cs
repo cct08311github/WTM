@@ -63,6 +63,9 @@ namespace WalkingTec.Mvvm.E2E.Tests
             Assert.AreEqual("/x?1=1&a=1&b=two", await RunAsync<string>("() => ff.concatWhereStr('/x?1=1', ['a', 'b'], { a: 1, b: 'two', c: 3 })"));
             Assert.AreEqual("/x?1=1", await RunAsync<string>("() => ff.concatWhereStr('/x?1=1', ['a'], null)"));
             Assert.AreEqual("", await RunAsync<string>("() => ff.concatWhereStr(null, null, null)"));
+            // the values are encoded for the address (#344): a value with & # or a space reaches the server whole; the page flag encodes twice
+            Assert.AreEqual("/x?1=1&a=p%26q%23r%20s", await RunAsync<string>("() => ff.concatWhereStr('/x?1=1', ['a'], { a: 'p&q#r s' })"));
+            Assert.AreEqual("/x?1=1&a=p%2526q", await RunAsync<string>("() => ff.concatWhereStr('/x?1=1', ['a'], { a: 'p&q' }, true)"));
         }
 
         [TestMethod]

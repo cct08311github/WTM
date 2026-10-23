@@ -137,7 +137,7 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost
                     Icon = "layui-icon layui-icon-component"
                 };
                 var labOrder = 1;
-                foreach (var labPage in new[] { "Inputs", "Choices", "Pickers", "Grid", "Detail", "Layout", "Charts", "Trees" })
+                foreach (var labPage in new[] { "Inputs", "Choices", "Pickers", "Grid", "Detail", "Layout", "Charts", "Trees", "Keys" })
                 {
                     labFolder.Children.Add(new FrameworkMenu
                     {
