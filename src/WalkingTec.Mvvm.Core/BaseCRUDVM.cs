@@ -1012,7 +1012,7 @@ namespace WalkingTec.Mvvm.Core
             //如果是PersistPoco，则把IsValid设为false，并不进行物理删除
             if (typeof(IPersistPoco).IsAssignableFrom(typeof(TModel)))
             {
-                FC.Add("Entity.IsValid", 0);
+                FC["Entity.IsValid"] = 0;
                 (Entity as IPersistPoco).IsValid = false;
 
                 var pros = typeof(TModel).GetAllProperties();
@@ -1038,7 +1038,7 @@ namespace WalkingTec.Mvvm.Core
             //如果是PersistPoco，则把IsValid设为false，并不进行物理删除
             if (typeof(IPersistPoco).IsAssignableFrom(typeof(TModel)))
             {
-                FC.Add("Entity.IsValid", 0);
+                FC["Entity.IsValid"] = 0;
                 (Entity as IPersistPoco).IsValid = false;
                 var pros = typeof(TModel).GetAllProperties();
                 //如果包含List<PersistPoco>，将子表IsValid也设置为false

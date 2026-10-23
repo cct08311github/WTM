@@ -26,6 +26,8 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
         private const string Hostile = "a'b\"c<d>&e";
         // its encoded form inside an attribute value
         private const string HostileEncoded = "a&#39;b&quot;c&lt;d&gt;&amp;e";
+        // the title of a check box / radio is parsed as an attribute and then written to the page as HTML by layui, so it is encoded twice
+        private const string HostileTitleEncoded = "a&amp;#39;b&amp;quot;c&amp;lt;d&amp;gt;&amp;amp;e";
 
         private const string Cjk = "第一所學校：測試";
 
@@ -81,7 +83,7 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
 
             var html = Render(new CheckBoxTagHelper { Field = Field(vm, x => x.Names), Items = Field(vm, x => x.AllSchools) }, "wt:checkbox");
 
-            AssertContains(html, "value=\"" + HostileEncoded + "\" title=\"" + HostileEncoded + "\"");
+            AssertContains(html, "value=\"" + HostileEncoded + "\" title=\"" + HostileTitleEncoded + "\"");
             AssertNotContains(html, "value=\"a'b", "title=\"a'b", "c<d>");
         }
 
@@ -102,7 +104,7 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
 
             var html = Render(new RadioTagHelper { Field = Field(vm, x => x.Names), Items = Field(vm, x => x.AllSchools) }, "wt:radio");
 
-            AssertContains(html, "value=\"" + HostileEncoded + "\" title=\"" + HostileEncoded + "\"");
+            AssertContains(html, "value=\"" + HostileEncoded + "\" title=\"" + HostileTitleEncoded + "\"");
             AssertNotContains(html, "value=\"a'b", "title=\"a'b", "c<d>");
         }
 
@@ -568,7 +570,7 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
 
             foreach (var html in new[] { check, radio })
             {
-                AssertContains(html, "name='" + HostileEncoded + "'", "value='" + HostileEncoded + "'", "title='" + HostileEncoded + "'");
+                AssertContains(html, "name='" + HostileEncoded + "'", "value='" + HostileEncoded + "'", "title='" + HostileTitleEncoded + "'");
                 AssertNotContains(html, "name='a'b", "value='a'b", "title='a'b", "c<d>");
             }
         }
