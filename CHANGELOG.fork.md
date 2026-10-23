@@ -10,6 +10,10 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
+## 未发布
+
+* **修复（涉及 LayUI 受保护路径）：**   Excel 导出时，`SetFormat` 回呼返回 `ColumnFormatInfo` 或 `List<ColumnFormatInfo>`（下载／预览按钮、对话框链接、脚本按钮、`MakeHtml` 等）且该列没有 `SetDisableExport()`，单元格原来写入类型名称（如 `System.Collections.Generic.List`1[WalkingTec.Mvvm.Core.ColumnFormatInfo]`），现在写入网格上看得到的文字（#289）：按钮或链接取其 `Text`，`MakeHtml` 取去掉标签后的内容，列表中的多个项目以“, ”连接；网格上不显示任何东西的项目（`null`、没有文件的下载／预览按钮、空的 `Text` 或空的 html）略过，整格为空则输出空白单元格。选择这个做法的原因：回呼若改为返回等价的 HTML 字符串（如 `<a>下载</a>`），既有的导出会去掉标签后写入可见文字，现在 `ColumnFormatInfo` 与之一致；上游 WTM 5.x 至 8.x 的导出对这类列同样写入类型名称，没有可沿用的行为。回呼返回字符串（含 HTML 字符串）的列完全不变，仍照 #285 的规则去掉标签；没有 `SetFormat` 的列、`SetDisableExport()` 的列、导出的方法签名都不变。只改 `BasePagedListVM` 的 Excel 导出（LayUI 导出按钮 `/_Framework/ExportExcel` 与 Vue3 的 `ExportExcel` 共用）。下游影响：原本靠 `SetDisableExport()` 避开此问题的列不受影响；没有设置 `SetDisableExport()` 的此类列，导出的文字由类型名称变为按钮文字。回滚：退回上一个 fork 版本
+
 ## 10.0.0.14(2026-10-23)
 
 * **修改（安全，涉及 LayUI 受保护路径）：**   `wt:grid` 动作按钮把数据行的 id 与动作指定的行字段（`whereStr`）接到请求网址时，改为依写入位置编码（#344，做法同 #326）：`SingleId`、`SingleIdWithNull` 两类按钮（行按钮、工具栏按钮、`ActionsGroup` 子按钮；弹出对话框、后台请求、下载、导出皆同）的 `&id=` 改用 `encodeURIComponent`，`ff.concatWhereStr` 对行字段的值同样编码（字段名照旧原样写入）。id 或字段值含 `& # + %`、空格、引号等字符时，服务器收到完整的值，不再被截断或改变。走 `ff.LoadPage`（`IsRedirect`）的按钮，因 `ff.LoadPage` 会先对网址解码一次再写入页面 hash，id 与字段值编码两次（`ff.concatWhereStr` 新增可选的第 4 个参数 `twice`），服务器同样收到完整的值。GUID、整数与一般文字的 id，网址与之前逐字相同，服务器收到的值不变；`MultiIds`／`MultiIdWithNull` 在请求主体送出的 `Ids`、`OnClickFunc` 收到的 `ids`、下载与导出送出的 `Ids` 都不受影响。下游影响：字段值中的空格、冒号、逗号等（例如日期时间文字）在网址里变成百分号编码（服务器照常解码，收到的值相同）；自行调用 `ff.concatWhereStr` 的页面，请传入原值（函数自己编码），不要先行编码。layui 与 xm-select 没有升级。回滚：退回上一个 fork 版本。详见 FORK.md 第 20 节

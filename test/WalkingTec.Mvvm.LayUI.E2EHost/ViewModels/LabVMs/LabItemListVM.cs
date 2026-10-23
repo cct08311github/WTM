@@ -61,8 +61,8 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost.ViewModels.LabVMs
                 this.MakeGridHeader(x => x.Score).SetSort(true),
                 this.MakeGridHeader(x => x.Active),
                 this.MakeGridHeader(x => x.Created),
-                // a column with a Format callback holds markup, not data: keep it out of the export
-                this.MakeGridHeader(x => x.Note).SetFormat(NoteFormat).SetDisableExport(),
+                // the cell holds a link (a list of ColumnFormatInfo); the export writes the link text (#289)
+                this.MakeGridHeader(x => x.Note).SetFormat(NoteFormat),
                 this.MakeGridHeaderAction(width: 120)
             };
         }

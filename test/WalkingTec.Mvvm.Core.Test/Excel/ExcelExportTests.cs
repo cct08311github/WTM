@@ -70,6 +70,82 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
             }
         }
 
+        /// <summary>
+        /// Remark is formatted to what the grid shows as buttons or links (a ColumnFormatInfo or a list of them), chosen per row by the Name.
+        /// </summary>
+        private class FormatInfoExportListVM : BasePagedListVM<GoodsSpecification, BaseSearcher>
+        {
+            public static readonly Guid FileId = Guid.NewGuid();
+
+            protected override IEnumerable<IGridColumn<GoodsSpecification>> InitGridHeader()
+            {
+                return new List<GridColumn<GoodsSpecification>>
+                {
+                    this.MakeGridHeader(x => x.Name),
+                    this.MakeGridHeader(x => x.Remark).SetFormat((entity, val) => Format(entity)),
+                    this.MakeGridHeader(x => x.OrderNum),
+                };
+            }
+
+            private static object Format(GoodsSpecification entity)
+            {
+                switch (entity.Name)
+                {
+                    case "download":
+                        return ColumnFormatInfo.MakeDownloadButton(ButtonTypesEnum.Button, FileId, "Download");
+                    case "view":
+                        return ColumnFormatInfo.MakeViewButton(ButtonTypesEnum.Link, FileId, buttonText: "Photo");
+                    case "nofile":
+                        return ColumnFormatInfo.MakeDownloadButton(ButtonTypesEnum.Button, null, "Download");
+                    case "dialog":
+                        return ColumnFormatInfo.MakeDialogButton(ButtonTypesEnum.Link, "/Goods/Details/1", "Details", 600, null, "Title");
+                    case "script":
+                        return ColumnFormatInfo.MakeScriptButton(ButtonTypesEnum.Button, "", "Run", script: "alert(1)");
+                    case "html":
+                        return ColumnFormatInfo.MakeHtml("<b>bold</b> and <i>italic</i>");
+                    case "list":
+                        return new List<ColumnFormatInfo>
+                        {
+                            ColumnFormatInfo.MakeDialogButton(ButtonTypesEnum.Link, "/Goods/Details/1", "Details", 600, null, "Title"),
+                            ColumnFormatInfo.MakeDownloadButton(ButtonTypesEnum.Button, FileId, "Download"),
+                        };
+                    case "listsome":
+                        return new List<ColumnFormatInfo>
+                        {
+                            null,
+                            ColumnFormatInfo.MakeDownloadButton(ButtonTypesEnum.Button, null, "Download"),
+                            ColumnFormatInfo.MakeDialogButton(ButtonTypesEnum.Link, "/Goods/Details/1", "Details", 600, null, "Title"),
+                            ColumnFormatInfo.MakeHtml(""),
+                        };
+                    case "emptylist":
+                        return new List<ColumnFormatInfo>();
+                    case "null":
+                        return null;
+                    case "string":
+                        return "plain " + entity.Remark;
+                    case "htmlstring":
+                        return "<a href=\"/x\" class=\"b\">Open</a>";
+                    default:
+                        return entity.Remark;
+                }
+            }
+
+            public override IOrderedQueryable<GoodsSpecification> GetSearchQuery()
+            {
+                return DC.Set<GoodsSpecification>().OrderBy(x => x.OrderNum);
+            }
+        }
+
+        private static string[] ExportRow(string name, string remark = "r")
+        {
+            var vm = NewListVm<FormatInfoExportListVM>(NewSeed());
+            vm.DC.Set<GoodsSpecification>().Add(new GoodsSpecification { Name = name, OrderNum = 7, Remark = remark });
+            vm.DC.SaveChanges();
+            var rows = XlsxTestHelper.ReadSheet(vm.GenerateExcel());
+            Assert.AreEqual(2, rows.Count);
+            return rows[1];
+        }
+
         private static string NewSeed() => Guid.NewGuid().ToString();
 
         private static T NewListVm<T>(string seed) where T : BaseVM, new()
@@ -140,6 +216,83 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
             var rows = XlsxTestHelper.ReadSheet(vm.GenerateExcel());
 
             CollectionAssert.AreEqual(new[] { "n", "ac", "No.1" }, rows[1]);
+        }
+
+        // Issue #289: a Format callback that returns a ColumnFormatInfo (button/link) used to export the type name.
+        [TestMethod]
+        public void GenerateExcel_FormatReturnsColumnFormatInfo_ExportsTheVisibleText()
+        {
+            // download, preview, dialog and script buttons all show their Text in the grid
+            CollectionAssert.AreEqual(new[] { "download", "Download", "7" }, ExportRow("download"));
+            CollectionAssert.AreEqual(new[] { "view", "Photo", "7" }, ExportRow("view"));
+            CollectionAssert.AreEqual(new[] { "dialog", "Details", "7" }, ExportRow("dialog"));
+            CollectionAssert.AreEqual(new[] { "script", "Run", "7" }, ExportRow("script"));
+        }
+
+        [TestMethod]
+        public void GenerateExcel_FormatReturnsColumnFormatInfo_NeverWritesATypeName()
+        {
+            foreach (var name in new[] { "download", "view", "nofile", "dialog", "script", "html", "list", "listsome", "emptylist", "null" })
+            {
+                foreach (var cell in ExportRow(name))
+                {
+                    Assert.IsFalse(cell.Contains("ColumnFormatInfo") || cell.Contains("System.Collections"), name + ": " + cell);
+                }
+            }
+        }
+
+        [TestMethod]
+        public void GenerateExcel_FormatReturnsListOfColumnFormatInfo_ExportsTheTextsJoined()
+        {
+            CollectionAssert.AreEqual(new[] { "list", "Details, Download", "7" }, ExportRow("list"));
+        }
+
+        [TestMethod]
+        public void GenerateExcel_FormatReturnsListOfColumnFormatInfo_SkipsItemsThatShowNothing()
+        {
+            // a null item, a download button without a file and an empty html item render nothing in the grid
+            CollectionAssert.AreEqual(new[] { "listsome", "Details", "7" }, ExportRow("listsome"));
+            CollectionAssert.AreEqual(new[] { "emptylist", "", "7" }, ExportRow("emptylist"));
+        }
+
+        [TestMethod]
+        public void GenerateExcel_FormatReturnsDownloadButtonWithoutFile_ExportsAnEmptyCell()
+        {
+            // the grid renders no button when there is no file
+            CollectionAssert.AreEqual(new[] { "nofile", "", "7" }, ExportRow("nofile"));
+        }
+
+        [TestMethod]
+        public void GenerateExcel_FormatReturnsHtmlColumnFormatInfo_StripsTags()
+        {
+            CollectionAssert.AreEqual(new[] { "html", "bold and italic", "7" }, ExportRow("html"));
+        }
+
+        [TestMethod]
+        public void GenerateExcel_FormatReturnsNull_ExportsAnEmptyCell()
+        {
+            CollectionAssert.AreEqual(new[] { "null", "", "7" }, ExportRow("null"));
+        }
+
+        // Unchanged by #289: a string result (HTML or not) is exported as before, tags removed (#285).
+        [TestMethod]
+        public void GenerateExcel_FormatReturnsString_IsExportedAsBefore()
+        {
+            CollectionAssert.AreEqual(new[] { "string", "plain r", "7" }, ExportRow("string"));
+            CollectionAssert.AreEqual(new[] { "string", "plain x", "7" }, ExportRow("string", "<b>x</b>"));
+        }
+
+        [TestMethod]
+        public void GenerateExcel_FormatReturnsHtmlString_StillStripsTags()
+        {
+            CollectionAssert.AreEqual(new[] { "htmlstring", "Open", "7" }, ExportRow("htmlstring"));
+        }
+
+        [TestMethod]
+        public void GenerateExcel_FormatReturnsTheRawValue_IsExportedAsBefore()
+        {
+            // a column with a Format callback is treated as HTML as a whole (the behavior before #285 and still today)
+            CollectionAssert.AreEqual(new[] { "other", "x", "7" }, ExportRow("other", "<tag>x"));
         }
 
         [TestMethod]

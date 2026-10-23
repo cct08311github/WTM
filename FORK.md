@@ -165,7 +165,7 @@ git merge --no-ff upstream/dotnet10
 | `src/WalkingTec.Mvvm.Core/ConfigOptions/Configs.cs` | `ExposeExceptionDetails`、`BufferJsonBodyOnly`、`WorkflowOptions` | #26、#17、#13 |
 | `src/WalkingTec.Mvvm.Core/ConfigOptions/Cors.cs` | `AllowCredentialsWithAnyOrigin` | #12 |
 | `src/WalkingTec.Mvvm.Core/BaseImportVM.cs` | 依欄位參照讀取儲存格 | #86 |
-| `src/WalkingTec.Mvvm.Core/BasePagedListVM.cs` | 匯出 zip 路徑改用 `Path.Combine`；stylesheet 符合 schema | #89、#87 |
+| `src/WalkingTec.Mvvm.Core/BasePagedListVM.cs` | 匯出 zip 路徑改用 `Path.Combine`；stylesheet 符合 schema；`SetFormat` 回傳 `ColumnFormatInfo`／`List<ColumnFormatInfo>` 的列匯出按鈕文字，不再寫入型別名稱 | #89、#87、#289 |
 | `src/WalkingTec.Mvvm.Core/BaseTemplateVM.cs` | 範本的元素順序、ARGB 色碼、保護密碼的 hash | #87 |
 | `src/WalkingTec.Mvvm.Core/Support/FileHandlers/WtmLocalFileHandler.cs` | 上傳路徑限制在根目錄內、檔名與副檔名清理、group fallback、根目錄外的已存路徑記 warning | #11 |
 | `src/WalkingTec.Mvvm.Core/Support/FileHandlers/{WtmOssFileHandler,WtmDataBaseFileHandler,WtmFileProvider}.cs` | OSS key 驗證、存入 DB 的檔名與副檔名清理（共用 `FileNameSanitizer`） | #128 |
@@ -648,7 +648,7 @@ dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build --filter TestCategory
 - #288：匯入檔含無效資料列時，回應是「Memory stream is not expandable.」，而不是列出錯誤並提供錯誤檔
 - #290：使用者管理頁呼叫 `/api/_Admin/FrameworkUser/*`（與實際路由 `/api/_FrameworkUser/*` 不符）；`City`／`SchoolVue3` 頁的匯出按鈕與資料權限列表的詳細按鈕檢查了不存在的權限鍵而不顯示；學校頁匯出勾選列不會下載；租戶列表的名稱欄為空
 - #291：只符合子群組的搜尋回傳空列表（這個 Issue 也包含群組列表的備註欄一律為空，該項沒有對應的測試）
-- 沒有對應測試的觀察：缺漏的 i18n 鍵、`FrameworkMenu/GetIcons` 回 400、刪除選單後選單快取未更新 → #292；匯出時以 `SetFormat` 格式化的欄位輸出型別名稱 → #289
+- 沒有對應測試的觀察：缺漏的 i18n 鍵、`FrameworkMenu/GetIcons` 回 400、刪除選單後選單快取未更新 → #292
 
 ### 權限矩陣（#273）
 

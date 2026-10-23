@@ -278,14 +278,25 @@ namespace WalkingTec.Mvvm.Core
                                 {
                                     isEnumBoolProp = true;
                                 }
-                                string text = col.GetText(List[i]).ToString();
-                                //only a column with a Format callback produces HTML; plain data (which may contain tag-like text) is exported as it is
-                                if (col.HasFormat())
+                                object cellValue = col.GetText(List[i]);
+                                string text;
+                                bool isFormatInfo = cellValue is ColumnFormatInfo || cellValue is List<ColumnFormatInfo>;
+                                if (isFormatInfo)
                                 {
-                                    text = Regex.Replace(text, @"<[^>]*>", String.Empty);
+                                    //a Format callback that returns buttons or links: export what the grid shows as text, not the type name
+                                    text = GetFormatInfoText(cellValue);
+                                }
+                                else
+                                {
+                                    text = cellValue.ToString();
+                                    //only a column with a Format callback produces HTML; plain data (which may contain tag-like text) is exported as it is
+                                    if (col.HasFormat())
+                                    {
+                                        text = Regex.Replace(text, @"<[^>]*>", String.Empty);
+                                    }
                                 }
 
-                                if (isEnumBoolProp)
+                                if (isEnumBoolProp && isFormatInfo == false)
                                 {
                                     string enumdisplay = PropertyHelper.GetEnumDisplayName(proType, text);
                                     if (string.IsNullOrEmpty(enumdisplay) == false)
@@ -322,6 +333,45 @@ namespace WalkingTec.Mvvm.Core
                 }
                 return ms.ToArray();
             }
+        }
+
+        /// <summary>
+        /// The text an Excel cell gets for a column whose Format callback returned a <see cref="ColumnFormatInfo"/> or a list of them: the visible text of
+        /// each item (the button or link label, or the html with its tags removed), joined with ", ". An item that shows nothing in the grid
+        /// (null, a download/preview button without a file, empty html or an empty label) is skipped.
+        /// </summary>
+        private static string GetFormatInfoText(object formatResult)
+        {
+            IEnumerable<ColumnFormatInfo> items = formatResult as List<ColumnFormatInfo> ?? new List<ColumnFormatInfo> { formatResult as ColumnFormatInfo };
+            var texts = new List<string>();
+            foreach (var item in items)
+            {
+                if (item == null)
+                {
+                    continue;
+                }
+                string itemText;
+                switch (item.FormatType)
+                {
+                    case ColumnFormatTypeEnum.Download:
+                    case ColumnFormatTypeEnum.ViewPic:
+                        //the grid renders no button when there is no file
+                        itemText = item.FileID == null ? null : item.Text;
+                        break;
+                    case ColumnFormatTypeEnum.Html:
+                        itemText = item.Html == null ? null : Regex.Replace(item.Html, @"<[^>]*>", String.Empty);
+                        break;
+                    default:
+                        itemText = item.Text;
+                        break;
+                }
+                itemText = itemText?.Trim();
+                if (string.IsNullOrEmpty(itemText) == false)
+                {
+                    texts.Add(itemText);
+                }
+            }
+            return string.Join(", ", texts);
         }
 
         private byte[] DownLoadExcel(List<TModel> data)
