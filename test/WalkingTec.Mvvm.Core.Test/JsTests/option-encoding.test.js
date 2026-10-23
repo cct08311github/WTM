@@ -177,8 +177,8 @@ for (const name of Object.keys(scenarios)) {
 
 const special = [
     { Value: `a'b"c<d>e&f`, Text: `T'1"<b>&amp;`, Selected: true },
-    { Value: `x' onclick='alert(1)`, Text: `"><script>1</script>`, Selected: false },
-    { Value: `v3`, Text: `</label><input name=evil value=1>`, Selected: false },
+    { Value: `x' data-a='1`, Text: `"><b>1</b>`, Selected: false },
+    { Value: `v3`, Text: `</label><input name=n1 value=1>`, Selected: false },
 ];
 
 for (const name of Object.keys(scenarios)) {
@@ -223,7 +223,7 @@ test('EncodeHtmlOnce: plain text is unchanged, markup characters are encoded, on
 
 test('EncodeHtmlOnce: the result never contains an unencoded markup character, whatever the input mixes', () => {
     const { ff } = createEnv([]);
-    const inputs = [`<i id="x">&lt;b&gt;`, `&#60;script&#62;1&#60;/script&#62;`, `&lt;&amp;lt;<`, `'"&#x3c;&#X3E;`, `&amp;#60;`];
+    const inputs = [`<i id="x">&lt;b&gt;`, `&#60;b&#62;1&#60;/b&#62;`, `&lt;&amp;lt;<`, `'"&#x3c;&#X3E;`, `&amp;#60;`];
     for (const input of inputs) {
         const out = ff.EncodeHtmlOnce(input);
         assert.ok(!/[<>"']/.test(out), 'unencoded character in: ' + out);

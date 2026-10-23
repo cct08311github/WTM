@@ -104,6 +104,23 @@ namespace WalkingTec.Mvvm.E2E.Tests
             await ExpectNoProbeElementsAsync(TreeBox("Branch"));
         }
 
+        [TestMethod]
+        public async Task Tree_Linked_AValueThatCutsAnAddressReachesTheServerWhole()
+        {
+            var tree = TreeBox("LinkedBranch");
+            await tree.ClickAsync();
+            // the root starts collapsed: expand it with its arrow, then pick its leaf
+            await tree.Locator(".xm-option[value=rootS] .xm-tree-icon").ClickAsync();
+            await tree.Locator(".xm-option", new() { HasTextString = "Special node" }).ClickAsync();
+            await Body.Locator("label[for=LabFormVM_LinkedBranch]").ClickAsync();
+
+            // the dependent combo box asked /Lab/Cities for its items with the chosen value (& # + % and quotes in it) in the address
+            await Combo("TreeCity").ClickAsync();
+            await Expect(Combo("TreeCity").Locator(".xm-option")).ToHaveCountAsync(1);
+            await Expect(Combo("TreeCity").Locator(".xm-option")).ToHaveTextAsync("Special city");
+            await ExpectNoProbeElementsAsync();
+        }
+
         // ---- wt:treecontainer -----------------------------------------------------------------------------------
 
         private ILocator Node(string id) => Body.Locator($"#lab-treecontainer-host .layui-tree-set[data-id={id}] > .layui-tree-entry .layui-tree-main").First;
@@ -166,6 +183,43 @@ namespace WalkingTec.Mvvm.E2E.Tests
 
             await Expect(Page.Locator(".layui-layer-dialog")).ToContainTextAsync(await Page.EvaluateAsync<string>("() => ff.DONOTUSE_Text_LoadFailed"));
             await Expect(host.Locator("#lab-pane")).ToHaveTextAsync("pane a");
+        }
+
+        // ---- wt:treecontainer with node ids that hold quotes, brackets, & # and an element-like fragment ------------------------
+
+        private ILocator IdTreeNode(string text) => Body.Locator("#lab-idtree-host .layui-tree-main", new() { HasTextString = text }).First;
+
+        [TestMethod]
+        public async Task TreeContainer_NodeIdsWithSpecialCharacters_AreShownAsNodesAndCreateNoElements()
+        {
+            var host = Body.Locator("#lab-idtree-host");
+
+            await Expect(host.Locator(".layui-tree-set")).ToHaveCountAsync(3);
+            await Expect(host.Locator(".layui-tree-set").Last).ToHaveAttributeAsync("data-id", LabData.SpecialId);
+            await ExpectNoProbeElementsAsync(host);
+        }
+
+        [TestMethod]
+        public async Task TreeContainer_PreselectedNodeWithASpecialId_IsHighlightedAndItsIdIsKept()
+        {
+            // the page is shown with the node selected: the tree finds the node by its id and the id is kept for the grid filter
+            await Expect(IdTreeNode("Special node")).ToHaveCSSAsync("background-color", "rgb(95, 184, 120)");
+            await Page.WaitForFunctionAsync("id => window.topidtreeselected && window.topidtreeselected.SpecialNodeId === id", LabData.SpecialId);
+        }
+
+        [TestMethod]
+        public async Task TreeContainer_ClickingNodesWithSpecialIds_MovesTheHighlightAndPassesTheOriginalId()
+        {
+            await IdTreeNode("Plain node").ClickAsync();
+            await Expect(IdTreeNode("Plain node")).ToHaveCSSAsync("background-color", "rgb(95, 184, 120)");
+            await Expect(IdTreeNode("Special node")).Not.ToHaveCSSAsync("background-color", "rgb(95, 184, 120)");
+
+            await IdTreeNode("Special node").ClickAsync();
+
+            await Expect(IdTreeNode("Special node")).ToHaveCSSAsync("background-color", "rgb(95, 184, 120)");
+            // the function of the page and the selected id see the id of the node, not its encoded form
+            await Page.WaitForFunctionAsync("id => window.labIdTreeClickedIds.length === 2 && window.labIdTreeClickedIds[0] === 'plainS' && window.labIdTreeClickedIds[1] === id", LabData.SpecialId);
+            await Page.WaitForFunctionAsync("id => window.topidtreeselected.SpecialNodeId === id", LabData.SpecialId);
         }
 
         [TestMethod]

@@ -215,7 +215,7 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
 
             var html = Render(helper, "wt:textbox");
 
-            AssertContains(html, "url: '" + HostileEscaped + "',", "ff.ChainChange('" + HostileEscaped + "/'+data.Value");
+            AssertContains(html, "url: '" + HostileEscaped + "',", "ff.ChainChange('" + HostileEscaped + "/'+encodeURIComponent(data.Value)");
             AssertNotContains(html, "url: 'a'b", "ChainChange('a'b");
         }
 
@@ -513,7 +513,7 @@ namespace WalkingTec.Mvvm.Core.Test.TagHelpers.LayUI
                 "var tempUrl = '/School/doEdit?a=1',whereStr=");
 
             var textBox = new TextBoxTagHelper { Field = Field(NewVm(), x => x.Name), SearchUrl = "/School/Search", TriggerUrl = "/School/Trigger" };
-            AssertContains(Render(textBox, "wt:textbox"), "url: '/School/Search',", "ff.ChainChange('/School/Trigger/'+data.Value");
+            AssertContains(Render(textBox, "wt:textbox"), "url: '/School/Search',", "ff.ChainChange('/School/Trigger/'+encodeURIComponent(data.Value)");
 
             var chart = new ChartTagHelper { Id = "salesChart", Type = ChartTypeEnum.Bar, Title = "銷售", NameX = "月份", NameY = "金額", TriggerUrl = "/Chart/Data" };
             AssertContains(Render(chart, "wt:chart"),

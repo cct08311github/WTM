@@ -137,6 +137,18 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
+        public async Task ComboBox_Linked_AValueThatCutsAnAddressReachesTheServerWhole()
+        {
+            // the value of the chosen region has & # + % and quotes in it: it is encoded in the address /Lab/Cities is asked with
+            await PickComboAsync("Region", "Special region");
+
+            await Combo("City").ClickAsync();
+            await Expect(Combo("City").Locator(".xm-option")).ToHaveCountAsync(1);
+            await Expect(Combo("City").Locator(".xm-option")).ToHaveTextAsync("Special city");
+            await ExpectNoProbeElementsAsync();
+        }
+
+        [TestMethod]
         public async Task ComboBox_Linked_ChangingTheFirstChoiceReplacesTheDependentItems()
         {
             await PickComboAsync("Region", "North");
