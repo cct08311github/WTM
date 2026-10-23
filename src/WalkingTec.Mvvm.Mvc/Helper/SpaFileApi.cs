@@ -237,7 +237,7 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         /// <summary>Reads the bytes that were peeked at first, then the rest of the stream.</summary>
-        private sealed class PrefixedStream : Stream
+        internal sealed class PrefixedStream : Stream
         {
             private readonly byte[] _prefix;
             private readonly int _length;

@@ -1,8 +1,6 @@
 // WTM默认页面 Wtm buidin page
 using System;
 using System.IO;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Processing;
 using Microsoft.AspNetCore.Mvc;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
@@ -90,27 +88,11 @@ namespace WalkingTec.Mvvm.Admin.Api
         public IActionResult DeletedFile([FromServices] WtmFileProvider fp, string id, string csName = null, string _DONOT_USE_FREF = null)
             => SpaFileApi.DeleteFile(this, fp, id, csName, _DONOT_USE_FREF);
 
-        // Mitigation for ImageSharp advisories (#78): format allowlist and size/dimension limits before anything is decoded
+        // Mitigation for ImageSharp advisories (#78): format allowlist and size/dimension limits before anything is decoded (the rules live in the framework)
         private SpaImageResult ResizeImage(Stream source, int? width, int? height)
         {
             var limits = ImageDecodeLimits.FromConfiguration(HttpContext.RequestServices.GetService<IConfiguration>());
-            if (!ImageDecodeGuard.TryLoad(source, limits, out Image image, out MemoryStream buffer, out var error) || image == null)
-            {
-                return new SpaImageResult { Buffered = buffer, Error = error };
-            }
-            using (image)
-            {
-                if (!ImageDecodeGuard.TryResolveSize(width, height, image.Width, image.Height, limits, out var targetWidth, out var targetHeight))
-                {
-                    return new SpaImageResult { Buffered = buffer, Error = "Requested size out of range" };
-                }
-                var resized = new MemoryStream();
-                image.Mutate(x => x.Resize(targetWidth, targetHeight));
-                image.SaveAsJpeg(resized);
-                resized.Position = 0;
-                buffer?.Dispose();
-                return new SpaImageResult { Resized = resized };
-            }
+            return ImageDecodeGuard.Resize(source, width, height, limits);
         }
     }
 }
