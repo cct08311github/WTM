@@ -175,11 +175,12 @@ namespace WalkingTec.Mvvm.E2E.Tests
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             await download.SaveAsAsync(path);
             var texts = ReadWorkbookTexts(path);
-            // the export applies the search conditions: only the seven rows with the special name, one header row
-            Assert.AreEqual(7, texts.Count(x => x.StartsWith("Special ")), "Rows that do not match the search must not be exported.");
+            // the export applies the search conditions: only the seven rows with the special name, one header row.
+            // Every row holds its name twice: in the name column and as the text of the link in the Details column (#289).
+            Assert.AreEqual(14, texts.Count(x => x.StartsWith("Special ")), "Rows that do not match the search must not be exported.");
             Assert.IsFalse(texts.Contains("Lab item 01"));
             CollectionAssert.Contains(texts, "Item Name");
-            // the characters that are not tag-like survive (the "Details" column holds markup and is not exported)
+            // the characters that are not tag-like survive
             Assert.IsTrue(texts.Any(x => x.StartsWith("Special 05 A&B ") && x.Contains("\"q\" 'q'")));
         }
 
@@ -192,6 +193,20 @@ namespace WalkingTec.Mvvm.E2E.Tests
             await download.SaveAsAsync(path);
 
             CollectionAssert.Contains(ReadWorkbookTexts(path), "Special 05 " + LabData.SpecialItem);
+        }
+
+        [TestMethod]
+        public async Task Export_ColumnFormattedAsALink_WritesTheLinkText_NotATypeName()
+        {
+            await SearchSpecialRowsAsync();
+            var download = await Page.RunAndWaitForDownloadAsync(async () => await Body.Locator(".layui-table-tool a.layui-btn", new() { HasTextString = "Export Excel" }).ClickAsync());
+            var path = Path.Combine(E2ERun.OutputDir, "downloads", "link-column-" + download.SuggestedFilename);
+            await download.SaveAsAsync(path);
+
+            var texts = ReadWorkbookTexts(path);
+            // the link text is the item name (data), so it is in the workbook twice: the name column and the link column, both unchanged
+            Assert.AreEqual(2, texts.Count(x => x == "Special 05 " + LabData.SpecialItem));
+            Assert.IsFalse(texts.Any(x => x.Contains("ColumnFormatInfo") || x.Contains("System.Collections")), "The workbook must not contain a type name.");
         }
 
         private static System.Collections.Generic.List<string> ReadWorkbookTexts(string path)
