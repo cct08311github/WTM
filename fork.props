@@ -15,7 +15,7 @@
         3. 上游变更日志见 CHANGELOG.md，fork 变更日志见 CHANGELOG.fork.md。
   -->
   <PropertyGroup>
-    <ForkRevision>14</ForkRevision>
+    <ForkRevision>15</ForkRevision>
 
     <!-- 保留上游版本号，并将 VersionPrefix 改为四段式 -->
     <UpstreamVersionPrefix>$(VersionPrefix)</UpstreamVersionPrefix>
