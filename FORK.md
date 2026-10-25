@@ -207,6 +207,7 @@ git merge --no-ff upstream/dotnet10
 | `test/WalkingTec.Mvvm.Test.Mock/MockWtmContext.cs` | 選用參數 `loggerFactory`、`configs`、`fileAccessPolicy`；預設空的 `Request.Query` | 第 28 節 |
 | 圖片解碼限制 | `src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs`（`UploadImage`、`GetFile`）、`Helper/ImageDecodeGuard.cs`（新增）、`demo/WalkingTec.Mvvm.Vue3Demo/Areas/_Admin/ImageDecodeGuard.cs`、`Controllers/FileApiController.cs`（`ResizeImage`） | 縮略圖在解碼前先檢查格式、大小與尺寸，上限由 `ImageUploadLimits` 設定；規則移到框架，demo 保留原有的型別與方法 | 第 30 節 |
 | `src/WalkingTec.Mvvm.Core/Json/FileAttachmentOutputExclusion.cs`（新增）、`src/WalkingTec.Mvvm.Mvc/Helper/MvcOptionExtension.cs` | `UseWtmJsonOptions` 在輸出時排除 `FileAttachment` 的儲存細節（`Path`、`ExtraInfo`、`SaveMode`、`HandlerInfo`、`FileData`），輸入與伺服器端程式不受影響 | 第 31 節 |
+| `src/WalkingTec.Mvvm.Mvc/CodeGenVM.cs` | `MainDir` 在沒有（或不含 `bin/Debug`、`bin/Release` 的）`EntryDir` 時維持未設定，不再丟 `ArgumentOutOfRangeException`；`MainNS` 在沒有 `MainDir` 時回傳空字串，不再丟 `NullReferenceException`（model 驗證會讀取 `MainNS`）；輸出目錄改由伺服器端計算並限制在允許的根目錄內（`UseServerDirectories`、`GetInputErrors`） | #178、#276 |
 | Dependabot 的依賴升級 | 各 csproj／`package-lock.json` 的版本號 | 見各 `dependencies` PR |
 
 fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder,GenericEndpointGuard}.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/GenericEndpointOptions.cs`、`docs/security/generic-endpoint-authz.md`、`test/WalkingTec.Mvvm.LayUI.E2EHost/Controllers/ReportController.cs`（授權測試用頁面）、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270、#272）、`test/WalkingTec.Mvvm.E2E.Instrumentation/`（E2E 的路由覆蓋與 hosting startup，#272）。
@@ -716,7 +717,7 @@ dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build --filter TestCategory
 
 #### 已知偏差
 
-觀察到的行為與預期不同、但本 Issue 不修改 `src`／`demo` 的項目，用 `knownDeviation` 標記（短而中性的描述加上各身分目前的結果）：測試照常通過並在報告中列出，修好後測試會要求移除標記。目前共 3 類，見追蹤 Issue（原本的第 4 類，`EnableWorkflow=true` 時名稱以數字結尾的 controller 路由名稱被改變，已在 #294 修好並移除）。
+觀察到的行為與預期不同、但本 Issue 不修改 `src`／`demo` 的項目，用 `knownDeviation` 標記（短而中性的描述加上各身分目前的結果）：測試照常通過並在報告中列出，修好後測試會要求移除標記。目前共 2 類，見追蹤 Issue（原本的第 4 類，`EnableWorkflow=true` 時名稱以數字結尾的 controller 路由名稱被改變，已在 #294 修好並移除；原本的第 3 類，`_CodeGen` 的 POST action 在 model 驗證階段回 400、蓋過 debug-only 訊息，已在 #276 修好並移除）。
 
 #### 設定切換：`EnableWorkflow`
 
