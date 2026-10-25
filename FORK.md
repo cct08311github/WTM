@@ -591,7 +591,7 @@ HEADED=1 dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build   # 顯示�
 
 **路由覆蓋**：所有 `_Framework` 端點與 Gadget 動作都有測試命中；排除清單沒有新增項目（沒有「不可達」的端點，需要外部網路、多站台或 `DebugOnly` 的維持原排除）。`SiteProcess.AssertRouteHitAsync` 讓測試可以直接檢查命中紀錄（批次刪除的測試用它確認 `gadget/batchdelete`、`gadget/dobatchdelete` 都被記錄）。基線 16／42 個可測動作，現在 70／70（含 28 個 Lab 測試用動作；原本的 42 個全部命中）。
 
-**執行時間與 nightly**：整套（含 Vue3Demo 與權限矩陣測試）在本機約 3 分鐘。若之後變長，在測試加上 `[TestCategory("nightly")]`；`e2e-smoke` 已用 `--filter "TestCategory!=nightly"` 排除它們，要跑時：`dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build --filter "TestCategory=nightly"`（本 Issue 沒有新增排程 workflow）。
+**執行時間與 nightly**：整套在本機約 3 分鐘（不含需先建置前端的 Vue3Demo 測試）。若之後變長，在測試加上 `[TestCategory("nightly")]`；`e2e-smoke` 已用 `--filter "TestCategory!=nightly"` 排除它們，要跑時：`dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build --filter "TestCategory=nightly"`（本 Issue 沒有新增排程 workflow）。
 
 **測試 host 的自備項目**：`_Layout.cshtml` 內有測試用的 `JSONfns`（`RefreshChart` 解析 series 時使用，框架腳本與共用靜態檔沒有提供，下游頁面自行引入），`Views/Home/Index.cshtml` 在 `index` 載入後再載入 `echarts` extension（圖表 TagHelper 使用全域 `echarts`）。
 
