@@ -110,6 +110,26 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         /// <summary>
+        /// Resolves an assembly qualified type name. Returns null, never throws, when the name is empty or does not
+        /// resolve to a type (a name posted by the client is not trusted to be loadable).
+        /// </summary>
+        public static Type TryGetType(string typeName)
+        {
+            if (string.IsNullOrWhiteSpace(typeName))
+            {
+                return null;
+            }
+            try
+            {
+                return Type.GetType(typeName);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
         /// Resolves the selected model against the models of the configured data contexts.
         /// The model must be one of <paramref name="allowedModels"/> and derive from <see cref="TopBasePoco"/>.
         /// </summary>
@@ -125,15 +145,8 @@ namespace WalkingTec.Mvvm.Mvc
             var type = allowed.FirstOrDefault(x => string.Equals(x.AssemblyQualifiedName, selectedModel, StringComparison.Ordinal));
             if (type == null)
             {
-                try
-                {
-                    var resolved = Type.GetType(selectedModel);
-                    type = resolved != null && allowed.Contains(resolved) ? resolved : null;
-                }
-                catch (Exception)
-                {
-                    type = null;
-                }
+                var resolved = TryGetType(selectedModel);
+                type = resolved != null && allowed.Contains(resolved) ? resolved : null;
             }
             if (type == null || type.IsSubclassOf(typeof(TopBasePoco)) == false)
             {

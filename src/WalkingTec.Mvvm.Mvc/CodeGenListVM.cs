@@ -75,7 +75,12 @@ namespace WalkingTec.Mvvm.Mvc
 
         public override IOrderedQueryable<CodeGenListView> GetSearchQuery()
         {
-            Type modeltype =  Type.GetType(ModelFullName);
+            Type modeltype = CodeGenPathGuard.TryGetType(ModelFullName);
+            if (modeltype == null)
+            {
+                // the selected model was not validated, there is nothing to list
+                return new List<CodeGenListView>().AsQueryable().OrderBy(x => x.FieldName);
+            }
             var pros = modeltype.GetAllProperties();
             List<CodeGenListView> lv = new List<CodeGenListView>();
             int count = 0;

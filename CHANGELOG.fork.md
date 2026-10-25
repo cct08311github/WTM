@@ -10,6 +10,10 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
+## 未发布
+
+* **修复：**   开发期代码生成器（`_CodeGen`）的 `SelectedModel` 不是空字符串、但对应不到任何类型时，`CodeGenVM.InitVM()` 把 `Type.GetType(SelectedModel)` 的结果（null）直接交给 `MakeGenericType`，丢出 `ArgumentNullException`（#353）。`InitVM` 在绑定请求时就会执行，所以 `SetField`、`Gen`、`DoGen`、`Preview` 在 action 与 debug-only 检查之前就失败。现在类型解析集中到 `CodeGenPathGuard.TryGetType`（空值或无法解析时返回 null，不丢例外），`InitVM` 对应不到类型的 `SelectedModel` 不再挑选数据上下文；`GetInputErrors` 在没有传入允许清单时也会检查 `SelectedModel` 能否解析，`DoGen` 对无法解析的 `SelectedModel` 在写入任何文件之前就拒绝；`CodeGenListVM`（字段清单）对无法解析的 `ModelFullName` 返回空清单；`CodeGenVM` 其余各处的 `Type.GetType(SelectedModel)` 一并改用同一个解析方法。action 一向先经 `GetInputErrors(GetAllModels())` 验证，无法对应到已配置 model 的 `SelectedModel` 因此得到一般的验证错误（`SetField` 回到 Index 页面显示 `SelectedModel` 的错误，`Gen`、`DoGen`、`Preview` 回 400），不再是 500。只影响仅在 `IsQuickDebug=true` 时可用的开发期工具，有效的 `SelectedModel` 行为不变，未修改 LayUI 受保护路径。回滚：退回上一个 fork 版本
+
 ## 10.0.0.15(2026-10-25)
 
 * **修复：**   开发期代码生成器（`_CodeGen`）在请求没有 `EntryDir`（空白或缺少）时，`CodeGenVM.MainNS` 在 model 验证阶段丢出 `NullReferenceException`，`DoGen`、`Gen`、`Preview`、`SetField` 因此在 action 与 debug-only 检查之前就失败（#276）。现在 `MainDir` 在无法由 `EntryDir` 推出时保持未设定，`MainNS` 此时返回空字符串，请求照常交给 action：未启用 `IsQuickDebug` 时得到框架的 debug-only 提示；启用时 action 一律改用服务器端目录（`UseServerDirectories`），客户端传来的 `EntryDir` 本来就不会被使用。无法推出主目录时仍拒绝生成，不写入任何文件。权限矩阵（#273）中这四个 action 的已知偏差一并移除。

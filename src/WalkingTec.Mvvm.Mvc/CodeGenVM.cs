@@ -111,6 +111,12 @@ namespace WalkingTec.Mvvm.Mvc
         }
 
         /// <summary>
+        /// The type <see cref="SelectedModel"/> names, or null when it is empty or does not resolve to a type.
+        /// <see cref="SelectedModel"/> is posted by the client, so callers must not assume it is loadable.
+        /// </summary>
+        private Type SelectedModelType => CodeGenPathGuard.TryGetType(SelectedModel);
+
+        /// <summary>
         /// Validates the values that end up in generated file and directory names.
         /// When <paramref name="allowedModels"/> is given, the selected model must also be one of them.
         /// Messages are localization keys.
@@ -119,7 +125,8 @@ namespace WalkingTec.Mvvm.Mvc
         {
             var errors = new List<KeyValuePair<string, string>>();
             if (string.IsNullOrEmpty(SelectedModel) || CodeGenPathGuard.IsIdentifier(ModelName) == false
-                || (allowedModels != null && CodeGenPathGuard.TryResolveModel(SelectedModel, allowedModels, out _) == false))
+                || (allowedModels != null && CodeGenPathGuard.TryResolveModel(SelectedModel, allowedModels, out _) == false)
+                || (allowedModels == null && SelectedModelType == null))
             {
                 errors.Add(new KeyValuePair<string, string>(nameof(SelectedModel), "Codegen.SelectedModelMustBeBasePoco"));
             }
@@ -136,7 +143,7 @@ namespace WalkingTec.Mvvm.Mvc
 
         private void EnsureInputsValid()
         {
-            if (CodeGenPathGuard.IsIdentifier(ModelName) == false || CodeGenPathGuard.IsOptionalIdentifier(Area) == false)
+            if (CodeGenPathGuard.IsIdentifier(ModelName) == false || CodeGenPathGuard.IsOptionalIdentifier(Area) == false || SelectedModelType == null)
             {
                 throw new InvalidOperationException("Invalid code generator input.");
             }
@@ -463,12 +470,15 @@ namespace WalkingTec.Mvvm.Mvc
 
         protected override void InitVM()
         {
-            if (string.IsNullOrEmpty(SelectedModel) == false)
+            // SelectedModel is posted by the client and InitVM runs while the request is bound: a name that does not
+            // resolve to a type is reported by GetInputErrors, here it just means there is no data context to pick
+            var selectedType = SelectedModelType;
+            if (selectedType != null)
             {
                 foreach (var item in ConfigInfo.Connections)
                 {
                     var dc = item.CreateDC();
-                    Type t = typeof(DbSet<>).MakeGenericType(Type.GetType(SelectedModel));
+                    Type t = typeof(DbSet<>).MakeGenericType(selectedType);
                     var exist = dc.GetType().GetSingleProperty(x => x.PropertyType == t);
                     if (exist != null)
                     {
@@ -723,7 +733,7 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 string prostring = "";
                 string initstr = "";
-                Type modelType = Type.GetType(SelectedModel);
+                Type modelType = SelectedModelType;
                 List<FieldInfo> pros = null;
                 if (name == "Searcher")
                 {
@@ -830,7 +840,7 @@ namespace WalkingTec.Mvvm.Mvc
                 }
 
                 var pros = FieldInfos.Where(x => x.IsListField == true).ToList();
-                Type modelType = Type.GetType(SelectedModel);
+                Type modelType = SelectedModelType;
                 List<PropertyInfo> existSubPro = new List<PropertyInfo>();
                 foreach (var pro in pros)
                 {
@@ -980,7 +990,7 @@ namespace WalkingTec.Mvvm.Mvc
 
                     if (pro.InfoType == FieldInfoType.Many2Many)
                     {
-                        Type modelType = Type.GetType(SelectedModel);
+                        Type modelType = SelectedModelType;
                         var protype = modelType.GetSingleProperty(pro.FieldName);
                         prostr += $@"
         [Display(Name = ""{protype.GetPropertyDisplayName()}"")]
@@ -1027,7 +1037,7 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 string prostring = "";
                 string initstr = "";
-                Type modelType = Type.GetType(SelectedModel);
+                Type modelType = SelectedModelType;
                 List<FieldInfo> pros = FieldInfos.Where(x => x.IsImportField == true).ToList();
                 foreach (var pro in pros)
                 {
@@ -1091,7 +1101,7 @@ namespace WalkingTec.Mvvm.Mvc
                     pros = FieldInfos.Where(x => x.IsFormField == true).ToList();
                     pre = "Entity";
                 }
-                Type modelType = Type.GetType(SelectedModel);
+                Type modelType = SelectedModelType;
                 fieldstr.Append(Environment.NewLine);
                 fieldstr.Append(@"<wt:row items-per-row=""ItemsPerRowEnum.Two"">");
                 fieldstr.Append(Environment.NewLine);
@@ -1189,7 +1199,7 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 StringBuilder fieldstr = new StringBuilder();
                 var pros = FieldInfos.Where(x => x.IsSearcherField == true).ToList();
-                Type modelType = Type.GetType(SelectedModel);
+                Type modelType = SelectedModelType;
                 fieldstr.Append(Environment.NewLine);
                 fieldstr.Append(@"<wt:row items-per-row=""ItemsPerRowEnum.Three"">");
                 fieldstr.Append(Environment.NewLine);
@@ -1256,7 +1266,7 @@ namespace WalkingTec.Mvvm.Mvc
             var rv = "";
             if (TestDir != null)
             {
-                Type modelType = Type.GetType(SelectedModel);
+                Type modelType = SelectedModelType;
                 if (UI == UIEnum.LayUI && IsApi == false)
                 {
                     if (typeof(IBasePoco).IsAssignableFrom(modelType) || typeof(IPersistPoco).IsAssignableFrom(modelType))
@@ -1463,7 +1473,7 @@ namespace WalkingTec.Mvvm.Mvc
         {
             var rv = GetResource($"{name}.txt", "Spa.React.views")
                 .Replace("$modelname$", ModelName.ToLower());
-            Type modelType = Type.GetType(SelectedModel);
+            Type modelType = SelectedModelType;
             if (name == "table")
             {
                 StringBuilder fieldstr = new StringBuilder();
@@ -1804,7 +1814,7 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 apineeded = new List<string>();
             }
-            Type modelType = Type.GetType(SelectedModel);
+            Type modelType = SelectedModelType;
             if (name == "config")
             {
                 StringBuilder fieldstr = new StringBuilder();
@@ -2259,7 +2269,7 @@ namespace WalkingTec.Mvvm.Mvc
                 .Replace("$des$", ModuleName)
                 .Replace("$controllername$", $"{ControllerNs},{ModelName}")
                 .Replace("$pagepath$", pagepath);
-            Type modelType = Type.GetType(SelectedModel);
+            Type modelType = SelectedModelType;
             if (name == "Index")
             {
                 StringBuilder fieldstr = new StringBuilder();
@@ -2734,7 +2744,7 @@ namespace WalkingTec.Mvvm.Mvc
                 .Replace("$des$", ModuleName)
                 .Replace("$controllername$", $"{ControllerNs};{ModelName}")
                 .Replace("$pagepath$", pagepath);
-            Type modelType = Type.GetType(SelectedModel);
+            Type modelType = SelectedModelType;
             if (name == "Index")
             {
                 StringBuilder fieldstr = new StringBuilder();
@@ -3165,7 +3175,7 @@ namespace WalkingTec.Mvvm.Mvc
         private string GetRelatedNamespace(List<FieldInfo> pros, string s)
         {
             string otherns = @"";
-            Type modelType = Type.GetType(SelectedModel);
+            Type modelType = SelectedModelType;
             foreach (var pro in pros)
             {
                 Type proType = null;
