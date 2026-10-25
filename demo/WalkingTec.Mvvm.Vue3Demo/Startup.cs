@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.IO;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
@@ -75,6 +76,9 @@ namespace WalkingTec.Mvvm.Vue3Demo
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
         public void Configure(IApplicationBuilder app, IOptionsMonitor<Configs> configs, IHostEnvironment env)
         {
+            // Fill the icon font catalog served by FrameworkMenu/GetIcons and GetIconItems. Without this call the catalog stays null
+            // and both actions fail. The path is built from the content root so that it does not depend on the working directory.
+            IconFontsHelper.GenerateIconFont(Path.Combine(env.ContentRootPath, "wwwroot", "font"));
             app.UseExceptionHandler(configs.CurrentValue.ErrorHandler);
             DefaultFilesOptions defaultFilesOptions = new DefaultFilesOptions();
             defaultFilesOptions.DefaultFileNames.Clear();

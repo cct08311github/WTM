@@ -19,8 +19,11 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkMenuVMs
 
         public override bool DoBatchDelete()
         {
+            string[] roles = null;
             if (Ids != null)
             {
+                // the roles are read first: they say whose cached menus are out of date after the delete
+                roles = FrameworkMenuCache.RolesOf(DC, FrameworkMenuCache.WithDescendants(DC, Ids.Select(x => Guid.Parse(x))));
                 foreach (var item in Ids)
                 {
                     FrameworkMenu f = new FrameworkMenu { ID = Guid.Parse(item) };
@@ -28,6 +31,8 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkMenuVMs
                 }
             }
             DC.SaveChanges();
+            // without this the deleted menus stay in the side menu until the cached menu list expires
+            FrameworkMenuCache.Invalidate(Wtm, roles);
             return true;
         }
     }

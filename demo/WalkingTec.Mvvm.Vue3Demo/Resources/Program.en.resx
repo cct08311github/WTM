@@ -267,6 +267,9 @@
   <data name="MenuKey.DataPrivilege" xml:space="preserve">
     <value>Data Privilege</value>
   </data>
+  <data name="MenuKey.FrameworkTenant" xml:space="preserve">
+    <value>Tenant management</value>
+  </data>
   <data name="MenuKey.GroupManagement" xml:space="preserve">
     <value>Group Management</value>
   </data>
@@ -896,6 +899,36 @@
   </data>
   <data name="_Admin.Tenant" xml:space="preserve">
     <value>Tenant</value>
+  </data>
+  <data name="_Admin.TenantAllowed" xml:space="preserve">
+    <value>Tenant allowed</value>
+  </data>
+  <data name="_Admin.TenantCode" xml:space="preserve">
+    <value>Tenant code</value>
+  </data>
+  <data name="_Admin.TenantDb" xml:space="preserve">
+    <value>Tenant database</value>
+  </data>
+  <data name="_Admin.TenantDbContext" xml:space="preserve">
+    <value>DbContext</value>
+  </data>
+  <data name="_Admin.TenantDbError" xml:space="preserve">
+    <value>The tenant database cannot be created, please check the settings</value>
+  </data>
+  <data name="_Admin.TenantDbType" xml:space="preserve">
+    <value>Database type</value>
+  </data>
+  <data name="_Admin.TenantDomain" xml:space="preserve">
+    <value>Tenant domain</value>
+  </data>
+  <data name="_Admin.TenantEnableSub" xml:space="preserve">
+    <value>Enable sub site</value>
+  </data>
+  <data name="_Admin.TenantName" xml:space="preserve">
+    <value>Tenant name</value>
+  </data>
+  <data name="_Admin.TenantNotAllowed" xml:space="preserve">
+    <value>This page is not available to tenants</value>
   </data>
   <data name="_Admin.UnsetPages" xml:space="preserve">
     <value>Unset pages</value>

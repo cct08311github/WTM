@@ -607,6 +607,47 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
             await api.PostAsync("/api/_FrameworkTenant/BatchDelete", Ids(await api.PostAsync("/api/_FrameworkTenant/Search", new { TCode = code })));
         }
 
+        // ---- #292 ----
+
+        [TestMethod]
+        public async Task Menu_Delete_TakesTheEntryOutOfTheSideMenuWithoutReloading()
+        {
+            var api = await ApiAsync();
+            await Vue3Seed.EnsureAsync(api);
+            var name = UniqueName("Side ");
+            await api.PostAsync("/api/_FrameworkMenu/Add", new
+            {
+                Entity = new { Url = "https://example.invalid/e2e-side", PageName = name, ShowOnMenu = true, IsInside = false, DisplayOrder = 900 },
+                SelectedRolesCodes = new[] { "001" }
+            });
+            await SignInAsync();
+            var entry = App.SideMenu.Locator("li").Filter(new() { HasTextString = name });
+            await Expect(entry).ToBeVisibleAsync();
+
+            var list = new ListPage(Page, "/_admin/frameworkmenu");
+            await list.OpenAsync(App);
+            await list.DeleteRowAsync(name);
+
+            // the page is not reloaded: the side menu is rebuilt from the user info that the server answers after the delete
+            await Expect(entry).ToHaveCountAsync(0);
+        }
+
+        [TestMethod]
+        public async Task Tenant_MenuAndPage_ShowTranslatedTexts()
+        {
+            await SignInAsync();
+
+            // the menu entry comes from the resource file of the server; its title was shown as the key MenuKey.FrameworkTenant
+            await Expect(App.SideMenu).ToContainTextAsync("Tenant management");
+            var list = new ListPage(Page, "/_admin/frameworktenant");
+            await list.OpenAsync(App);
+            await Expect(Page.Locator(".layout-tagsview, .layout-navbars-tagsview").First).ToContainTextAsync("Tenant management");
+
+            var text = await Page.Locator("body").InnerTextAsync();
+            Assert.IsFalse(text.Contains("MenuKey."), "a menu title is shown as its resource key");
+            Assert.IsFalse(text.Contains("message."), "a text of the SPA is shown as its key");
+        }
+
         // One list per test run: the browser limits repeated automatic downloads of one page, so each export starts from its own page.
         [TestMethod]
         [DataRow("/_admin/frameworkrole")]

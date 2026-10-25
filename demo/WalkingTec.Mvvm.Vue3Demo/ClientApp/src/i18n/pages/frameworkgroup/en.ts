@@ -9,6 +9,10 @@ export default {
 				ParentId: 'Parent',
 				Manager: 'Manager',
 				GroupRemark: 'Remark',
+			},
+			req: {
+				GroupCode: 'Please enter the group code',
+				GroupName: 'Please enter the group name',
 			}
 		}
 	}

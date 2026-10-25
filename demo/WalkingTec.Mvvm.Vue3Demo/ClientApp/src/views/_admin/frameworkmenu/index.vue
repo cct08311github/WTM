@@ -48,6 +48,8 @@ import { ElMessageBox, ElMessage } from 'element-plus';
 import frameworkmenuApi from '/@/api/frameworkmenu';
 import { useThemeConfig } from '/@/stores/themeConfig';
 import other from '/@/utils/other';
+import { Session } from '/@/utils/storage';
+import { initBackEndControlRoutes } from '/@/router/backEnd';
 
 const ci = getCurrentInstance() as any;
 // 引入组件
@@ -102,15 +104,25 @@ const onDetail = (row: any) => {
 	other.openDialog(ci.proxy.$t('message._system.common.vm.detail'), detailDialog, row, getTableData)
 };
 // 删除
+// 删除菜单后，重新读取用户信息并重建侧边菜单，被删除的菜单立即从侧边菜单消失
+// （用户信息缓存在 sessionStorage，不清除的话要等重新载入页面才会更新）
+const reloadSideMenu = () => {
+	Session.remove('userInfo');
+	return initBackEndControlRoutes().catch(() => { });
+};
+const afterDelete = () => {
+	getTableData();
+	return reloadSideMenu();
+};
 const onDelete = (row: any) => {
-	frameworkmenuApi().delete([row.ID]).then(() => { getTableData() })
+	frameworkmenuApi().delete([row.ID]).then(afterDelete)
 };
 const onRefresh = () => {
 	frameworkmenuApi().refresh().then(() => { ElMessage.success(ci.proxy.$t('message._system.common.vm.submittip')); })
 };
 const onBatchDelete = () => {
 	const selected = tableRef.value.getSelectedRows();
-	frameworkmenuApi().delete(selected.map((x: any) => x.ID)).then(() => { getTableData() })
+	frameworkmenuApi().delete(selected.map((x: any) => x.ID)).then(afterDelete)
 };
 const onExport = () => {
 	const selected = tableRef.value.getSelectedRows();
