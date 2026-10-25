@@ -12,6 +12,10 @@ export default {
 				EnableSub: '允许子租户',
 				TDomain: '租户域名',
 				AdminRoleCode: '角色',
+			},
+			req: {
+				TCode: '请输入租户编码',
+				TName: '请输入租户名称',
 			}
 		}
 	}

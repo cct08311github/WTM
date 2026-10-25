@@ -255,6 +255,75 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
             await api.PostAsync("/api/_FrameworkTenant/BatchDelete", new[] { tenantId }.Concat(Ids(await api.PostAsync("/api/_FrameworkTenant/Search", new { TCode = tenantImport }))).ToArray());
         }
 
+        // ---- menus: icon font catalog, cache after a delete, texts of the tenant template (#292) ----
+
+        [TestMethod]
+        public async Task FrameworkMenu_IconCatalog_ListsFontsAndTheirIcons()
+        {
+            var api = await StartAsync();
+
+            var fonts = await api.GetAsync("/api/_FrameworkMenu/GetIcons");
+            Assert.AreEqual(JsonValueKind.Array, fonts.ValueKind);
+            Assert.IsTrue(fonts.GetArrayLength() > 0, "the demo ships an icon font (wwwroot/font), the catalog lists it");
+            var font = fonts.EnumerateArray().First().GetProperty("Value").GetString();
+
+            var icons = await api.GetAsync("/api/_FrameworkMenu/GetIconItems?key=" + Uri.EscapeDataString(font));
+            Assert.AreEqual(JsonValueKind.Array, icons.ValueKind);
+            Assert.IsTrue(icons.GetArrayLength() > 0, "the font has icons");
+
+            // a font that is not in the catalog (or no font at all) has no icons; it is not a server error
+            Assert.AreEqual(0, (await api.GetAsync("/api/_FrameworkMenu/GetIconItems?key=no-such-font")).GetArrayLength());
+            Assert.AreEqual(0, (await api.GetAsync("/api/_FrameworkMenu/GetIconItems")).GetArrayLength());
+        }
+
+        [TestMethod]
+        public async Task FrameworkError_RequestedDirectly_AnswersWithoutAServerError()
+        {
+            // the error page is the target of the exception handler; called by itself it has no exception to report
+            var api = await StartAsync();
+            var response = await api.GetRawAsync("/_Framework/Error");
+            Assert.AreEqual(400, response.Status);
+            // (the page used to fail with a NullReferenceException and the exception handler then answered with its message)
+            Assert.AreEqual(string.Empty, await response.TextAsync());
+        }
+
+        [TestMethod]
+        public async Task FrameworkMenu_Delete_TakesTheMenuOutOfTheUserInfoAtOnce()
+        {
+            var api = await StartAsync();
+            var name = UniqueName("Cached ");
+            var added = await api.PostAsync("/api/_FrameworkMenu/Add", new
+            {
+                Entity = new { Url = "https://example.invalid/e2e-cache", PageName = name, ShowOnMenu = true, IsInside = false, DisplayOrder = 902 },
+                SelectedRolesCodes = new[] { "001" }
+            });
+            var id = added.GetProperty("ID").GetString();
+
+            // a new menu is part of the menus of the user without a manual refresh ...
+            Assert.IsTrue(MenuTexts(await api.GetAsync("/api/_account/checkuserinfo")).Contains(name), "the new menu is listed");
+
+            // ... and so is the removal of a menu: the cached menu list and the cached user are dropped by the delete
+            await api.PostAsync("/api/_FrameworkMenu/BatchDelete", new[] { id });
+            Assert.IsFalse(MenuTexts(await api.GetAsync("/api/_account/checkuserinfo")).Contains(name), "the deleted menu is gone");
+        }
+
+        private static string[] MenuTexts(JsonElement userInfo) =>
+            userInfo.GetProperty("Attributes").GetProperty("Menus").EnumerateArray().Select(x => x.GetProperty("Text").GetString()).ToArray();
+
+        [TestMethod]
+        public async Task FrameworkTenant_ImportTemplate_HasReadableHeaders()
+        {
+            var api = await StartAsync();
+            var headers = ExcelTemplate.Headers(await TemplateAsync(api, "/api/_FrameworkTenant/GetExcelTemplate"));
+
+            Assert.IsTrue(headers.Length > 0);
+            foreach (var header in headers)
+            {
+                Assert.IsFalse(header.StartsWith("_Admin.") || header.StartsWith("Sys."), "the header '" + header + "' is a resource key that has no text");
+            }
+            StringAssert.StartsWith(headers[0], "Tenant code");
+        }
+
         [TestMethod]
         public async Task ActionLog_ExportAndBatchDelete()
         {

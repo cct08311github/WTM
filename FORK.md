@@ -208,6 +208,8 @@ git merge --no-ff upstream/dotnet10
 | 圖片解碼限制 | `src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs`（`UploadImage`、`GetFile`）、`Helper/ImageDecodeGuard.cs`（新增）、`demo/WalkingTec.Mvvm.Vue3Demo/Areas/_Admin/ImageDecodeGuard.cs`、`Controllers/FileApiController.cs`（`ResizeImage`） | 縮略圖在解碼前先檢查格式、大小與尺寸，上限由 `ImageUploadLimits` 設定；規則移到框架，demo 保留原有的型別與方法 | 第 30 節 |
 | `src/WalkingTec.Mvvm.Core/Json/FileAttachmentOutputExclusion.cs`（新增）、`src/WalkingTec.Mvvm.Mvc/Helper/MvcOptionExtension.cs` | `UseWtmJsonOptions` 在輸出時排除 `FileAttachment` 的儲存細節（`Path`、`ExtraInfo`、`SaveMode`、`HandlerInfo`、`FileData`），輸入與伺服器端程式不受影響 | 第 31 節 |
 | `src/WalkingTec.Mvvm.Mvc/CodeGenVM.cs` | `MainDir` 在沒有（或不含 `bin/Debug`、`bin/Release` 的）`EntryDir` 時維持未設定，不再丟 `ArgumentOutOfRangeException`；`MainNS` 在沒有 `MainDir` 時回傳空字串，不再丟 `NullReferenceException`（model 驗證會讀取 `MainNS`）；輸出目錄改由伺服器端計算並限制在允許的根目錄內（`UseServerDirectories`、`GetInputErrors`） | #178、#276 |
+| `src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs` | `Error()` 對沒有 `IExceptionHandlerPathFeature`、`TargetSite`（或其 `DeclaringType`）、`RemoteIpAddress` 的情況做空值檢查，不再自己拋例外（有 `TargetSite` 的例外走原來的路徑） | #292 |
+| `demo/WalkingTec.Mvvm.Vue3Demo/Startup.cs`、`Areas/_Admin/Controllers/FrameworkMenuController.cs`、`Areas/_Admin/ViewModels/FrameworkMenuVMs/{FrameworkMenuVM2,FrameworkMenuBatchVM}.cs`、`FrameworkMenuCache.cs`（新增）、`Resources/Program.{en,zh}.resx`、`ClientApp/src/i18n/pages/**`、`ClientApp/src/views/_admin/frameworkmenu/index.vue` | 啟動時建立圖示目錄（`GetIcons`／`GetIconItems`）、選單刪除（以及新增、修改）後清除選單與用戶快取、選單管理頁刪除後重建側邊選單、補齊多語系鍵 | #292 |
 | Dependabot 的依賴升級 | 各 csproj／`package-lock.json` 的版本號 | 見各 `dependencies` PR |
 
 fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder,GenericEndpointGuard}.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/GenericEndpointOptions.cs`、`docs/security/generic-endpoint-authz.md`、`test/WalkingTec.Mvvm.LayUI.E2EHost/Controllers/ReportController.cs`（授權測試用頁面）、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270、#272）、`test/WalkingTec.Mvvm.E2E.Instrumentation/`（E2E 的路由覆蓋與 hosting startup，#272）。
@@ -636,7 +638,7 @@ dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build --filter TestCategory
 
 #### 路由覆蓋
 
-排除清單：`test/WalkingTec.Mvvm.E2E/Coverage/vue3demo.route-exclusions.json`（每條都有 `id` 與 `reason`）。排除的是：程式碼產生器（`DebugOnly`）、未啟用的 workflow、呼叫外部網站的 action、需要主站台的 action、LayUI 圖示目錄，以及伺服器端渲染 UI 專用的 `_Framework` 輔助 action（SPA 只呼叫 `/api/*`）。目前基線：共 222 個 action，排除 70，可計入 152，全部命中（100%）。LayUI 目標的數字見其自己的報告。仍只記錄基線，**不因覆蓋率低而失敗**。
+排除清單：`test/WalkingTec.Mvvm.E2E/Coverage/vue3demo.route-exclusions.json`（每條都有 `id` 與 `reason`）。排除的是：程式碼產生器（`DebugOnly`）、未啟用的 workflow、呼叫外部網站的 action、需要主站台的 action，以及伺服器端渲染 UI 專用的 `_Framework` 輔助 action（SPA 只呼叫 `/api/*`）。目前基線：共 223 個 action，排除 68，可計入 155，全部命中（100%）。LayUI 目標的數字見其自己的報告。仍只記錄基線，**不因覆蓋率低而失敗**。
 
 #### CI 與執行時間
 
@@ -649,7 +651,7 @@ dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build --filter TestCategory
 - #288：匯入檔含無效資料列時，回應是「Memory stream is not expandable.」，而不是列出錯誤並提供錯誤檔
 - #290：使用者管理頁呼叫 `/api/_Admin/FrameworkUser/*`（與實際路由 `/api/_FrameworkUser/*` 不符）；`City`／`SchoolVue3` 頁的匯出按鈕與資料權限列表的詳細按鈕檢查了不存在的權限鍵而不顯示；學校頁匯出勾選列不會下載；租戶列表的名稱欄為空
 - #291：只符合子群組的搜尋回傳空列表（這個 Issue 也包含群組列表的備註欄一律為空，該項沒有對應的測試）
-- 沒有對應測試的觀察：缺漏的 i18n 鍵、`FrameworkMenu/GetIcons` 回 400、刪除選單後選單快取未更新 → #292
+- #292 已修正：缺漏的 i18n 鍵、`FrameworkMenu/GetIcons` 回 400 與 `GetIconItems` 回 500（含 `_FrameworkController.Error()` 自己拋例外）、刪除選單後側邊選單未即時更新。這些沒有事先標 `Ignore` 的測試，修正時一併新增（`Vue3ApiTests`：圖示目錄、刪除選單後的使用者資訊、租戶範本表頭、直接請求錯誤頁；`Vue3AdminTests`：刪除後的側邊選單、租戶選單與頁面標題），權限矩陣的 `geticonitems` 已移除 `knownDeviation`，路由排除清單移除圖示目錄兩項
 
 ### 權限矩陣（#273）
 

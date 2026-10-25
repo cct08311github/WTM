@@ -12,6 +12,10 @@ export default {
 				EnableSub: 'EnableSub',
 				TDomain: 'TenantDomain',
 				AdminRoleCode: 'AdminRoleCode',
+			},
+			req: {
+				TCode: 'Please enter the tenant code',
+				TName: 'Please enter the tenant name',
 			}
 		}
 	}

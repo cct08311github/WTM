@@ -198,7 +198,12 @@ namespace WalkingTec.Mvvm.Admin.Api
         [HttpGet("GetIconItems")]
         public List<MenuItem> GetIconItems(string key)
         {
-            return IconFontsHelper.IconFontDicItems[key];
+            // an unknown (or missing) icon font has no items; it is not a server error
+            if (key != null && IconFontsHelper.IconFontDicItems != null && IconFontsHelper.IconFontDicItems.TryGetValue(key, out var items))
+            {
+                return items;
+            }
+            return new List<MenuItem>();
         }
 
     }

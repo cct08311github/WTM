@@ -269,7 +269,7 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkMenuVMs
                 }
             }
             DC.SaveChanges();
-            Wtm.RemoveUserCacheByRole(SelectedRolesCodes.ToArray()).Wait();
+            FrameworkMenuCache.Invalidate(Wtm, SelectedRolesCodes.ToArray());
         }
 
 
@@ -277,8 +277,11 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkMenuVMs
         {
             try
             {
+                var roles = FrameworkMenuCache.RolesOf(DC, FrameworkMenuCache.WithDescendants(DC, new[] { Entity.ID }));
                 DC.CascadeDelete(Entity);
                 DC.SaveChanges();
+                // without this the deleted menu stays in the side menu until the cached menu list expires
+                FrameworkMenuCache.Invalidate(Wtm, roles);
             }
             catch
             { }
