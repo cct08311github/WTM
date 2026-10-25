@@ -198,7 +198,7 @@
   <data name="Codegen.SubField" xml:space="preserve">
     <value>Display field of linked poco</value>
   </data>
-  <data name="CodeGen.Success" xml:space="preserve">
+  <data name="Codegen.Success" xml:space="preserve">
     <value>Code has been generated, please close the debug and rebuild the solution.</value>
   </data>
   <data name="Codegen.TestNs" xml:space="preserve">
@@ -242,6 +242,9 @@
   </data>
   <data name="Login.OldPasswrodWrong" xml:space="preserve">
     <value>Current password is wrong</value>
+  </data>
+  <data name="Login.Password" xml:space="preserve">
+    <value>Password</value>
   </data>
   <data name="Login.PasswordNotSame" xml:space="preserve">
     <value>Inconsistent password</value>
@@ -302,6 +305,9 @@
   </data>
   <data name="Sys.ApiDoc" xml:space="preserve">
     <value>Api Doc</value>
+  </data>
+  <data name="Sys.Approve" xml:space="preserve">
+    <value>Approve</value>
   </data>
   <data name="Sys.AttemptedValueIsInvalidAccessor" xml:space="preserve">
     <value>The value '{0}' is not valid for {1}.</value>
@@ -510,6 +516,9 @@
   <data name="Sys.NotHave" xml:space="preserve">
     <value>None</value>
   </data>
+  <data name="Sys.NoWorkflow" xml:space="preserve">
+    <value>No related work flow is found</value>
+  </data>
   <data name="Sys.OK" xml:space="preserve">
     <value>OK</value>
   </data>
@@ -705,6 +714,9 @@
   <data name="_Admin.CheckPage" xml:space="preserve">
     <value>Check Page</value>
   </data>
+  <data name="_Admin.Children" xml:space="preserve">
+    <value>Children</value>
+  </data>
   <data name="_Admin.ClassName" xml:space="preserve">
     <value>ClassName</value>
   </data>
@@ -759,6 +771,9 @@
   <data name="_Admin.FileExt" xml:space="preserve">
     <value>File ext</value>
   </data>
+  <data name="_Admin.FileName" xml:space="preserve">
+    <value>File name</value>
+  </data>
   <data name="_Admin.FolderOnly" xml:space="preserve">
     <value>Folder</value>
   </data>
@@ -777,8 +792,14 @@
   <data name="_Admin.GroupDp" xml:space="preserve">
     <value>Group Dp</value>
   </data>
+  <data name="_Admin.GroupManager" xml:space="preserve">
+    <value>Group Manager</value>
+  </data>
   <data name="_Admin.GroupName" xml:space="preserve">
     <value>Group name</value>
+  </data>
+  <data name="_Admin.HasMainHost" xml:space="preserve">
+    <value>This operation cannot be performed. Please go to the main site for corresponding operation</value>
   </data>
   <data name="_Admin.HomePhone" xml:space="preserve">
     <value>HomePhone</value>
@@ -803,6 +824,9 @@
   </data>
   <data name="_Admin.IsValid" xml:space="preserve">
     <value>IsValid</value>
+  </data>
+  <data name="_Admin.Job" xml:space="preserve">
+    <value>Job</value>
   </data>
   <data name="_Admin.Length" xml:space="preserve">
     <value>Length</value>
@@ -950,6 +974,9 @@
   </data>
   <data name="_Admin.UsersCount" xml:space="preserve">
     <value>Users</value>
+  </data>
+  <data name="_Admin.WorkflowApi" xml:space="preserve">
+    <value>Workflow Api</value>
   </data>
   <data name="_Admin.ZipCode" xml:space="preserve">
     <value>Zip</value>
