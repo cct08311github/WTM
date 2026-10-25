@@ -324,6 +324,44 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
             StringAssert.StartsWith(headers[0], "Tenant code");
         }
 
+        // ---- texts of the framework screens that came from resource keys without a text (#355) ----
+
+        [TestMethod]
+        public async Task FrameworkExports_HaveTextsForTheirColumnTitles()
+        {
+            var api = await StartAsync();
+            var keyLike = new System.Text.RegularExpressions.Regex(@"^(_Admin|Sys|Login|MenuKey|Validate)\.");
+
+            foreach (var url in new[] { "/api/_FrameworkGroup/ExportExcel", "/api/_FrameworkUser/ExportExcel", "/api/_FrameworkRole/ExportExcel", "/api/_FrameworkTenant/ExportExcel", "/api/_ActionLog/ExportExcel" })
+            {
+                var res = await api.PostRawAsync(url, new { });
+                Assert.AreEqual(200, res.Status, url);
+                var headers = ExcelTemplate.Headers(await res.BodyAsync());
+                Assert.IsTrue(headers.Length > 0, url + " has a header row");
+                foreach (var header in headers)
+                {
+                    Assert.IsFalse(keyLike.IsMatch(header), url + ": the column title '" + header + "' is a resource key that has no text");
+                }
+                if (url.Contains("_FrameworkGroup"))
+                {
+                    CollectionAssert.Contains(headers, "Group Manager", "the group list names its manager column");
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task Account_Registration_NamesTheMissingPasswordWithItsText()
+        {
+            var anonymous = await Playwright.APIRequest.NewContextAsync(new() { BaseURL = Site.BaseUri.ToString() });
+            var res = await anonymous.PostAsync("/api/_account/Reg", new() { DataObject = new { ITCode = UniqueName("p").ToLowerInvariant(), Name = "No password" } });
+            var body = await res.TextAsync();
+            await anonymous.DisposeAsync();
+
+            Assert.AreEqual(400, res.Status, body);
+            StringAssert.Contains(body, "Password", "the answer names the field");
+            Assert.IsFalse(body.Contains("Login.Password"), "the field is named by its text, not by its resource key: " + body);
+        }
+
         [TestMethod]
         public async Task ActionLog_ExportAndBatchDelete()
         {

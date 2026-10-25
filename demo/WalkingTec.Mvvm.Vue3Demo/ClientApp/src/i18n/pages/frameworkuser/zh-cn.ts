@@ -12,6 +12,7 @@ export default {
 	},
 	// 批量修改对话框（batchedit.vue）使用的文字
 	autotrans: {
+		_Page_AdminFrameworkUserBatchEdit: '批量修改用户',
 		SysBatchEditConfirm: '批量修改以下数据',
 		_Model_FrameworkUser_Email: '邮箱',
 		_Model_FrameworkUser_Gender: '性别',

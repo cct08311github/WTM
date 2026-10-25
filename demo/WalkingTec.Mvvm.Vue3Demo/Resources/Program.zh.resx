@@ -243,6 +243,9 @@
   <data name="Login.OldPasswrodWrong" xml:space="preserve">
     <value>当前密码错误</value>
   </data>
+  <data name="Login.Password" xml:space="preserve">
+    <value>密码</value>
+  </data>
   <data name="Login.PasswordNotSame" xml:space="preserve">
     <value>两次新密码输入不一致</value>
   </data>
@@ -305,6 +308,9 @@
   </data>
   <data name="Sys.ApiDoc" xml:space="preserve">
     <value>Api文档</value>
+  </data>
+  <data name="Sys.Approve" xml:space="preserve">
+    <value>审批</value>
   </data>
   <data name="Sys.AttemptedValueIsInvalidAccessor" xml:space="preserve">
     <value>'{0}' 不是 {1} 的有效格式</value>
@@ -513,6 +519,9 @@
   <data name="Sys.NotHave" xml:space="preserve">
     <value>无</value>
   </data>
+  <data name="Sys.NoWorkflow" xml:space="preserve">
+    <value>没有找到匹配的工作流</value>
+  </data>
   <data name="Sys.OK" xml:space="preserve">
     <value>确定</value>
   </data>
@@ -708,6 +717,9 @@
   <data name="_Admin.CheckPage" xml:space="preserve">
     <value>检查页面</value>
   </data>
+  <data name="_Admin.Children" xml:space="preserve">
+    <value>子项</value>
+  </data>
   <data name="_Admin.ClassName" xml:space="preserve">
     <value>类名</value>
   </data>
@@ -762,6 +774,9 @@
   <data name="_Admin.FileExt" xml:space="preserve">
     <value>扩展名</value>
   </data>
+  <data name="_Admin.FileName" xml:space="preserve">
+    <value>文件名</value>
+  </data>
   <data name="_Admin.FolderOnly" xml:space="preserve">
     <value>目录</value>
   </data>
@@ -780,8 +795,14 @@
   <data name="_Admin.GroupDp" xml:space="preserve">
     <value>用户组权限</value>
   </data>
+  <data name="_Admin.GroupManager" xml:space="preserve">
+    <value>部门主管</value>
+  </data>
   <data name="_Admin.GroupName" xml:space="preserve">
     <value>组名</value>
+  </data>
+  <data name="_Admin.HasMainHost" xml:space="preserve">
+    <value>当前站点已设置了主站，无法进行此操作，请到主站进行相应操作</value>
   </data>
   <data name="_Admin.HomePhone" xml:space="preserve">
     <value>座机</value>
@@ -806,6 +827,9 @@
   </data>
   <data name="_Admin.IsValid" xml:space="preserve">
     <value>是否有效</value>
+  </data>
+  <data name="_Admin.Job" xml:space="preserve">
+    <value>作业</value>
   </data>
   <data name="_Admin.Length" xml:space="preserve">
     <value>长度</value>
@@ -953,6 +977,9 @@
   </data>
   <data name="_Admin.UsersCount" xml:space="preserve">
     <value>包含用户</value>
+  </data>
+  <data name="_Admin.WorkflowApi" xml:space="preserve">
+    <value>工作流Api</value>
   </data>
   <data name="_Admin.ZipCode" xml:space="preserve">
     <value>邮编</value>
