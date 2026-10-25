@@ -452,23 +452,31 @@ namespace WalkingTec.Mvvm.Mvc
         public IActionResult Error()
         {
             var ex = HttpContext.Features.Get<IExceptionHandlerPathFeature>();
+            if (ex?.Error == null)
+            {
+                // the page was requested directly, not by the exception handler: there is no exception to report
+                return BadRequest(string.Empty);
+            }
+            // TargetSite is null when the exception did not come from a method that can be described (for example a dynamic method)
+            var site = ex.Error.TargetSite;
+            var siteType = site?.DeclaringType;
             ActionLog log = new ActionLog();
             log.LogType = ActionLogTypesEnum.Exception;
             log.ActionTime = DateTime.Now;
             log.ITCode = Wtm.LoginUserInfo?.ITCode ?? string.Empty;
 
-            var controllerDes = ex.Error.TargetSite.DeclaringType.GetCustomAttributes(typeof(ActionDescriptionAttribute), false).Cast<ActionDescriptionAttribute>().FirstOrDefault();
-            var actionDes = ex.Error.TargetSite.GetCustomAttributes(typeof(ActionDescriptionAttribute), false).Cast<ActionDescriptionAttribute>().FirstOrDefault();
-            var postDes = ex.Error.TargetSite.GetCustomAttributes(typeof(HttpPostAttribute), false).Cast<HttpPostAttribute>().FirstOrDefault();
+            var controllerDes = siteType?.GetCustomAttributes(typeof(ActionDescriptionAttribute), false).Cast<ActionDescriptionAttribute>().FirstOrDefault();
+            var actionDes = site?.GetCustomAttributes(typeof(ActionDescriptionAttribute), false).Cast<ActionDescriptionAttribute>().FirstOrDefault();
+            var postDes = site?.GetCustomAttributes(typeof(HttpPostAttribute), false).Cast<HttpPostAttribute>().FirstOrDefault();
             //给日志的多语言属性赋�?
-            log.ModuleName = controllerDes?.GetDescription(ex.Error.TargetSite.DeclaringType) ?? ex.Error.TargetSite.DeclaringType.Name.Replace("Controller", string.Empty);
-            log.ActionName = actionDes?.GetDescription(ex.Error.TargetSite.DeclaringType) ?? ex.Error.TargetSite.Name;
+            log.ModuleName = (siteType == null ? null : controllerDes?.GetDescription(siteType) ?? siteType.Name.Replace("Controller", string.Empty)) ?? string.Empty;
+            log.ActionName = (site == null ? null : actionDes?.GetDescription(siteType) ?? site.Name) ?? string.Empty;
             if (postDes != null)
             {
                 log.ActionName += "[P]";
             }
             log.ActionUrl = ex.Path;
-            log.IP = HttpContext.Connection.RemoteIpAddress.ToString();
+            log.IP = HttpContext.Connection.RemoteIpAddress?.ToString();
             log.Remark = ex.Error.ToString();
             if (string.IsNullOrEmpty(log.Remark) == false && log.Remark.Length > 2000)
             {
