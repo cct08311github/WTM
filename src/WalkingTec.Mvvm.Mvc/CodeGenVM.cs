@@ -72,15 +72,20 @@ namespace WalkingTec.Mvvm.Mvc
         {
             get
             {
-                if (_mainDir == null)
+                if (_mainDir == null && string.IsNullOrEmpty(EntryDir) == false)
                 {
-                    int? index = EntryDir?.IndexOf($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}Debug{Path.DirectorySeparatorChar}");
-                    if (index == null || index < 0)
+                    int index = EntryDir.IndexOf($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}Debug{Path.DirectorySeparatorChar}");
+                    if (index < 0)
                     {
-                        index = EntryDir?.IndexOf($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}") ?? 0;
+                        index = EntryDir.IndexOf($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}");
                     }
 
-                    _mainDir = EntryDir?.Substring(0, index.Value);
+                    // without a bin/Debug or bin/Release segment there is no main directory, it stays unset and
+                    // GetOutputRoots refuses to generate anything
+                    if (index >= 0)
+                    {
+                        _mainDir = EntryDir.Substring(0, index);
+                    }
                 }
                 return _mainDir;
             }
@@ -314,14 +319,20 @@ namespace WalkingTec.Mvvm.Mvc
         {
             get
             {
-                int index = MainDir.LastIndexOf(Path.DirectorySeparatorChar);
+                // model validation reads this property, so it must not throw when no main directory is known
+                var mainDir = MainDir;
+                if (string.IsNullOrEmpty(mainDir))
+                {
+                    return _mainNs ?? string.Empty;
+                }
+                int index = mainDir.LastIndexOf(Path.DirectorySeparatorChar);
                 if (index > 0)
                 {
-                    _mainNs = MainDir[(index + 1)..];
+                    _mainNs = mainDir[(index + 1)..];
                 }
                 else
                 {
-                    _mainNs = MainDir;
+                    _mainNs = mainDir;
                 }
                 return _mainNs;
             }

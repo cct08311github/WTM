@@ -390,5 +390,70 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         #endregion
+
+        #region requests without directories (#276)
+
+        [DataTestMethod]
+        [DataRow(null)]
+        [DataRow("")]
+        [DataRow("   ")]
+        [DataRow("/no/bin/folder/here")]
+        public void BlankOrUnrecognizedEntryDir_DoesNotThrowWhenValidated(string entryDir)
+        {
+            // an empty request body binds to a VM whose EntryDir is blank; model validation then reads every
+            // property that is not marked ValidateNever, and none of them may throw
+            var vm = new CodeGenVM { EntryDir = entryDir };
+            var validated = typeof(CodeGenVM).GetProperties()
+                .Where(p => p.GetIndexParameters().Length == 0 && p.GetGetMethod() != null)
+                .Where(p => p.IsDefined(typeof(Microsoft.AspNetCore.Mvc.ModelBinding.Validation.ValidateNeverAttribute), true) == false)
+                .ToList();
+            Assert.IsTrue(validated.Any(p => p.Name == nameof(CodeGenVM.MainNS)));
+            foreach (var p in validated)
+            {
+                try
+                {
+                    p.GetValue(vm);
+                }
+                catch (Exception ex)
+                {
+                    Assert.Fail($"Reading {p.Name} threw {ex.GetBaseException().GetType().Name}");
+                }
+            }
+        }
+
+        [TestMethod]
+        public void MainNS_IsEmpty_WhenThereIsNoMainDir()
+        {
+            Assert.AreEqual("", new CodeGenVM().MainNS);
+            Assert.AreEqual("", new CodeGenVM { EntryDir = "" }.MainNS);
+            Assert.IsTrue(string.IsNullOrEmpty(new CodeGenVM { EntryDir = "/no/bin/folder/here" }.MainDir));
+        }
+
+        [TestMethod]
+        public void MainNS_IsTheMainDirectoryName_WhenKnown()
+        {
+            var vm = CreateVM();
+            Assert.AreEqual("Sample.Mvc", vm.MainNS);
+        }
+
+        [TestMethod]
+        public void BlankEntryDir_GeneratingIsRefused_AndNothingIsWritten()
+        {
+            var vm = new CodeGenVM { SelectedModel = SchoolModel, ModuleName = "School" };
+            Assert.ThrowsException<InvalidOperationException>(() => vm.DoGen());
+            AssertNothingWritten();
+        }
+
+        [TestMethod]
+        public void BlankEntryDir_IsReplacedByTheServerDirectory()
+        {
+            // the controller actions always call UseServerDirectories, so a blank value posted by the client is not an error
+            var vm = new CodeGenVM { SelectedModel = SchoolModel, ModuleName = "School", EntryDir = "" };
+            vm.UseServerDirectories();
+            Assert.AreEqual(AppDomain.CurrentDomain.BaseDirectory, vm.EntryDir);
+            Assert.AreEqual(0, vm.GetInputErrors().Count);
+        }
+
+        #endregion
     }
 }
