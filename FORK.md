@@ -598,21 +598,22 @@ HEADED=1 dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build   # 顯示�
 
 **`UIOptions:EncodeHtmlContent`**：測試 host 預設開（`appsettings.json`），Lab 的顯示與編碼測試都以開啟為前提；預設值（關）下，標題、標籤、按鈕文字與表格儲存格會原樣輸出，另有測試固定這個相容行為（`LayUiHtmlEncodingOptionTests`）。測試要暫時切換時用 `SetHtmlContentEncodingAsync(bool)`（呼叫 host 的 `/Lab/HtmlEncoding`，測試結束自動還原）。另外要留意：框架在綁定請求時，預設會把字串先做 HTML 編碼（`StringIgnoreLTGTBinder`），所以經表單存進資料庫的值本來就是編碼過的；`Gadget` 這類資料用預設設定（關）顯示才正確，Lab 的種子資料則是未編碼的原始文字。表格顯示端對這種值只編碼一次的行為見第 23 節（#286）。
 
-**待處理（`[Ignore("#N: …")]`）**：下列測試寫的是「應有的行為」，目前因產品行為不符而略過，修正後移除 `[Ignore]` 即可。清單與原因都在各測試的 `Ignore` 訊息：
-- `checkbox`／`radio`／`combobox`／`transfer`／`tree`／`treecontainer` 的選項文字含標記字元時，由元件寫入為 HTML（元素被建立）（#279）
-- `wt:panel` 的標題沒有經過其他標題（card、tab、fieldset、button）使用的 HTML 編碼（#279）
-- 可編輯表格的儲存格文字含單引號，在表格重繪（新增、刪除列）後被截斷（#279）
-- `wt:transfer` 移動任一項目後，只送出自頁面顯示後移動的項目，原本已選的值遺失（#280）
-- `wt:slider` 不依綁定欄位的值設定把手位置（只看 `default-value`）（#281）
-- `wt:multiupload` 的刪除鈕呼叫的 `/api/_file/DeletedFile/{id}` 沒有任何 controller 提供（#282）
-- `ff.clearSelector` 找不到 selector 的隱藏 id 欄位（容器名稱寫成 `id_Container`）（#283）
-- 匯出 Excel 會移除儲存格中看起來像 HTML 標籤的文字（#285）
+**待處理（`[Ignore("#N: …")]`）**：測試寫的是「應有的行為」、但因產品行為不符而暫時略過時，用 `[Ignore("#N: …")]` 標記，原因寫在訊息裡，修正後移除即可。目前沒有任何被略過的 E2E 測試（先前列在這裡的 #279、#280、#281、#282、#283、#285 皆已修正並關閉）。
+
+**`wt:slider` 與請求 culture（#322、#342、#343）**：
+
+- 隱藏 input 的值是**請求 culture 的文字**（`Languages` 為 `de-DE` 的網站渲染成 `30,5`），表單以同一個 culture 做模型繫結，所以未拖動的滑塊會綁回渲染時的值。腳本內的 `value`／`min`／`max`／`step`／`height` 一律以 invariant culture 輸出（#281、#342）。
+- 本專案隨附的 layui 2.5.x slider 只會產生整數（`step` 小於 1 會被當成 1，`setValue` 會四捨五入），所以拖動、點擊與 layui API 都不會寫出小數。唯一的入口是頁面腳本**直接**把小數寫進隱藏 input。
+- 契約：頁面腳本直接寫入小數時，必須使用請求 culture 的小數符號（`de-DE` 寫 `42,5`），否則會綁錯。以 `42.5` 為例，千分位為 `.` 的 culture（`de-DE`、`es-ES`、`it-IT`、`nl-NL`、`pt-BR`、`tr-TR`）會**靜默**綁成 425，千分位為其他字元的 culture（例如 `fr-FR`、`sv-SE`）則是繫結失敗（`ModelState` 無效）。這不是 slider 獨有的行為，綁定到 `decimal`／`double`／`float` 的文字欄位（例如 `wt:textbox`）被腳本寫入含 `.` 的小數時也一樣。
+- 框架不提供格式化寫值的 helper，也不在送出時自動轉換：框架無法判斷 `1.234` 是 invariant 的 1.234 還是 `de-DE` 的 1234。`Languages` 設多個時，請求 culture 可能因使用者而異，腳本要以頁面實際的 culture 為準。
+- 若下游在小數逗號的網站需要小數滑塊，請重新開 Issue 說明需求；那需要先採用支援小數 `step` 的 slider，再決定是否加寫值 helper。
+- 固定此契約的測試：`LayUiSliderCultureTests`（`Languages=de-DE` 的 host），其中 `Slider_ScriptValueInTheRequestCulture_BindsTheWrittenValue` 寫入 `42,5` 並斷言綁成 42.5。
 
 **JS 覆蓋率**（`framework_layui.js`，`/_js/framework_layui.js`）：Playwright for .NET 沒有 `page.Coverage`，所以測試經 CDP session 呼叫 `Profiler.startPreciseCoverage`／`takePreciseCoverage`（呼叫次數＋區塊範圍），在每個測試結束時收集，整個 run 彙總。函式只要有任何一個測試呼叫過就算涵蓋。輸出 `TestResults/e2e/js-coverage/framework_layui.report.md|json`（函式、具名函式、字元範圍三種數字，與未被呼叫的函式清單），CI 放進 step summary 與 artifact `e2e-js-coverage`。**只記錄基線，不因數字低而失敗。** 會整頁重新載入的測試（例如切換語言）要在重新載入前呼叫 `FlushJsCoverageAsync()`，否則舊文件的資料會遺失。目前基線：函式 86／95（90.5%），具名函式 65／69（94.2%），字元範圍 72.6%。沒有被呼叫的 9 個：舊瀏覽器用的 `String.startsWith` 補丁、`LoadPage` 開新視窗的分支、`OpenDialog2` 的失敗回呼、對話框內圖表縮放的三個回呼，以及舊的 `changeComboIcon`、`refreshcombobox`（後者依賴不在靜態檔內的 `layui.formSelects`）。
 
 **路由覆蓋**：所有 `_Framework` 端點與 Gadget 動作都有測試命中；排除清單沒有新增項目（沒有「不可達」的端點，需要外部網路、多站台或 `DebugOnly` 的維持原排除）。`SiteProcess.AssertRouteHitAsync` 讓測試可以直接檢查命中紀錄（批次刪除的測試用它確認 `gadget/batchdelete`、`gadget/dobatchdelete` 都被記錄）。基線 16／42 個可測動作，現在 70／70（含 28 個 Lab 測試用動作；原本的 42 個全部命中）。
 
-**執行時間與 nightly**：目前整套（158 個測試，其中 14 個 `[Ignore]`）約 2 分鐘（本機）。若之後變長，在測試加上 `[TestCategory("nightly")]`；`e2e-smoke` 已用 `--filter "TestCategory!=nightly"` 排除它們，要跑時：`dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build --filter "TestCategory=nightly"`（本 Issue 沒有新增排程 workflow）。
+**執行時間與 nightly**：整套在本機約 3 分鐘（不含需先建置前端的 Vue3Demo 測試）。若之後變長，在測試加上 `[TestCategory("nightly")]`；`e2e-smoke` 已用 `--filter "TestCategory!=nightly"` 排除它們，要跑時：`dotnet test test/WalkingTec.Mvvm.E2E -c Release --no-build --filter "TestCategory=nightly"`（本 Issue 沒有新增排程 workflow）。
 
 **測試 host 的自備項目**：`_Layout.cshtml` 內有測試用的 `JSONfns`（`RefreshChart` 解析 series 時使用，框架腳本與共用靜態檔沒有提供，下游頁面自行引入），`Views/Home/Index.cshtml` 在 `index` 載入後再載入 `echarts` extension（圖表 TagHelper 使用全域 `echarts`）。
 

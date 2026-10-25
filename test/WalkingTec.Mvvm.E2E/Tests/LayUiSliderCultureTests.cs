@@ -79,15 +79,18 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [Ignore("#343: a fractional value written by a script has a decimal point and is bound with the request culture (42.5 becomes 425 on a de-DE host)")]
-        public async Task Slider_FractionalScriptValue_BindsTheWrittenValue()
+        public async Task Slider_ScriptValueInTheRequestCulture_BindsTheWrittenValue()
         {
-            await Body.Locator("input[type=hidden][name=Rate]").EvaluateAsync("e => e.value = String(42.5)");
+            // #343, by design: the hidden input holds text of the request culture and is bound with it, so a script that writes a
+            // fractional value into it has to use the decimal separator of that culture (42,5 on this de-DE host). The layui slider
+            // itself only produces integers. Writing "42.5" is not supported on a decimal comma host (it is read as 425, see FORK.md).
+            await Body.Locator("input[type=hidden][name=Rate]").EvaluateAsync("e => e.value = '42,5'");
 
             var posted = await SaveAsync();
 
-            CollectionAssert.AreEqual(new[] { "42.5" }, posted["Rate"]);
+            CollectionAssert.AreEqual(new[] { "42,5" }, posted["Rate"]);
             Assert.AreEqual("42.5", posted["bound:Rate"][0], Describe(posted));
+            Assert.AreEqual(0, posted["bound:RateError"].Length, Describe(posted));
         }
     }
 }
