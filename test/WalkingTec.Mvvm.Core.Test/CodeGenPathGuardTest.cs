@@ -455,5 +455,96 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         #endregion
+
+        #region selected model that is not a type (#353)
+
+        // a data context with the constructor the generator looks for (CS), so InitVM can create it
+        public class CodeGenTestDataContext : DataContext
+        {
+            public CodeGenTestDataContext(CS cs) : base(cs.Value, cs.DbType ?? DBTypeEnum.Memory)
+            {
+            }
+        }
+
+        private static WTMContext CreateWtmWithConnection()
+        {
+            var configs = new Configs
+            {
+                Connections = new List<CS>
+                {
+                    new CS
+                    {
+                        Key = "default",
+                        Value = Guid.NewGuid().ToString("N"),
+                        DbType = DBTypeEnum.Memory,
+                        DcConstructor = typeof(CodeGenTestDataContext).GetConstructor(new[] { typeof(CS) }),
+                    },
+                },
+            };
+            return MockWtmContext.CreateWtmContext(configs: configs);
+        }
+
+        [DataTestMethod]
+        [DataRow("No.Such.Type, NoSuchAssembly")]
+        [DataRow("No.Such.Type")]
+        [DataRow("School")]
+        [DataRow("Foo/../../Bar, Baz")]
+        [DataRow("[[[")]
+        [DataRow("   ")]
+        public void InitVM_SelectedModelThatIsNotAType_DoesNotThrow(string selectedModel)
+        {
+            // the posted VM is initialized while the request is bound, before the action can report anything
+            var vm = new CodeGenVM { SelectedModel = selectedModel, Wtm = CreateWtmWithConnection() };
+            try
+            {
+                vm.DoInit();
+            }
+            catch (Exception ex)
+            {
+                Assert.Fail($"InitVM threw {ex.GetBaseException().GetType().Name}: {ex.GetBaseException().Message}");
+            }
+            Assert.IsNotNull(vm.FieldList);
+        }
+
+        [TestMethod]
+        public void InitVM_SelectedModelOfTheConfiguredContext_StillFindsTheDataContext()
+        {
+            var vm = new CodeGenVM { SelectedModel = SchoolModel, Wtm = CreateWtmWithConnection() };
+            vm.DoInit();
+            Assert.IsInstanceOfType(vm.DC, typeof(CodeGenTestDataContext));
+            Assert.IsNotNull(vm.FieldList);
+        }
+
+        [DataTestMethod]
+        [DataRow("No.Such.Type, NoSuchAssembly")]
+        [DataRow("No.Such.Type")]
+        [DataRow("Foo.Bar, Baz")]
+        public void GetInputErrors_SelectedModelThatIsNotAType_ReportsTheSelectedModel(string selectedModel)
+        {
+            var allowed = new List<Type> { typeof(SchoolTop) };
+            var vm = CreateVM(model: selectedModel);
+            Assert.AreEqual(nameof(CodeGenVM.SelectedModel), vm.GetInputErrors(allowed).Single().Key);
+            // without a list of allowed models the name still has to resolve to a type
+            Assert.AreEqual(nameof(CodeGenVM.SelectedModel), vm.GetInputErrors().Single().Key);
+        }
+
+        [TestMethod]
+        public void DoGen_SelectedModelThatIsNotAType_IsRefused_AndNothingIsWritten()
+        {
+            var vm = CreateVM(model: "No.Such.Type, NoSuchAssembly");
+            Assert.ThrowsException<InvalidOperationException>(() => vm.DoGen());
+            AssertNothingWritten();
+        }
+
+        [TestMethod]
+        public void FieldList_SelectedModelThatIsNotAType_HasNoFields()
+        {
+            var list = new CodeGenListVM { ModelFullName = "No.Such.Type, NoSuchAssembly" };
+            Assert.AreEqual(0, list.GetSearchQuery().Count());
+            list = new CodeGenListVM { ModelFullName = null };
+            Assert.AreEqual(0, list.GetSearchQuery().Count());
+        }
+
+        #endregion
     }
 }
