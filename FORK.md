@@ -431,9 +431,31 @@ demo（`demo/WalkingTec.Mvvm.Vue3Demo`）的 `AccountController.Reg` 是匿名�
 | `ChangeFunc` 的名稱 | 只接受一般的 JS 識別字，可用 `.` 連接（例如 `app.handlers.onPick`）；其他內容視為沒有設定，不輸出到 script（修改前原樣交給 `eval`） |
 | 沒有連動時 | 輸出與修改前逐字相同（`on:function(data){ <ChangeFunc>(data) }`） |
 
-- **`wt:submitbutton`**：`Click` 仍以既有方式執行，將於後續階段處理
+- **`wt:submitbutton`**：`Click` 仍以既有方式執行，不再另做修改（見下節）
 - **影響範圍**：隨 NuGet 發佈的 `WalkingTec.Mvvm.TagHelpers.LayUI`；一般用法（`ChangeFunc="fn"`）行為不變
 - 驗證：`DirectCallbackInvocationTests`（輸出不含 `eval(`、無連動時輸出不變、script 以 node 解析）
+
+### LayUI 與 CSP 的已知限制（#25 結案說明）
+
+#25 原本的目標是減少 `framework_layui.js` 的動態程式碼執行，為導入 CSP 鋪路。階段 1、2（第 18、19 節）完成後，評估資料驅動的伺服器指令協定（階段 3）時確認：只要頁面使用 LayUI，下列幾項都與 WTM 自己的 eval 無關，嚴格的 `script-src`（不含 `'unsafe-eval'`、`'unsafe-inline'`）都無法套用。因此 #25 在階段 2 之後結案，不做階段 3。
+
+| 項目 | 需要的 CSP 例外 | 說明 |
+|---|---|---|
+| layui 2.x 本身（`layui.js`、`laytpl`、`table`、`upload`、`element` 等）與 layuiadmin | `'unsafe-eval'` | 模板編譯與 `lay-data`／`lay-options` 解析使用 `new Function`。下游自帶的靜態檔，WTM 不修改 |
+| `wt:chart` 的 `JSONfns.parse` | `'unsafe-eval'` | 由宿主頁面提供（例如 echarts 的 `json-fns.js`），repo 內沒有定義 |
+| TagHelpers.LayUI 輸出的內嵌 `<script>` 與 `onclick` | `'unsafe-inline'` | 數十處，沒有 nonce 支援 |
+| 未登入或 session 過期時的導向（`PrivilegeFilter`） | `'unsafe-inline'` | 回應為內嵌 `<script>` 的 HTML，不經 `ff.ExecServerScript` |
+
+WTM 自己剩下的 eval：
+
+| 位置 | 內容 |
+|---|---|
+| `framework_layui.js` 的 `ff.ExecServerScript` | 執行 `IsScript` 回應的指令文字（第 18 節）。可用 `ff.StrictScriptChannel` 關閉 |
+| `SubmitButtonTagHelper` | 設定了 `click` 或 `confirm-txt` 時，產生的 script 以 `eval` 執行 `Click`（沒有 `click` 時為 `eval("true")`） |
+
+**`ff.StrictScriptChannel = true` 的前提**：設定後，伺服器以 `FFResult()` 回傳的所有指令都不會執行，包括 `CloseDialog`、`Alert`、`RefreshGrid` 等標準指令與 `AddCustomScript`。框架自己的 `_Framework/SetLanguage`、`_Framework/SetTenant` 也是以 `AddCustomScript("location.reload();")` 回應，開啟後切換語言、切換租戶不會重新載入頁面。這個開關只適合不使用 `FFResult()` 回應的頁面。
+
+**重新開啟的條件**：下游確定要導入 CSP，而且頁面已不依賴 layui（或 layui 已換成不需要 `new Function` 的版本）；或有下游實際需要替代 `AddCustomScript` 的指令協定。
 
 ## 20. LayUI checkbox／radio 選項的 HTML 編碼（#262）
 
