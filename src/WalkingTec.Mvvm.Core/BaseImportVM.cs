@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
@@ -11,10 +12,13 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json.Serialization;
+using System.Threading;
+using System.Threading.Tasks;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Query;
 using Microsoft.Extensions.DependencyInjection;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
@@ -1033,6 +1037,136 @@ namespace WalkingTec.Mvvm.Core
         /// <returns></returns>
         public virtual bool BatchSaveData()
         {
+            if (!PrepareBatchSave())
+            {
+                return false;
+            }
+            //循环数据列表
+            List<P> ListAdd = new List<P>();
+            foreach (var item in EntityList)
+            {
+                //根据唯一性的设定查找数据库中是否有同样的数据
+                P exist = IsDuplicateData(item, finalInfo);
+                PrepareItemForSave(item, exist);
+            }
+
+            if (ErrorListVM.EntityList.Count > 0)
+            {
+                DoReInit();
+                return false;
+            }
+
+            //如果没有错误，更新数据库
+            if (EntityList.Count > 0)
+            {
+                try
+                {
+                    DC.SaveChanges();
+
+                    if (ListAdd.Count > 0)
+                    {
+                        BulkInsert<P>(DC, DC.GetTableName<P>(), ListAdd);
+                    }
+                }
+                catch (Exception e)
+                {
+                    SetExceptionMessage(e, null);
+                    DoReInit();
+                    return false;
+                }
+            }
+            DeleteUploadFile();
+
+            return true;
+        }
+
+        /// <summary>
+        /// 保存指定表中的数据的异步版本（可选），验证、重复数据判断、覆盖、保存与删除上传文件的逻辑与 <see cref="BatchSaveData"/> 一致，
+        /// 只是以异步方式访问数据库（重复数据判断使用 <see cref="IsDuplicateDataAsync"/>，保存使用 <c>SaveChangesAsync</c>）。
+        /// 如果子类覆盖了同步的 <see cref="BatchSaveData"/> 而没有覆盖本方法，会直接调用 <see cref="BatchSaveData"/> 并返回其结果，让既有的覆盖逻辑不被略过。
+        /// 本方法中以下步骤仍然是同步的：<see cref="SetEntityList"/>（解析 Excel）、<see cref="SetValidateCheck"/>（包含其中的重复数据验证）、删除文件（<c>WtmFileProvider</c> 没有异步 API）。
+        /// 如果查询所用的 provider 不支持异步，重复数据判断改用同步查询，不会抛例外。
+        /// 与同步版本不同的是取消：<paramref name="cancellationToken"/> 已取消时（调用前或保存期间）会抛出 <see cref="OperationCanceledException"/>，
+        /// 不会像其他保存例外一样被转成导入错误信息，也不会删除上传的文件；本方法不会写入已被追踪但尚未保存的变更，但它们仍留在 DC 的追踪中，取消后应丢弃该 DC（或不要再对同一个 DC 调用 SaveChanges）。
+        /// 异步路径使用 <c>SaveChangesAsync</c>，如果自定义的 DataContext 只覆盖了同步的 <c>SaveChanges</c>（例如审计逻辑），需同时覆盖 <c>SaveChangesAsync</c>。
+        /// 框架内部仍然调用同步的 <see cref="BatchSaveData"/>，只有消费端明确调用本方法时才会走异步路径
+        /// </summary>
+        /// <param name="cancellationToken">取消令牌</param>
+        /// <returns>true 代表保存成功，false 代表有错误，错误信息在 <see cref="ErrorListVM"/> 中</returns>
+        public virtual async Task<bool> BatchSaveDataAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (OverridesBatchSaveData(GetType()))
+            {
+                return BatchSaveData();
+            }
+            if (!PrepareBatchSave())
+            {
+                return false;
+            }
+            //循环数据列表
+            List<P> ListAdd = new List<P>();
+            foreach (var item in EntityList)
+            {
+                //根据唯一性的设定查找数据库中是否有同样的数据
+                P exist = await IsDuplicateDataAsync(item, finalInfo, cancellationToken);
+                PrepareItemForSave(item, exist);
+            }
+
+            if (ErrorListVM.EntityList.Count > 0)
+            {
+                DoReInit();
+                return false;
+            }
+
+            //如果没有错误，更新数据库
+            if (EntityList.Count > 0)
+            {
+                try
+                {
+                    await DC.SaveChangesAsync(cancellationToken);
+
+                    if (ListAdd.Count > 0)
+                    {
+                        BulkInsert<P>(DC, DC.GetTableName<P>(), ListAdd);
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    //取消不是导入错误，交给调用方处理
+                    throw;
+                }
+                catch (Exception e)
+                {
+                    SetExceptionMessage(e, null);
+                    DoReInit();
+                    return false;
+                }
+            }
+            DeleteUploadFile();
+
+            return true;
+        }
+
+        private static readonly ConcurrentDictionary<Type, bool> _overridesBatchSaveData = new ConcurrentDictionary<Type, bool>();
+
+        /// <summary>
+        /// 判断实际类型是否覆盖了同步的 BatchSaveData（BatchSaveData 的声明类型不是 BaseImportVM 本身），结果按类型缓存
+        /// </summary>
+        private static bool OverridesBatchSaveData(Type type)
+        {
+            return _overridesBatchSaveData.GetOrAdd(type, static t =>
+            {
+                var declaring = t.GetMethod(nameof(BatchSaveData), BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null)?.DeclaringType;
+                return declaring == null || !(declaring.IsGenericType && declaring.GetGenericTypeDefinition() == typeof(BaseImportVM<,>));
+            });
+        }
+
+        /// <summary>
+        /// 保存前的准备：删除指定的文件、解析数据、验证数据；有错误时返回 false。同步与异步的 BatchSaveData 共用
+        /// </summary>
+        private bool PrepareBatchSave()
+        {
             ///
             if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm.ServiceProvider != null)
             {
@@ -1069,131 +1203,111 @@ namespace WalkingTec.Mvvm.Core
                 DoReInit();
                 return false;
             }
+            return true;
+        }
+
+        /// <summary>
+        /// 根据数据库中是否已有重复数据（<paramref name="exist"/>），覆盖已有数据或把新数据加入 DC；同步与异步的 BatchSaveData 共用
+        /// </summary>
+        private void PrepareItemForSave(P item, P exist)
+        {
             var ModelType = typeof(P);
-            //循环数据列表
-            List<P> ListAdd = new List<P>();
-            foreach (var item in EntityList)
+            //如果设置了覆盖功能
+            if (IsOverWriteExistData)
             {
-                //根据唯一性的设定查找数据库中是否有同样的数据
-                P exist = IsDuplicateData(item, finalInfo);
-                //如果设置了覆盖功能
-                if (IsOverWriteExistData)
+                if (exist != null)
                 {
-                    if (exist != null)
+                    //如果有重复数据，则进行修改
+                    var tempPros = typeof(T).GetFields();
+                    foreach (var pro in tempPros)
                     {
-                        //如果有重复数据，则进行修改
-                        var tempPros = typeof(T).GetFields();
-                        foreach (var pro in tempPros)
+                        var excelProp = Template.GetType().GetField(pro.Name).GetValue(Template) as ExcelPropety;
+                        var proToSet = typeof(P).GetSingleProperty(excelProp.FieldName);
+                        if (proToSet != null)
                         {
-                            var excelProp = Template.GetType().GetField(pro.Name).GetValue(Template) as ExcelPropety;
-                            var proToSet = typeof(P).GetSingleProperty(excelProp.FieldName);
-                            if (proToSet != null)
+                            var val = proToSet.GetValue(item);
+                            PropertyHelper.SetPropertyValue(exist, excelProp.FieldName, val, stringBasedValue: true);
+                            try
                             {
-                                var val = proToSet.GetValue(item);
-                                PropertyHelper.SetPropertyValue(exist, excelProp.FieldName, val, stringBasedValue: true);
-                                try
-                                {
-                                    DC.UpdateProperty(exist, proToSet.Name);
-                                }
-                                catch { }
+                                DC.UpdateProperty(exist, proToSet.Name);
                             }
-                        }
-
-                        if (tempPros.Where(x => x.Name == "UpdateTime").SingleOrDefault() == null)
-                        {
-                            if (typeof(IBasePoco).IsAssignableFrom(exist.GetType()))
-                            {
-                                (exist as IBasePoco).UpdateTime = DateTime.Now;
-                                DC.UpdateProperty(exist, "UpdateTime");
-                            }
-                        }
-
-                        if (tempPros.Where(x => x.Name == "UpdateBy").SingleOrDefault() == null)
-                        {
-                            if (typeof(IBasePoco).IsAssignableFrom(exist.GetType()))
-                            {
-                                (exist as IBasePoco).UpdateBy = LoginUserInfo.ITCode;
-                                DC.UpdateProperty(exist, "UpdateBy");
-                            }
-                        }
-                        exist.ExcelIndex = item.ExcelIndex;
-                        //DC.UpdateEntity(exist);
-
-                        continue;
-                    }
-                    else
-                    {
-                        if (typeof(IPersistPoco).IsAssignableFrom(item.GetType()))
-                        {
-                            (item as IPersistPoco).IsValid = true;
+                            catch { }
                         }
                     }
+
+                    if (tempPros.Where(x => x.Name == "UpdateTime").SingleOrDefault() == null)
+                    {
+                        if (typeof(IBasePoco).IsAssignableFrom(exist.GetType()))
+                        {
+                            (exist as IBasePoco).UpdateTime = DateTime.Now;
+                            DC.UpdateProperty(exist, "UpdateTime");
+                        }
+                    }
+
+                    if (tempPros.Where(x => x.Name == "UpdateBy").SingleOrDefault() == null)
+                    {
+                        if (typeof(IBasePoco).IsAssignableFrom(exist.GetType()))
+                        {
+                            (exist as IBasePoco).UpdateBy = LoginUserInfo.ITCode;
+                            DC.UpdateProperty(exist, "UpdateBy");
+                        }
+                    }
+                    exist.ExcelIndex = item.ExcelIndex;
+                    //DC.UpdateEntity(exist);
+
+                    return;
                 }
                 else
                 {
-                    if (exist == null)
+                    if (typeof(IPersistPoco).IsAssignableFrom(item.GetType()))
                     {
-                        if (typeof(IPersistPoco).IsAssignableFrom(ModelType))
-                        {
-                            (item as IPersistPoco).IsValid = true;
-                        }
+                        (item as IPersistPoco).IsValid = true;
                     }
                 }
-                //进行添加操作
-                if (typeof(IBasePoco).IsAssignableFrom(item.GetType()))
-                {
-                    (item as IBasePoco).CreateTime = DateTime.Now;
-                    (item as IBasePoco).CreateBy = LoginUserInfo?.ITCode;
-                }
-                if (typeof(ITenant).IsAssignableFrom(ModelType))
-                {
-                    ITenant ent = item as ITenant;
-                    ent.TenantCode = LoginUserInfo?.CurrentTenant;
-                }
-
-                //如果是SqlServer数据库，而且没有主子表功能，进行Bulk插入
-                if (ConfigInfo.Connections.Where(x => x.Key == (CurrentCS ?? "default")).FirstOrDefault().DbType == DBTypeEnum.SqlServer && !HasSubTable && UseBulkSave == true)
-                {
-                    //ListAdd.Add(item);
-                }
-                else
-                {
-                    DC.Set<P>().Add(item);
-                }
             }
-
-            if (ErrorListVM.EntityList.Count > 0)
+            else
             {
-                DoReInit();
-                return false;
-            }
-
-            //如果没有错误，更新数据库
-            if (EntityList.Count > 0)
-            {
-                try
+                if (exist == null)
                 {
-                    DC.SaveChanges();
-
-                    if (ListAdd.Count > 0)
+                    if (typeof(IPersistPoco).IsAssignableFrom(ModelType))
                     {
-                        BulkInsert<P>(DC, DC.GetTableName<P>(), ListAdd);
+                        (item as IPersistPoco).IsValid = true;
                     }
                 }
-                catch (Exception e)
-                {
-                    SetExceptionMessage(e, null);
-                    DoReInit();
-                    return false;
-                }
             }
+            //进行添加操作
+            if (typeof(IBasePoco).IsAssignableFrom(item.GetType()))
+            {
+                (item as IBasePoco).CreateTime = DateTime.Now;
+                (item as IBasePoco).CreateBy = LoginUserInfo?.ITCode;
+            }
+            if (typeof(ITenant).IsAssignableFrom(ModelType))
+            {
+                ITenant ent = item as ITenant;
+                ent.TenantCode = LoginUserInfo?.CurrentTenant;
+            }
+
+            //如果是SqlServer数据库，而且没有主子表功能，进行Bulk插入
+            if (ConfigInfo.Connections.Where(x => x.Key == (CurrentCS ?? "default")).FirstOrDefault().DbType == DBTypeEnum.SqlServer && !HasSubTable && UseBulkSave == true)
+            {
+                //ListAdd.Add(item);
+            }
+            else
+            {
+                DC.Set<P>().Add(item);
+            }
+        }
+
+        /// <summary>
+        /// 导入成功后删除上传的文件；同步与异步的 BatchSaveData 共用
+        /// </summary>
+        private void DeleteUploadFile()
+        {
             if (string.IsNullOrEmpty(UploadFileId) == false && Wtm.ServiceProvider != null)
             {
                 var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
                 fp.DeleteFile(UploadFileId, Wtm.CreateDC(false, "default"));
             }
-
-            return true;
         }
 
         /// <summary>
@@ -1368,6 +1482,57 @@ namespace WalkingTec.Mvvm.Core
         /// <returns>null代表没有重复</returns>
         protected P IsDuplicateData(P Entity, DuplicatedInfo<P> checkCondition)
         {
+            foreach (var (result, props) in BuildDuplicateQueries(Entity, checkCondition))
+            {
+                foreach (var res in result)
+                {
+                    ReportDuplicateData(Entity, props);
+                    return res as P;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 判断数据是否在库中存在重复数据的异步版本，查询条件（包含租户条件）与 <see cref="IsDuplicateData"/> 一致，只是以异步方式取得数据。
+        /// 如果查询所用的 provider 不支持异步，改用同步枚举，不会抛例外。<see cref="SetValidateCheck"/> 与 <see cref="ValidateDuplicateData"/> 仍然使用同步版本
+        /// </summary>
+        /// <param name="Entity">要验证的数据</param>
+        /// <param name="checkCondition">验证表达式</param>
+        /// <param name="cancellationToken">取消令牌</param>
+        /// <returns>null代表没有重复</returns>
+        protected async Task<P> IsDuplicateDataAsync(P Entity, DuplicatedInfo<P> checkCondition, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var (result, props) in BuildDuplicateQueries(Entity, checkCondition))
+            {
+                //只有查询的 provider 支持异步（EF Core）时才以异步方式执行，否则退回同步枚举，避免 AsAsyncEnumerable 抛出 InvalidOperationException
+                if (result.Provider is IAsyncQueryProvider)
+                {
+                    await foreach (var res in result.AsAsyncEnumerable().WithCancellation(cancellationToken))
+                    {
+                        ReportDuplicateData(Entity, props);
+                        return res;
+                    }
+                }
+                else
+                {
+                    foreach (var res in result)
+                    {
+                        ReportDuplicateData(Entity, props);
+                        return res;
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 根据重复字段组逐组生成查询（有条件的组才会产生查询，惰性生成，前一组查到数据后不会再处理后面的组），同时返回该组的字段，用于生成错误信息；
+        /// 同步与异步的重复数据判断共用，所以两者的查询条件一致
+        /// </summary>
+        private IEnumerable<(IQueryable<P> Query, List<PropertyInfo> Props)> BuildDuplicateQueries(P Entity, DuplicatedInfo<P> checkCondition)
+        {
             //获取设定的重复字段信息
             if (checkCondition != null && checkCondition.Groups.Count > 0)
             {
@@ -1414,42 +1579,42 @@ namespace WalkingTec.Mvvm.Core
                                  whereCallExpression,
                                  Expression.Lambda<Func<P, bool>>(conditions[i], new ParameterExpression[] { para }));
                         }
-                        var result = baseExp.Provider.CreateQuery(whereCallExpression);
-
-
-                        foreach (var res in result)
-                        {
-                            if (IsOverWriteExistData == false)
-                            {
-                                //循环拼接所有字段名
-                                string AllName = "";
-                                foreach (var prop in props)
-                                {
-                                    string name = PropertyHelper.GetPropertyDisplayName(prop);
-                                    AllName += name + ",";
-                                }
-                                if (AllName.EndsWith(","))
-                                {
-                                    AllName = AllName.Remove(AllName.Length - 1);
-                                }
-                                //如果只有一个字段重复，则拼接形成 xxx字段重复 这种提示
-                                if (props.Count == 1)
-                                {
-                                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = CoreProgram._localizer?["Sys.DuplicateError", AllName], Index = Entity.ExcelIndex });
-                                }
-                                //如果多个字段重复，则拼接形成 xx，yy，zz组合字段重复 这种提示
-                                else if (props.Count > 1)
-                                {
-                                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = CoreProgram._localizer?["Sys.DuplicateGroupError", AllName], Index = Entity.ExcelIndex });
-                                }
-
-                            }
-                            return res as P;
-                        }
+                        yield return (baseExp.Provider.CreateQuery<P>(whereCallExpression), props);
                     }
                 }
             }
-            return null;
+        }
+
+        /// <summary>
+        /// 查到重复数据且没有设置覆盖功能时，生成重复数据的错误信息
+        /// </summary>
+        private void ReportDuplicateData(P Entity, List<PropertyInfo> props)
+        {
+            if (IsOverWriteExistData == false)
+            {
+                //循环拼接所有字段名
+                string AllName = "";
+                foreach (var prop in props)
+                {
+                    string name = PropertyHelper.GetPropertyDisplayName(prop);
+                    AllName += name + ",";
+                }
+                if (AllName.EndsWith(","))
+                {
+                    AllName = AllName.Remove(AllName.Length - 1);
+                }
+                //如果只有一个字段重复，则拼接形成 xxx字段重复 这种提示
+                if (props.Count == 1)
+                {
+                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = CoreProgram._localizer?["Sys.DuplicateError", AllName], Index = Entity.ExcelIndex });
+                }
+                //如果多个字段重复，则拼接形成 xx，yy，zz组合字段重复 这种提示
+                else if (props.Count > 1)
+                {
+                    ErrorListVM.EntityList.Add(new ErrorMessage { Message = CoreProgram._localizer?["Sys.DuplicateGroupError", AllName], Index = Entity.ExcelIndex });
+                }
+
+            }
         }
         #endregion
 
