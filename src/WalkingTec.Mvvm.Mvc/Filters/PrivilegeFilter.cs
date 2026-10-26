@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Policy;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using System.Web;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -23,6 +24,21 @@ namespace WalkingTec.Mvvm.Mvc.Filters
 {
     public class PrivilegeFilter : ActionFilterAttribute
     {
+        /// <summary>
+        /// Loads the signed-in user before anything reads <see cref="WTMContext.LoginUserInfo"/> (<see cref="OnActionExecuting"/> is the first to do so),
+        /// so that a user that is not cached yet is read from the database without blocking the request thread. The base implementation then
+        /// runs <see cref="OnActionExecuting"/> and the rest of the filter pipeline as before; the property stays the fallback.
+        /// </summary>
+        public override async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
+        {
+            if (context.Controller is IBaseController controller && context.HttpContext.User?.Identity?.IsAuthenticated == true)
+            {
+                context.SetWtmContext();
+                await controller.Wtm.EnsureLoginUserInfoAsync();
+            }
+            await base.OnActionExecutionAsync(context, next);
+        }
+
         public override void OnActionExecuting(ActionExecutingContext context)
         {
             var controller = context.Controller as IBaseController;

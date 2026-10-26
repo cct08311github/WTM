@@ -235,6 +235,40 @@ namespace WalkingTec.Mvvm.Core
         }
 
         /// <summary>
+        /// Loads <see cref="LoginUserInfo"/> of a signed-in request without blocking the thread, so the synchronous property finds it ready.
+        /// It does what the property does when the request is authenticated and the user is not loaded yet: take the user from the cache, else
+        /// reload it (<see cref="ReloadUserAsync"/>; an exception is swallowed and gives null, as in the property) and add it to the cache.
+        /// Called early in the request by the framework filters; the property stays the fallback for everything else (no <see cref="HttpContext"/>,
+        /// a request that did not pass the filters, a user that could not be loaded). A request that is not authenticated falls back to the property,
+        /// which also resolves the _remotetoken query parameter.
+        /// </summary>
+        public async Task<LoginUserInfo> EnsureLoginUserInfoAsync()
+        {
+            if (_loginUserInfo == null && HttpContext?.User?.Identity?.IsAuthenticated == true)
+            {
+                var userIdStr = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault();
+                var tenant = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault();
+                string usercode = userIdStr;
+                var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{userIdStr + "$`$" + tenant}";
+                _loginUserInfo = Cache.Get<LoginUserInfo>(cacheKey);
+                if (_loginUserInfo == null)
+                {
+                    try
+                    {
+                        _loginUserInfo = await ReloadUserAsync(usercode);
+                    }
+                    catch { }
+                    if (_loginUserInfo != null)
+                    {
+                        Cache.Add(cacheKey, _loginUserInfo);
+                    }
+                }
+                return _loginUserInfo;
+            }
+            return LoginUserInfo;
+        }
+
+        /// <summary>
         /// Validate the remote token before trusting any of its claims.
         /// Returns null (anonymous) when the token is missing or fails validation.
         /// </summary>
@@ -325,6 +359,45 @@ namespace WalkingTec.Mvvm.Core
             // any other request goes through the sign-in check, which verifies the (here empty) password
             var user = HttpContext?.User?.Identity?.IsAuthenticated == true ? LoadSignedInUser(itcode) : DoLogin(itcode, null, null);
             return user;
+        }
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, bool> _reloadUserOverridden = new System.Collections.Concurrent.ConcurrentDictionary<Type, bool>();
+
+        /// <summary>
+        /// Whether a derived context replaces <see cref="ReloadUser"/>. The asynchronous reload must not bypass such an override, so it calls it instead.
+        /// </summary>
+        private bool IsReloadUserOverridden()
+        {
+            return _reloadUserOverridden.GetOrAdd(GetType(), t => t.GetMethod(nameof(ReloadUser), new[] { typeof(string) }).DeclaringType != typeof(WTMContext));
+        }
+
+        /// <summary>
+        /// Asynchronous twin of <see cref="ReloadUser"/>: the same rules (<see cref="ReloadUserFunc"/> first, then the signed-in user, or the sign-in
+        /// check for any other request), but the database and token work is awaited instead of blocking the thread.
+        /// A derived context that overrides <see cref="ReloadUser"/> keeps its override: it is called (synchronously) instead.
+        /// </summary>
+        /// <param name="itcode">用户名</param>
+        /// <returns>用户信息</returns>
+        public virtual async Task<LoginUserInfo> ReloadUserAsync(string itcode)
+        {
+            if (IsReloadUserOverridden())
+            {
+                return ReloadUser(itcode);
+            }
+            if (ReloadUserFunc != null)
+            {
+                var reload = ReloadUserFunc.Invoke(this, itcode);
+                if (reload != null)
+                {
+                    return reload;
+                }
+            }
+            if (DC == null)
+            {
+                return null;
+            }
+            // same split as ReloadUser: a signed-in request is reloaded from its sign-in, any other one goes through the sign-in check with an empty password
+            return await DoLoginCoreAsync(itcode, null, null, useSignedInIdentity: HttpContext?.User?.Identity?.IsAuthenticated == true);
         }
 
         #endregion
@@ -422,7 +495,11 @@ namespace WalkingTec.Mvvm.Core
             return DoLoginCore(itcode, null, null, useSignedInIdentity: true);
         }
 
-        private LoginUserInfo DoLoginCore(string username, string password, string tenant, bool useSignedInIdentity)
+        /// <summary>
+        /// The tenant a sign-in is for: the given one, else the tenant of the data context, else (for the signed-in identity) the tenant claim of the request.
+        /// Shared by <see cref="DoLoginCore"/> and <see cref="DoLoginCoreAsync"/>.
+        /// </summary>
+        private string ResolveLoginTenant(string tenant, bool useSignedInIdentity)
         {
             if(string.IsNullOrEmpty(tenant))
             {
@@ -432,6 +509,55 @@ namespace WalkingTec.Mvvm.Core
             {
                 tenant = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.TenantCode).Select(x => x.Value).FirstOrDefault() ?? tenant;
             }
+            return tenant;
+        }
+
+        /// <summary>
+        /// The part of the local (non mainhost) sign-in that comes before the roles, groups and privileges are loaded: resolves the tenant data context,
+        /// verifies the account (and password) and creates the bare user. Returns null when the tenant does not exist or the account does not verify.
+        /// Everything here is synchronous; shared by <see cref="DoLoginCore"/> and <see cref="DoLoginCoreAsync"/>.
+        /// </summary>
+        private LoginUserInfo PrepareLocalLogin(string username, string password, string tenant, bool useSignedInIdentity)
+        {
+            bool exist = false;
+            if (useSignedInIdentity)
+            {
+                username = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault() ?? username;
+            }
+            var ct = GlobaInfo.AllTenant.Where(x => x.TCode == tenant).FirstOrDefault();
+            //如果找不到指定的tenant，说明租户不存在，直接返回null
+            if(ct == null && string.IsNullOrEmpty(tenant) == false)
+            {
+                return null;
+            }
+            if (ct != null)
+            {
+                _dc = ct.CreateDC(this);
+            }
+            if (useSignedInIdentity)
+            {
+                exist = BaseUserQuery.IgnoreQueryFilters().Any(x => x.ITCode == username && x.TenantCode == tenant && x.IsValid==true);
+            }
+            else
+            {
+                exist = CheckLoginPassword(username, password, tenant);
+            }
+            if (exist == false)
+            {
+                return null;
+            }
+
+            return new LoginUserInfo
+            {
+                ITCode = username,
+                TenantCode = tenant
+            };
+        }
+
+        private LoginUserInfo DoLoginCore(string username, string password, string tenant, bool useSignedInIdentity)
+        {
+            // the mainhost branch below is duplicated in DoLoginCoreAsync (there the calls are awaited): any change to it must be made in both
+            tenant = ResolveLoginTenant(tenant, useSignedInIdentity);
             if (ConfigInfo.HasMainHost && string.IsNullOrEmpty(tenant) == true)
             {
                 var remoteToken = (useSignedInIdentity ? _loginUserInfo?.RemoteToken : null) ?? HttpContext?.Request.Query?.Where(x => x.Key == "_remotetoken").Select(x => x.Value.First()).FirstOrDefault();
@@ -484,39 +610,11 @@ namespace WalkingTec.Mvvm.Core
             }
             else
             {
-                bool exist = false;
-                if (useSignedInIdentity)
-                {
-                    username = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.Subject).Select(x => x.Value).FirstOrDefault() ?? username;
-                }
-                var ct = GlobaInfo.AllTenant.Where(x => x.TCode == tenant).FirstOrDefault();
-                //如果找不到指定的tenant，说明租户不存在，直接返回null
-                if(ct == null && string.IsNullOrEmpty(tenant) == false)
+                var user = PrepareLocalLogin(username, password, tenant, useSignedInIdentity);
+                if (user == null)
                 {
                     return null;
                 }
-                if (ct != null)
-                {
-                    _dc = ct.CreateDC(this);
-                }
-                if (useSignedInIdentity)
-                {
-                    exist = BaseUserQuery.IgnoreQueryFilters().Any(x => x.ITCode == username && x.TenantCode == tenant && x.IsValid==true);
-                }
-                else
-                {
-                    exist = CheckLoginPassword(username, password, tenant);
-                }
-                if (exist == false)
-                {
-                    return null;
-                }
-
-                LoginUserInfo user = new LoginUserInfo
-                {
-                    ITCode = username,
-                    TenantCode = tenant
-                };
                 //var cacheKey = $"{GlobalConstants.CacheKey.UserInfo}:{username + "$`$" + tenant}";
                 //var cacheuser = Cache.Get<LoginUserInfo>(cacheKey);
                 //if (cacheuser != null)
@@ -530,6 +628,71 @@ namespace WalkingTec.Mvvm.Core
                 user.RemoteToken = null;
                 var authService = HttpContext.RequestServices.GetService(typeof(ITokenService)) as ITokenService;
                 var token = authService.IssueTokenAsync(user).Result;
+                user.RemoteToken = token.AccessToken;
+                return user;
+            }
+        }
+
+        /// <summary>
+        /// Asynchronous twin of <see cref="DoLoginCore"/>: same checks, same tenant handling, same claims, same token, but loading the roles, groups and
+        /// privileges, issuing the token and calling the main host are awaited instead of blocking the thread.
+        /// </summary>
+        private async Task<LoginUserInfo> DoLoginCoreAsync(string username, string password, string tenant, bool useSignedInIdentity)
+        {
+            // the mainhost branch below is duplicated in DoLoginCore (there the calls block the thread): any change to it must be made in both
+            tenant = ResolveLoginTenant(tenant, useSignedInIdentity);
+            if (ConfigInfo.HasMainHost && string.IsNullOrEmpty(tenant) == true)
+            {
+                var remoteToken = (useSignedInIdentity ? _loginUserInfo?.RemoteToken : null) ?? HttpContext?.Request.Query?.Where(x => x.Key == "_remotetoken").Select(x => x.Value.First()).FirstOrDefault();
+                if (useSignedInIdentity)
+                {
+                    remoteToken = HttpContext.User.Claims.Where(x => x.Type == AuthConstants.JwtClaimTypes.RToken).Select(x => x.Value).FirstOrDefault();
+                }
+                LoginUserInfo rv = null;
+                if (string.IsNullOrEmpty(remoteToken) == false)
+                {
+                    Dictionary<string, string> headers = new Dictionary<string, string>();
+                    headers.Add("Authorization", "Bearer " + remoteToken);
+                    var user = await CallAPI<LoginUserInfo>("mainhost", "/api/_account/checkuserinfo?IsApi=false", HttpMethodEnum.GET, new { }, 10, headers: headers);
+                    rv = user.Data;
+                    if (rv != null)
+                    {
+                        rv.RemoteToken = remoteToken;
+                    }
+                }
+                else if(string.IsNullOrEmpty(password)==false)
+                {
+                    var loginjwt = await CallAPI<Token>("mainhost", "/api/_account/loginjwt", HttpMethodEnum.POST, new { Account = username, Password = password }, 10);
+                    if (string.IsNullOrEmpty(loginjwt?.Data?.AccessToken) == false)
+                    {
+                        remoteToken = loginjwt?.Data?.AccessToken;
+                        Dictionary<string, string> headers = new Dictionary<string, string>();
+                        headers.Add("Authorization", "Bearer " + remoteToken);
+                        var user = await CallAPI<LoginUserInfo>("mainhost", "/api/_account/checkuserinfo?IsApi=false", HttpMethodEnum.GET, new { }, 10, headers: headers);
+                        rv = user.Data;
+                        if (rv != null)
+                        {
+                            rv.RemoteToken = remoteToken;
+                        }
+                    }
+                }
+                if (rv != null)
+                {
+                    await rv.LoadBasicInfoAsync(this);
+                }
+                return rv;
+            }
+            else
+            {
+                var user = PrepareLocalLogin(username, password, tenant, useSignedInIdentity);
+                if (user == null)
+                {
+                    return null;
+                }
+                await user.LoadBasicInfoAsync(this);
+                user.RemoteToken = null;
+                var authService = HttpContext.RequestServices.GetService(typeof(ITokenService)) as ITokenService;
+                var token = await authService.IssueTokenAsync(user);
                 user.RemoteToken = token.AccessToken;
                 return user;
             }
