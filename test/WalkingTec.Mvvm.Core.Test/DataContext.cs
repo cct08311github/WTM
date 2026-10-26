@@ -33,5 +33,6 @@ namespace WalkingTec.Mvvm.Core.Test
 
         public DbSet<Album> Albums { get; set; }
         public DbSet<AlbumPhoto> AlbumPhotos { get; set; }
+        public DbSet<VM.BatchWorkflowDoc> BatchWorkflowDocs { get; set; }
     }
 }
