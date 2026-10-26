@@ -556,6 +556,7 @@ namespace WalkingTec.Mvvm.Core
 
         private LoginUserInfo DoLoginCore(string username, string password, string tenant, bool useSignedInIdentity)
         {
+            // the mainhost branch below is duplicated in DoLoginCoreAsync (there the calls are awaited): any change to it must be made in both
             tenant = ResolveLoginTenant(tenant, useSignedInIdentity);
             if (ConfigInfo.HasMainHost && string.IsNullOrEmpty(tenant) == true)
             {
@@ -638,6 +639,7 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         private async Task<LoginUserInfo> DoLoginCoreAsync(string username, string password, string tenant, bool useSignedInIdentity)
         {
+            // the mainhost branch below is duplicated in DoLoginCore (there the calls block the thread): any change to it must be made in both
             tenant = ResolveLoginTenant(tenant, useSignedInIdentity);
             if (ConfigInfo.HasMainHost && string.IsNullOrEmpty(tenant) == true)
             {

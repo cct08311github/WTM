@@ -1,12 +1,18 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Abstractions;
+using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Localization;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -31,6 +37,34 @@ namespace WalkingTec.Mvvm.Core.Test
         private static string Key(string itcode, string tenant = null)
         {
             return $"{GlobalConstants.CacheKey.UserInfo}:{itcode + "$`$" + tenant}";
+        }
+
+        private static readonly TimeSpan Patience = TimeSpan.FromSeconds(5);
+
+        /// <summary>Waits for a task that a test expects to finish; a task that never does fails the test instead of hanging it.</summary>
+        private static async Task<T> Within<T>(Task<T> task, string what)
+        {
+            var finished = await Task.WhenAny(task, Task.Delay(Patience));
+            Assert.AreSame(task, finished, $"{what}: not finished within {Patience.TotalSeconds}s");
+            return await task;
+        }
+
+        private static async Task Within(Task task, string what)
+        {
+            var finished = await Task.WhenAny(task, Task.Delay(Patience));
+            Assert.AreSame(task, finished, $"{what}: not finished within {Patience.TotalSeconds}s");
+            await task;
+        }
+
+        /// <summary>
+        /// Starts an operation that should hand back an unfinished task straight away. It is started on the thread pool so that an operation that
+        /// blocks its caller instead fails the test (the call does not return in time) rather than hanging it.
+        /// </summary>
+        private static async Task<Task<T>> StartWithin<T>(Func<Task<T>> operation, string what)
+        {
+            // boxed, so that Task.Run does not unwrap the task and wait for it
+            var started = await Within(Task.Run(() => Tuple.Create(operation())), $"{what} (the call blocked instead of returning a pending task)");
+            return started.Item1;
         }
 
         private static ClaimsPrincipal SignedIn(string itcode, string tenant = null)
@@ -266,11 +300,11 @@ namespace WalkingTec.Mvvm.Core.Test
             var gate = new TaskCompletionSource<LoginUserInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
             wtm.OnReload = itcode => gate.Task;
 
-            var pending = wtm.EnsureLoginUserInfoAsync();
+            var pending = await StartWithin(() => wtm.EnsureLoginUserInfoAsync(), "EnsureLoginUserInfoAsync");
 
             Assert.IsFalse(pending.IsCompleted, "the caller got control back while the user is still being loaded");
             gate.SetResult(new LoginUserInfo { ITCode = "slow" });
-            Assert.AreEqual("slow", (await pending).ITCode);
+            Assert.AreEqual("slow", (await Within(pending, "the user to finish loading")).ITCode);
         }
 
         [TestMethod]
@@ -419,10 +453,125 @@ namespace WalkingTec.Mvvm.Core.Test
 
             var gate = new TaskCompletionSource();
             session.Setup(x => x.CommitAsync(It.IsAny<CancellationToken>())).Returns(gate.Task);
-            var pending = session.Object.SetAsync("k", 1);
-            Assert.IsFalse(pending.IsCompleted, "the commit is awaited, not blocked on");
+            var started = await Within(Task.Run(() => Tuple.Create(session.Object.SetAsync("k", 1))), "SetAsync (the call blocked instead of returning a pending task)");
+            var pendingCommit = started.Item1;
+            Assert.IsFalse(pendingCommit.IsCompleted, "the commit is awaited, not blocked on");
             gate.SetResult();
-            await pending;
+            await Within(pendingCommit, "the commit to finish");
+        }
+
+        // ---- the real filter (its own OnActionExecuting, nothing overridden) ----
+
+        private class TestController : ControllerBase, IBaseController
+        {
+            public WTMContext Wtm { get; set; }
+            public Configs ConfigInfo => Wtm.ConfigInfo;
+            public GlobalData GlobaInfo => Wtm.GlobaInfo;
+            public string CurrentCS => Wtm.CurrentCS;
+            public DBTypeEnum? CurrentDbType => null;
+            public IDataContext DC => Wtm.DC;
+            public IDistributedCache Cache => Wtm.Cache;
+            public string BaseUrl => null;
+            public IStringLocalizer Localizer => null;
+
+            [AllowAnonymous]
+            public IActionResult Open() => Ok();
+
+            public IActionResult Closed() => Ok();
+        }
+
+        private static ActionExecutingContext CreateRealActionContext(ProbeContext wtm, ClaimsPrincipal user, string action)
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddRouting();
+            var provider = services.BuildServiceProvider();
+            var http = new Mock<HttpContext>();
+            http.Setup(x => x.User).Returns(user);
+            http.Setup(x => x.RequestServices).Returns(provider);
+            var request = new Mock<HttpRequest>();
+            request.Setup(x => x.Headers).Returns(new HeaderDictionary { { "Authorization", "Bearer x" } });
+            request.Setup(x => x.Query).Returns(new QueryCollection());
+            http.Setup(x => x.Request).Returns(request.Object);
+            var controller = new TestController { Wtm = wtm };
+            controller.ControllerContext = new ControllerContext { HttpContext = http.Object };
+            var descriptor = new ControllerActionDescriptor
+            {
+                ActionName = action,
+                ControllerName = "Test",
+                ControllerTypeInfo = typeof(TestController).GetTypeInfo(),
+                MethodInfo = typeof(TestController).GetMethod(action)
+            };
+            var actionContext = new ActionContext(http.Object, new RouteData(), descriptor);
+            return new ActionExecutingContext(actionContext, new List<IFilterMetadata>(), new Dictionary<string, object>(), controller);
+        }
+
+        [TestMethod]
+        public async Task TheRealPrivilegeFilter_PreloadsOnce_AndItsOwnOnActionExecutingFindsTheUserReady()
+        {
+            var wtm = CreateProbe(SignedIn("real"));
+            var context = CreateRealActionContext(wtm, SignedIn("real"), nameof(TestController.Open));
+            var nextCalled = false;
+            var syncReloads = 0;
+
+            await WithReloadUserFunc((c, i) => { syncReloads++; return null; }, async () =>
+            {
+                await new PrivilegeFilter().OnActionExecutionAsync(context, () =>
+                {
+                    nextCalled = true;
+                    return Task.FromResult(new ActionExecutedContext(context, new List<IFilterMetadata>(), context.Controller));
+                });
+                return 0;
+            });
+
+            Assert.AreEqual(1, wtm.AsyncReloads, "the user was loaded by the preload");
+            Assert.AreEqual(0, syncReloads, "the property read in OnActionExecuting found it ready: no second (synchronous) reload");
+            Assert.AreEqual("real", wtm.LoginUserInfo.ITCode);
+            Assert.IsNotNull(wtm.Cache.Get<LoginUserInfo>(Key("real")));
+            Assert.IsNull(context.Result);
+            Assert.IsTrue(nextCalled);
+        }
+
+        [TestMethod]
+        public async Task TheRealPrivilegeFilter_WhenItSetsAResult_DoesNotRunTheAction()
+        {
+            // signed in, but the user cannot be loaded: the real OnActionExecuting answers 401 for this request with an Authorization header
+            var wtm = CreateProbe(SignedIn("gone"));
+            wtm.OnReload = itcode => Task.FromResult<LoginUserInfo>(null);
+            var context = CreateRealActionContext(wtm, SignedIn("gone"), nameof(TestController.Closed));
+            var nextCalled = false;
+            var syncReloads = 0;
+
+            await WithReloadUserFunc((c, i) => { syncReloads++; return null; }, async () =>
+            {
+                await new PrivilegeFilter().OnActionExecutionAsync(context, () =>
+                {
+                    nextCalled = true;
+                    return Task.FromResult(new ActionExecutedContext(context, new List<IFilterMetadata>(), context.Controller));
+                });
+                return 0;
+            });
+
+            Assert.AreEqual(1, wtm.AsyncReloads);
+            Assert.IsNotNull(context.Result, "OnActionExecuting short-circuited");
+            Assert.IsFalse(nextCalled, "the action is not run once a filter has set a result");
+        }
+
+        [TestMethod]
+        public void TheGlobalFilters_AreRegisteredInTheOrderThePreloadDependsOn()
+        {
+            // the preload runs inside PrivilegeFilter, and it needs the connection DataContextFilter has chosen (CurrentCS) by then
+            var options = new MvcOptions();
+            options.UseWtmMvcOptions();
+            var order = options.Filters.Select(x => (x as FilterDescriptor)?.Filter ?? x).Select(x => x.GetType()).ToList();
+
+            var dataContext = order.IndexOf(typeof(DataContextFilter));
+            var privilege = order.IndexOf(typeof(PrivilegeFilter));
+            var framework = order.IndexOf(typeof(FrameworkFilter));
+
+            Assert.IsTrue(dataContext >= 0 && privilege >= 0 && framework >= 0, "all three are registered");
+            Assert.IsTrue(dataContext < privilege, "DataContextFilter before PrivilegeFilter");
+            Assert.IsTrue(privilege < framework, "PrivilegeFilter before FrameworkFilter");
         }
     }
 }

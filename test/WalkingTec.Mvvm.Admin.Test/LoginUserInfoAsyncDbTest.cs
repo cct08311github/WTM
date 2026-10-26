@@ -1,6 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
@@ -8,6 +13,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Auth;
+using WalkingTec.Mvvm.Core.ConfigOptions;
 using WalkingTec.Mvvm.Core.Support.Json;
 using WalkingTec.Mvvm.Vue3Demo;
 using WalkingTec.Mvvm.Core.Extensions;
@@ -66,9 +72,9 @@ namespace WalkingTec.Mvvm.Admin.Test
         }
 
         // a signed-in request whose user is not loaded yet
-        private WTMContext CreateContext(string subject, string tenantClaim = null, Task<Token> token = null)
+        private WTMContext CreateContext(string subject, string tenantClaim = null, Task<Token> token = null, string rtokenClaim = null, string queryRemoteToken = null)
         {
-            var wtm = MockWtmContext.CreateWtmContext(NewDc(), "template");
+            var wtm = MockWtmContext.CreateWtmContext(NewDc(), "template", remoteToken: queryRemoteToken);
             wtm.GlobaInfo.CustomUserType = typeof(FrameworkUser);
             wtm.GlobaInfo.SetTenantGetFunc(() => new List<FrameworkTenant>());
             wtm.LoginUserInfo = null;
@@ -78,12 +84,26 @@ namespace WalkingTec.Mvvm.Admin.Test
                 claims.Add(new Claim(AuthConstants.JwtClaimTypes.TenantCode, tenantClaim));
                 wtm.GlobaInfo.SetTenantGetFunc(() => new List<FrameworkTenant> { new FrameworkTenant { TCode = tenantClaim, TName = tenantClaim, TDb = SqliteCs, TDbType = DBTypeEnum.SQLite, DbContext = "DataContext" } });
             }
+            if (rtokenClaim != null)
+            {
+                claims.Add(new Claim(AuthConstants.JwtClaimTypes.RToken, rtokenClaim));
+            }
             Mock.Get(wtm.HttpContext).Setup(x => x.User).Returns(new ClaimsPrincipal(new ClaimsIdentity(claims, "test")));
             var tokenService = new Mock<ITokenService>();
             tokenService.Setup(x => x.IssueTokenAsync(It.IsAny<LoginUserInfo>())).Returns(token ?? Task.FromResult(new Token { AccessToken = "token" }));
             Mock.Get(wtm.HttpContext.RequestServices).Setup(x => x.GetService(typeof(ITokenService))).Returns(tokenService.Object);
             _tokens = tokenService;
             return wtm;
+        }
+
+        private static readonly TimeSpan Patience = TimeSpan.FromSeconds(5);
+
+        // waits for a task that should finish; one that never does fails the test instead of hanging it
+        private static async Task<T> Within<T>(Task<T> task, string what)
+        {
+            var finished = await Task.WhenAny(task, Task.Delay(Patience));
+            Assert.AreSame(task, finished, $"{what}: not finished within {Patience.TotalSeconds}s");
+            return await task;
         }
 
         private static void AssertSameUser(LoginUserInfo expected, LoginUserInfo actual)
@@ -196,7 +216,9 @@ namespace WalkingTec.Mvvm.Admin.Test
             var gate = new TaskCompletionSource<Token>(TaskCreationOptions.RunContinuationsAsynchronously);
             var wtm = CreateContext("authuser", token: gate.Task);
 
-            var pending = wtm.EnsureLoginUserInfoAsync();
+            // started on the thread pool and boxed: an implementation that blocks on the token fails the test (the call does not return) instead of hanging it
+            var started = await Within(Task.Run(() => Tuple.Create(wtm.EnsureLoginUserInfoAsync())), "EnsureLoginUserInfoAsync (the call blocked instead of returning a pending task)");
+            var pending = started.Item1;
             // the data is read first; wait until the token is asked for
             for (var i = 0; i < 200 && _tokens.Invocations.Count == 0; i++)
             {
@@ -206,8 +228,104 @@ namespace WalkingTec.Mvvm.Admin.Test
             Assert.AreEqual(1, _tokens.Invocations.Count, "the token has been asked for");
             Assert.IsFalse(pending.IsCompleted, "the request thread is free while the token is being issued");
             gate.SetResult(new Token { AccessToken = "late" });
-            var user = await pending;
+            var user = await Within(pending, "the user to finish loading");
             Assert.AreEqual("late", user.RemoteToken);
+        }
+
+        // ---- main host: the branch that DoLoginCore and DoLoginCoreAsync duplicate ----
+
+        private class StubMainHost : HttpMessageHandler
+        {
+            public readonly List<string> Authorizations = new List<string>();
+            public readonly string Body;
+
+            public StubMainHost(LoginUserInfo remote)
+            {
+                Body = JsonSerializer.Serialize(remote, CoreProgram.DefaultJsonOption);
+            }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                Authorizations.Add(request.Headers.Authorization?.ToString());
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(Body, Encoding.UTF8, "application/json") });
+            }
+        }
+
+        private Guid _remoteRoleId = Guid.NewGuid();
+
+        // the same request for a sub site with a main host; the main host answers checkuserinfo with the stubbed user
+        private WTMContext CreateMainHostContext(StubMainHost mainHost, string rtokenClaim, string queryRemoteToken)
+        {
+            var wtm = CreateContext("authuser", rtokenClaim: rtokenClaim, queryRemoteToken: queryRemoteToken);
+            wtm.ConfigInfo.Domains = new Dictionary<string, Domain> { { "mainhost", new Domain { Name = "mainhost", Address = "http://mainhost.test" } } };
+            Assert.IsTrue(wtm.ConfigInfo.HasMainHost);
+            var factory = new Mock<IHttpClientFactory>();
+            factory.Setup(x => x.CreateClient("mainhost")).Returns(() => new HttpClient(mainHost, false) { BaseAddress = new Uri("http://mainhost.test") });
+            Mock.Get(wtm.HttpContext.RequestServices).Setup(x => x.GetService(typeof(IHttpClientFactory))).Returns(factory.Object);
+            return wtm;
+        }
+
+        private LoginUserInfo RemoteUser()
+        {
+            return new LoginUserInfo
+            {
+                ITCode = "authuser",
+                Name = "Remote Name",
+                Roles = new List<SimpleRole> { new SimpleRole { ID = _remoteRoleId, RoleCode = "R1", RoleName = "role" } },
+                Groups = new List<SimpleGroup>()
+            };
+        }
+
+        private void AddFunctionPrivilege(string roleCode)
+        {
+            using (var dc = NewDc())
+            {
+                dc.Set<FunctionPrivilege>().Add(new FunctionPrivilege { RoleCode = roleCode, MenuItemId = Guid.NewGuid(), Allowed = true });
+                dc.SaveChanges();
+            }
+        }
+
+        [TestMethod]
+        public async Task MainHost_SyncAndAsyncPaths_GiveTheSameUser_TheTokenOfTheClaimWinsOverTheQuery_AndNoTokenIsIssued()
+        {
+            AddFunctionPrivilege("R1");
+            var syncHost = new StubMainHost(RemoteUser());
+            var asyncHost = new StubMainHost(RemoteUser());
+            var viaGetter = CreateMainHostContext(syncHost, "claim-token", "query-token");
+            var viaAsync = CreateMainHostContext(asyncHost, "claim-token", "query-token");
+            var viaReload = CreateMainHostContext(new StubMainHost(RemoteUser()), "claim-token", "query-token");
+
+            var b = viaGetter.LoginUserInfo;                                  // sync: LoginUserInfo -> ReloadUser -> DoLoginCore
+            var a = await viaAsync.EnsureLoginUserInfoAsync();                // async: EnsureLoginUserInfoAsync -> ReloadUserAsync -> DoLoginCoreAsync
+            var c = await viaReload.ReloadUserAsync("ignored");
+            var d = CreateMainHostContext(new StubMainHost(RemoteUser()), "claim-token", "query-token").ReloadUser("ignored");
+
+            AssertSameUser(b, a);
+            AssertSameUser(b, c);
+            AssertSameUser(b, d);
+            Assert.AreEqual("Remote Name", a.Name);
+            Assert.AreEqual("claim-token", a.RemoteToken, "the RToken claim of the sign-in, not the _remotetoken of the query");
+            Assert.AreEqual(1, a.Roles.Count);
+            Assert.AreEqual(1, a.FunctionPrivileges.Count, "LoadBasicInfo ran on the remote user: its role's privileges come from the local database");
+            Assert.AreEqual(1, b.FunctionPrivileges.Count);
+            CollectionAssert.AreEqual(syncHost.Authorizations, asyncHost.Authorizations);
+            CollectionAssert.AreEqual(new[] { "Bearer claim-token" }, asyncHost.Authorizations, "the main host is asked with the token of the claim");
+            _tokens.Verify(x => x.IssueTokenAsync(It.IsAny<LoginUserInfo>()), Times.Never);
+            AssertSameUser(viaGetter.Cache.Get<LoginUserInfo>(Key("authuser")), viaAsync.Cache.Get<LoginUserInfo>(Key("authuser")));
+        }
+
+        [TestMethod]
+        public async Task MainHost_WithoutATokenClaim_BothPathsGiveNull_AndNeverCallTheMainHost()
+        {
+            var syncHost = new StubMainHost(RemoteUser());
+            var asyncHost = new StubMainHost(RemoteUser());
+            var viaGetter = CreateMainHostContext(syncHost, null, "query-token");
+            var viaAsync = CreateMainHostContext(asyncHost, null, "query-token");
+
+            Assert.IsNull(viaGetter.LoginUserInfo, "a signed-in request is reloaded from its claims only: the query token is not used");
+            Assert.IsNull(await viaAsync.EnsureLoginUserInfoAsync());
+            Assert.AreEqual(0, syncHost.Authorizations.Count);
+            Assert.AreEqual(0, asyncHost.Authorizations.Count);
         }
     }
 }
