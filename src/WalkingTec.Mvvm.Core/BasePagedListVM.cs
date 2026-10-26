@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Data;
@@ -10,9 +11,12 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Internal;
+using Microsoft.EntityFrameworkCore.Query;
 using MySqlConnector;
 using Npgsql;
 using NpgsqlTypes;
@@ -728,53 +732,9 @@ namespace WalkingTec.Mvvm.Core
             var cmd = GetSearchCommand();
             if (cmd == null)
             {
-                IOrderedQueryable<TModel> query = null;
-                //根据搜索模式调用不同的函数
-                switch (SearcherMode)
-                {
-                    case ListVMSearchModeEnum.Search:
-                        query = GetSearchQuery();
-                        break;
-                    case ListVMSearchModeEnum.Export:
-                        query = GetExportQuery();
-                        break;
-                    case ListVMSearchModeEnum.Batch:
-                        query = GetBatchQuery();
-                        break;
-                    case ListVMSearchModeEnum.MasterDetail:
-                        query = GetMasterDetailsQuery();
-                        break;
-                    case ListVMSearchModeEnum.CheckExport:
-                        query = GetCheckedExportQuery();
-                        break;
-                    case ListVMSearchModeEnum.Selector:
-                        query = GetSelectorQuery();
-                        break;
-                    default:
-                        query = GetSearchQuery();
-                        break;
-                }
+                var query = BuildSearchQuery();
                 if (query != null)
                 {
-                    //如果设定了替换条件，则使用替换条件替换Query中的Where语句
-                    if (ReplaceWhere != null)
-                    {
-                        var mod = new WhereReplaceModifier<TModel>(ReplaceWhere as Expression<Func<TModel, bool>>);
-                        var newExp = mod.Modify(query.Expression);
-                        query = query.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
-                    }
-                    if (Searcher.SortInfo != null)
-                    {
-                        var mod = new OrderReplaceModifier(Searcher.SortInfo);
-                        var newExp = mod.Modify(query.Expression);
-                        query = query.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
-                    }
-                    //if (typeof(IPersistPoco).IsAssignableFrom( typeof(TModel)))
-                    //{
-                    //    var mod = new IsValidModifier();
-                    //    var newExp = mod.Modify(query.Expression);
-                    //    query = query.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
-                    //}
                     if (PassSearch == false)
                     {
                         //如果需要分页，则添加分页语句
@@ -782,34 +742,12 @@ namespace WalkingTec.Mvvm.Core
                         {
                             //获取返回数据的数量
                             var count = query.Count();
-                            if (count < 0)
-                            {
-                                count = 0;
-                            }
-                            if (Searcher.Limit == 0)
-                            {
-                                Searcher.Limit = ConfigInfo?.UIOptions.DataTable.RPP ?? 20;
-                            }
-                            //根据返回数据的数量，以及预先设定的每页行数来设定数据量和总页数
-                            Searcher.Count = count;
-                            Searcher.PageCount = (int)Math.Ceiling((1.0 * Searcher.Count / Searcher.Limit));
-                            if (Searcher.Page <= 0)
-                            {
-                                Searcher.Page = 1;
-                            }
-                            if (Searcher.PageCount > 0 && Searcher.Page > Searcher.PageCount)
-                            {
-                                Searcher.Page = Searcher.PageCount;
-                            }
-                            EntityList = query.Skip((Searcher.Page - 1) * Searcher.Limit).Take(Searcher.Limit).AsNoTracking().ToList();
+                            EntityList = ApplyPaging(query, count).AsNoTracking().ToList();
                         }
                         else //如果不需要分页则直接获取数据
                         {
                             EntityList = query.AsNoTracking().ToList();
-                            Searcher.Count = EntityList.Count();
-                            Searcher.Limit = EntityList.Count();
-                            Searcher.PageCount = 1;
-                            Searcher.Page = 1;
+                            ApplyNoPaging(EntityList.Count);
                         }
                     }
                     else
@@ -825,6 +763,182 @@ namespace WalkingTec.Mvvm.Core
             IsSearched = true;
             //调用AfterDoSearch函数来处理自定义的后续操作
             AfterDoSearcher();
+        }
+
+        /// <summary>
+        /// 进行搜索的异步版本（可选），查询、分页、排序、数据权限与 <see cref="DoSearch"/> 一致，只是以异步方式访问数据库。
+        /// 如果子类覆盖了同步的 <see cref="DoSearch"/> 而没有覆盖本方法，会直接调用 <see cref="DoSearch"/>，让既有的覆盖逻辑不被略过。
+        /// 如果查询所用的 provider 不支持异步（例如 <see cref="GetSearchQuery"/> 返回的是 <c>List&lt;T&gt;.AsQueryable()</c>），该次查询改用同步的 Count／ToList。
+        /// 框架内部仍然调用同步的 <see cref="DoSearch"/>，只有消费端明确调用本方法时才会走异步路径
+        /// </summary>
+        /// <param name="cancellationToken">取消令牌</param>
+        public virtual async Task DoSearchAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (OverridesDoSearch(GetType()))
+            {
+                DoSearch();
+                return;
+            }
+            var cmd = GetSearchCommand();
+            if (cmd == null)
+            {
+                var query = BuildSearchQuery();
+                if (query != null)
+                {
+                    if (PassSearch == false)
+                    {
+                        if (NeedPage && Searcher.Limit != -1)
+                        {
+                            var count = await CountQueryAsync(query, cancellationToken);
+                            EntityList = await ToListQueryAsync(ApplyPaging(query, count), cancellationToken);
+                        }
+                        else
+                        {
+                            EntityList = await ToListQueryAsync(query, cancellationToken);
+                            ApplyNoPaging(EntityList.Count);
+                        }
+                    }
+                    else
+                    {
+                        EntityList = await ToListQueryAsync(query, cancellationToken);
+                    }
+                }
+            }
+            else
+            {
+                //存储过程／自定义命令这条路径在本阶段仍然是同步的（ProcessCommand 依数据库类型走各自的 ADO.NET 流程），之后再异步化
+                ProcessCommand(cmd);
+            }
+            IsSearched = true;
+            AfterDoSearcher();
+        }
+
+        private static readonly ConcurrentDictionary<Type, bool> _overridesDoSearch = new ConcurrentDictionary<Type, bool>();
+
+        /// <summary>
+        /// 判断实际类型是否覆盖了同步的 DoSearch（DoSearch 的声明类型不是 BasePagedListVM 本身），结果按类型缓存
+        /// </summary>
+        private static bool OverridesDoSearch(Type type)
+        {
+            return _overridesDoSearch.GetOrAdd(type, static t =>
+            {
+                var declaring = t.GetMethod(nameof(DoSearch), BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null)?.DeclaringType;
+                return declaring == null || !(declaring.IsGenericType && declaring.GetGenericTypeDefinition() == typeof(BasePagedListVM<,>));
+            });
+        }
+
+        /// <summary>
+        /// 根据搜索模式取得查询，并套用 ReplaceWhere 与排序；同步与异步的 DoSearch 共用
+        /// </summary>
+        private IOrderedQueryable<TModel> BuildSearchQuery()
+        {
+            IOrderedQueryable<TModel> query = null;
+            //根据搜索模式调用不同的函数
+            switch (SearcherMode)
+            {
+                case ListVMSearchModeEnum.Search:
+                    query = GetSearchQuery();
+                    break;
+                case ListVMSearchModeEnum.Export:
+                    query = GetExportQuery();
+                    break;
+                case ListVMSearchModeEnum.Batch:
+                    query = GetBatchQuery();
+                    break;
+                case ListVMSearchModeEnum.MasterDetail:
+                    query = GetMasterDetailsQuery();
+                    break;
+                case ListVMSearchModeEnum.CheckExport:
+                    query = GetCheckedExportQuery();
+                    break;
+                case ListVMSearchModeEnum.Selector:
+                    query = GetSelectorQuery();
+                    break;
+                default:
+                    query = GetSearchQuery();
+                    break;
+            }
+            if (query != null)
+            {
+                //如果设定了替换条件，则使用替换条件替换Query中的Where语句
+                if (ReplaceWhere != null)
+                {
+                    var mod = new WhereReplaceModifier<TModel>(ReplaceWhere as Expression<Func<TModel, bool>>);
+                    var newExp = mod.Modify(query.Expression);
+                    query = query.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
+                }
+                if (Searcher.SortInfo != null)
+                {
+                    var mod = new OrderReplaceModifier(Searcher.SortInfo);
+                    var newExp = mod.Modify(query.Expression);
+                    query = query.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
+                }
+                //if (typeof(IPersistPoco).IsAssignableFrom( typeof(TModel)))
+                //{
+                //    var mod = new IsValidModifier();
+                //    var newExp = mod.Modify(query.Expression);
+                //    query = query.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
+                //}
+            }
+            return query;
+        }
+
+        /// <summary>
+        /// 根据返回数据的数量设定 Limit、Count、PageCount、Page，并返回当前页的查询；同步与异步的 DoSearch 共用
+        /// </summary>
+        private IQueryable<TModel> ApplyPaging(IOrderedQueryable<TModel> query, int count)
+        {
+            if (count < 0)
+            {
+                count = 0;
+            }
+            if (Searcher.Limit == 0)
+            {
+                Searcher.Limit = ConfigInfo?.UIOptions.DataTable.RPP ?? 20;
+            }
+            //根据返回数据的数量，以及预先设定的每页行数来设定数据量和总页数
+            Searcher.Count = count;
+            Searcher.PageCount = (int)Math.Ceiling((1.0 * Searcher.Count / Searcher.Limit));
+            if (Searcher.Page <= 0)
+            {
+                Searcher.Page = 1;
+            }
+            if (Searcher.PageCount > 0 && Searcher.Page > Searcher.PageCount)
+            {
+                Searcher.Page = Searcher.PageCount;
+            }
+            return query.Skip((Searcher.Page - 1) * Searcher.Limit).Take(Searcher.Limit);
+        }
+
+        /// <summary>
+        /// 不分页时，数据全部取出，Limit 与 Count 等于数据量；同步与异步的 DoSearch 共用
+        /// </summary>
+        private void ApplyNoPaging(int count)
+        {
+            Searcher.Count = count;
+            Searcher.Limit = count;
+            Searcher.PageCount = 1;
+            Searcher.Page = 1;
+        }
+
+        //只有查询的 provider 支持异步（EF Core）时才以异步方式执行，否则（例如 List<T>.AsQueryable()）退回同步，避免 ToListAsync 抛出 InvalidOperationException
+        private static async Task<int> CountQueryAsync(IQueryable<TModel> query, CancellationToken cancellationToken)
+        {
+            if (query.Provider is IAsyncQueryProvider)
+            {
+                return await query.CountAsync(cancellationToken);
+            }
+            return query.Count();
+        }
+
+        private static async Task<List<TModel>> ToListQueryAsync(IQueryable<TModel> query, CancellationToken cancellationToken)
+        {
+            if (query.Provider is IAsyncQueryProvider)
+            {
+                return await query.AsNoTracking().ToListAsync(cancellationToken);
+            }
+            return query.AsNoTracking().ToList();
         }
 
 

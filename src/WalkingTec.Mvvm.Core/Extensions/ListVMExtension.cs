@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace WalkingTec.Mvvm.Core.Extensions
 {
@@ -441,6 +443,40 @@ namespace WalkingTec.Mvvm.Core.Extensions
             }
             if (!self.IsSearched) self.DoSearch();
 
+            return BuildJson(self, PlainText, enumToString, func);
+        }
+
+        /// <summary>
+        /// Async version of <see cref="GetJson{T}"/>: same output for the same ListVM state, but the search (if the ListVM has not been searched yet)
+        /// goes through <see cref="IBasePagedListVM{T, S}.DoSearchAsync"/>. A ListVM that overrides the synchronous DoSearch only keeps its override,
+        /// and a query whose provider is not async (e.g. a list's AsQueryable()) is evaluated synchronously, see <c>BasePagedListVM.DoSearchAsync</c>.
+        /// An already searched ListVM is not searched again
+        /// </summary>
+        /// <typeparam name="T">Model type</typeparam>
+        /// <param name="self">a listvm</param>
+        /// <param name="PlainText">true to return plain text, false to return formated html, such as checkbox,buttons ...</param>
+        /// <param name="enumToString">use enum display name</param>
+        /// <param name="func">other key,value needed to be returned</param>
+        /// <param name="cancellationToken">cancellation token</param>
+        /// <returns>json string</returns>
+        public static async Task<string> GetJsonAsync<T>(this IBasePagedListVM<T, BaseSearcher> self, bool PlainText = true, bool enumToString = true, Func<Dictionary<string, object>> func = null, CancellationToken cancellationToken = default) where T : TopBasePoco, new()
+        {
+            if (self.Searcher.IsPlainText != null)
+            {
+                PlainText = self.Searcher.IsPlainText.Value;
+            }
+            if (self.Searcher.IsEnumToString != null)
+            {
+                enumToString = self.Searcher.IsEnumToString.Value;
+            }
+            if (!self.IsSearched) await self.DoSearchAsync(cancellationToken);
+
+            return BuildJson(self, PlainText, enumToString, func);
+        }
+
+        // GetJson 与 GetJsonAsync 共用：搜索之后的字符串拼装（先 func，再 wtm 必要的数据，最后 GetDataJson）
+        private static string BuildJson<T>(IBasePagedListVM<T, BaseSearcher> self, bool PlainText, bool enumToString, Func<Dictionary<string, object>> func) where T : TopBasePoco, new()
+        {
             StringBuilder builder = new("{", capacity: 1024);
             var dic = func?.Invoke();
 
