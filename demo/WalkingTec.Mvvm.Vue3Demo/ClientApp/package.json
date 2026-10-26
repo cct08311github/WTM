@@ -24,7 +24,7 @@
     "jsplumb": "^2.15.6",
     "mitt": "^3.0.1",
     "nprogress": "^0.2.0",
-    "pinia": "^3.0.4",
+    "pinia": "^4.1.0",
     "print-js": "^1.6.0",
     "qrcodejs2-fixes": "^0.0.2",
     "qs": "^6.16.1",
