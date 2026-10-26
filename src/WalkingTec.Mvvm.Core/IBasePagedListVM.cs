@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace WalkingTec.Mvvm.Core
 {
@@ -124,6 +126,17 @@ namespace WalkingTec.Mvvm.Core
         /// DoSearch
         /// </summary>
         void DoSearch();
+        /// <summary>
+        /// DoSearch 的异步版本（可选）。默认实现直接调用 <see cref="DoSearch"/>，所以自行实现此接口的类不会因为新增这个成员而无法编译，行为也不变；
+        /// <see cref="BasePagedListVM{TModel, TSearcher}"/> 提供真正以异步方式查询数据库的实现
+        /// </summary>
+        /// <param name="cancellationToken">取消令牌</param>
+        Task DoSearchAsync(CancellationToken cancellationToken = default)
+        {
+            if (cancellationToken.IsCancellationRequested) return Task.FromCanceled(cancellationToken);
+            DoSearch();
+            return Task.CompletedTask;
+        }
         /// <summary>
         /// CopyContext
         /// </summary>
