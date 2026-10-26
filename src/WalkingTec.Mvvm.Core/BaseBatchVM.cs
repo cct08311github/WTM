@@ -99,7 +99,8 @@ namespace WalkingTec.Mvvm.Core
         }
 
         /// <summary>
-        /// 检查是否可以删除，当进行批量删除操作时会调用本函数。子类如果有特殊判断应重载本函数
+        /// 检查是否可以删除，当进行批量删除操作时会调用本函数。子类如果有特殊判断应重载本函数。
+        /// 批量删除时，对每一条要删除的数据调用一次，传入 Ids 中与该数据对应的写法；没有完全对应的写法时传入该数据自身 Id 的字符串。Ids 中重复的 Id 只检查一次
         /// </summary>
         /// <param name="id">数据Id</param>
         /// <param name="errorMessage">错误信息</param>
@@ -117,25 +118,27 @@ namespace WalkingTec.Mvvm.Core
         public virtual bool DoBatchDelete()
         {
             bool rv = true;
-            //循环所有数据Id
-            var state = new BatchDeleteState(Ids.ToList());
-            var query = BuildDeleteQuery(state);
-            var entityList = query.ToList();
+            //Ids 去重后作为本次要删除的数据Id；没有任何 Id 时不删除任何数据
+            var state = new BatchDeleteState(Ids);
+            var entityList = state.HasIds ? BuildDeleteQuery(state).ToList() : new List<TModel>();
             List<string> idsData = state.IdsData;
+            //循环所有要删除的数据
             for (int i = 0; i < entityList.Count; i++)
             {
+                var Entity = entityList[i];
+                //按每条数据调用 CheckIfCanDelete（传入 Ids 中与该数据对应的写法；没有完全对应的写法时传入该数据自身 Id 的字符串）
+                string entityId = state.GetRequestId(Entity);
                 string checkErro = null;
                 //检查是否可以删除，如不能删除则直接跳过
-                if (CheckIfCanDelete(idsData[i], out checkErro) == false)
+                if (CheckIfCanDelete(entityId, out checkErro) == false)
                 {
-                    ErrorMessage.Add(idsData[i], checkErro);
+                    ErrorMessage.Add(entityId, checkErro);
                     rv = false;
                     break;
                 }
                 //进行删除
                 try
                 {
-                    var Entity = entityList[i];
                     if (PrepareEntityForDelete(state, Entity))
                     {
                         var wi = BuildWorkflowInstanceQuery(Entity).ToList();
@@ -151,7 +154,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 catch (Exception e)
                 {
-                    SetExceptionMessage(e, idsData[i]);
+                    SetExceptionMessage(e, entityId);
                     rv = false;
                 }
             }
@@ -202,25 +205,27 @@ namespace WalkingTec.Mvvm.Core
                 return DoBatchDelete();
             }
             bool rv = true;
-            //循环所有数据Id
-            var state = new BatchDeleteState(Ids.ToList());
-            var query = BuildDeleteQuery(state);
-            var entityList = await ToListQueryAsync(query, cancellationToken);
+            //Ids 去重后作为本次要删除的数据Id；没有任何 Id 时不删除任何数据
+            var state = new BatchDeleteState(Ids);
+            var entityList = state.HasIds ? await ToListQueryAsync(BuildDeleteQuery(state), cancellationToken) : new List<TModel>();
             List<string> idsData = state.IdsData;
+            //循环所有要删除的数据
             for (int i = 0; i < entityList.Count; i++)
             {
+                var Entity = entityList[i];
+                //按每条数据调用 CheckIfCanDelete（传入 Ids 中与该数据对应的写法；没有完全对应的写法时传入该数据自身 Id 的字符串）
+                string entityId = state.GetRequestId(Entity);
                 string checkErro = null;
                 //检查是否可以删除，如不能删除则直接跳过
-                if (CheckIfCanDelete(idsData[i], out checkErro) == false)
+                if (CheckIfCanDelete(entityId, out checkErro) == false)
                 {
-                    ErrorMessage.Add(idsData[i], checkErro);
+                    ErrorMessage.Add(entityId, checkErro);
                     rv = false;
                     break;
                 }
                 //进行删除
                 try
                 {
-                    var Entity = entityList[i];
                     if (PrepareEntityForDelete(state, Entity))
                     {
                         var wi = await ToListQueryAsync(BuildWorkflowInstanceQuery(Entity), cancellationToken);
@@ -241,7 +246,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 catch (Exception e)
                 {
-                    SetExceptionMessage(e, idsData[i]);
+                    SetExceptionMessage(e, entityId);
                     rv = false;
                 }
             }
@@ -296,9 +301,24 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         private sealed class BatchDeleteState
         {
-            public BatchDeleteState(List<string> idsData)
+            private readonly Dictionary<Guid, string> _guidIds = new Dictionary<Guid, string>();
+            private readonly Dictionary<string, string> _textIds = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            /// <param name="ids">请求中的 Ids，为 null 时按没有任何 Id 处理</param>
+            public BatchDeleteState(IEnumerable<string> ids)
             {
-                IdsData = idsData;
+                IdsData = DistinctIds(ids);
+                foreach (var id in IdsData)
+                {
+                    if (id != null)
+                    {
+                        _textIds.TryAdd(id, id);
+                        if (Guid.TryParse(id, out var guid))
+                        {
+                            _guidIds.TryAdd(guid, id);
+                        }
+                    }
+                }
                 ModelType = typeof(TModel);
                 Pros = ModelType.GetAllProperties();
                 Fa = Pros.Where(x => x.PropertyType == typeof(FileAttachment) || typeof(TopBasePoco).IsAssignableFrom(x.PropertyType)).ToList();
@@ -307,7 +327,62 @@ namespace WalkingTec.Mvvm.Core
                 Fas = Pros.Where(x => typeof(IEnumerable<ISubFile>).IsAssignableFrom(x.PropertyType)).ToList();
             }
 
+            /// <summary>
+            /// Ids 去重后的结果：能解析为 Guid 的按 Guid 比较（大小写、花括号等写法不同视为同一个，即使主键是字符串类型，两个只有大小写不同且形如 Guid 的字符串主键也会被视为同一个 Id），否则按 ordinal 字符串比较；保留首次出现的顺序与写法
+            /// </summary>
             public List<string> IdsData { get; }
+            public bool HasIds => IdsData.Count > 0;
+
+            /// <summary>
+            /// 找到 Ids 中与该数据对应的写法（Guid 写法不同视为同一个，否则 ordinal 字符串比较），用于 CheckIfCanDelete 与错误信息；
+            /// 没有完全对应的写法时用该数据自身 Id 的字符串。例如字符串主键在请求中的大小写或前后空白不同、int／long 主键写成 "05"、
+            /// 无法解析的 Id 被转换成 Guid.Empty 或 0 时，框架转换 Id 查询仍然能找到数据，但 Ids 中没有完全对应的写法
+            /// </summary>
+            public string GetRequestId(TModel entity)
+            {
+                var entityId = entity.GetID()?.ToString();
+                if (entityId != null)
+                {
+                    if (Guid.TryParse(entityId, out var guid) && _guidIds.TryGetValue(guid, out var byGuid))
+                    {
+                        return byGuid;
+                    }
+                    if (_textIds.TryGetValue(entityId, out var byText))
+                    {
+                        return byText;
+                    }
+                }
+                return entityId ?? string.Empty;
+            }
+
+            private static List<string> DistinctIds(IEnumerable<string> ids)
+            {
+                var rv = new List<string>();
+                if (ids == null)
+                {
+                    return rv;
+                }
+                var seenGuids = new HashSet<Guid>();
+                var seenTexts = new HashSet<string>(StringComparer.Ordinal);
+                var seenNull = false;
+                foreach (var id in ids)
+                {
+                    if (id == null)
+                    {
+                        if (!seenNull)
+                        {
+                            seenNull = true;
+                            rv.Add(id);
+                        }
+                    }
+                    else if (Guid.TryParse(id, out var guid) ? seenGuids.Add(guid) : seenTexts.Add(id))
+                    {
+                        rv.Add(id);
+                    }
+                }
+                return rv;
+            }
+
             public Type ModelType { get; }
             public List<PropertyInfo> Pros { get; }
             public List<PropertyInfo> Fa { get; }
@@ -451,9 +526,10 @@ namespace WalkingTec.Mvvm.Core
             {
                 foreach (var id in idsData)
                 {
-                    if (!ErrorMessage.ContainsKey(id))
+                    if (id != null)
                     {
-                        ErrorMessage.Add(id, CoreProgram._localizer?["Sys.Rollback"]);
+                        //已有的错误信息保留，同一个 Id 不会重复添加
+                        ErrorMessage.TryAdd(id, CoreProgram._localizer?["Sys.Rollback"]);
                     }
                 }
             }
