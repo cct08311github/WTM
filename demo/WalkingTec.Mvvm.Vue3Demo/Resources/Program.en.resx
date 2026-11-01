@@ -471,6 +471,9 @@
   <data name="Sys.ImportError" xml:space="preserve">
     <value>Error occurs during import</value>
   </data>
+  <data name="Sys.ImportRecordMatchedByMultipleRows" xml:space="preserve">
+    <value>This row matches the same existing record as row {0}. Change the file so that each existing record matches only one row</value>
+  </data>
   <data name="Sys.ImportSuccess" xml:space="preserve">
     <value>{0} rows have been imported</value>
   </data>

@@ -214,6 +214,7 @@ git merge --no-ff upstream/dotnet10
 | `src/WalkingTec.Mvvm.Core/WTMContext.cs`、`src/WalkingTec.Mvvm.Mvc/Filters/PrivilegeFilter.cs`、`src/WalkingTec.Mvvm.Mvc/Helper/SessionExtension.cs` | 新增 `WTMContext.EnsureLoginUserInfoAsync`、`ReloadUserAsync`（`virtual`）與私有的 `DoLoginCoreAsync`、`ResolveLoginTenant`、`PrepareLocalLogin`；`PrivilegeFilter` 覆蓋 `OnActionExecutionAsync`，在 `OnActionExecuting` 之前非同步載入已登入使用者；新增 `SessionExtensions.SetAsync<T>`（框架內尚無呼叫者，`Set<T>` 不變）。同步的 `LoginUserInfo`、`ReloadUser`、`DoLogin` 保留作為後備 | #381 |
 | `src/WalkingTec.Mvvm.Core/BasePagedListVM.cs`、`src/WalkingTec.Mvvm.Core/IBasePagedListVM.cs`、`src/WalkingTec.Mvvm.Core/Extensions/ListVMExtension.cs`、`src/WalkingTec.Mvvm.Core/BaseImportVM.cs`、`src/WalkingTec.Mvvm.Core/BaseBatchVM.cs` | 新增選用的 `BasePagedListVM.DoSearchAsync`（`virtual`；`IBasePagedListVM` 以預設介面方法提供，預設呼叫 `DoSearch()`）與 `ListVMExtension.GetJsonAsync`；`DoSearch` 的查詢組裝與分頁記錄抽成同步、非同步共用的私有方法。子類別只覆寫同步 `DoSearch()` 時，`DoSearchAsync` 仍呼叫該覆寫；查詢的 provider 不支援非同步（如 `AsQueryable()`）時退回同步，預存程序路徑仍為同步。新增選用的 `BaseImportVM.BatchSaveDataAsync`（`virtual`）與 `protected` 的 `IsDuplicateDataAsync`；`BatchSaveData`、`IsDuplicateData` 的內部實作抽成同步、非同步共用的私有方法，同步版本的行為不變。子類別只覆寫同步 `BatchSaveData()` 時，`BatchSaveDataAsync` 仍呼叫該覆寫；`SetEntityList`、`SetValidateCheck`（含其中的重複驗證）與檔案刪除仍為同步，取消時拋出 `OperationCanceledException`（不轉成匯入錯誤）。新增選用的 `BaseBatchVM.DoBatchDeleteAsync`、`DoBatchEditAsync`（`virtual`）與 `protected` 的 `RefreshErrorListAsync`；`DoBatchDelete`、`DoBatchEdit` 的內部實作抽成同步、非同步共用的私有方法，同步版本的行為不變。子類別只覆寫同步 `DoBatchDelete()`／`DoBatchEdit()` 時，對應的非同步方法仍呼叫該覆寫；`CheckIfCanDelete`、`vm.Validate()` 與檔案刪除仍為同步，取消時拋出 `OperationCanceledException`（不轉成錯誤訊息）。框架內部仍呼叫同步版本 | #382 |
 | `src/WalkingTec.Mvvm.Core/BaseBatchVM.cs` | `DoBatchDelete`／`DoBatchDeleteAsync` 對每一筆要刪除的資料，以該筆資料自身的 Id 呼叫 `CheckIfCanDelete`（傳入 `Ids` 中與該筆資料對應的寫法，沒有完全對應的寫法時傳入該筆資料自身 Id 的字串），`Ids` 先去重（Guid 寫法不同視為同一個，字串主鍵亦同）；`FillRollbackMessages` 不重複加入已有的鍵；`Ids` 為空或 null 時不刪除任何資料 | #392 |
+| `src/WalkingTec.Mvvm.Core/BaseImportVM.cs`、`demo/WalkingTec.Mvvm.Vue3Demo/Resources/Program.{en,zh}.resx` | 覆蓋模式下，同一筆既有資料被檔案中多列（透過不同的重複欄位組）對應時，後面的列加入錯誤、整批不存檔（私有方法 `ReportIfMatchedByEarlierRow`、`GetUsableKey`，新增多語系鍵 `Sys.ImportRecordMatchedByMultipleRows`） | #397，第 32 節 |
 | Dependabot 的依賴升級 | 各 csproj／`package-lock.json` 的版本號 | 見各 `dependencies` PR |
 
 fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder,GenericEndpointGuard}.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/GenericEndpointOptions.cs`、`docs/security/generic-endpoint-authz.md`、`test/WalkingTec.Mvvm.LayUI.E2EHost/Controllers/ReportController.cs`（授權測試用頁面）、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270、#272）、`test/WalkingTec.Mvvm.E2E.Instrumentation/`（E2E 的路由覆蓋與 hosting startup，#272）。
@@ -1031,3 +1032,37 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 **補充**：(a) 宣告型別為 `IWtmFile` 的屬性（含 `List<IWtmFile>`）同樣不輸出這些成員與 `DataStream`；(b) 經共用 JSON 設定寫入的物件也一樣：例如以 `Cache.Add`／`Wtm.ReadFromCache<T>` 放進快取的 `FileAttachment`，快取裡不再有這些欄位，讀回來為空（需要這些欄位的快取內容請快取自己的型別，或只快取 id 再從資料庫讀）；讀取（反序列化）與 `CallAPI` 送出的請求內容（`DefaultPostJsonOption`）不受影響。
 
 **測試**：Core.Test 的 `FileAttachmentOutputTest`（輸出、子類、`IWtmFile` 型別、巢狀、輸入、伺服器端值、快取、`DefaultPostJsonOption`、`GetById` 的詳細資料）。
+
+## 32. 匯入時多列對應到同一筆既有資料改為回報錯誤（#397，行為變更）
+
+**範圍**：`BaseImportVM<T, P>.BatchSaveData()` 與 `BatchSaveDataAsync()`，且 `IsOverWriteExistData = true`（預設值）。生效的重複欄位設定是匯入 VM 的 `SetDuplicatedCheck()`；它回傳 null 時才使用對應 CRUD VM 的設定，兩邊不會合併。生效的設定有兩組以上條件，而且檔案中有多列對應到同一筆既有資料時才會觸發。不變：`IsDuplicateData`／`IsDuplicateDataAsync` 及其查詢、`IsOverWriteExistData = false`、只有一組條件的匯入（檔案內的重複驗證已擋下）、對應到不同既有資料的列、沒有對應到資料的列、覆寫 `BatchSaveData` 且不呼叫基底的子類、LayUI 與 Vue3 範本。
+
+**原本的行為**：兩列透過不同的欄位組對應到同一筆既有資料時，後面的列靜默覆蓋前面的列，匯入回傳成功、沒有任何提示；檔案內的重複驗證（`ValidateDuplicateData`）只檢查同一組內的重複。
+
+**變更**：
+
+| 項目 | 行為 |
+|---|---|
+| 偵測 | 對每一列，若既有資料已被前面的列對應過，則為該列在 `ErrorListVM` 加入錯誤，不把該列的值覆蓋到既有資料 |
+| 處理順序 | 其餘列繼續處理，所有衝突一起回報；有任何錯誤時整批不存檔（包括衝突之前的列），回傳 false |
+| 比對方式 | 以主鍵（`GetID()`）比對，不要求是同一個實例，DataContext 設為 NoTracking 時同樣有效；Guid、int、long、string 等主鍵型別皆以值比對 |
+| 主鍵缺失或不可用 | null、空字串、型別預設值（例如 0、`Guid.Empty`）或取不到 `ID` 時，只有實例相同才算同一筆，不產生誤報 |
+| 錯誤訊息 | 新鍵 `Sys.ImportRecordMatchedByMultipleRows`（`Program.{en,zh}.resx`），含前面那一列的列號，列號與其他匯入錯誤一致（工作表的列號，標題列為第 1 列）；不含任何儲存格的值 |
+| 同步與非同步 | 共用同一個私有方法，行為一致；每次保存重新記錄，同一個 VM 的第二次保存不帶入上次的狀態 |
+| 設定與 API | 無新設定；新增的成員皆為 private，公開與受保護的 API 沒有變更 |
+| 下游自帶資源檔 | 取不到本地化文字（鍵不存在，即 `ResourceNotFound`，或沒有 localizer）時使用內建的英文文字，同樣含前面那一列的列號，不會顯示鍵名；做法與 `SpaFileApi` 的 `Text(..., fallback)` 相同 |
+
+**影響與應對**：只有「覆蓋開啟（預設）、生效設定有兩組以上條件、檔案中有多列對應到同一筆既有資料」的匯入會改變，這類匯入原本會靜默遺失前面列的內容。遇到新的錯誤時，修正檔案，讓每筆既有資料只對應一列（合併或刪除重複的列）。不需要資料遷移。
+
+**LayUI 影響**：`BaseImportVM` 是 LayUI 的受保護路徑（第 3 節）。LayUI 的匯入頁面走同一個入口，錯誤顯示在原有的匯入錯誤列表中；頁面程式碼與 API 沒有變更，使用單組條件或沒有重複設定的頁面不受影響。
+
+**下游自帶資源檔**：下游若有自己的 `Program.{en,zh}.resx`，升級後沒有 `Sys.ImportRecordMatchedByMultipleRows`，會先顯示內建的英文文字；要顯示本地化文字，把這個鍵加到自己的資源檔：
+
+- en：`This row matches the same existing record as row {0}. Change the file so that each existing record matches only one row`
+- zh：`与第 {0} 行对应到同一条已有数据，请修改文件，使每条已有数据只对应一行`
+
+**回滾**：還原該次提交即可恢復原行為，不涉及資料格式。
+
+**維護者決定**：2026-11-01 於 #397 選擇「預設偵測並報錯、整批不存檔」，不另設開關。
+
+**測試**：Core.Test 的 `ExcelImportSameRecordMatchTests`（同步與非同步各一輪）：兩列對應同一筆（錯誤落在後面的列、資料庫不變）、三列對應同一筆（兩個錯誤）、衝突加上新增列與有效覆蓋列（整批不存）、兩列對應不同筆（皆更新）、單組條件、`IsOverWriteExistData = false`、NoTracking、int 與 string 主鍵、錯誤訊息不含儲存格值、同一個 VM 第二次保存沒有殘留衝突。
