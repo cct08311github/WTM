@@ -20,6 +20,7 @@ using DocumentFormat.OpenXml.Spreadsheet;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Query;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core.Extensions;
 using WalkingTec.Mvvm.Core.Support.FileHandlers;
 
@@ -1194,6 +1195,32 @@ namespace WalkingTec.Mvvm.Core
             return true;
         }
 
+        //本次导入中已经写过 log 的属性（model+属性名），同一个属性不会因为每一行都失败而重复写 log
+        private readonly HashSet<string> _loggedUpdatePropertyFailures = new HashSet<string>();
+
+        /// <summary>
+        /// DC.UpdateProperty 对覆盖的属性抛出例外时写入一次警告 log（内容只有 model、属性名与例外类型／信息，不含单元格的值）。
+        /// 使用 <see cref="WTMContext.LoggerFactory"/> 的 ILogger，不使用 <c>Wtm.DoLog</c>（会走 ActionLog 的数据库记录）；
+        /// 没有 Wtm 或 LoggerFactory 时什么都不做，写 log 本身的任何失败也不会影响导入
+        /// </summary>
+        private void LogUpdatePropertyFailure(string propertyName, Exception ex)
+        {
+            try
+            {
+                var key = typeof(P).FullName + "." + propertyName;
+                if (!_loggedUpdatePropertyFailures.Add(key))
+                {
+                    return;
+                }
+                var logger = Wtm?.LoggerFactory?.CreateLogger("WalkingTec.Mvvm.Core.BaseImportVM");
+                logger?.LogWarning("Import overwrite could not mark property {Property} of {Model} as modified ({ExceptionType}); the import result is not affected",
+                    propertyName, typeof(P).Name, ex.GetType().Name);
+            }
+            catch
+            {
+            }
+        }
+
         /// <summary>
         /// 根据数据库中是否已有重复数据（<paramref name="exist"/>），覆盖已有数据或把新数据加入 DC；同步与异步的 BatchSaveData 共用
         /// </summary>
@@ -1215,11 +1242,24 @@ namespace WalkingTec.Mvvm.Core
                         {
                             var val = proToSet.GetValue(item);
                             PropertyHelper.SetPropertyValue(exist, excelProp.FieldName, val, stringBasedValue: true);
+                            //[NotMapped]、导航属性（TopBasePoco 或元素为 TopBasePoco 的 List）不是数据库栏位，DC.UpdateProperty 对它们一定会抛例外，直接略过（值仍然已经赋给 exist）；
+                            //其他 List（例如映射为原生集合的 List<string>）和数组不在此列，照旧调用 UpdateProperty
+                            var proType = proToSet.PropertyType;
+                            if (proToSet.GetCustomAttribute<NotMappedAttribute>() != null
+                                || (proType.IsList() && typeof(TopBasePoco).IsAssignableFrom(proType.GenericTypeArguments[0]))
+                                || proType.IsSubclassOf(typeof(TopBasePoco)))
+                            {
+                                continue;
+                            }
                             try
                             {
                                 DC.UpdateProperty(exist, proToSet.Name);
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                //其他无法标记为已修改的属性（例如以 fluent 设定排除的属性）：导入结果不变，只写入一次 log
+                                LogUpdatePropertyFailure(proToSet.Name, ex);
+                            }
                         }
                     }
 
