@@ -112,7 +112,7 @@ namespace WalkingTec.Mvvm.Core
         protected bool HasSubTable { get; set; }
 
         /// <summary>
-        /// 是否在sqlserver时使用bulk导入
+        /// 保留属性，不再影响导入行为：旧的 bulk 导入实现已移除，数据始终通过 DC 保存
         /// </summary>
         public bool UseBulkSave { get; set; }
 
@@ -1042,7 +1042,6 @@ namespace WalkingTec.Mvvm.Core
                 return false;
             }
             //循环数据列表
-            List<P> ListAdd = new List<P>();
             foreach (var item in EntityList)
             {
                 //根据唯一性的设定查找数据库中是否有同样的数据
@@ -1062,11 +1061,6 @@ namespace WalkingTec.Mvvm.Core
                 try
                 {
                     DC.SaveChanges();
-
-                    if (ListAdd.Count > 0)
-                    {
-                        BulkInsert<P>(DC, DC.GetTableName<P>(), ListAdd);
-                    }
                 }
                 catch (Exception e)
                 {
@@ -1105,7 +1099,6 @@ namespace WalkingTec.Mvvm.Core
                 return false;
             }
             //循环数据列表
-            List<P> ListAdd = new List<P>();
             foreach (var item in EntityList)
             {
                 //根据唯一性的设定查找数据库中是否有同样的数据
@@ -1125,11 +1118,6 @@ namespace WalkingTec.Mvvm.Core
                 try
                 {
                     await DC.SaveChangesAsync(cancellationToken);
-
-                    if (ListAdd.Count > 0)
-                    {
-                        BulkInsert<P>(DC, DC.GetTableName<P>(), ListAdd);
-                    }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -1287,15 +1275,7 @@ namespace WalkingTec.Mvvm.Core
                 ent.TenantCode = LoginUserInfo?.CurrentTenant;
             }
 
-            //如果是SqlServer数据库，而且没有主子表功能，进行Bulk插入
-            if (ConfigInfo.Connections.Where(x => x.Key == (CurrentCS ?? "default")).FirstOrDefault().DbType == DBTypeEnum.SqlServer && !HasSubTable && UseBulkSave == true)
-            {
-                //ListAdd.Add(item);
-            }
-            else
-            {
-                DC.Set<P>().Add(item);
-            }
+            DC.Set<P>().Add(item);
         }
 
         /// <summary>

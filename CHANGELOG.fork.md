@@ -10,6 +10,10 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
+## 未发布
+
+* **修复（涉及 LayUI 受保护路径，不破坏现有行为）：**   导入 VM 的保存（`BaseImportVM<T, P>.BatchSaveData()`、`BatchSaveDataAsync()`）有两处问题（#387 的第 2、3 项）。(1) 连接类型为 SqlServer、没有主子表、且把 `UseBulkSave` 设为 `true` 时，新增的数据既没有加入 DC、也没有真正写入，保存方法仍返回成功，数据被静默丢弃（旧的 bulk 实现已在更早的版本移除，只留下这段空分支）。(2) 保存每一行之前都会按 `CurrentCS`（缺省为 `default`）在连接设置里查找 DbType；找不到对应连接时（例如键名大小写与查找时不一致）会抛出 `NullReferenceException`，即使没有使用 `UseBulkSave`。现在新增的数据一律通过 `DC.Set<P>().Add` 保存，不再查找连接设置，也不再有返回成功却没写入的分支。`UseBulkSave` 属性与 `protected static BulkInsert<K>` 方法都保留（只增不删），`UseBulkSave` 不再改变行为，注释已说明。**下游影响：** 只有在 SqlServer 上显式设置 `UseBulkSave = true` 的导入，行为会改变：数据现在会被写入，而不是被静默丢弃；其余导入的结果不变，只是不再因连接设置查找失败而抛出异常。**LayUI 影响：** `BaseImportVM` 是 LayUI 的受保护路径，LayUI 的导入页面不设置 `UseBulkSave`，公开与受保护的 API 都没有变化。**回滚：** 还原本次提交即可恢复原行为；还原后若有站点依赖「数据被写入」，需要同时停止设置 `UseBulkSave`。
+
 ## 10.0.0.17(2026-10-26)
 
 * **修复（安全）：**   批量删除（`BaseBatchVM<TModel, TLinkModel>.DoBatchDelete()` 与 `DoBatchDeleteAsync()`）对每一条要删除的数据，以该数据自身的 Id 调用 `CheckIfCanDelete`，并对 `Ids` 去重：(1) `Ids` 先去重，能解析为 Guid 的按 Guid 比较（大小写、花括号等写法不同视为同一个；即使主键是字符串类型，两个只有大小写不同且形如 Guid 的字符串主键也会被视为同一个 Id），否则按 ordinal 字符串比较，保留首次出现的顺序与写法，去重后的列表也用于查询与回滚信息；(2) 对每一条要删除的数据调用一次 `CheckIfCanDelete`，传入 `Ids` 中与该数据对应的写法（所以按字符串解析或比较 Id 的既有覆盖仍然适用）；没有完全对应的写法时传入该数据自身 Id 的字符串，例如字符串主键在请求中的大小写或前后空白不同、int／long 主键写成 "05"、无法解析的 Id 被转换成 `Guid.Empty` 或 0 的情况；拒绝时的 `ErrorMessage` 键与逐条删除例外的错误信息键使用同一个 Id；(3) `FillRollbackMessages` 对已有的键不重复添加（也略过 null 的 Id）。同步与异步版本共用同一套逻辑，`break` 于第一个拒绝、全有或全无的保存、软删除／物理删除、附件文件在保存后删除、流程数据清理、`ListVM` 刷新与 `BatchError`、`MSD` 错误、取消的处理与覆盖判断都不变。对覆盖了 `CheckIfCanDelete` 的子类：钩子收到的是与正在被删除的那条数据对应的 Id，`Ids` 中重复的 Id 只检查一次，`Ids` 中找不到数据的 Id 不会调用钩子。`Ids` 为空或为 null 时不查询也不删除任何数据，直接返回 true；批量修改（`DoBatchEdit`）失败时填入回滚信息的步骤同样不重复添加已有的键，其余不变。公开 API 不变，LayUI 页面与 TagHelper 输出无变化，未修改 LayUI 受保护路径。回滚：退回上一个 fork 版本
