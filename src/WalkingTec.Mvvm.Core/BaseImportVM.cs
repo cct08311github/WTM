@@ -1047,6 +1047,10 @@ namespace WalkingTec.Mvvm.Core
             {
                 //根据唯一性的设定查找数据库中是否有同样的数据
                 P exist = IsDuplicateData(item, finalInfo);
+                if (ReportIfMatchedByEarlierRow(item, exist))
+                {
+                    continue;
+                }
                 PrepareItemForSave(item, exist);
             }
 
@@ -1104,6 +1108,10 @@ namespace WalkingTec.Mvvm.Core
             {
                 //根据唯一性的设定查找数据库中是否有同样的数据
                 P exist = await IsDuplicateDataAsync(item, finalInfo, cancellationToken);
+                if (ReportIfMatchedByEarlierRow(item, exist))
+                {
+                    continue;
+                }
                 PrepareItemForSave(item, exist);
             }
 
@@ -1156,6 +1164,9 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         private bool PrepareBatchSave()
         {
+            //每次保存都重新记录已被对应到的既有数据，不沿用上一次保存的状态
+            _matchedExistRows.Clear();
+            _matchedExistRowsByInstance.Clear();
             ///
             if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm.ServiceProvider != null)
             {
@@ -1218,6 +1229,72 @@ namespace WalkingTec.Mvvm.Core
             }
             catch
             {
+            }
+        }
+
+        //本次保存中已经被某一行对应到的既有数据（键为主键，主键缺失或不可用时为实例本身），值为那一行的行号
+        private readonly Dictionary<object, long> _matchedExistRows = new Dictionary<object, long>();
+        //主键不可用时按实例比对（强制使用引用相等，即使 Model 覆盖了 Equals／GetHashCode）
+        private readonly Dictionary<P, long> _matchedExistRowsByInstance = new Dictionary<P, long>(ReferenceEqualityComparer.Instance as IEqualityComparer<P>);
+
+        /// <summary>
+        /// 覆盖模式下，同一条既有数据被文件中前面的行对应过时（例如两行分别通过不同的重复字段组对应到同一条数据），
+        /// 为当前行加入错误并返回 true，调用方应略过该行（不把它的值覆盖到 <paramref name="exist"/>）；其余行继续处理，让所有冲突一起报告。
+        /// 以主键比对（不要求同一个实例，所以 NoTracking 时也有效）；主键缺失或不可用（null、空字符串、类型默认值）时只在实例相同时才算同一条，避免误报。
+        /// 不记录也不输出任何储存格的值。同步与异步的 BatchSaveData 共用
+        /// </summary>
+        private bool ReportIfMatchedByEarlierRow(P item, P exist)
+        {
+            if (IsOverWriteExistData == false || exist == null)
+            {
+                return false;
+            }
+            object key = GetUsableKey(exist);
+            long earlierRow;
+            if (key != null ? _matchedExistRows.TryGetValue(key, out earlierRow) : _matchedExistRowsByInstance.TryGetValue(exist, out earlierRow))
+            {
+                //下游自己的资源文件可能还没有这个键：没有本地化文字时使用内置的英文，仍然包含前面那一行的行号
+                var localized = CoreProgram._localizer?["Sys.ImportRecordMatchedByMultipleRows", earlierRow];
+                var message = localized == null || localized.ResourceNotFound
+                    ? $"This row matches the same existing record as row {earlierRow}. Change the file so that each existing record matches only one row"
+                    : localized.Value;
+                ErrorListVM.EntityList.Add(new ErrorMessage { Message = message, Index = item.ExcelIndex });
+                return true;
+            }
+            if (key != null)
+            {
+                _matchedExistRows[key] = item.ExcelIndex;
+            }
+            else
+            {
+                _matchedExistRowsByInstance[exist] = item.ExcelIndex;
+            }
+            return false;
+        }
+
+        private static object GetUsableKey(P entity)
+        {
+            try
+            {
+                var id = entity.GetID();
+                if (id == null)
+                {
+                    return null;
+                }
+                if (id is string str)
+                {
+                    return str.Length == 0 ? null : str;
+                }
+                if (id.GetType().IsValueType && id.Equals(Activator.CreateInstance(id.GetType())))
+                {
+                    return null;
+                }
+                return id;
+            }
+            catch
+            {
+                //没有 ID 属性等无法取得主键的情况：退回以实例比对
+                return null;
             }
         }
 

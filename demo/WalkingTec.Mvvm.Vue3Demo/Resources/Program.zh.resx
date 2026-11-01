@@ -474,6 +474,9 @@
   <data name="Sys.ImportError" xml:space="preserve">
     <value>导入时发生错误</value>
   </data>
+  <data name="Sys.ImportRecordMatchedByMultipleRows" xml:space="preserve">
+    <value>与第 {0} 行对应到同一条已有数据，请修改文件，使每条已有数据只对应一行</value>
+  </data>
   <data name="Sys.ImportSuccess" xml:space="preserve">
     <value>成功导入{0}行数据</value>
   </data>
