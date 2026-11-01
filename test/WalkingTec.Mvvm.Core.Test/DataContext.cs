@@ -36,5 +36,14 @@ namespace WalkingTec.Mvvm.Core.Test
         public DbSet<VM.BatchWorkflowDoc> BatchWorkflowDocs { get; set; }
         public DbSet<VM.BatchIntKeyDoc> BatchIntKeyDocs { get; set; }
         public DbSet<VM.BatchStringKeyDoc> BatchStringKeyDocs { get; set; }
+        public DbSet<ImportOverwriteDoc> ImportOverwriteDocs { get; set; }
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            base.OnModelCreating(modelBuilder);
+            // excluded by fluent configuration only, so a NotMappedAttribute check cannot see it (import overwrite tests, #396)
+            modelBuilder.Entity<ImportOverwriteDoc>().Ignore(x => x.FluentIgnored);
+            modelBuilder.Entity<ImportOverwriteDoc>().Ignore(x => x.FluentIgnoredTags);
+        }
     }
 }
