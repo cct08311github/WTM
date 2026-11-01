@@ -65,7 +65,7 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
         // picked up by CS.Cis (which only scans exported types) and cannot affect other tests.
         internal sealed class ImportTestDataContext : DataContext
         {
-            public ImportTestDataContext(CS cs) : base(cs.Value, cs.DbType ?? DBTypeEnum.Memory)
+            public ImportTestDataContext(CS cs) : base(cs.Value, DBTypeEnum.Memory) // the configured DbType is only metadata here (tests label it SqlServer), the store is always in-memory
             {
             }
         }
@@ -93,7 +93,7 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
             CoreProgram._localizer = _previousLocalizer;
         }
 
-        private static WTMContext NewWtm(string seed)
+        private static WTMContext NewWtm(string seed, DBTypeEnum configuredDbType = DBTypeEnum.Memory)
         {
             var wtm = MockWtmContext.CreateWtmContext(new DataContext(seed, DBTypeEnum.Memory), "importuser");
             // WTMContext.CreateDC() inspects the Referer header; the shared mock leaves Request.Headers unset (null)
@@ -105,7 +105,7 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
                 {
                     Key = "default",
                     Value = seed,
-                    DbType = DBTypeEnum.Memory,
+                    DbType = configuredDbType,
                     DcConstructor = typeof(ImportTestDataContext).GetConstructor(new[] { typeof(CS) }),
                 },
             };
@@ -312,6 +312,71 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
             Assert.AreEqual("importuser", saved[0].CreateBy);
             Assert.IsNotNull(saved[0].CreateTime);
             Assert.IsFalse(check.Set<FileAttachment>().Any(x => x.ID.ToString() == uploadId), "uploaded template must be deleted after a successful import");
+        }
+
+        [TestMethod]
+        public void Import_BatchSaveData_SqlServerConfiguredWithUseBulkSave_SavesRows()
+        {
+            var seed = Guid.NewGuid().ToString();
+            var wtm = NewWtm(seed, DBTypeEnum.SqlServer);
+            var template = new SchoolImportVM().GenerateTemplate(out _);
+            var filled = FillTemplate(template,
+                new[] { "211", "Alpha", "公立学校", "a" },
+                new[] { "212", "Beta", "私立学校", "b" });
+            var vm = NewImportVm<SchoolImportVM>(wtm, filled);
+            vm.UseBulkSave = true;
+
+            var ok = vm.BatchSaveData();
+
+            Assert.IsTrue(ok, string.Join("; ", vm.ErrorListVM.EntityList.Select(x => x.Message)));
+            using var check = new DataContext(seed, DBTypeEnum.Memory);
+            Assert.AreEqual(2, check.Set<School>().Count(), "rows must be written, not dropped");
+        }
+
+        [TestMethod]
+        public void Import_BatchSaveData_SqlServerConfiguredWithoutUseBulkSave_SavesRows()
+        {
+            var seed = Guid.NewGuid().ToString();
+            var wtm = NewWtm(seed, DBTypeEnum.SqlServer);
+            var filled = FillTemplate(new SchoolImportVM().GenerateTemplate(out _), new[] { "213", "Alpha", "公立学校", "a" });
+            var vm = NewImportVm<SchoolImportVM>(wtm, filled);
+            vm.UseBulkSave = false;
+
+            Assert.IsTrue(vm.BatchSaveData(), string.Join("; ", vm.ErrorListVM.EntityList.Select(x => x.Message)));
+            using var check = new DataContext(seed, DBTypeEnum.Memory);
+            Assert.AreEqual(1, check.Set<School>().Count());
+        }
+
+        [TestMethod]
+        public void Import_BatchSaveData_ConnectionKeyNotMatchingExactly_DoesNotThrowAndSavesRows()
+        {
+            var seed = Guid.NewGuid().ToString();
+            var wtm = NewWtm(seed);
+            var filled = FillTemplate(new SchoolImportVM().GenerateTemplate(out _), new[] { "214", "Alpha", "公立学校", "a" });
+            var vm = NewImportVm<SchoolImportVM>(wtm, filled);
+            // CreateDC() matches connection keys case-insensitively, a plain Key == "default" comparison does not find this one;
+            // the import must not depend on such a lookup
+            wtm.ConfigInfo.Connections[0].Key = "Default";
+
+            var ok = vm.BatchSaveData();
+
+            Assert.IsTrue(ok, string.Join("; ", vm.ErrorListVM.EntityList.Select(x => x.Message)));
+            using var check = new DataContext(seed, DBTypeEnum.Memory);
+            Assert.AreEqual(1, check.Set<School>().Count());
+        }
+
+        [TestMethod]
+        public void Import_BatchSaveData_UseBulkSaveFalse_StillSavesRows()
+        {
+            var seed = Guid.NewGuid().ToString();
+            var wtm = NewWtm(seed);
+            var filled = FillTemplate(new SchoolImportVM().GenerateTemplate(out _), new[] { "215", "Alpha", "公立学校", "a" });
+            var vm = NewImportVm<SchoolImportVM>(wtm, filled);
+            vm.UseBulkSave = false;
+
+            Assert.IsTrue(vm.BatchSaveData(), string.Join("; ", vm.ErrorListVM.EntityList.Select(x => x.Message)));
+            using var check = new DataContext(seed, DBTypeEnum.Memory);
+            Assert.AreEqual(1, check.Set<School>().Count());
         }
 
         [TestMethod]
