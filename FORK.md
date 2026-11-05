@@ -1080,15 +1080,15 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 | 項目 | 行為 |
 |---|---|
 | 啟用 | 設定 `FileEndpoints:UploadAllowList:Extensions`（字串清單）。**未設定（空或沒有）時完全關閉**：端點的行為、回應與 LayUI TagHelper 的輸出都與以前相同，也不讀取上傳內容 |
-| 副檔名 | 只看檔名最後一段副檔名（雙重副檔名如 `a.php.png` 以 `png` 判斷；`a.png.php` 以 `php` 判斷），不分大小寫，取檔名時先去掉路徑；沒有副檔名、結尾是點、或最後一段含空白等額外字元者，一律不在清單內。清單項目不分大小寫、可帶或不帶開頭的點；`jpg` 與 `jpeg` 視為同一種。設定了項目卻都不是有效副檔名時（例如 `*`），所有上傳都被拒絕 |
-| 內容比對 | `FileEndpoints:UploadAllowList:VerifyContent`（預設 `true`）。xls：OLE2 檔頭；xlsx：zip，且目錄中有 `[Content_Types].xml` 與 `xl/workbook.xml`（只讀 zip 目錄，不解壓縮；只有 zip 檔頭不夠）；jpg／jpeg：`FF D8 FF`；png：PNG 檔頭；gif：`GIF87a` 或 `GIF89a`。副檔名與內容種類不符即拒絕（例如 `.png` 的內容是 JPEG）。**沒有比對規則的種類（清單中的其他副檔名，如 `pdf`、`txt`）只比對副檔名，不讀取內容**。`VerifyContent=false` 時全部只比對副檔名 |
-| 比對的限制 | 只檢查檔頭與（xlsx 的）zip 目錄，不解析內容、不掃描惡意程式，也不改寫檔案。xls 的 OLE2 檔頭與舊版 doc／ppt 相同，不區分。base64 分支的檔名由伺服器依偵測到的格式產生，也經過同一個規則 |
-| 自訂規則 | `IUploadFileRule`（`TryAdd` 註冊 `ConfiguredUploadFileRule`，比照 `IFileAccessPolicy`）：在 `AddWtmContext` 之前註冊自己的實作即可取代。`IsAllowed(UploadFileRequest)` 傳回 false 即拒絕（可設 `RefusalReason` 作為記錄的固定文字）；`IsActive(wtm)`（預設 true，自訂規則只實作 `IsAllowed` 時永遠生效）傳回 false 時等同沒有規則。規則丟出例外時上傳被拒絕，記錄 Error（只有例外型別）。`UploadFileRequest.Content` 是可 seek 的串流（第一次讀取時才開啟與複製），規則不讀內容就沒有額外成本 |
+| 副檔名 | 只看檔名最後一段副檔名（雙重副檔名如 `a.txt.png` 以 `png` 判斷；`a.png.txt` 以 `txt` 判斷），不分大小寫，取檔名時先去掉路徑；沒有副檔名、結尾是點、或最後一段含空白等額外字元者，一律不在清單內。清單項目不分大小寫、可帶或不帶開頭的點；`jpg` 與 `jpeg` 視為同一種。設定了項目卻都不是有效副檔名時（例如 `*`），所有上傳都被拒絕 |
+| 內容比對 | `FileEndpoints:UploadAllowList:VerifyContent`（預設 `true`）。xls：OLE2 檔頭；xlsx：zip，且目錄中有 `[Content_Types].xml` 與 `xl/workbook.xml`（只讀 zip 目錄，不解壓縮；只有 zip 檔頭不夠。讀取目錄之前，先有界地讀檔尾的 end-of-central-directory 記錄：目錄項目超過 10,000、Zip64、或找不到有效記錄的 zip 一律拒絕，一般的活頁簿只有數十個項目）；jpg／jpeg：`FF D8 FF`；png：PNG 檔頭；gif：`GIF87a` 或 `GIF89a`。副檔名與內容種類不符即拒絕（例如 `.png` 的內容是 JPEG）。**沒有比對規則的種類（清單中的其他副檔名，如 `pdf`、`txt`）只比對副檔名，不讀取內容**。`VerifyContent=false` 時全部只比對副檔名 |
+| 比對的限制 | 內容比對只到簽章層級：只檢查檔頭與（xlsx 的）zip 目錄，不解析內容、不掃描惡意程式，也不改寫檔案，不能證明檔案其餘部分有效。任何 OLE2 檔案（包括舊版 doc／ppt）都能以 `.xls` 通過；xlsx 比對的是 zip 的部件名稱，所以含巨集的活頁簿封裝（xlsm 等）內容若有這些部件也會通過 `.xlsx`。base64 圖片與圖片上傳的檢查同樣只讀檔頭，不證明圖片資料的其餘部分。base64 分支的檔名由伺服器依偵測到的格式產生，也經過同一個規則 |
+| 自訂規則 | `IUploadFileRule`（`TryAdd` 註冊 `ConfiguredUploadFileRule`，比照 `IFileAccessPolicy`）：在 `AddWtmContext` 之前註冊自己的實作即可取代。`IsAllowed(UploadFileRequest)` 傳回 false 即拒絕（可設 `RefusalReason` 作為記錄的固定文字）；`IsActive(wtm)`（預設 true，自訂規則只實作 `IsAllowed` 時永遠生效）傳回 false 時等同沒有規則。規則丟出例外時上傳被拒絕，記錄 Error（只有例外型別）；解析（建立）已註冊的規則時丟出例外也一樣拒絕。沒有註冊規則（解析結果為空）才等同關閉。`UploadFileRequest.Content` 是可 seek 的串流（第一次讀取時才開啟與複製），規則不讀內容就沒有額外成本 |
 | 串流 | 來源不能 seek 時複製成記憶體內的串流再檢查，並以同一份複本交給儲存（`FileUploadOptions.UploadLimit` 為上限，超過則拒絕）；能 seek 的來源（一般的表單檔案）直接使用並倒回。規則沒有讀取內容時，端點與以前一樣自己開啟上傳串流 |
 | 回應（拒絕時） | `/_Framework/Upload`、`UploadImage`：HTTP 200，`{Msg:"Upload failed", Code:400, Data:{Id:"", Name:""}}`（`Data.Id` 為空是 `wt:upload`、`wt:multiupload` 判斷上傳失敗的條件，元件顯示它們自己的失敗訊息）。`UploadForLayUIRichTextBox`：既有的失敗格式（`code:1`、`msg`、`data.src:""`）。`UploadForLayUIUEditor`：`Code:400`、`Msg`、`Data.src:""`（UEditor 對話框讀 `Code`，200 才是成功，失敗時顯示 `Msg`），並保留以前失敗回應的 `code`、`msg`、`data.src`。`SpaFileApi`：HTTP 400，內容為上傳失敗的固定文字（與其他失敗的上傳相同）。訊息一律是固定文字，不含檔名或原因 |
 | 記錄 | 拒絕時記錄 Warning：`Upload endpoint {Endpoint} refused a file: {Reason} (user {User})`。原因是固定文字（`the file extension is not allowed`、`the file content does not match its extension`、`the file content could not be read`、`the upload rule refused the file`、`the upload rule failed`），不記錄檔名與內容 |
 
-**C. 縮圖的輸出與副檔名**：帶尺寸的 `UploadImage` 一律輸出 JPEG。白名單檢查針對**原始上傳**，在縮圖之前進行。**啟用規則時**，縮圖以與輸出格式一致的名稱儲存：結尾已是 `.jpg`／`.jpeg` 者保留原名，其他最後一段副檔名換成 `.jpg`（例如 `photo.gif` 存成 `photo.jpg`）。**未啟用時維持現有行為**（沿用原檔名，例如 `.gif` 檔名存 JPEG 內容）。縮圖不再重新檢查，所以啟用白名單又要使用帶尺寸的上傳時，清單需要包含 `jpg`。`_FrameworkController.UploadImage` 與 `SpaFileApi.UploadImage` 規則相同。
+**C. 縮圖的輸出與副檔名**：帶尺寸的 `UploadImage` 一律輸出 JPEG。白名單檢查針對**原始上傳**，在縮圖之前進行。**啟用規則時**，縮圖以與輸出格式一致的名稱儲存：結尾已是 `.jpg`／`.jpeg` 者保留原名，其他最後一段副檔名換成 `.jpg`（例如 `photo.gif` 存成 `photo.jpg`）。**未啟用時維持現有行為**（沿用原檔名，例如 `.gif` 檔名存 JPEG 內容）。縮圖的名稱不會再對清單重新檢查：清單不含 `jpg`／`jpeg` 時，通過檢查的原始圖片（例如 png）仍會以 `.jpg` 名稱儲存縮圖。`_FrameworkController.UploadImage` 與 `SpaFileApi.UploadImage` 規則相同。
 
 **B. UEditor 的 base64 分支只接受圖片（預設生效，與白名單是否設定無關）**
 
