@@ -10,7 +10,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
-## 未发布
+## 10.0.0.19(2026-11-06)
 
 * **变更（默认行为变更，涉及 LayUI 受保护路径，可关闭）：**   列表 VM 的批量与勾选导出查询（`BasePagedListVM` 的 `GetBatchQuery`、`CheckExport`、`GenerateExcel`，以及设置了 `ReplaceWhere` 时的查询）在缩小为所勾选的数据时，保留数据权限条件。原本 `WhereReplaceModifier<T>` 会把最外层连续的一段根实体 `Where` 整段移除，`DPWhere` 添加的条件落在这一段时也被一并移除，批量与导出路径应与搜索路径套用相同的数据权限，现在两者一致。现在 `DPWhere` 以 lambda 名称标记它的条件（不影响 SQL 与查询缓存，`DPWhere` 签名不变），`WhereReplaceModifier<T>` 新增构造函数 `(where, keepProtected)`，在移除时把带标记的条件按原顺序接回；原有的单参数构造函数行为不变。搜索条件仍会被取代，勾选的数据在搜索表单改变后依然可以导出。新增选项 `DataPrivilegeOptions:KeepInBatchQuery`（默认 `true`）与可覆写的 `BasePagedListVM.KeepDataPrivilegeInBatchQuery`（`protected virtual`，单个 VM 可自行选择），新增可选的 `IQueryable<T>.WhereProtected(predicate)` 供手写的授权条件使用（闭包变量仍是查询参数）。可观察的变化：数据权限之外的勾选数据不再出现在批量与勾选导出中（全部勾选的数据都在权限之外时，导出仍产生文件，只有标题行）；没有登录信息的使用者在这些路径得到空集合；可访问全部数据的使用者不受影响；LayUI Selector 的值在权限之外时，回填的显示文字为空。**配置值：** `DataPrivilegeOptions:KeepInBatchQuery` 只接受 `true` 或 `false`（不区分大小写），其他值（`0`、`1`、空字符串等）会在启动读取配置时抛出异常，应用程序不会启动。   **回滚：** 设置 `DataPrivilegeOptions:KeepInBatchQuery=false`，生成的 SQL 与修改前相同（有测试）；或退回前一个 fork 版本。详见 FORK.md 第 35 节。
 
