@@ -356,10 +356,18 @@ namespace WalkingTec.Mvvm.Mvc
             }
             // the marker of files embedded by a rich text editor is the server's to set
             extra = FileEndpointGuard.StripEmbeddedMarker(extra);
-            using (var data = form.OpenReadStream())
+            using (var check = UploadFileGuard.Check(c.Wtm, "Upload", form.FileName, form.Length, form.OpenReadStream))
             {
-                var file = fp.Upload(form.FileName, form.Length, data, groupName, subdir, extra, sm, Own(c, c.Wtm.CreateDC(cskey: connection.Key)));
-                return file == null ? c.BadRequest(Text(c, "Sys.UploadFailed", "Upload failed")) : UploadResult(c, file, connection.Key);
+                if (check.Allowed == false)
+                {
+                    return UploadRefused(c);
+                }
+                using (var opened = check.Content == null ? form.OpenReadStream() : null)
+                {
+                    var data = check.Content ?? opened;
+                    var file = fp.Upload(form.FileName, form.Length, data, groupName, subdir, extra, sm, Own(c, c.Wtm.CreateDC(cskey: connection.Key)));
+                    return file == null ? c.BadRequest(Text(c, "Sys.UploadFailed", "Upload failed")) : UploadResult(c, file, connection.Key);
+                }
             }
         }
 
@@ -379,10 +387,16 @@ namespace WalkingTec.Mvvm.Mvc
                 return refused;
             }
             extra = FileEndpointGuard.StripEmbeddedMarker(extra);
-            SpaImageResult processed;
-            using (var upstream = form.OpenReadStream())
+            // the original upload is checked first, before any thumbnail is made
+            using var check = UploadFileGuard.Check(c.Wtm, "UploadImage", form.FileName, form.Length, form.OpenReadStream);
+            if (check.Allowed == false)
             {
-                processed = resize(upstream, width, height);
+                return UploadRefused(c);
+            }
+            SpaImageResult processed;
+            using (var opened = check.Content == null ? form.OpenReadStream() : null)
+            {
+                processed = resize(check.Content ?? opened, width, height);
             }
             if (processed?.Resized == null)
             {
@@ -390,11 +404,13 @@ namespace WalkingTec.Mvvm.Mvc
                 LogImageRejected(c, "UploadImage", processed?.Error ?? "Invalid image");
                 return c.BadRequest(Text(c, "Sys.UploadFailed", "Upload failed"));
             }
+            // a thumbnail is always JPEG: with the allow-list in force the stored name says so (without it the name is stored as it came)
+            var storedName = check.Applied ? UploadFileNames.ThumbnailFileName(form.FileName) : form.FileName;
             using (processed.Resized)
             using (processed.Buffered)
             {
                 processed.Resized.Position = 0;
-                var file = fp.Upload(form.FileName, processed.Resized.Length, processed.Resized, groupName, subdir, extra, sm, Own(c, c.Wtm.CreateDC(cskey: connection.Key)));
+                var file = fp.Upload(storedName, processed.Resized.Length, processed.Resized, groupName, subdir, extra, sm, Own(c, c.Wtm.CreateDC(cskey: connection.Key)));
                 return file == null ? c.BadRequest(Text(c, "Sys.UploadFailed", "Upload failed")) : UploadResult(c, file, connection.Key);
             }
         }
@@ -411,20 +427,34 @@ namespace WalkingTec.Mvvm.Mvc
                 return refused;
             }
             extra = FileEndpointGuard.MarkEmbedded(FileEndpointGuard.StripEmbeddedMarker(extra));
-            using (var data = form.OpenReadStream())
+            using (var check = UploadFileGuard.Check(c.Wtm, "UploadForEditor", form.FileName, form.Length, form.OpenReadStream))
             {
-                var file = fp.Upload(form.FileName, form.Length, data, groupName, subdir, extra, sm, Own(c, c.Wtm.CreateDC(cskey: connection.Key)));
-                if (file == null)
+                if (check.Allowed == false)
                 {
-                    return c.BadRequest(Text(c, "Sys.UploadFailed", "Upload failed"));
+                    return UploadRefused(c);
                 }
-                var url = $"{BasePath}/getfile/{file.GetID()}";
-                if (string.IsNullOrEmpty(connection.Key) == false)
+                using (var opened = check.Content == null ? form.OpenReadStream() : null)
                 {
-                    url += "?" + ConnectionParameter + "=" + Uri.EscapeDataString(connection.Key);
+                    var data = check.Content ?? opened;
+                    var file = fp.Upload(form.FileName, form.Length, data, groupName, subdir, extra, sm, Own(c, c.Wtm.CreateDC(cskey: connection.Key)));
+                    if (file == null)
+                    {
+                        return c.BadRequest(Text(c, "Sys.UploadFailed", "Upload failed"));
+                    }
+                    var url = $"{BasePath}/getfile/{file.GetID()}";
+                    if (string.IsNullOrEmpty(connection.Key) == false)
+                    {
+                        url += "?" + ConnectionParameter + "=" + Uri.EscapeDataString(connection.Key);
+                    }
+                    return c.Content(JsonSerializer.Serialize(new { errno = 0, data = new { url, alt = file.FileName, href = string.Empty } }), "application/json");
                 }
-                return c.Content(JsonSerializer.Serialize(new { errno = 0, data = new { url, alt = file.FileName, href = string.Empty } }), "application/json");
             }
+        }
+
+        /// <summary>The answer to a file that the upload rule refused: the same as for any other failed upload, a 400 with the fixed upload-failed text (the reason goes to the log only).</summary>
+        private static IActionResult UploadRefused(BaseApiController c)
+        {
+            return c.BadRequest(Text(c, "Sys.UploadFailed", "Upload failed"));
         }
 
         private static IActionResult BeginUpload(BaseApiController c, string endpoint, string csName, string reference, out FileConnectionDecision connection, out IFormFile form)

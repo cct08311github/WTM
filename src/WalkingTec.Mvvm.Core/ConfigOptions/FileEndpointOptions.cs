@@ -59,6 +59,11 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         public List<string> RequestConnectionKeys { get; set; } = new List<string>();
 
+        /// <summary>
+        /// Optional allow-list of the files the upload endpoints store. Off until an extension is configured. See <see cref="UploadAllowListOptions"/>.
+        /// </summary>
+        public UploadAllowListOptions UploadAllowList { get; set; } = new UploadAllowListOptions();
+
         public const int DefaultReferenceLifetimeMinutes = 480;
 
         /// <summary>The lifetime in effect (the default when the configured value is below 1).</summary>
@@ -74,6 +79,41 @@ namespace WalkingTec.Mvvm.Core
             var normalized = FileEndpointGuard.NormalizeConnectionKey(key);
             return RequestConnectionKeys.Any(x => string.IsNullOrWhiteSpace(x) == false
                 && string.Equals(FileEndpointGuard.NormalizeConnectionKey(x.Trim()), normalized, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    /// <summary>
+    /// Settings of the optional upload allow-list (configuration section <c>FileEndpoints:UploadAllowList</c>), applied by the default
+    /// <see cref="IUploadFileRule"/> to the upload endpoints of the framework. It is off while <see cref="Extensions"/> is empty or missing, and the
+    /// endpoints then behave as before.
+    /// </summary>
+    public class UploadAllowListOptions
+    {
+        /// <summary>
+        /// The file name extensions that may be uploaded, for example <c>["xls", "xlsx", "jpg", "jpeg", "png", "gif"]</c> (case-insensitive, with or without
+        /// the leading dot; <c>jpg</c> and <c>jpeg</c> are the same type). Only the last extension of a file name counts and a name without one is refused.
+        /// Setting any entry turns the allow-list on, so a list of entries that match nothing refuses every upload.
+        /// </summary>
+        public List<string> Extensions { get; set; } = new List<string>();
+
+        /// <summary>
+        /// Whether the content has to match the extension (default true): xls (OLE2 signature), xlsx (a zip with the workbook part), jpg/jpeg, png and gif
+        /// are checked. An allowed extension without a content rule (any other type) passes on its extension alone.
+        /// </summary>
+        public bool VerifyContent { get; set; } = true;
+
+        /// <summary>True when at least one entry is configured.</summary>
+        public bool IsEnabled => Extensions != null && Extensions.Count > 0;
+
+        /// <summary>True when <paramref name="extension"/> (last extension of a name, case-insensitive) is allowed. An empty extension never is.</summary>
+        public bool IsExtensionAllowed(string extension)
+        {
+            var type = UploadContentSniffer.Canonical(extension);
+            if (type.Length == 0 || Extensions == null)
+            {
+                return false;
+            }
+            return Extensions.Any(x => string.IsNullOrWhiteSpace(x) == false && UploadContentSniffer.FromListEntry(x) == type);
         }
     }
 }

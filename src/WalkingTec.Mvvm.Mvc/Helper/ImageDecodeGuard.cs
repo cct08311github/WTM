@@ -136,7 +136,17 @@ namespace WalkingTec.Mvvm.Mvc.Imaging
         /// <summary>Header-only validation (format allowlist, byte size, pixel dimensions). The stream must be seekable.</summary>
         public static bool Validate(Stream seekable, ImageDecodeLimits limits, out string error)
         {
+            return Validate(seekable, limits, out _, out error);
+        }
+
+        /// <summary>
+        /// Same as the other overload, and also says which format the header has, as the file name extension it is stored under
+        /// (<c>jpg</c>, <c>png</c>, <c>gif</c>, <c>bmp</c> or <c>webp</c>); null when the image is rejected.
+        /// </summary>
+        public static bool Validate(Stream seekable, ImageDecodeLimits limits, out string extension, out string error)
+        {
             error = null;
+            extension = null;
             limits ??= new ImageDecodeLimits();
             if (seekable.CanSeek && seekable.Length > limits.MaxBytes)
             {
@@ -167,6 +177,7 @@ namespace WalkingTec.Mvvm.Mvc.Imaging
                     error = "Image dimensions too large";
                     return false;
                 }
+                extension = ExtensionOf(format);
                 return true;
             }
             catch (Exception)
@@ -175,6 +186,48 @@ namespace WalkingTec.Mvvm.Mvc.Imaging
                 error = "Invalid image";
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Decodes a base64 text that carries a picture (no <c>data:</c> prefix) and validates the picture header like <see cref="Validate(Stream, ImageDecodeLimits, out string, out string)"/>.
+        /// Returns false, with a fixed <paramref name="error"/>, for text that is not base64, bytes that are no allowed picture or a picture outside the
+        /// limits; nothing is thrown for bad input. <paramref name="extension"/> is the extension of the detected format.
+        /// </summary>
+        public static bool TryDecodeBase64(string text, ImageDecodeLimits limits, out byte[] data, out string extension, out string error)
+        {
+            data = null;
+            extension = null;
+            limits ??= new ImageDecodeLimits();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                error = "Invalid base64";
+                return false;
+            }
+            // the decoded size is at most 3/4 of the text: refuse an oversized text before allocating for it
+            if (text.Length / 4 * 3L > limits.MaxBytes + 3)
+            {
+                error = "Image file too large";
+                return false;
+            }
+            byte[] bytes;
+            try
+            {
+                bytes = Convert.FromBase64String(text);
+            }
+            catch (FormatException)
+            {
+                error = "Invalid base64";
+                return false;
+            }
+            using (var ms = new MemoryStream(bytes, false))
+            {
+                if (!Validate(ms, limits, out extension, out error))
+                {
+                    return false;
+                }
+            }
+            data = bytes;
+            return true;
         }
 
         /// <summary>
@@ -246,6 +299,15 @@ namespace WalkingTec.Mvvm.Mvc.Imaging
         public static SpaImageResizer CreateResizer(Func<ImageDecodeLimits> limits)
         {
             return (source, width, height) => Resize(source, width, height, limits?.Invoke());
+        }
+
+        private static string ExtensionOf(IImageFormat format)
+        {
+            if (format is JpegFormat) return "jpg";
+            if (format is PngFormat) return "png";
+            if (format is GifFormat) return "gif";
+            if (format is BmpFormat) return "bmp";
+            return "webp";
         }
 
         private static bool IsAllowed(IImageFormat format)

@@ -215,9 +215,13 @@ git merge --no-ff upstream/dotnet10
 | `src/WalkingTec.Mvvm.Core/BasePagedListVM.cs`、`src/WalkingTec.Mvvm.Core/IBasePagedListVM.cs`、`src/WalkingTec.Mvvm.Core/Extensions/ListVMExtension.cs`、`src/WalkingTec.Mvvm.Core/BaseImportVM.cs`、`src/WalkingTec.Mvvm.Core/BaseBatchVM.cs` | 新增選用的 `BasePagedListVM.DoSearchAsync`（`virtual`；`IBasePagedListVM` 以預設介面方法提供，預設呼叫 `DoSearch()`）與 `ListVMExtension.GetJsonAsync`；`DoSearch` 的查詢組裝與分頁記錄抽成同步、非同步共用的私有方法。子類別只覆寫同步 `DoSearch()` 時，`DoSearchAsync` 仍呼叫該覆寫；查詢的 provider 不支援非同步（如 `AsQueryable()`）時退回同步，預存程序路徑仍為同步。新增選用的 `BaseImportVM.BatchSaveDataAsync`（`virtual`）與 `protected` 的 `IsDuplicateDataAsync`；`BatchSaveData`、`IsDuplicateData` 的內部實作抽成同步、非同步共用的私有方法，同步版本的行為不變。子類別只覆寫同步 `BatchSaveData()` 時，`BatchSaveDataAsync` 仍呼叫該覆寫；`SetEntityList`、`SetValidateCheck`（含其中的重複驗證）與檔案刪除仍為同步，取消時拋出 `OperationCanceledException`（不轉成匯入錯誤）。新增選用的 `BaseBatchVM.DoBatchDeleteAsync`、`DoBatchEditAsync`（`virtual`）與 `protected` 的 `RefreshErrorListAsync`；`DoBatchDelete`、`DoBatchEdit` 的內部實作抽成同步、非同步共用的私有方法，同步版本的行為不變。子類別只覆寫同步 `DoBatchDelete()`／`DoBatchEdit()` 時，對應的非同步方法仍呼叫該覆寫；`CheckIfCanDelete`、`vm.Validate()` 與檔案刪除仍為同步，取消時拋出 `OperationCanceledException`（不轉成錯誤訊息）。框架內部仍呼叫同步版本 | #382 |
 | `src/WalkingTec.Mvvm.Core/BaseBatchVM.cs` | `DoBatchDelete`／`DoBatchDeleteAsync` 對每一筆要刪除的資料，以該筆資料自身的 Id 呼叫 `CheckIfCanDelete`（傳入 `Ids` 中與該筆資料對應的寫法，沒有完全對應的寫法時傳入該筆資料自身 Id 的字串），`Ids` 先去重（Guid 寫法不同視為同一個，字串主鍵亦同）；`FillRollbackMessages` 不重複加入已有的鍵；`Ids` 為空或 null 時不刪除任何資料 | #392 |
 | `src/WalkingTec.Mvvm.Core/BaseImportVM.cs`、`demo/WalkingTec.Mvvm.Vue3Demo/Resources/Program.{en,zh}.resx` | 覆蓋模式下，同一筆既有資料被檔案中多列（透過不同的重複欄位組）對應時，後面的列加入錯誤、整批不存檔（私有方法 `ReportIfMatchedByEarlierRow`、`GetUsableKey`，新增多語系鍵 `Sys.ImportRecordMatchedByMultipleRows`） | #397，第 32 節 |
+| `src/WalkingTec.Mvvm.Core/Support/UploadFileRule.cs`（新增）、`src/WalkingTec.Mvvm.Core/ConfigOptions/FileEndpointOptions.cs` | 選用的上傳白名單：`IUploadFileRule`（可取代，`TryAdd`）、預設的 `ConfiguredUploadFileRule`、設定 `FileEndpoints:UploadAllowList`（`UploadAllowListOptions`）、內容比對 `UploadContentSniffer`、`UploadFileGuard`；`WtmFileProvider` 不變 | 第 33 節 |
+| `src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs`、`Helper/SpaFileApi.cs`、`Helper/ImageDecodeGuard.cs`、`Helper/FrameworkServiceExtension.cs` | `Upload`、`UploadImage`、`UploadForLayUIRichTextBox`、`UploadForLayUIUEditor` 與 `SpaFileApi` 的上傳在儲存前先問上傳規則；啟用時縮圖以 `.jpg` 名稱儲存；UEditor 的 base64 分支只接受圖片，副檔名依偵測到的格式（`ImageDecodeGuard.Validate` 的新多載、`TryDecodeBase64`）；預設規則的 `TryAdd` 註冊 | 第 33 節 |
+| `test/WalkingTec.Mvvm.Test.Mock/MockWtmContext.cs` | 選用參數 `uploadFileRule` | 第 33 節 |
+| `test/WalkingTec.Mvvm.LayUI.E2EHost/Startup.cs`、`appsettings.json`、`Fixtures/E2EUploadFileRule.cs`（新增） | 測試用：預設上傳規則只對帶 `X-E2E-Upload-AllowList` 標頭的請求生效，設定了 `FileEndpoints:UploadAllowList` | 第 33 節 |
 | Dependabot 的依賴升級 | 各 csproj／`package-lock.json` 的版本號 | 見各 `dependencies` PR |
 
-fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder,GenericEndpointGuard}.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/GenericEndpointOptions.cs`、`docs/security/generic-endpoint-authz.md`、`test/WalkingTec.Mvvm.LayUI.E2EHost/Controllers/ReportController.cs`（授權測試用頁面）、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270、#272）、`test/WalkingTec.Mvvm.E2E.Instrumentation/`（E2E 的路由覆蓋與 hosting startup，#272）。
+fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder,GenericEndpointGuard,UploadFileRule}.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/GenericEndpointOptions.cs`、`docs/security/generic-endpoint-authz.md`、`test/WalkingTec.Mvvm.LayUI.E2EHost/Controllers/ReportController.cs`（授權測試用頁面）、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270、#272）、`test/WalkingTec.Mvvm.E2E.Instrumentation/`（E2E 的路由覆蓋與 hosting startup，#272）。
 
 ## 7. CI、依賴更新與合併
 
@@ -1066,3 +1070,47 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 **維護者決定**：2026-11-01 於 #397 選擇「預設偵測並報錯、整批不存檔」，不另設開關。
 
 **測試**：Core.Test 的 `ExcelImportSameRecordMatchTests`（同步與非同步各一輪）：兩列對應同一筆（錯誤落在後面的列、資料庫不變）、三列對應同一筆（兩個錯誤）、衝突加上新增列與有效覆蓋列（整批不存）、兩列對應不同筆（皆更新）、單組條件、`IsOverWriteExistData = false`、NoTracking、int 與 string 主鍵、錯誤訊息不含儲存格值、同一個 VM 第二次保存沒有殘留衝突。
+
+## 33. 上傳端點的選用白名單，與 UEditor base64 分支只接受圖片（B 為預設生效的行為變更）
+
+**範圍**：框架內建的上傳端點：`/_Framework/Upload`、`UploadImage`（帶尺寸與不帶尺寸）、`UploadForLayUIRichTextBox`、`UploadForLayUIUEditor`（檔案與 base64 兩個分支），以及單頁應用檔案 API 的 `SpaFileApi.Upload`、`UploadImage`、`UploadForEditor`（demo 的 `/api/_file/*` 呼叫它們）。**不變**：`WtmFileProvider.Upload`、`GetFile`、`DeleteFile`（下游在伺服器端直接呼叫）、`IFileAccessPolicy` 與檔案讀取／刪除規則、影像 metadata 的處理、`DeletedFileIds` 與匯入的 `UploadFileId`、資料表與欄位。檢查放在端點層，不在 `WtmFileProvider` 裡。
+
+**A. 選用的白名單（預設關閉）**
+
+| 項目 | 行為 |
+|---|---|
+| 啟用 | 設定 `FileEndpoints:UploadAllowList:Extensions`（字串清單）。**未設定（空或沒有）時完全關閉**：端點的行為、回應與 LayUI TagHelper 的輸出都與以前相同，也不讀取上傳內容 |
+| 副檔名 | 只看檔名最後一段副檔名（雙重副檔名如 `a.txt.png` 以 `png` 判斷；`a.png.txt` 以 `txt` 判斷），不分大小寫，取檔名時先去掉路徑；沒有副檔名、結尾是點、或最後一段含空白等額外字元者，一律不在清單內。清單項目不分大小寫、可帶或不帶開頭的點；`jpg` 與 `jpeg` 視為同一種。設定了項目卻都不是有效副檔名時（例如 `*`），所有上傳都被拒絕 |
+| 內容比對 | `FileEndpoints:UploadAllowList:VerifyContent`（預設 `true`）。xls：OLE2 檔頭；xlsx：zip，且目錄中有 `[Content_Types].xml` 與 `xl/workbook.xml`（只讀 zip 目錄，不解壓縮；只有 zip 檔頭不夠。讀取目錄之前，先有界地讀檔尾的 end-of-central-directory 記錄：目錄項目超過 10,000、Zip64、或找不到有效記錄的 zip 一律拒絕，一般的活頁簿只有數十個項目）；jpg／jpeg：`FF D8 FF`；png：PNG 檔頭；gif：`GIF87a` 或 `GIF89a`。副檔名與內容種類不符即拒絕（例如 `.png` 的內容是 JPEG）。**沒有比對規則的種類（清單中的其他副檔名，如 `pdf`、`txt`）只比對副檔名，不讀取內容**。`VerifyContent=false` 時全部只比對副檔名 |
+| 比對的限制 | 內容比對只到簽章層級：只檢查檔頭與（xlsx 的）zip 目錄，不解析內容、不掃描惡意程式，也不改寫檔案，不能證明檔案其餘部分有效。任何 OLE2 檔案（包括舊版 doc／ppt）都能以 `.xls` 通過；xlsx 比對的是 zip 的部件名稱，所以含巨集的活頁簿封裝（xlsm 等）內容若有這些部件也會通過 `.xlsx`。base64 圖片與圖片上傳的檢查同樣只讀檔頭，不證明圖片資料的其餘部分。base64 分支的檔名由伺服器依偵測到的格式產生，也經過同一個規則 |
+| 自訂規則 | `IUploadFileRule`（`TryAdd` 註冊 `ConfiguredUploadFileRule`，比照 `IFileAccessPolicy`）：在 `AddWtmContext` 之前註冊自己的實作即可取代。`IsAllowed(UploadFileRequest)` 傳回 false 即拒絕（可設 `RefusalReason` 作為記錄的固定文字）；`IsActive(wtm)`（預設 true，自訂規則只實作 `IsAllowed` 時永遠生效）傳回 false 時等同沒有規則。規則丟出例外時上傳被拒絕，記錄 Error（只有例外型別）；解析（建立）已註冊的規則時丟出例外也一樣拒絕。沒有註冊規則（解析結果為空）才等同關閉。`UploadFileRequest.Content` 是可 seek 的串流（第一次讀取時才開啟與複製），規則不讀內容就沒有額外成本 |
+| 串流 | 來源不能 seek 時複製成記憶體內的串流再檢查，並以同一份複本交給儲存（`FileUploadOptions.UploadLimit` 為上限，超過則拒絕）；能 seek 的來源（一般的表單檔案）直接使用並倒回。規則沒有讀取內容時，端點與以前一樣自己開啟上傳串流 |
+| 回應（拒絕時） | `/_Framework/Upload`、`UploadImage`：HTTP 200，`{Msg:"Upload failed", Code:400, Data:{Id:"", Name:""}}`（`Data.Id` 為空是 `wt:upload`、`wt:multiupload` 判斷上傳失敗的條件，元件顯示它們自己的失敗訊息）。`UploadForLayUIRichTextBox`：既有的失敗格式（`code:1`、`msg`、`data.src:""`）。`UploadForLayUIUEditor`：`Code:400`、`Msg`、`Data.src:""`（UEditor 對話框讀 `Code`，200 才是成功，失敗時顯示 `Msg`），並保留以前失敗回應的 `code`、`msg`、`data.src`。`SpaFileApi`：HTTP 400，內容為上傳失敗的固定文字（與其他失敗的上傳相同）。訊息一律是固定文字，不含檔名或原因 |
+| 記錄 | 拒絕時記錄 Warning：`Upload endpoint {Endpoint} refused a file: {Reason} (user {User})`。原因是固定文字（`the file extension is not allowed`、`the file content does not match its extension`、`the file content could not be read`、`the upload rule refused the file`、`the upload rule failed`），不記錄檔名與內容 |
+
+**C. 縮圖的輸出與副檔名**：帶尺寸的 `UploadImage` 一律輸出 JPEG。白名單檢查針對**原始上傳**，在縮圖之前進行。**啟用規則時**，縮圖以與輸出格式一致的名稱儲存：結尾已是 `.jpg`／`.jpeg` 者保留原名，其他最後一段副檔名換成 `.jpg`（例如 `photo.gif` 存成 `photo.jpg`）。**未啟用時維持現有行為**（沿用原檔名，例如 `.gif` 檔名存 JPEG 內容）。縮圖的名稱不會再對清單重新檢查：清單不含 `jpg`／`jpeg` 時，通過檢查的原始圖片（例如 png）仍會以 `.jpg` 名稱儲存縮圖。`_FrameworkController.UploadImage` 與 `SpaFileApi.UploadImage` 規則相同。
+
+**B. UEditor 的 base64 分支只接受圖片（預設生效，與白名單是否設定無關）**
+
+- **塗鴉實際送出的格式**（讀 `layuiadmin/ueditor/dialogs/scrawl/scrawl.js`）：`canvas.toDataURL("image/png").substring(22)`，也就是 PNG 的 base64 文字（不含 `data:image/png;base64,` 前綴），以 `application/x-www-form-urlencoded` 放在欄位 `FileID`（`scrawlFieldName`）。所以正常的塗鴉一律是 PNG；加入背景圖片也一樣，因為都經過畫布輸出
+- **變更**：內容須通過 `ImageDecodeGuard` 的標頭檢查（JPEG、PNG、GIF、BMP、WebP）並受 `ImageUploadLimits`（`MaxBytes`、`MaxWidth`、`MaxHeight`、`MaxPixels`）限制，才會儲存；文字長度超過上限推算的大小時，不解碼就拒絕。儲存的檔名為 `SCRAWL_<時間>.<副檔名>`，副檔名依實際偵測到的格式（`png`、`jpg`、`gif`、`bmp`、`webp`），不再固定為 `.jpg`。不是有效的 base64、不是允許的圖片、或超出限制時，回應上傳失敗（格式見上表的 `UploadForLayUIUEditor`），不儲存，也不丟出未處理的例外；記錄 Warning（固定原因，如 `Invalid base64`、`Unsupported image format`，不含內容）
+- **行為變更**：原本任何 base64 內容都以 `.jpg` 儲存。現在非圖片（例如 HTML、文件）會被拒絕；PNG 塗鴉以 `.png` 儲存（原本是 `.jpg`）。沒有開關
+- 回應的成功格式不變
+
+**升級步驟**：一般應用不需要修改。要啟用白名單，在設定加入，例如：
+
+```json
+"FileEndpoints": {
+  "UploadAllowList": { "Extensions": [ "xls", "xlsx", "jpg", "jpeg", "png", "gif" ] }
+}
+```
+
+自行用 `<wt:upload>` 以外的方式呼叫上傳端點、或用上傳端點存放不在清單內的檔案類型的頁面，啟用後會被拒絕，需要把副檔名加入清單。需要自訂規則時實作 `IUploadFileRule`，並在框架服務之前以 `AddSingleton<IUploadFileRule, YourRule>()` 註冊。UEditor 的 `scrawlUrlPrefix`／`scrawlMaxSize` 設定不受影響。
+
+**回滾**：白名單：移除 `FileEndpoints:UploadAllowList` 即可（不需要重新部署程式）。B：沒有開關，退回前一個 fork 版本。
+
+**LayUI 影響**：`_FrameworkController.cs` 是 LayUI 的受保護路徑（第 3 節）。未設定白名單時，上傳端點的程式路徑、回應與 TagHelper 輸出與以前相同（規則沒有啟用就不讀內容）；`wt:upload`、`wt:multiupload` 的元件程式碼沒有修改。B 對 UEditor 的塗鴉與貼圖（PNG）沒有影響。
+
+**已知限制**：內容比對不是惡意程式掃描；副檔名沒有比對規則的種類通過副檔名即可；xlsx 比對 zip 的部件名稱，不驗證部件內容；`WtmFileProvider` 的直接呼叫不經過規則。
+
+**測試**：Core.Test 的 `UploadAllowListTest`（規則本身：允許與不允許的副檔名、雙重副檔名、大小寫、`jpg`／`jpeg`、無副檔名、xls／xlsx／jpg／png／gif 的正常與不符內容、`VerifyContent=false`、沒有比對規則的種類、自訂規則與丟出例外的規則、不可 seek 的串流與上限、設定繫結與預設關閉、`TryAdd` 註冊；`/_Framework` 各端點與 `SpaFileApi` 的允許、拒絕、未設定時不變、不可 seek 的上傳；縮圖名稱；base64 分支的有效與無效內容、各格式的副檔名、限制、記錄）；E2E 的 `UploadAllowListTests`（真實的 `wt:upload` 允許與拒絕、圖片縮圖的 `.jpg` 名稱、UEditor 檔案與塗鴉上傳；E2EHost 的預設規則只對帶 `X-E2E-Upload-AllowList` 標頭的請求生效，其餘測試不受影響）。

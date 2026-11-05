@@ -16,7 +16,7 @@ namespace WalkingTec.Mvvm.Test.Mock
 {
     public static class MockWtmContext
     {
-        public static WTMContext CreateWtmContext(IDataContext dataContext= null, string usercode = null, string remoteToken = null, Microsoft.AspNetCore.DataProtection.IDataProtectionProvider dataProtection = null, Microsoft.Extensions.Logging.ILoggerFactory loggerFactory = null, Configs configs = null, IFileAccessPolicy fileAccessPolicy = null, Func<string, IDataContext> createDc = null)
+        public static WTMContext CreateWtmContext(IDataContext dataContext= null, string usercode = null, string remoteToken = null, Microsoft.AspNetCore.DataProtection.IDataProtectionProvider dataProtection = null, Microsoft.Extensions.Logging.ILoggerFactory loggerFactory = null, Configs configs = null, IFileAccessPolicy fileAccessPolicy = null, Func<string, IDataContext> createDc = null, IUploadFileRule uploadFileRule = null, IServiceProvider uploadRuleProvider = null)
         {
             GlobalData gd = new GlobalData();
             gd.AllAccessUrls = new List<string>();
@@ -47,6 +47,15 @@ namespace WalkingTec.Mvvm.Test.Mock
             if (fileAccessPolicy != null)
             {
                 mockService.Setup(x => x.GetService(typeof(IFileAccessPolicy))).Returns(fileAccessPolicy);
+            }
+            if (uploadFileRule != null)
+            {
+                mockService.Setup(x => x.GetService(typeof(IUploadFileRule))).Returns(uploadFileRule);
+            }
+            if (uploadRuleProvider != null)
+            {
+                // the rule is resolved from this provider each time it is asked for, so that a factory that throws throws at resolution
+                mockService.Setup(x => x.GetService(typeof(IUploadFileRule))).Returns(() => uploadRuleProvider.GetService(typeof(IUploadFileRule)));
             }
             Mock<IOptionsMonitor<Configs>> configMonitor = null;
             if (configs != null)

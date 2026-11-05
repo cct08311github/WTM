@@ -520,7 +520,13 @@ namespace WalkingTec.Mvvm.Mvc
             var FileData = Request.Form.Files[0];
             // the marker of files embedded by a rich text editor is the server's to set
             extra = FileEndpointGuard.StripEmbeddedMarker(extra);
-            var file = fp.Upload(FileData.FileName, FileData.Length, FileData.OpenReadStream(), groupName, subdir, extra, sm, Wtm.CreateDC(cskey: connection.Key));
+            // the optional upload rule (FileEndpoints:UploadAllowList or a registered IUploadFileRule); without one this does nothing
+            using var check = UploadFileGuard.Check(Wtm, "Upload", FileData.FileName, FileData.Length, FileData.OpenReadStream);
+            if (check.Allowed == false)
+            {
+                return UploadRefused();
+            }
+            var file = fp.Upload(FileData.FileName, FileData.Length, check.Content ?? FileData.OpenReadStream(), groupName, subdir, extra, sm, Wtm.CreateDC(cskey: connection.Key));
             return JsonMore(UploadResult(file, connection.Key));
         }
 
@@ -584,9 +590,16 @@ namespace WalkingTec.Mvvm.Mvc
             extra = FileEndpointGuard.StripEmbeddedMarker(extra);
             var FileData = Request.Form.Files[0];
 
+            // the original upload is checked first, before any thumbnail is made
+            using var check = UploadFileGuard.Check(Wtm, "UploadImage", FileData.FileName, FileData.Length, FileData.OpenReadStream);
+            if (check.Allowed == false)
+            {
+                return UploadRefused();
+            }
+
             // the picture is identified first and decoded only within the limits of ImageUploadLimits (see ImageDecodeGuard)
             SpaImageResult processed;
-            using (var upstream = FileData.OpenReadStream())
+            using (var upstream = check.Content ?? FileData.OpenReadStream())
             {
                 processed = ImageDecodeGuard.Resize(upstream, width, height, ImageLimits());
             }
@@ -596,10 +609,12 @@ namespace WalkingTec.Mvvm.Mvc
                 LogImageRejected("UploadImage", processed.Error);
                 return JsonMore(new { Id = string.Empty, Name = string.Empty }, StatusCodes.Status404NotFound);
             }
+            // a thumbnail is always JPEG: with the allow-list in force the stored name says so (without it the name is stored as it came)
+            var storedName = check.Applied ? UploadFileNames.ThumbnailFileName(FileData.FileName) : FileData.FileName;
             using (processed.Resized)
             using (processed.Buffered)
             {
-                var file = fp.Upload(FileData.FileName, processed.Resized.Length, processed.Resized, groupName, subdir, extra, sm, Wtm.CreateDC(cskey: connection.Key));
+                var file = fp.Upload(storedName, processed.Resized.Length, processed.Resized, groupName, subdir, extra, sm, Wtm.CreateDC(cskey: connection.Key));
                 return JsonMore(UploadResult(file, connection.Key));
             }
         }
@@ -621,6 +636,40 @@ namespace WalkingTec.Mvvm.Mvc
                 .Log(level, "File endpoint {Endpoint} did not process a picture: {Reason} (user {User})", endpoint, reason, Wtm.LoginUserInfo?.ITCode);
         }
 
+        /// <summary>
+        /// The answer to a file that the upload rule refused, for the <c>wt:upload</c> and <c>wt:multiupload</c> components: the shape of a failed upload
+        /// (an empty <c>Data.Id</c>, which they report as a failed upload), the fixed upload-failed text in <c>Msg</c>. The reason goes to the log only.
+        /// </summary>
+        private IActionResult UploadRefused()
+        {
+            return JsonMore(new { Id = string.Empty, Name = string.Empty }, StatusCodes.Status400BadRequest, UploadFailedText());
+        }
+
+        /// <summary>
+        /// The answer of <c>UploadForLayUIUEditor</c> to a file or picture that was not stored. The UEditor dialogs read <c>Code</c> (200 is success),
+        /// <c>Msg</c> and <c>Data</c>; the members of the earlier failure answer (<c>code</c>, <c>msg</c>, <c>data.src</c>) are kept as well.
+        /// </summary>
+        private IActionResult UEditorRefused()
+        {
+            var text = UploadFailedText();
+            return Content(JsonSerializer.Serialize(
+                new Dictionary<string, object>
+                {
+                    ["Code"] = 400,
+                    ["Msg"] = text,
+                    ["Data"] = new { src = string.Empty, FileName = string.Empty },
+                    ["code"] = 1,
+                    ["msg"] = text,
+                    ["data"] = new { src = string.Empty }
+                },
+                new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+        }
+
+        private static string UploadFailedText()
+        {
+            return MvcProgram._localizer?["Sys.UploadFailed"]?.Value ?? "Upload failed";
+        }
+
         [HttpPost]
         [ActionDescription("UploadForLayUIRichTextBox")]
         public IActionResult UploadForLayUIRichTextBox([FromServices] WtmFileProvider fp, string _DONOT_USE_CS = null, string groupName = null, string subdir = null, string _DONOT_USE_FREF = null)
@@ -631,8 +680,15 @@ namespace WalkingTec.Mvvm.Mvc
                 return RefuseFileRequest("UploadForLayUIRichTextBox", "the connection is not allowed");
             }
             var FileData = Request.Form.Files[0];
+            using var check = UploadFileGuard.Check(Wtm, "UploadForLayUIRichTextBox", FileData.FileName, FileData.Length, FileData.OpenReadStream);
+            if (check.Allowed == false)
+            {
+                return Content(JsonSerializer.Serialize(
+                    new Dictionary<string, object> { ["code"] = 1, ["msg"] = UploadFailedText(), ["data"] = new { src = string.Empty } },
+                    new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+            }
             // the file is embedded in the content of an editor: the server marks it, so that it stays reachable by its id
-            var file = fp.Upload(FileData.FileName, FileData.Length, FileData.OpenReadStream(), groupName, subdir, FileEndpointGuard.MarkEmbedded(null), dc: Wtm.CreateDC(cskey: connection.Key));
+            var file = fp.Upload(FileData.FileName, FileData.Length, check.Content ?? FileData.OpenReadStream(), groupName, subdir, FileEndpointGuard.MarkEmbedded(null), dc: Wtm.CreateDC(cskey: connection.Key));
             if (file != null)
             {
                 string url = EmbeddedFileUrl(file, connection.Key);
@@ -959,15 +1015,35 @@ namespace WalkingTec.Mvvm.Mvc
             {
                 //通过文件流方式上传附�?
                 var FileData = Request.Form.Files[0];
-                file = fp.Upload(FileData.FileName, FileData.Length, FileData.OpenReadStream(), groupName, subdir, FileEndpointGuard.MarkEmbedded(null), dc: Wtm.CreateDC(cskey: connection.Key));
+                using var check = UploadFileGuard.Check(Wtm, "UploadForLayUIUEditor", FileData.FileName, FileData.Length, FileData.OpenReadStream);
+                if (check.Allowed == false)
+                {
+                    return UEditorRefused();
+                }
+                file = fp.Upload(FileData.FileName, FileData.Length, check.Content ?? FileData.OpenReadStream(), groupName, subdir, FileEndpointGuard.MarkEmbedded(null), dc: Wtm.CreateDC(cskey: connection.Key));
             }
             else if (Request.Form.Keys != null && Request.Form.ContainsKey("FileID"))
             {
                 //通过Base64方式上传附件
-                var FileData = Convert.FromBase64String(Request.Form["FileID"]);
-                MemoryStream MS = new MemoryStream(FileData);
-                file = fp.Upload("SCRAWL_" + DateTime.Now.ToString("yyyyMMddHHmmssttt") + ".jpg", FileData.Length, MS, groupName, subdir, FileEndpointGuard.MarkEmbedded(null), dc: Wtm.CreateDC(cskey: connection.Key));
-                MS.Dispose();
+                // the scrawl dialog sends a PNG as base64 text; only a picture of an allowed format within ImageUploadLimits is stored,
+                // under the extension of the format that was detected
+                if (ImageDecodeGuard.TryDecodeBase64(Request.Form["FileID"].ToString(), ImageLimits(), out var imageData, out var imageExt, out var imageError) == false)
+                {
+                    LogImageRejected("UploadForLayUIUEditor", imageError);
+                    return UEditorRefused();
+                }
+                var scrawlName = "SCRAWL_" + DateTime.Now.ToString("yyyyMMddHHmmssttt") + "." + imageExt;
+                using (var check = UploadFileGuard.Check(Wtm, "UploadForLayUIUEditor", scrawlName, imageData.Length, () => new MemoryStream(imageData, false)))
+                {
+                    if (check.Allowed == false)
+                    {
+                        return UEditorRefused();
+                    }
+                    using (var MS = check.Content ?? new MemoryStream(imageData, false))
+                    {
+                        file = fp.Upload(scrawlName, imageData.Length, MS, groupName, subdir, FileEndpointGuard.MarkEmbedded(null), dc: Wtm.CreateDC(cskey: connection.Key));
+                    }
+                }
             }
 
 

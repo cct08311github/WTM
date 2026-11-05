@@ -548,6 +548,8 @@ namespace WalkingTec.Mvvm.Mvc
             services.AddScoped<WtmFileProvider>();
             // the rule applications may add after the file endpoints have admitted a request; replace it by registering your own first
             services.TryAddSingleton<IFileAccessPolicy, AllowAllFileAccessPolicy>();
+            // the optional rule for uploads (off until FileEndpoints:UploadAllowList is configured); replace it by registering your own first
+            services.TryAddSingleton<IUploadFileRule, ConfiguredUploadFileRule>();
             services.Configure<FormOptions>(y =>
             {
                 y.ValueCountLimit = 5000;
