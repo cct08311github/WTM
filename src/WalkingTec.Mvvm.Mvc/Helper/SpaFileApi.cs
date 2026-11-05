@@ -394,7 +394,7 @@ namespace WalkingTec.Mvvm.Mvc
             using (processed.Buffered)
             {
                 processed.Resized.Position = 0;
-                var file = fp.Upload(form.FileName, form.Length, processed.Resized, groupName, subdir, extra, sm, Own(c, c.Wtm.CreateDC(cskey: connection.Key)));
+                var file = fp.Upload(form.FileName, processed.Resized.Length, processed.Resized, groupName, subdir, extra, sm, Own(c, c.Wtm.CreateDC(cskey: connection.Key)));
                 return file == null ? c.BadRequest(Text(c, "Sys.UploadFailed", "Upload failed")) : UploadResult(c, file, connection.Key);
             }
         }
