@@ -748,6 +748,19 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
+        public void UploadImage_WithASize_RecordsTheLengthOfTheStoredPicture_NotOfTheOriginalUpload()
+        {
+            var small = new byte[] { 7, 7, 7 };
+            Assert.AreNotEqual(Png.Length, small.Length);
+            var h = Make("alice", FileEndpointMode.Enforce, files: new[] { Form("a.png", Png) });
+            var body = Body(SpaFileApi.UploadImage(h.Controller, h.Provider, 150, 150, null, null, null, null, null, null, (s, w, hh) => new SpaImageResult { Resized = new MemoryStream(small) }));
+            using var dc = new LoginTestContext(_seed);
+            var stored = dc.Set<FileAttachment>().Single(x => x.ID == Guid.Parse(body.GetProperty("Id").GetString()));
+            CollectionAssert.AreEqual(small, stored.FileData);
+            Assert.AreEqual(stored.FileData.Length, stored.Length, "the recorded length matches the stored content");
+        }
+
+        [TestMethod]
         public void UploadImage_WithoutASize_IsAPlainUpload()
         {
             var h = Make("alice", FileEndpointMode.Audit, files: new[] { Form("a.png", Png) });
