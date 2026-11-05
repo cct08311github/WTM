@@ -1114,3 +1114,11 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 **已知限制**：內容比對不是惡意程式掃描；副檔名沒有比對規則的種類通過副檔名即可；xlsx 比對 zip 的部件名稱，不驗證部件內容；`WtmFileProvider` 的直接呼叫不經過規則。
 
 **測試**：Core.Test 的 `UploadAllowListTest`（規則本身：允許與不允許的副檔名、雙重副檔名、大小寫、`jpg`／`jpeg`、無副檔名、xls／xlsx／jpg／png／gif 的正常與不符內容、`VerifyContent=false`、沒有比對規則的種類、自訂規則與丟出例外的規則、不可 seek 的串流與上限、設定繫結與預設關閉、`TryAdd` 註冊；`/_Framework` 各端點與 `SpaFileApi` 的允許、拒絕、未設定時不變、不可 seek 的上傳；縮圖名稱；base64 分支的有效與無效內容、各格式的副檔名、限制、記錄）；E2E 的 `UploadAllowListTests`（真實的 `wt:upload` 允許與拒絕、圖片縮圖的 `.jpg` 名稱、UEditor 檔案與塗鴉上傳；E2EHost 的預設規則只對帶 `X-E2E-Upload-AllowList` 標頭的請求生效，其餘測試不受影響）。
+
+## 34. `BaseVM.FromView` 的來源與使用建議（僅文件）
+
+**說明**：`BaseVM.FromView` 是表單可綁定的屬性，它的值來自請求，應視為使用者輸入。框架本身不讀取這個值；只有 LayUI 的 `FormTagHelper` 會輸出名為 `FromView` 的隱藏欄位（值為 `CurrentView`）。
+
+**建議**：應用程式要選擇渲染哪個 view 時，使用固定的 view 名稱（fork 的 controller 產生範本也是如此）；確實需要動態決定時，先對照應用程式自己的允許清單，再使用。
+
+**相容性**：`FromView` 屬性與隱藏欄位都維持不變，既有應用程式不受影響。這一節只改文件，沒有程式碼變更，也不影響 LayUI 的輸出。
