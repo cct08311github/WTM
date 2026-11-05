@@ -36,6 +36,8 @@ namespace WalkingTec.Mvvm.LayUI.E2EHost
             services.AddDistributedMemoryCache();
             // test only: a rule for the file endpoints that the E2E tests switch per request (registered first, so the framework keeps it)
             services.AddSingleton<WalkingTec.Mvvm.Core.IFileAccessPolicy, Fixtures.E2EFileAccessPolicy>();
+            // test only: the default upload rule, in force only for requests that carry the header X-E2E-Upload-AllowList
+            services.AddSingleton<WalkingTec.Mvvm.Core.IUploadFileRule, Fixtures.E2EUploadFileRule>();
             services.AddWtmSession(3600, ConfigRoot);
             services.AddWtmCrossDomain(ConfigRoot);
             services.AddWtmAuthentication(ConfigRoot);
