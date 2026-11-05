@@ -680,6 +680,16 @@ namespace WalkingTec.Mvvm.Core
         }
 
         /// <summary>
+        /// Whether the data privilege conditions (<c>DPWhere</c>, <c>WhereProtected</c>) are kept when the query is narrowed to the selected
+        /// records (batch and checked export) or when <see cref="ReplaceWhere"/> is applied. The default is the configuration
+        /// <c>DataPrivilegeOptions:KeepInBatchQuery</c> (<c>true</c> when it is not set). Override to choose differently for one view model.
+        /// </summary>
+        protected virtual bool KeepDataPrivilegeInBatchQuery
+        {
+            get { return ConfigInfo?.DataPrivilegeOptions?.KeepInBatchQuery ?? true; }
+        }
+
+        /// <summary>
         /// 设定勾选后导出的搜索语句，继承的类应该重载这个函数来指定自己导出时的搜索语句，如不指定则默认和搜索用的搜索语句相同
         /// </summary>
         /// <returns>搜索语句</returns>
@@ -704,7 +714,7 @@ namespace WalkingTec.Mvvm.Core
                     var pe = Expression.Parameter(typeof(TModel));
                     peid = Expression.Property(pe, typeof(TModel).GetSingleProperty(SelectorValueField));
                 }
-                var mod = new WhereReplaceModifier<TModel>(Ids.GetContainIdExpression<TModel>(peid));
+                var mod = new WhereReplaceModifier<TModel>(Ids.GetContainIdExpression<TModel>(peid), KeepDataPrivilegeInBatchQuery);
                 var newExp = mod.Modify(baseQuery.Expression);
                 var newQuery = baseQuery.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
                 return newQuery;
@@ -864,7 +874,7 @@ namespace WalkingTec.Mvvm.Core
                 //如果设定了替换条件，则使用替换条件替换Query中的Where语句
                 if (ReplaceWhere != null)
                 {
-                    var mod = new WhereReplaceModifier<TModel>(ReplaceWhere as Expression<Func<TModel, bool>>);
+                    var mod = new WhereReplaceModifier<TModel>(ReplaceWhere as Expression<Func<TModel, bool>>, KeepDataPrivilegeInBatchQuery);
                     var newExp = mod.Modify(query.Expression);
                     query = query.Provider.CreateQuery<TModel>(newExp) as IOrderedQueryable<TModel>;
                 }

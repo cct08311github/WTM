@@ -549,7 +549,8 @@ namespace WalkingTec.Mvvm.Core.Extensions
             else
             {
                 //返回加入了where条件之后的baseQuery
-                var query = baseQuery.Where(Expression.Lambda<Func<T, bool>>(finalExp, pe));
+                //条件带上保护标记（只是 lambda 的名称，不影响 SQL），批量、勾选导出时保留
+                var query = baseQuery.Where(ProtectedCondition.Mark(Expression.Lambda<Func<T, bool>>(finalExp, pe)));
                 return query;
             }
         }

@@ -221,6 +221,31 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region Data privilege options
+
+        private DataPrivilegeOptions _dataPrivilegeOptions;
+
+        /// <summary>
+        /// Settings of the data privilege conditions in list queries. See <see cref="DataPrivilegeOptions"/>.
+        /// </summary>
+        public DataPrivilegeOptions DataPrivilegeOptions
+        {
+            get
+            {
+                if (_dataPrivilegeOptions == null)
+                {
+                    _dataPrivilegeOptions = new DataPrivilegeOptions();
+                }
+                return _dataPrivilegeOptions;
+            }
+            set
+            {
+                _dataPrivilegeOptions = value;
+            }
+        }
+
+        #endregion
+
         #region File endpoint options
 
         private FileEndpointOptions _fileEndpoints;
