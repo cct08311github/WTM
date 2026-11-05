@@ -35,7 +35,7 @@
 | `src/WalkingTec.Mvvm.Mvc/GeneratorFiles/Mvc/**` | LayUI MVC 程式碼產生器範本 |
 | `src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs` | LayUI 使用的 endpoint（Selector、GetPagingData、匯出、上傳…） |
 | `src/WalkingTec.Mvvm.Mvc/Filters/PrivilegeFilter.cs`、`src/WalkingTec.Mvvm.Mvc/Helper/FResultExtension.cs` | `layuisearch` header 處理、`layui.index.render()` 輸出 |
-| `src/WalkingTec.Mvvm.Core`（`BasePagedListVM`、`BaseTemplateVM`、`BaseImportVM`、`LayUIMenu`／`MenuExtension`） | LayUI 頁面所依賴的匯出、範本、匯入與選單 |
+| `src/WalkingTec.Mvvm.Core`（`BasePagedListVM`、`BaseTemplateVM`、`BaseImportVM`、`LayUIMenu`／`MenuExtension`；`DPWhere` 所在的 `Extensions/DCExtension`、`WhereProtected` 所在的 `Extensions/ProtectedCondition`、`Support/ExpressionVisitors` 的 `WhereReplaceModifier`） | LayUI 頁面所依賴的匯出、範本、匯入與選單；勾選（批量、匯出、Selector 回填）時改寫列表查詢的邏輯 |
 
 自動化防線：TagHelper 的呈現與編碼測試（#23），在 CI 中執行。這些測試失敗時，PR（包括同步上游的 PR）不得合併。
 
@@ -219,6 +219,7 @@ git merge --no-ff upstream/dotnet10
 | `src/WalkingTec.Mvvm.Mvc/_FrameworkController.cs`、`Helper/SpaFileApi.cs`、`Helper/ImageDecodeGuard.cs`、`Helper/FrameworkServiceExtension.cs` | `Upload`、`UploadImage`、`UploadForLayUIRichTextBox`、`UploadForLayUIUEditor` 與 `SpaFileApi` 的上傳在儲存前先問上傳規則；啟用時縮圖以 `.jpg` 名稱儲存；UEditor 的 base64 分支只接受圖片，副檔名依偵測到的格式（`ImageDecodeGuard.Validate` 的新多載、`TryDecodeBase64`）；預設規則的 `TryAdd` 註冊 | 第 33 節 |
 | `test/WalkingTec.Mvvm.Test.Mock/MockWtmContext.cs` | 選用參數 `uploadFileRule` | 第 33 節 |
 | `test/WalkingTec.Mvvm.LayUI.E2EHost/Startup.cs`、`appsettings.json`、`Fixtures/E2EUploadFileRule.cs`（新增） | 測試用：預設上傳規則只對帶 `X-E2E-Upload-AllowList` 標頭的請求生效，設定了 `FileEndpoints:UploadAllowList` | 第 33 節 |
+| `src/WalkingTec.Mvvm.Core/Extensions/DCExtension.cs`、`Extensions/ProtectedCondition.cs`（新增）、`Support/ExpressionVisitors.cs`、`ConfigOptions/DataPrivilegeOptions.cs`（新增）、`ConfigOptions/Configs.cs`、`BasePagedListVM.cs`、`test/WalkingTec.Mvvm.Core.Test/VM/DataPrivilegeBatchQueryTest.cs`（新增） | 列表查詢縮小為勾選的資料時保留數據權限條件：`DPWhere` 的條件以 lambda 名稱標記；`WhereReplaceModifier` 新增 `(where, keepProtected)` 建構函式；`BasePagedListVM.KeepDataPrivilegeInBatchQuery`（`protected virtual`）；設定 `DataPrivilegeOptions:KeepInBatchQuery`（預設 true）；新增 `WhereProtected` | 第 35 節 |
 | Dependabot 的依賴升級 | 各 csproj／`package-lock.json` 的版本號 | 見各 `dependencies` PR |
 
 fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder,GenericEndpointGuard,UploadFileRule}.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/GenericEndpointOptions.cs`、`docs/security/generic-endpoint-authz.md`、`test/WalkingTec.Mvvm.LayUI.E2EHost/Controllers/ReportController.cs`（授權測試用頁面）、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270、#272）、`test/WalkingTec.Mvvm.E2E.Instrumentation/`（E2E 的路由覆蓋與 hosting startup，#272）。
@@ -1122,3 +1123,44 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 **建議**：應用程式要選擇渲染哪個 view 時，使用固定的 view 名稱（fork 的 controller 產生範本也是如此）；確實需要動態決定時，先對照應用程式自己的允許清單，再使用。
 
 **相容性**：`FromView` 屬性與隱藏欄位都維持不變，既有應用程式不受影響。這一節只改文件，沒有程式碼變更，也不影響 LayUI 的輸出。
+
+## 35. 列表查詢縮小為勾選的資料時保留數據權限條件（行為變更，預設開啟，可關閉）
+
+**範圍**：`BasePagedListVM` 的批量（`SearcherMode = Batch`）與勾選匯出（`CheckExport`，含 `GenerateExcel`）所用的查詢，以及設定了 `ReplaceWhere` 時套用 `ReplaceWhere` 的查詢；LayUI 的 Selector 回填顯示文字也走批量查詢。這些路徑原本由 `WhereReplaceModifier<T>` 把「從最外層往下的第一段連續的根實體 `Where`」整段移除，再在查詢根部加上 Id 條件；`DPWhere` 產生的是一般的 `Where`，落在這一段時數據權限條件也被一起移除，因此批量與匯出路徑應與搜尋路徑套用相同的數據權限，而原本並非如此。
+
+**變更**：
+
+| 項目 | 行為 |
+|---|---|
+| 標記 | `DPWhere` 以 `LambdaExpression.Name`（`ProtectedCondition.LambdaName`）標記它加入的條件。名稱不影響產生的 SQL，也不影響 EF 的查詢快取鍵；標記一律存在。`DPWhere` 的簽章不變 |
+| 移除時保留 | `WhereReplaceModifier<T>` 新增建構函式 `(where, keepProtected)`；為 true 時，被移除的那一段中帶標記的條件按原來的順序重新接回。既有的單參數建構函式行為完全不變 |
+| 預設與開關 | `BasePagedListVM` 兩個呼叫點（`GetBatchQuery`、`ReplaceWhere` 路徑）傳入 `KeepDataPrivilegeInBatchQuery`，預設讀 `DataPrivilegeOptions:KeepInBatchQuery`（預設 `true`）。單一 VM 可覆寫 `protected virtual bool KeepDataPrivilegeInBatchQuery` 選擇不同的值 |
+| 搜尋條件 | 照舊被取代：搜尋表單改變後，勾選的資料仍會匯出 |
+| 手寫的授權條件 | 新增選用的 `IQueryable<T>.WhereProtected(predicate)`（`WalkingTec.Mvvm.Core.Extensions`），加入帶同一標記的條件；閉包變數仍是查詢參數（不寫入 SQL） |
+| 全域過濾 | `IsValid`、`TenantCode` 等全域查詢過濾不受影響 |
+| 不變 | `DPWhere` 之後才 `Select` 成檢視型別、再手寫 `Where` 的形狀（由 `DPWhere` 在實體上計算出 Id 集合）：修飾器的停止行為沒有改動，開關開、關產生的 SQL 相同；`BaseCRUDVM`、`BaseBatchVM` 不變；既有的匯出 API 簽章不變 |
+
+**限制**：標記只存在於 `DPWhere` 與 `WhereProtected` 加入的條件。以其他方式重新建立的條件（自訂的運算式訪問器把 lambda 重建為沒有名稱的版本、手寫的 `Where`、`AppendSelfDPWhere`）沒有標記，批量與勾選匯出時仍會被移除；覆寫 `GetBatchQuery`／`GetCheckedExportQuery` 的 VM、直接使用單參數 `WhereReplaceModifier` 建構函式的程式碼維持原行為。標記不會經過運算式的序列化往返保留。`WhereProtected` 的條件內請避免使用同一實體的子查詢，這種寫法不支援（縮小查詢時會對運算式再訪問一次，可能影響 lambda 內部）；條件請只用該實體自身的欄位與擷取的變數。`AppendSelfDPWhere`（`DCExtension.cs`，私有）加入的條件不加標記：它只供 `GetSelectListItems`、`GetTreeSelectListItems` 使用（以及透過它們的 `DataPrivilegeInfo` 清單與產生器範本中的下拉資料來源），這些方法產生的是選單與樹狀清單，不在批量與匯出的查詢路徑上。
+
+**為什麼必要**：數據權限的目的是限制使用者能讀到的資料；批量與匯出路徑縮小為勾選的資料時，也應該保留這些條件，不應該連同搜尋條件一起被移除。
+
+**考慮過的替代方案**：(1) 新增 `DPWhere` 的參數或新方法：簽章改變、既有呼叫端都要改。(2) 以查詢標籤（`TagWith`）或自訂方法節點標記：會進入 SQL 註解或查詢樹，影響快取與 provider 行為。(3) 預設關閉、由下游開啟：安全預設不成立。採用 lambda 名稱標記加上預設開啟、可關閉的開關。
+
+**影響範圍與可觀察的變化**：
+- 使用者在數據權限之外的勾選資料，批量與勾選匯出不再取得該列（匯出檔只含可讀的列；全部勾選的列都在權限之外時，仍產生檔案，只有標題列）。
+- 沒有登入資訊的使用者，`DPWhere` 本來就回傳空集合；批量與匯出現在也是空集合。
+- 可存取全部資料的使用者（`RelateId` 為 null）不受影響。
+- LayUI Selector：欄位值在權限之外時，回填的顯示文字為空（查不到該列）；表單送出的隱藏欄位仍是欄位原本的值（由程式碼閱讀得出，未以瀏覽器測試驗證）。
+- 只有「`DPWhere` 落在被移除的那一段」的查詢改變。位於 `Include` 之後被保留的條件、以及不在第一段的條件，沒有變化（既有行為，這次不處理）。
+
+**遷移步驟**：不需要。預設即生效；少數依賴舊行為的 VM 覆寫 `KeepDataPrivilegeInBatchQuery` 傳回 `false`，或整站設 `DataPrivilegeOptions:KeepInBatchQuery=false`。手寫的授權條件改用 `WhereProtected` 即可得到同樣的保留。
+
+**設定值**：`DataPrivilegeOptions:KeepInBatchQuery` 只接受 `true` 或 `false`（不分大小寫）；其他值（`0`、`1`、空字串或任何無法解析的文字）會在啟動讀取設定時拋出 `InvalidOperationException`，應用程式不會啟動。
+
+**回滾**：設定 `DataPrivilegeOptions:KeepInBatchQuery=false` 即恢復原行為（產生的 SQL 與修改前相同，有測試）；也可還原該次提交。不涉及資料格式。
+
+**LayUI 影響**：`BasePagedListVM` 是 LayUI 的受保護路徑（第 3 節）。TagHelper 的輸出沒有改變；只有 Selector 在值位於權限之外時，回填的文字變為空。
+
+**維護者決定**：預設開啟，附關閉開關。
+
+**測試**：Core.Test 的 `DataPrivilegeBatchQueryTest`（SQLite；設定環境變數 `WTM_TEST_PGSQL` 時同樣在 PostgreSQL 執行）：各種查詢形狀（搜尋、`DPWhere`、`Include`、`AsNoTracking`、`Select`、`Order` 的組合）、批量與勾選匯出的同步與非同步、`SelectorValueField` 非 Id、`ReplaceWhere`、可存取全部資料／無登入／限定單一上層的使用者、全域過濾、開關開與關、單一 VM 覆寫、`WhereProtected`（含參數化）、手寫 `Where` 位於 `Select` 之後的形狀、`GenerateExcel` 的輸出，開關關閉時 SQL 與既有建構函式、與未加標記的查詢相同，以及標記的限制（覆寫 `GetBatchQuery` 的 VM 照原樣使用其查詢；手寫、未加標記的條件，或標記因重建運算式而遺失的條件，仍會被取代）。

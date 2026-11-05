@@ -210,6 +210,7 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
         private Type _modelType;
         private bool _addMode = false;
         private Expression<Func<T, bool>> _where;
+        private bool _keepProtected = false;
 
         /// <summary>
         /// 构造函数
@@ -218,6 +219,17 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
         public WhereReplaceModifier(Expression<Func<T, bool>> where)
         {
             _where = where;
+        }
+
+        /// <summary>
+        /// 构造函数
+        /// </summary>
+        /// <param name="where">需要替换的新where语句</param>
+        /// <param name="keepProtected">为true时，被删除的where中带保护标记的条件（<see cref="Extensions.ProtectedCondition"/>，数据权限的 DPWhere 会带上）按原来的顺序保留；为false时与不带这个参数的构造函数完全相同</param>
+        public WhereReplaceModifier(Expression<Func<T, bool>> where, bool keepProtected)
+        {
+            _where = where;
+            _keepProtected = keepProtected;
         }
 
         /// <summary>
@@ -352,9 +364,28 @@ Expression.Lambda(trueExp, new ParameterExpression[] { pe }));
                     //使用上面不是where的节点直接拼接本节点，从而删除了中间的where
                     if ((gType == typeof(IQueryable<>) || gType == typeof(QueryRootExpression)) && argType == _modelType)
                     {
+                        Expression source = nowhereNode;
+                        if (_keepProtected)
+                        {
+                            //被删除的where中带保护标记的条件，按原来的顺序重新接回
+                            var kept = new List<MethodCallExpression>();
+                            Expression cur = parentNode;
+                            while (cur is MethodCallExpression whereCall && whereCall.Method.Name.ToLower() == "where")
+                            {
+                                if (Extensions.ProtectedCondition.IsMarkedWhere(whereCall))
+                                {
+                                    kept.Add(whereCall);
+                                }
+                                cur = whereCall.Arguments[0];
+                            }
+                            for (int i = kept.Count - 1; i >= 0; i--)
+                            {
+                                source = Expression.Call(kept[i].Method, source, kept[i].Arguments[1]);
+                            }
+                        }
                         var paras = new List<Expression>
                         {
-                            nowhereNode
+                            source
                         };
                         paras.AddRange(node.Arguments.Skip(1).ToList());
                         var rv = Expression.Call(
