@@ -116,7 +116,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         }
 
         [TestMethod]
-        [DataRow("tool.exe", "MZ binary")]
+        [DataRow("tool.bin", "binary data")]
         [DataRow("page.html", "<html><script>1</script></html>")]
         [DataRow("noextension", "text")]
         [DataRow("fake.png", "this is not a picture")]
@@ -161,7 +161,7 @@ namespace WalkingTec.Mvvm.E2E.Tests
         {
             await Context.SetExtraHTTPHeadersAsync(new Dictionary<string, string>());
 
-            var json = await UploadAsync("AttachmentId", "Upload", MakeFile("tool.exe", Encoding.UTF8.GetBytes("MZ binary")));
+            var json = await UploadAsync("AttachmentId", "Upload", MakeFile("tool.bin", Encoding.UTF8.GetBytes("binary data")));
 
             Assert.AreEqual("200", json.GetProperty("Code").ToString());
             StringAssert.Matches(json.GetProperty("Data").GetProperty("Id").GetString(), new Regex("^[0-9a-f-]{36}$"));

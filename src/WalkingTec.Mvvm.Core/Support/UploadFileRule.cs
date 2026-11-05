@@ -225,14 +225,25 @@ namespace WalkingTec.Mvvm.Core
         public static UploadFileCheck Check(WTMContext wtm, string endpoint, string fileName, long length, Func<Stream> open)
         {
             var check = new UploadFileCheck();
+            var provider = wtm?.ServiceProvider;
+            if (provider == null)
+            {
+                return check;
+            }
             IUploadFileRule rule;
             try
             {
-                rule = wtm?.ServiceProvider?.GetService<IUploadFileRule>();
+                rule = provider.GetService<IUploadFileRule>();
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                rule = null;
+                // a rule that cannot be created does not let the upload through
+                wtm.LoggerFactory?.CreateLogger("WalkingTec.Mvvm.Core.UploadFileGuard")
+                    .LogError("The upload rule could not be created for {Endpoint}: {ExceptionType}; the upload is refused", endpoint, ex.GetType().Name);
+                check.Applied = true;
+                check.Allowed = false;
+                check.Reason = "the upload rule could not be created";
+                return check;
             }
             if (rule == null)
             {
@@ -376,6 +387,59 @@ namespace WalkingTec.Mvvm.Core
             return read == head.Length && head.SequenceEqual(signature);
         }
 
+        /// <summary>The most entries a workbook package may list in its zip directory; a real workbook has a few dozen.</summary>
+        private const int MaxPackageEntries = 10000;
+
+        /// <summary>
+        /// Reads the end-of-central-directory record (a bounded read of the tail: it is at most 22 bytes plus a comment of at most 65,535 bytes) and
+        /// returns the number of entries; false when there is no valid record or the archive uses Zip64 (a workbook does not need it).
+        /// </summary>
+        private static bool TryReadEntryCount(Stream s, out int count)
+        {
+            count = 0;
+            var length = s.Length;
+            if (length < 22)
+            {
+                return false;
+            }
+            var size = (int)Math.Min(length, 22 + 65535);
+            var tail = new byte[size];
+            s.Position = length - size;
+            var read = 0;
+            while (read < size)
+            {
+                var n = s.Read(tail, read, size - read);
+                if (n <= 0)
+                {
+                    return false;
+                }
+                read += n;
+            }
+            for (var i = size - 22; i >= 0; i--)
+            {
+                if (tail[i] != 0x50 || tail[i + 1] != 0x4B || tail[i + 2] != 0x05 || tail[i + 3] != 0x06)
+                {
+                    continue;
+                }
+                var commentLength = tail[i + 20] | (tail[i + 21] << 8);
+                if (i + 22 + commentLength != size)
+                {
+                    continue;
+                }
+                var entries = tail[i + 10] | (tail[i + 11] << 8);
+                var directorySize = BitConverter.ToUInt32(tail, i + 12);
+                var directoryOffset = BitConverter.ToUInt32(tail, i + 16);
+                var zip64Locator = i >= 20 && tail[i - 20] == 0x50 && tail[i - 19] == 0x4B && tail[i - 18] == 0x06 && tail[i - 17] == 0x07;
+                if (entries == 0xFFFF || directorySize == 0xFFFFFFFF || directoryOffset == 0xFFFFFFFF || zip64Locator)
+                {
+                    return false;
+                }
+                count = entries;
+                return true;
+            }
+            return false;
+        }
+
         private static bool IsWorkbookPackage(Stream s)
         {
             if (StartsWith(s, new byte[] { 0x50, 0x4B, 0x03, 0x04 }) == false)
@@ -384,6 +448,11 @@ namespace WalkingTec.Mvvm.Core
             }
             try
             {
+                // the number of entries is checked before the archive object reads (and keeps) every entry of the directory
+                if (TryReadEntryCount(s, out var count) == false || count > MaxPackageEntries)
+                {
+                    return false;
+                }
                 s.Position = 0;
                 using (var zip = new ZipArchive(s, ZipArchiveMode.Read, leaveOpen: true))
                 {

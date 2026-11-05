@@ -683,7 +683,9 @@ namespace WalkingTec.Mvvm.Mvc
             using var check = UploadFileGuard.Check(Wtm, "UploadForLayUIRichTextBox", FileData.FileName, FileData.Length, FileData.OpenReadStream);
             if (check.Allowed == false)
             {
-                return Content($"{{\"code\": 1 , \"msg\": \"{UploadFailedText()}\", \"data\": {{\"src\": \"\"}}}}");
+                return Content(JsonSerializer.Serialize(
+                    new Dictionary<string, object> { ["code"] = 1, ["msg"] = UploadFailedText(), ["data"] = new { src = string.Empty } },
+                    new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
             }
             // the file is embedded in the content of an editor: the server marks it, so that it stays reachable by its id
             var file = fp.Upload(FileData.FileName, FileData.Length, check.Content ?? FileData.OpenReadStream(), groupName, subdir, FileEndpointGuard.MarkEmbedded(null), dc: Wtm.CreateDC(cskey: connection.Key));

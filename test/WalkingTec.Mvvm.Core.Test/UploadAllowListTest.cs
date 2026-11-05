@@ -171,7 +171,7 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         private Harness Make(IEnumerable<string> allowed = null, bool verify = true, IUploadFileRule rule = null, bool registerDefaultRule = true,
-            Dictionary<string, string> limits = null, IEnumerable<IFormFile> files = null, Dictionary<string, string> fields = null, long? uploadLimit = null)
+            Dictionary<string, string> limits = null, IEnumerable<IFormFile> files = null, Dictionary<string, string> fields = null, long? uploadLimit = null, IServiceProvider ruleProvider = null)
         {
             var seed = _seed;
             var configs = new Configs();
@@ -187,7 +187,7 @@ namespace WalkingTec.Mvvm.Core.Test
             }
             var logs = new CapturingLoggerFactory();
             var wtm = MockWtmContext.CreateWtmContext(new LoginTestContext(seed), "alice", loggerFactory: logs, configs: configs, createDc: key => new LoginTestContext(seed),
-                uploadFileRule: rule ?? (registerDefaultRule ? new ConfiguredUploadFileRule() : null));
+                uploadFileRule: rule ?? (registerDefaultRule && ruleProvider == null ? new ConfiguredUploadFileRule() : null), uploadRuleProvider: ruleProvider);
             wtm.GlobaInfo.CustomUserType = typeof(LoginTestUser);
             var services = new ServiceCollection();
             var values = new Dictionary<string, string>();
@@ -256,7 +256,7 @@ namespace WalkingTec.Mvvm.Core.Test
         {
             var h = Make();
 
-            using var check = Check(h.Wtm, "anything.exe", Text("MZ"), out var opened);
+            using var check = Check(h.Wtm, "anything.bin", Text("binary"), out var opened);
 
             Assert.IsFalse(check.Applied);
             Assert.IsTrue(check.Allowed);
@@ -269,7 +269,7 @@ namespace WalkingTec.Mvvm.Core.Test
         {
             var h = Make(allowed: Standard, registerDefaultRule: false);
 
-            using var check = Check(h.Wtm, "anything.exe", Text("MZ"), out _);
+            using var check = Check(h.Wtm, "anything.bin", Text("binary"), out _);
 
             Assert.IsFalse(check.Applied);
             Assert.IsTrue(check.Allowed);
@@ -293,15 +293,15 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
-        [DataRow("report.exe")]
-        [DataRow("report.php")]
+        [DataRow("report.bin")]
+        [DataRow("report.txt")]
         [DataRow("report.html")]
         [DataRow("report.pdf")]
         [DataRow("report")]
         [DataRow("report.")]
         [DataRow(".")]
         [DataRow("")]
-        [DataRow("report.png.exe")]
+        [DataRow("report.png.bin")]
         [DataRow("report.jpg ")]
         [DataRow("report.png::$DATA")]
         public void AnExtensionOutsideTheList_IsRefused_WhateverTheContent(string name)
@@ -321,11 +321,11 @@ namespace WalkingTec.Mvvm.Core.Test
         {
             var h = Make(allowed: Standard);
 
-            using (var allowed = Check(h.Wtm, "archive.exe.png", Picture("png"), out _))
+            using (var allowed = Check(h.Wtm, "archive.bin.png", Picture("png"), out _))
             {
                 Assert.IsTrue(allowed.Allowed);
             }
-            using (var refused = Check(h.Wtm, "photo.png.exe", Picture("png"), out _))
+            using (var refused = Check(h.Wtm, "photo.png.bin", Picture("png"), out _))
             {
                 Assert.IsFalse(refused.Allowed);
             }
@@ -390,7 +390,7 @@ namespace WalkingTec.Mvvm.Core.Test
                 ("a.xlsx", Zip("hello.txt")),
                 ("a.xlsx", new byte[] { 0x50, 0x4B, 0x03, 0x04, 0, 0, 0, 0 }),
                 ("a.xlsx", Picture("png")),
-                ("a.xls", Text("MZ executable")),
+                ("a.xls", Text("binary content")),
             };
             foreach (var (name, data) in cases)
             {
@@ -406,7 +406,7 @@ namespace WalkingTec.Mvvm.Core.Test
             var h = Make(allowed: Standard, verify: false);
 
             using var mismatch = Check(h.Wtm, "a.png", Text("not a picture"), out var opened);
-            using var refused = Check(h.Wtm, "a.exe", Text("MZ"), out _);
+            using var refused = Check(h.Wtm, "a.bin", Text("binary"), out _);
 
             Assert.IsTrue(mismatch.Allowed);
             Assert.AreEqual(0, opened);
@@ -440,7 +440,7 @@ namespace WalkingTec.Mvvm.Core.Test
         {
             var h = Make(allowed: Standard);
 
-            using (Check(h.Wtm, "secret-name-for-the-log.exe", Text("secret-content"), out _)) { }
+            using (Check(h.Wtm, "secret-name-for-the-log.bin", Text("secret-content"), out _)) { }
             using (Check(h.Wtm, "secret-name-for-the-log.png", Text("secret-content"), out _)) { }
 
             var warnings = h.Logs.Entries.Where(x => x.Level == LogLevel.Warning).ToList();
@@ -536,11 +536,147 @@ namespace WalkingTec.Mvvm.Core.Test
         {
             var h = Make(rule: new InactiveRule());
 
-            using var check = Check(h.Wtm, "a.exe", Text("x"), out var opened);
+            using var check = Check(h.Wtm, "a.bin", Text("x"), out var opened);
 
             Assert.IsFalse(check.Applied);
             Assert.IsTrue(check.Allowed);
             Assert.AreEqual(0, opened);
+        }
+
+        [TestMethod]
+        public void ARuleThatCannotBeCreated_RefusesTheUpload_AndLogsOnlyTheExceptionType()
+        {
+            var services = new ServiceCollection();
+            services.AddSingleton<IUploadFileRule>(_ => throw new InvalidOperationException("secret detail"));
+            var h = Make(ruleProvider: services.BuildServiceProvider());
+
+            using var check = Check(h.Wtm, "a.png", Picture("png"), out var opened);
+
+            Assert.IsTrue(check.Applied);
+            Assert.IsFalse(check.Allowed);
+            Assert.AreEqual(0, opened);
+            var error = h.Logs.Entries.Single(x => x.Level == LogLevel.Error);
+            StringAssert.Contains(error.Message, nameof(InvalidOperationException));
+            Assert.IsFalse(error.Message.Contains("secret detail"));
+        }
+
+        [TestMethod]
+        public void ARuleThatCannotBeCreated_RefusesTheUploadAtTheEndpoints()
+        {
+            var services = new ServiceCollection();
+            services.AddSingleton<IUploadFileRule>(_ => throw new InvalidOperationException("x"));
+            var h = Make(ruleProvider: services.BuildServiceProvider(), files: new[] { Form("a.png", Picture("png")) });
+
+            Assert.AreEqual(400, Answer(h.Controller.Upload(h.Provider)).Code);
+            Assert.AreEqual(0, Stored().Count);
+        }
+
+        private static byte[] ZipWithEntries(int count)
+        {
+            using var ms = new MemoryStream();
+            using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, true))
+            {
+                zip.CreateEntry("[Content_Types].xml");
+                zip.CreateEntry("xl/workbook.xml");
+                for (var i = 2; i < count; i++)
+                {
+                    zip.CreateEntry("xl/worksheets/s" + i + ".xml");
+                }
+            }
+            return ms.ToArray();
+        }
+
+        /// <summary>A package with the parts of a small real workbook (content types, relationships, workbook, one sheet, styles).</summary>
+        private static byte[] RealXlsx()
+        {
+            using var ms = new MemoryStream();
+            using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, true))
+            {
+                void Part(string name, string xml)
+                {
+                    using var w = new StreamWriter(zip.CreateEntry(name).Open(), new UTF8Encoding(false));
+                    w.Write(xml);
+                }
+                Part("[Content_Types].xml", "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/><Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/></Types>");
+                Part("_rels/.rels", "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>");
+                Part("xl/workbook.xml", "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>");
+                Part("xl/_rels/workbook.xml.rels", "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>");
+                Part("xl/worksheets/sheet1.xml", "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>hello</t></is></c></row></sheetData></worksheet>");
+                Part("xl/styles.xml", "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><fonts count=\"1\"><font><sz val=\"11\"/><name val=\"Calibri\"/></font></fonts><fills count=\"1\"><fill><patternFill patternType=\"none\"/></fill></fills><borders count=\"1\"><border/></borders><cellXfs count=\"1\"><xf/></cellXfs></styleSheet>");
+            }
+            return ms.ToArray();
+        }
+
+        [TestMethod]
+        public void Xlsx_ARealWorkbookPackage_Passes()
+        {
+            var data = RealXlsx();
+            using (var archive = new ZipArchive(new MemoryStream(data), ZipArchiveMode.Read))
+            {
+                Assert.AreEqual(6, archive.Entries.Count, "the fixture is a package with its usual parts");
+            }
+            using var ms = new MemoryStream(data);
+            Assert.AreEqual(true, UploadContentSniffer.Matches("xlsx", ms));
+            Assert.AreEqual(0, ms.Position);
+        }
+
+        [TestMethod]
+        public void Xlsx_AZipWithoutTheWorkbookPart_OrWithoutTheContentTypes_IsRefused()
+        {
+            using var noWorkbook = new MemoryStream(Zip("[Content_Types].xml", "word/document.xml"));
+            using var noTypes = new MemoryStream(Zip("xl/workbook.xml", "xl/worksheets/sheet1.xml"));
+
+            Assert.AreEqual(false, UploadContentSniffer.Matches("xlsx", noWorkbook));
+            Assert.AreEqual(false, UploadContentSniffer.Matches("xlsx", noTypes));
+        }
+
+        [TestMethod]
+        public void Xlsx_ADirectoryWithMoreEntriesThanTheCap_IsRefused_BeforeItIsRead()
+        {
+            using var atCap = new MemoryStream(ZipWithEntries(10000));
+            using var overCap = new MemoryStream(ZipWithEntries(10001));
+
+            Assert.AreEqual(true, UploadContentSniffer.Matches("xlsx", atCap));
+            Assert.AreEqual(false, UploadContentSniffer.Matches("xlsx", overCap));
+            Assert.AreEqual(0, overCap.Position);
+        }
+
+        [TestMethod]
+        public void Xlsx_NoEndRecord_OrZip64_OrACorruptedTail_IsRefused()
+        {
+            var good = RealXlsx();
+            // no end-of-central-directory record: the tail is cut off
+            using var cut = new MemoryStream(good.Take(good.Length - 30).ToArray());
+            // a record whose entry count is the Zip64 marker
+            var zip64 = (byte[])good.Clone();
+            var at = zip64.Length - 22;
+            zip64[at + 10] = 0xFF;
+            zip64[at + 11] = 0xFF;
+            using var marker = new MemoryStream(zip64);
+            // a record that claims a comment that is not there
+            var wrongComment = (byte[])good.Clone();
+            wrongComment[at + 20] = 5;
+            using var comment = new MemoryStream(wrongComment);
+            // only the signature of a zip
+            using var tiny = new MemoryStream(new byte[] { 0x50, 0x4B, 0x03, 0x04, 1, 2, 3 });
+
+            Assert.AreEqual(false, UploadContentSniffer.Matches("xlsx", cut));
+            Assert.AreEqual(false, UploadContentSniffer.Matches("xlsx", marker));
+            Assert.AreEqual(false, UploadContentSniffer.Matches("xlsx", comment));
+            Assert.AreEqual(false, UploadContentSniffer.Matches("xlsx", tiny));
+        }
+
+        [TestMethod]
+        public void Xlsx_APackageWithACommentOnTheArchive_Passes()
+        {
+            var data = RealXlsx();
+            // append a comment of 10 bytes and set its length in the end record
+            var withComment = data.Concat(new byte[10]).ToArray();
+            var at = data.Length - 22;
+            withComment[at + 20] = 10;
+            using var ms = new MemoryStream(withComment);
+
+            Assert.AreEqual(true, UploadContentSniffer.Matches("xlsx", ms));
         }
 
         private sealed class InactiveRule : IUploadFileRule
@@ -610,12 +746,12 @@ namespace WalkingTec.Mvvm.Core.Test
         [TestMethod]
         public void Upload_NotConfigured_StoresWhateverItIs_AsBefore()
         {
-            var h = Make(files: new[] { Form("a.exe", Text("MZ")) });
+            var h = Make(files: new[] { Form("a.bin", Text("binary")) });
 
             var (code, id, _) = Answer(h.Controller.Upload(h.Provider));
 
             Assert.AreEqual(200, code);
-            Assert.AreEqual("a.exe", Stored().Single(x => x.ID == Guid.Parse(id)).FileName);
+            Assert.AreEqual("a.bin", Stored().Single(x => x.ID == Guid.Parse(id)).FileName);
         }
 
         [TestMethod]
@@ -639,8 +775,8 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
-        [DataRow("a.exe", "MZ")]
-        [DataRow("a", "MZ")]
+        [DataRow("a.bin", "binary")]
+        [DataRow("a", "binary")]
         [DataRow("a.png", "<html>")]
         public void Upload_Configured_RefusesAFileOutsideTheList_AndStoresNothing(string name, string content)
         {
@@ -716,6 +852,7 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.AreEqual(200, code);
             var stored = Stored().Single(x => x.ID == Guid.Parse(id));
             Assert.AreEqual(expectedName, stored.FileName);
+            Assert.AreEqual(stored.FileData.Length, stored.Length, "the recorded length is the length of the stored thumbnail");
             Assert.AreEqual("jpg", stored.FileExt.TrimStart('.').ToLowerInvariant().Replace("jpeg", "jpg"));
             var info = Image.Identify(stored.FileData);
             Assert.AreEqual("JPEG", info.Metadata.DecodedImageFormat.Name);
@@ -732,6 +869,7 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.AreEqual(200, code);
             var stored = Stored().Single(x => x.ID == Guid.Parse(id));
             Assert.AreEqual("photo.gif", stored.FileName, "the name is stored as it came, although the content is JPEG");
+            Assert.AreEqual(stored.FileData.Length, stored.Length);
             Assert.AreEqual("JPEG", Image.Identify(stored.FileData).Metadata.DecodedImageFormat.Name);
         }
 
@@ -740,7 +878,7 @@ namespace WalkingTec.Mvvm.Core.Test
         {
             // a JPEG named .png: without the allow-list a thumbnail is made; with it the original is refused first (400, not the 404 of the image guard)
             var h = Make(allowed: Standard, files: new[] { Form("photo.png", Picture("jpg")) });
-            var h2 = Make(allowed: Standard, files: new[] { Form("photo.exe", Picture("png")) });
+            var h2 = Make(allowed: Standard, files: new[] { Form("photo.bin", Picture("png")) });
 
             Assert.AreEqual(400, Answer(h.Controller.UploadImage(h.Provider, width: 10)).Code);
             Assert.AreEqual(400, Answer(h2.Controller.UploadImage(h2.Provider, width: 10)).Code);
@@ -950,10 +1088,10 @@ namespace WalkingTec.Mvvm.Core.Test
         [TestMethod]
         public void Spa_Upload_NotConfigured_StoresWhateverItIs_AsBefore()
         {
-            var h = Make(files: new[] { Form("a.exe", Text("MZ")) });
+            var h = Make(files: new[] { Form("a.bin", Text("binary")) });
 
             Assert.AreEqual(200, Status(SpaFileApi.Upload(h.Spa, h.Provider, null, null, null, null, null, null)));
-            Assert.AreEqual("a.exe", Stored().Single().FileName);
+            Assert.AreEqual("a.bin", Stored().Single().FileName);
         }
 
         [TestMethod]
@@ -961,7 +1099,7 @@ namespace WalkingTec.Mvvm.Core.Test
         {
             var good = Make(allowed: Standard, files: new[] { Form("a.xlsx", Xlsx()) });
             var bad = Make(allowed: Standard, files: new[] { Form("a.xlsx", Docx()) });
-            var other = Make(allowed: Standard, files: new[] { Form("a.exe", Text("MZ")) });
+            var other = Make(allowed: Standard, files: new[] { Form("a.bin", Text("binary")) });
 
             Assert.AreEqual(200, Status(SpaFileApi.Upload(good.Spa, good.Provider, null, null, null, null, null, null)));
             Assert.AreEqual(400, Status(SpaFileApi.Upload(bad.Spa, bad.Provider, null, null, null, null, null, null)));
@@ -994,7 +1132,9 @@ namespace WalkingTec.Mvvm.Core.Test
 
             Assert.AreEqual(200, Status(SpaFileApi.UploadImage(good.Spa, good.Provider, 10, 10, null, null, null, null, null, null, resize)));
             Assert.AreEqual(1, seen.Count);
-            Assert.AreEqual("photo.jpg", Stored().Single().FileName);
+            var storedThumb = Stored().Single();
+            Assert.AreEqual("photo.jpg", storedThumb.FileName);
+            Assert.AreEqual(storedThumb.FileData.Length, storedThumb.Length);
 
             Assert.AreEqual(400, Status(SpaFileApi.UploadImage(bad.Spa, bad.Provider, 10, 10, null, null, null, null, null, null, resize)));
             Assert.AreEqual(1, seen.Count, "no thumbnail is made for a file that is refused");
@@ -1008,7 +1148,9 @@ namespace WalkingTec.Mvvm.Core.Test
             var result = SpaFileApi.UploadImage(h.Spa, h.Provider, 10, 10, null, null, null, null, null, null, ImageDecodeGuard.CreateResizer(() => new ImageDecodeLimits()));
 
             Assert.AreEqual(200, Status(result));
-            Assert.AreEqual("photo.gif", Stored().Single().FileName);
+            var stored = Stored().Single();
+            Assert.AreEqual("photo.gif", stored.FileName);
+            Assert.AreEqual(stored.FileData.Length, stored.Length);
         }
 
         [TestMethod]
@@ -1021,7 +1163,9 @@ namespace WalkingTec.Mvvm.Core.Test
 
             Assert.AreEqual(200, Status(result));
             Assert.AreEqual(1, file.Opened);
-            Assert.AreEqual("a.jpg", Stored().Single().FileName);
+            var stored = Stored().Single();
+            Assert.AreEqual("a.jpg", stored.FileName);
+            Assert.AreEqual(stored.FileData.Length, stored.Length);
         }
 
         [TestMethod]
@@ -1042,7 +1186,7 @@ namespace WalkingTec.Mvvm.Core.Test
         {
             var h = Make(allowed: new[] { "png" });
 
-            var file = h.Provider.Upload("server-side.exe", 2, new MemoryStream(Text("MZ")));
+            var file = h.Provider.Upload("server-side.bin", 2, new MemoryStream(Text("binary")));
 
             Assert.IsNotNull(file);
             Assert.AreEqual(1, Stored().Count);
