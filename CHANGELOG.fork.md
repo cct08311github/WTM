@@ -10,7 +10,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
-## 未发布
+## 10.0.0.20(2026-11-06)
 
 * **修改（不破坏现有行为）：**   单页应用文件 API（`SpaFileApi`，路由 `api/_file/*`）的所有回应一律带 `X-Content-Type-Options: nosniff`（#429）。原本只有成功读取文件的路径会设置这个标头，找不到文件、id 格式不正确、被拒绝（403）、未登录（401）等提前结束的路径没有，与 `/_Framework` 的文件端点不一致。现在 `GetFileName`、`GetFile`、`DownloadFile`、`GetUserPhoto`、`GetFileInfo`、`Upload`、`UploadImage`、`UploadForEditor`、`DeleteFile` 在任何回传之前先设置该标头。只新增标头，不改授权、文件存取与回应内容的逻辑；成功读取时的 `Cache-Control: private, no-store` 行为不变，错误回应仍不带 `Cache-Control`。公开 API 不变，未修改 LayUI 受保护路径。回滚：还原本次提交即可。
 
