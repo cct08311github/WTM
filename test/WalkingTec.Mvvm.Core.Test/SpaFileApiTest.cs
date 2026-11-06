@@ -586,6 +586,75 @@ namespace WalkingTec.Mvvm.Core.Test
             }
         }
 
+        private static IActionResult DoRaw(Harness h, string action, string id, string reference = null)
+        {
+            switch (action)
+            {
+                case "GetFile": return SpaFileApi.GetFile(h.Controller, h.Provider, id, null, null, null, reference);
+                case "DownloadFile": return SpaFileApi.DownloadFile(h.Controller, h.Provider, id, null, reference);
+                case "GetFileName": return SpaFileApi.GetFileName(h.Controller, h.Provider, id, null, reference);
+                case "GetFileInfo": return SpaFileApi.GetFileInfo(h.Controller, id, null, reference);
+                case "GetUserPhoto": return SpaFileApi.GetUserPhoto(h.Controller, h.Provider, id, null, null, null, reference);
+                default: throw new ArgumentException(action);
+            }
+        }
+
+        [TestMethod]
+        public void TheReads_SendNoSniff_WhenTheFileIsNotThere()
+        {
+            foreach (var action in Reads)
+            {
+                var h = Make("alice", FileEndpointMode.Legacy);
+                var result = DoRaw(h, action, Guid.NewGuid().ToString());
+                if (action != "GetFileName")
+                {
+                    Assert.AreEqual(400, Status(result), action);
+                }
+                Assert.AreEqual("nosniff", h.Controller.Response.Headers["X-Content-Type-Options"].ToString(), action);
+                // the error answers carry no cache header: only the successful reads set it
+                if (action == "GetFile" || action == "DownloadFile" || action == "GetUserPhoto")
+                {
+                    Assert.IsFalse(h.Controller.Response.Headers.ContainsKey("Cache-Control"), action);
+                }
+            }
+        }
+
+        [TestMethod]
+        public void TheReads_SendNoSniff_WhenTheIdIsMalformed()
+        {
+            foreach (var action in Reads)
+            {
+                var h = Make("alice", FileEndpointMode.Legacy);
+                DoRaw(h, action, "not-an-id");
+                Assert.AreEqual("nosniff", h.Controller.Response.Headers["X-Content-Type-Options"].ToString(), action);
+            }
+        }
+
+        [TestMethod]
+        public void TheReads_SendNoSniff_WhenTheRequestIsRefused()
+        {
+            var id = AddFile();
+            foreach (var action in Reads)
+            {
+                var h = Make("alice", FileEndpointMode.Enforce);
+                var result = DoRaw(h, action, id.ToString());
+                Assert.AreEqual(403, Status(result), action);
+                Assert.AreEqual("nosniff", h.Controller.Response.Headers["X-Content-Type-Options"].ToString(), action);
+            }
+        }
+
+        [TestMethod]
+        public void TheWrites_SendNoSniff_WhenTheCallerIsNotSignedIn()
+        {
+            var id = AddFile();
+            var h = Make(null, FileEndpointMode.Legacy);
+            Assert.AreEqual(401, Status(SpaFileApi.DeleteFile(h.Controller, h.Provider, id.ToString(), null, null)));
+            Assert.AreEqual("nosniff", h.Controller.Response.Headers["X-Content-Type-Options"].ToString());
+            var u = Make(null, FileEndpointMode.Legacy);
+            SpaFileApi.Upload(u.Controller, u.Provider, null, null, null, null, null, null);
+            Assert.AreEqual("nosniff", u.Controller.Response.Headers["X-Content-Type-Options"].ToString());
+        }
+
         [TestMethod]
         public void TheReads_AreNotKeptByCaches_UnlessFilesArePublic()
         {

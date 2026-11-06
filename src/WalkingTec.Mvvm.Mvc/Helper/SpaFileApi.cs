@@ -61,6 +61,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// <summary>The name of a file (purpose <see cref="FilePurpose.Name"/>).</summary>
         public static IActionResult GetFileName(BaseApiController c, WtmFileProvider fp, string id, string csName, string reference)
         {
+            Nosniff(c);
             var refused = AuthorizeRead(c, "GetFileName", id, FilePurpose.Name, csName, reference, false, null, out var dc);
             if (refused != null)
             {
@@ -76,12 +77,14 @@ namespace WalkingTec.Mvvm.Mvc
         /// </summary>
         public static IActionResult GetFile(BaseApiController c, WtmFileProvider fp, string id, string csName, int? width, int? height, string reference, SpaImageResizer resize = null)
         {
+            Nosniff(c);
             return Serve(c, fp, "GetFile", id, FilePurpose.View, csName, width, height, reference, resize, attachment: false, embeddedForAnonymous: true, avatar: false);
         }
 
         /// <summary>Downloads a file (purpose <see cref="FilePurpose.Download"/>), always as an attachment.</summary>
         public static IActionResult DownloadFile(BaseApiController c, WtmFileProvider fp, string id, string csName, string reference)
         {
+            Nosniff(c);
             return Serve(c, fp, "DownloadFile", id, FilePurpose.Download, csName, null, null, reference, null, attachment: true, embeddedForAnonymous: false, avatar: false);
         }
 
@@ -91,6 +94,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// </summary>
         public static IActionResult GetUserPhoto(BaseApiController c, WtmFileProvider fp, string id, string csName, int? width, int? height, string reference, SpaImageResizer resize = null)
         {
+            Nosniff(c);
             if (c.ConfigInfo.HasMainHost && c.Wtm.LoginUserInfo?.CurrentTenant == null)
             {
                 return c.Redirect(c.Wtm.ConfigInfo.MainHost + c.Request.Path + c.Request.QueryString);
@@ -104,6 +108,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// </summary>
         public static IActionResult GetFileInfo(BaseApiController c, string id, string csName, string reference)
         {
+            Nosniff(c);
             var refused = AuthorizeRead(c, "GetFileInfo", id, FilePurpose.Name, csName, reference, false, null, out var dc);
             if (refused != null)
             {
@@ -216,10 +221,16 @@ namespace WalkingTec.Mvvm.Mvc
             return new FileStreamResult(data, contentType);
         }
 
+        /// <summary>The browser uses the type the server states. Set at the start of every action, so refusals and early answers carry it too.</summary>
+        private static void Nosniff(BaseApiController c)
+        {
+            c.Response.Headers["X-Content-Type-Options"] = "nosniff";
+        }
+
         /// <summary>The headers every read answer has: the browser uses the type the server states, and shared caches keep nothing unless the files are public.</summary>
         private static void Secure(BaseApiController c)
         {
-            c.Response.Headers["X-Content-Type-Options"] = "nosniff";
+            Nosniff(c);
             if (c.Wtm.ConfigInfo.IsFilePublic == false)
             {
                 c.Response.Headers["Cache-Control"] = "private, no-store";
@@ -349,6 +360,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// </summary>
         public static IActionResult Upload(BaseApiController c, WtmFileProvider fp, string sm, string groupName, string subdir, string extra, string csName, string reference)
         {
+            Nosniff(c);
             var refused = BeginUpload(c, "Upload", csName, reference, out var connection, out var form);
             if (refused != null)
             {
@@ -377,6 +389,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// </summary>
         public static IActionResult UploadImage(BaseApiController c, WtmFileProvider fp, int? width, int? height, string sm, string groupName, string subdir, string extra, string csName, string reference, SpaImageResizer resize)
         {
+            Nosniff(c);
             if ((width == null && height == null) || resize == null)
             {
                 return Upload(c, fp, sm, groupName, subdir, extra, csName, reference);
@@ -421,6 +434,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// </summary>
         public static IActionResult UploadForEditor(BaseApiController c, WtmFileProvider fp, string sm, string groupName, string subdir, string extra, string csName, string reference)
         {
+            Nosniff(c);
             var refused = BeginUpload(c, "UploadForEditor", csName, reference, out var connection, out var form);
             if (refused != null)
             {
@@ -508,6 +522,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// </summary>
         public static IActionResult DeleteFile(BaseApiController c, WtmFileProvider fp, string id, string csName, string reference)
         {
+            Nosniff(c);
             if (c.Wtm.LoginUserInfo == null)
             {
                 return c.Unauthorized();
