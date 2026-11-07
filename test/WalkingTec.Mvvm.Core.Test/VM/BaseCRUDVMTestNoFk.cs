@@ -98,7 +98,8 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             {
                 var rv = context.Set<SchoolNoFK>().ToList();
                 Assert.AreEqual(1, rv.Count);
-                Assert.AreEqual(code, rv[0].SchoolCode);
+                // SchoolCode is marked CanNotEdit: writing the whole record keeps the stored value (FORK.md section 37)
+                Assert.AreEqual("000", rv[0].SchoolCode);
                 Assert.AreEqual(name, rv[0].SchoolName);
                 Assert.AreEqual(schooltype, rv[0].SchoolType);
                 Assert.AreEqual(remark, rv[0].Remark);

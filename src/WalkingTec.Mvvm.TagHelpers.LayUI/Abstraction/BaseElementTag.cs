@@ -85,6 +85,30 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             return reference == null ? null : FileEndpointGuard.ReferenceParameter + "=" + System.Uri.EscapeDataString(reference);
         }
 
+        /// <summary>
+        /// Whether the page may hand out the references that read a file (see <see cref="BaseVM.MayShowFileReferences"/>): on a form that is shown again
+        /// the id comes from the request, so only a file the record already refers to, or that the request proves the user uploaded, gets them.
+        /// </summary>
+        protected static bool MayShowFileReferences(BaseVM vm, object fileId)
+        {
+            if (vm == null)
+            {
+                return true;
+            }
+            // a value that is not the id of a file of the store cannot name another user's file
+            return System.Guid.TryParse(fileId?.ToString(), out var id) == false || vm.MayShowFileReferences(id);
+        }
+
+        /// <summary>The valid link reference (<c>BaseVM.UploadedFileRefs</c>) of the signed-in user that the request carried for the file; null when there is none.</summary>
+        protected static string LinkReferenceOf(BaseVM vm, object fileId)
+        {
+            if (vm == null || System.Guid.TryParse(fileId?.ToString(), out var id) == false)
+            {
+                return null;
+            }
+            return vm.ValidFileLinkReferences().TryGetValue(id, out var reference) ? reference : null;
+        }
+
         /// <summary>The query part that carries the reference of an upload to the connection the page uses; null when the page uses the default connection.</summary>
         protected string UploadReferenceQuery(BaseVM vm, string connectionKey)
         {

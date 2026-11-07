@@ -4,6 +4,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
@@ -95,7 +96,7 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
 
         private static WTMContext NewWtm(string seed, DBTypeEnum configuredDbType = DBTypeEnum.Memory)
         {
-            var wtm = MockWtmContext.CreateWtmContext(new DataContext(seed, DBTypeEnum.Memory), "importuser");
+            var wtm = MockWtmContext.CreateWtmContext(new DataContext(seed, DBTypeEnum.Memory), "importuser", dataProtection: ImportUploadRef.Provider);
             // WTMContext.CreateDC() inspects the Referer header; the shared mock leaves Request.Headers unset (null)
             Moq.Mock.Get(wtm.HttpContext.Request).Setup(x => x.Headers).Returns(new Microsoft.AspNetCore.Http.HeaderDictionary());
             // the import reads/deletes the uploaded file through WtmFileProvider using Wtm.CreateDC(), which goes through Configs.Connections
@@ -185,7 +186,7 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
         {
             var vm = new T { Wtm = wtm };
             var id = Upload(wtm, xlsx);
-            vm.GetType().GetProperty("UploadFileId").SetValue(vm, id);
+            ImportUploadRef.Apply(wtm, vm, id);
             return vm;
         }
 
@@ -1108,6 +1109,243 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
             workbook.DeletePart(workbook.WorkbookStylesPart);
             Assert.IsFalse(OpenXmlHelper.IsDateFormattedCell(NumberCell(0, "1", WtmTemplateDateStyle), workbook), "no stylesheet");
         }
+
+        #region the reference of the uploaded file (UploadFileRef)
+
+        private static (SchoolImportVM vm, string seed, string uploadId, WTMContext wtm) ImportWithUpload(string user = "importuser")
+        {
+            var seed = Guid.NewGuid().ToString();
+            var wtm = NewWtm(seed);
+            var filled = FillTemplate(new SchoolImportVM().GenerateTemplate(out _), new[] { "301", "Alpha", "公立学校", "a" });
+            var vm = NewImportVm<SchoolImportVM>(wtm, filled);
+            return (vm, seed, vm.UploadFileId, wtm);
+        }
+
+        private static bool FileExists(string seed, string id)
+        {
+            using var check = new DataContext(seed, DBTypeEnum.Memory);
+            return check.Set<FileAttachment>().Any(x => x.ID.ToString() == id);
+        }
+
+        private static int SchoolCount(string seed)
+        {
+            using var check = new DataContext(seed, DBTypeEnum.Memory);
+            return check.Set<School>().Count();
+        }
+
+        [TestMethod]
+        public void UploadReference_ValidOne_IsAccepted()
+        {
+            var (vm, seed, id, _) = ImportWithUpload();
+            Assert.IsTrue(vm.BatchSaveData());
+            Assert.AreEqual(1, SchoolCount(seed));
+            Assert.IsFalse(FileExists(seed, id));
+        }
+
+        [TestMethod]
+        public void UploadReference_Missing_TheFileIsNeitherReadNorDeleted()
+        {
+            var (vm, seed, id, _) = ImportWithUpload();
+            vm.UploadFileRef = null;
+            Assert.IsFalse(vm.BatchSaveData());
+            Assert.AreEqual(0, SchoolCount(seed));
+            Assert.IsTrue(FileExists(seed, id));
+            Assert.IsTrue(vm.ErrorListVM.EntityList.Any(x => x.Message == "Sys.WrongTemplate"), "the answer is the one of a file that is not usable");
+        }
+
+        [TestMethod]
+        public void UploadReference_OfAnotherUser_IsRefused()
+        {
+            var (vm, seed, id, wtm) = ImportWithUpload();
+            var other = MockWtmContext.CreateWtmContext(wtm.DC, "someone-else", dataProtection: ImportUploadRef.Provider);
+            vm.UploadFileRef = other.CreateFileReference(id, FilePurpose.Import);
+            Assert.IsFalse(vm.BatchSaveData());
+            Assert.AreEqual(0, SchoolCount(seed));
+            Assert.IsTrue(FileExists(seed, id));
+        }
+
+        [TestMethod]
+        public void UploadReference_OfAnotherFile_OrAnotherPurpose_IsRefused()
+        {
+            var (vm, seed, id, wtm) = ImportWithUpload();
+            var otherFile = Guid.NewGuid().ToString();
+            vm.UploadFileRef = wtm.CreateFileReference(otherFile, FilePurpose.Import);
+            Assert.IsFalse(vm.BatchSaveData());
+
+            var (vm2, seed2, id2, wtm2) = ImportWithUpload();
+            vm2.UploadFileRef = wtm2.CreateFileReference(id2, FilePurpose.Read | FilePurpose.Delete);
+            Assert.IsFalse(vm2.BatchSaveData(), "a reference to read or delete the file does not let an import use it");
+            Assert.IsTrue(FileExists(seed2, id2));
+            Assert.AreEqual(0, SchoolCount(seed));
+        }
+
+        [TestMethod]
+        public void UploadReference_OfAnotherTenant_IsRefused()
+        {
+            var (vm, seed, id, wtm) = ImportWithUpload();
+            var other = MockWtmContext.CreateWtmContext(wtm.DC, "importuser", dataProtection: ImportUploadRef.Provider);
+            other.LoginUserInfo.CurrentTenant = "tenant-b";
+            vm.UploadFileRef = other.CreateFileReference(id, FilePurpose.Import);
+            Assert.IsFalse(vm.BatchSaveData());
+            Assert.IsTrue(FileExists(seed, id));
+        }
+
+        [TestMethod]
+        public void UploadReference_Garbage_IsRefused()
+        {
+            var (vm, seed, id, _) = ImportWithUpload();
+            vm.UploadFileRef = "not-a-reference";
+            Assert.IsFalse(vm.BatchSaveData());
+            Assert.IsTrue(FileExists(seed, id));
+        }
+
+        [TestMethod]
+        public void UploadReference_Expired_IsRefused()
+        {
+            var protector = FileEndpointGuard.CreateProtector(ImportUploadRef.Provider);
+            var now = DateTimeOffset.UtcNow;
+            var reference = FileEndpointGuard.Issue(protector, new FileEndpointOptions(), "abc", FilePurpose.Import, null, "importuser", null, now);
+            FileEndpointRequestContext Ask(DateTimeOffset at) => new FileEndpointRequestContext
+            {
+                Options = new FileEndpointOptions(), FileId = "abc", Purpose = FilePurpose.Import, Reference = reference, User = "importuser", Now = at,
+                OpenReference = r => FileEndpointGuard.Unprotect(protector, r)
+            };
+            Assert.IsTrue(FileEndpointGuard.AuthorizeImport(Ask(now.AddMinutes(1))).Allowed);
+            var late = FileEndpointGuard.AuthorizeImport(Ask(now.AddDays(2)));
+            Assert.IsFalse(late.Allowed);
+            Assert.AreEqual(FileEndpointRefusal.ExpiredReference, late.Refusal);
+        }
+
+        [TestMethod]
+        public void UploadReference_CannotBeIssuedWithoutAUser()
+        {
+            var protector = FileEndpointGuard.CreateProtector(ImportUploadRef.Provider);
+            Assert.IsNull(FileEndpointGuard.Issue(protector, new FileEndpointOptions(), "abc", FilePurpose.Import, null, null, null, DateTimeOffset.UtcNow));
+        }
+
+        [TestMethod]
+        public void UploadReference_LegacyMode_SkipsTheCheck_AuditAndEnforceDoNot()
+        {
+            foreach (var mode in new[] { FileEndpointMode.Audit, FileEndpointMode.Enforce })
+            {
+                var (vm, seed, id, wtm) = ImportWithUpload();
+                wtm.ConfigInfo.FileEndpoints.Mode = mode;
+                vm.UploadFileRef = null;
+                Assert.IsFalse(vm.BatchSaveData(), mode.ToString());
+                Assert.IsTrue(FileExists(seed, id), mode.ToString());
+            }
+
+            var (legacy, lseed, lid, lwtm) = ImportWithUpload();
+            lwtm.ConfigInfo.FileEndpoints.Mode = FileEndpointMode.Legacy;
+            legacy.UploadFileRef = null;
+            Assert.IsTrue(legacy.BatchSaveData());
+            Assert.AreEqual(1, SchoolCount(lseed));
+            Assert.IsFalse(FileExists(lseed, lid));
+        }
+
+        [TestMethod]
+        public void UploadReference_LegacyImportFile_AcceptsTheFileWithoutAReference_InAuditAndEnforce()
+        {
+            foreach (var mode in new[] { FileEndpointMode.Audit, FileEndpointMode.Enforce })
+            {
+                var (vm, seed, id, wtm) = ImportWithUpload();
+                wtm.ConfigInfo.FileEndpoints.Mode = mode;
+                wtm.ConfigInfo.FileEndpoints.LegacyImportFile = true;
+                vm.UploadFileRef = null;
+                Assert.IsTrue(vm.BatchSaveData(), mode.ToString());
+                Assert.AreEqual(1, SchoolCount(seed), mode.ToString());
+                Assert.IsFalse(FileExists(seed, id), mode + ": the upload is deleted after the import");
+            }
+        }
+
+        [TestMethod]
+        public void UploadReference_LegacyImportFileOff_StillRequiresTheReference()
+        {
+            Assert.IsFalse(new Configs().FileEndpoints.LegacyImportFile);
+            foreach (var mode in new[] { FileEndpointMode.Audit, FileEndpointMode.Enforce })
+            {
+                var (vm, seed, id, wtm) = ImportWithUpload();
+                wtm.ConfigInfo.FileEndpoints.Mode = mode;
+                wtm.ConfigInfo.FileEndpoints.LegacyImportFile = false;
+                vm.UploadFileRef = null;
+                Assert.IsFalse(vm.BatchSaveData(), mode.ToString());
+                Assert.AreEqual(0, SchoolCount(seed), mode.ToString());
+                Assert.IsTrue(FileExists(seed, id), mode.ToString());
+            }
+        }
+
+        [TestMethod]
+        public void UploadReference_LegacyImportFile_DoesNotRelaxTheOtherFileChecks()
+        {
+            var (_, _, id, wtm) = ImportWithUpload();
+            wtm.ConfigInfo.FileEndpoints.Mode = FileEndpointMode.Enforce;
+            wtm.ConfigInfo.FileEndpoints.LegacyImportFile = true;
+            Assert.IsTrue(wtm.AuthorizeImportFile(id, null).Allowed);
+            Assert.IsFalse(wtm.AuthorizeFileDeletion("DeletedFile", id, null).Allowed, "the delete endpoint still needs its reference");
+            Assert.IsFalse(wtm.AuthorizeFileRequest("GetFile", id, FilePurpose.View, null, () => null).Allowed, "a read still needs a reference in Enforce");
+        }
+
+        private static Guid AddPendingFile(string seed)
+        {
+            using var dc = new DataContext(seed, DBTypeEnum.Memory);
+            var id = Guid.NewGuid();
+            dc.Set<FileAttachment>().Add(new FileAttachment { ID = id, FileName = "p.png", FileExt = "png", UploadTime = DateTime.Now });
+            dc.SaveChanges();
+            return id;
+        }
+
+        [TestMethod]
+        public void RequestedFiles_AreDeletedOnlyAfterTheImportWasSaved()
+        {
+            // with the compatibility setting every listed id would be deleted, so only the order of the steps decides
+            var seed = Guid.NewGuid().ToString();
+            var wtm = NewWtm(seed);
+            wtm.ConfigInfo.FileEndpoints.LegacyVmFileDeletion = true;
+            var pending = AddPendingFile(seed);
+
+            // row 3 violates the regular expression of the school code: nothing is saved
+            var bad = NewImportVm<SchoolImportVM>(wtm, FillTemplate(new SchoolImportVM().GenerateTemplate(out _),
+                new[] { "101", "Good", "公立学校", "ok" }, new[] { "9", "Bad", "公立学校", "x" }));
+            bad.DeletedFileIds = new List<string> { pending.ToString() };
+            Assert.IsFalse(bad.BatchSaveData());
+            Assert.IsTrue(FileExists(seed, pending.ToString()), "a refused import keeps the files");
+
+            var good = NewImportVm<SchoolImportVM>(wtm, FillTemplate(new SchoolImportVM().GenerateTemplate(out _), new[] { "301", "Alpha", "公立学校", "a" }));
+            good.DeletedFileIds = new List<string> { pending.ToString() };
+            Assert.IsTrue(good.BatchSaveData());
+            Assert.IsFalse(FileExists(seed, pending.ToString()), "a saved import deletes them");
+        }
+
+        [TestMethod]
+        public async Task RequestedFiles_AreDeletedOnlyAfterTheImportWasSaved_Async()
+        {
+            var seed = Guid.NewGuid().ToString();
+            var wtm = NewWtm(seed);
+            wtm.ConfigInfo.FileEndpoints.LegacyVmFileDeletion = true;
+            var pending = AddPendingFile(seed);
+
+            var bad = NewImportVm<SchoolImportVM>(wtm, FillTemplate(new SchoolImportVM().GenerateTemplate(out _),
+                new[] { "101", "Good", "公立学校", "ok" }, new[] { "9", "Bad", "公立学校", "x" }));
+            bad.DeletedFileIds = new List<string> { pending.ToString() };
+            Assert.IsFalse(await bad.BatchSaveDataAsync());
+            Assert.IsTrue(FileExists(seed, pending.ToString()));
+
+            var good = NewImportVm<SchoolImportVM>(wtm, FillTemplate(new SchoolImportVM().GenerateTemplate(out _), new[] { "302", "Beta", "公立学校", "a" }));
+            good.DeletedFileIds = new List<string> { pending.ToString() };
+            Assert.IsTrue(await good.BatchSaveDataAsync());
+            Assert.IsFalse(FileExists(seed, pending.ToString()));
+        }
+
+        [TestMethod]
+        public void UploadReference_TheErrorFileIsNotBuiltForAFileTheUserMayNotUse()
+        {
+            var (vm, seed, id, _) = ImportWithUpload();
+            vm.UploadFileRef = null;
+            var json = vm.GetErrorJson();
+            Assert.IsFalse(json.Form.ContainsKey("Entity.ErrorFileId"));
+        }
+
+        #endregion
 
         #endregion
     }

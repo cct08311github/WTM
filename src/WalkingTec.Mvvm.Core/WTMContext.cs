@@ -1612,12 +1612,86 @@ params string[] groupcode)
         /// <summary>
         /// Decides whether the signed-in user may delete the file: a <see cref="FilePurpose.Delete"/> reference that was issued to this user for this
         /// file is required in every mode except <see cref="FileEndpointMode.Legacy"/> (<see cref="FileEndpointMode.Audit"/> does not serve a delete
-        /// without one). A refusal is logged. The application's <see cref="IFileAccessPolicy"/> is asked as for a read.
+        /// without one), unless the registered <see cref="IFileDeletionPolicy"/> allows the deletion (operation <c>Endpoint</c>) or denies it (then
+        /// even a valid reference is refused). A refusal is logged. The application's <see cref="IFileAccessPolicy"/> is asked as for a read.
         /// </summary>
         public FileEndpointDecision AuthorizeFileDeletion(string endpoint, string fileId, string reference)
         {
             var decision = FileEndpointGuard.AuthorizeDeletion(CreateFileRequest(fileId, FilePurpose.Delete, reference, null));
+            // the application's IFileDeletionPolicy (the same hook as for the files a form removes) has the last word for a signed-in user:
+            // Deny refuses even with a valid reference, Allow admits a request whose reference was refused, Default changes nothing
+            if (string.IsNullOrEmpty(LoginUserInfo?.ITCode) == false && Guid.TryParse(fileId, out var id))
+            {
+                var logger = _loggerFactory?.CreateLogger<WTMContext>();
+                var answer = FileDeletionPolicyRunner.Ask(this, new FileDeletionRequest { FileId = id, IsLinked = false, Operation = "Endpoint" }, logger);
+                if (answer == FileDeletionDecision.Deny)
+                {
+                    decision = FileEndpointDecision.Refuse(FileEndpointRefusal.PolicyDenied);
+                }
+                else if (answer == FileDeletionDecision.Allow && decision.Allowed == false)
+                {
+                    logger?.LogInformation("File endpoint {Endpoint} admitted a deletion without a valid reference: the file deletion policy allowed it (file {FileId}, user {User})",
+                        endpoint, id, LogText.Sanitize(LoginUserInfo?.ITCode, 100));
+                    decision = FileEndpointDecision.Admit(FileEndpointAdmission.DeletionPolicy);
+                }
+            }
             return ApplyFilePolicy(endpoint, fileId, FilePurpose.Delete, decision);
+        }
+
+        /// <summary>
+        /// Decides whether the signed-in user may use the uploaded file as the upload of an import (<c>BaseImportVM.UploadFileId</c>). The reference
+        /// (<c>BaseImportVM.UploadFileRef</c>, <see cref="FilePurpose.Import"/>) is issued by the upload endpoints to the user who uploaded the file;
+        /// without a valid one the file is neither read nor deleted. <see cref="FileEndpointMode.Legacy"/> skips the check. A refusal is logged
+        /// (no file id in the text that is shown to the user).
+        /// </summary>
+        public FileEndpointDecision AuthorizeImportFile(string fileId, string reference)
+        {
+            var decision = FileEndpointGuard.AuthorizeImport(CreateFileRequest(fileId, FilePurpose.Import, reference, null));
+            if (decision.Allowed == false)
+            {
+                _loggerFactory?.CreateLogger<WTMContext>().LogWarning("An import was refused the uploaded file {FileId}: {Reason} (user {User})",
+                    LogText.Sanitize(fileId, 64), decision.Refusal, LogText.Sanitize(LoginUserInfo?.ITCode, 100));
+            }
+            return decision;
+        }
+
+        /// <summary>
+        /// True when the proof of a file link is not required: <c>FileEndpoints:Mode=Legacy</c> or <c>FileEndpoints:LegacyVmFileLinking=true</c>
+        /// (the registered <see cref="IFileLinkPolicy"/> is still asked).
+        /// </summary>
+        public bool FileLinkProofSkipped
+        {
+            get
+            {
+                var options = ConfigInfo?.FileEndpoints;
+                return options != null && (options.Mode == FileEndpointMode.Legacy || options.LegacyVmFileLinking);
+            }
+        }
+
+        /// <summary>
+        /// Opens a <see cref="FilePurpose.Link"/> reference (<c>BaseVM.UploadedFileRefs</c>) and returns the file it covers, or null when it is not a
+        /// valid reference of the signed-in user: not issued by this server, expired, issued to another user or tenant, or not made for linking.
+        /// </summary>
+        public Guid? ReadFileLinkReference(string reference)
+        {
+            if (string.IsNullOrEmpty(reference) || reference.Length > 2048)
+            {
+                return null;
+            }
+            try
+            {
+                var opened = FileEndpointGuard.Unprotect(FileEndpointProtector(), reference);
+                if (opened == null || Guid.TryParse(opened.FileId, out var id) == false)
+                {
+                    return null;
+                }
+                var refusal = FileEndpointGuard.CheckReference(CreateFileRequest(id.ToString(), FilePurpose.Link, reference, null), out _);
+                return refusal == FileEndpointRefusal.None ? id : (Guid?)null;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
         }
 
         private FileEndpointDecision ApplyFilePolicy(string endpoint, string fileId, FilePurpose purpose, FileEndpointDecision decision)

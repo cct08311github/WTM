@@ -64,6 +64,30 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         public UploadAllowListOptions UploadAllowList { get; set; } = new UploadAllowListOptions();
 
+        /// <summary>
+        /// Compatibility switch for the files a form asks to remove (<c>BaseVM.DeletedFileIds</c>). Default <c>false</c>: when a record is saved, only a
+        /// file that the stored record currently refers to is deleted; other ids are skipped and logged. <c>true</c> restores the earlier behavior
+        /// (every listed id is deleted). An <see cref="IFileDeletionPolicy"/> is consulted in both cases. See FORK.md.
+        /// </summary>
+        public bool LegacyVmFileDeletion { get; set; }
+
+        /// <summary>
+        /// Compatibility switch for the uploaded file of an import (<c>BaseImportVM.UploadFileId</c>). Default <c>false</c>: in <see cref="FileEndpointMode.Audit"/>
+        /// and <see cref="FileEndpointMode.Enforce"/> the import uses the file only together with the reference that the upload endpoints return
+        /// (<c>BaseImportVM.UploadFileRef</c>). <c>true</c> accepts the file without a reference, as <see cref="FileEndpointMode.Legacy"/> does for it, and leaves
+        /// every other file check as it is. Meant for applications whose hand-written import forms cannot carry the reference yet. See FORK.md.
+        /// </summary>
+        public bool LegacyImportFile { get; set; }
+
+        /// <summary>
+        /// Compatibility switch for the files a form links to the record it saves (<c>BaseVM.UploadedFileRefs</c>). Default <c>false</c>: a file that a
+        /// saved record newly refers to (a single attachment or an <c>ISubFile</c> list) must be covered by the <c>LinkRef</c> that the upload endpoints
+        /// gave to the signed-in user, unless the record already referred to it. <c>true</c> links any file without a reference, as
+        /// <see cref="FileEndpointMode.Legacy"/> does together with every other check; the registered <c>IFileLinkPolicy</c> is still asked.
+        /// Meant for applications whose hand-written forms cannot carry the reference yet. See FORK.md.
+        /// </summary>
+        public bool LegacyVmFileLinking { get; set; }
+
         public const int DefaultReferenceLifetimeMinutes = 480;
 
         /// <summary>The lifetime in effect (the default when the configured value is below 1).</summary>

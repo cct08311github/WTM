@@ -31,17 +31,39 @@ namespace WalkingTec.Mvvm.Admin.Test
             return id;
         }
 
+        private static readonly Microsoft.AspNetCore.DataProtection.IDataProtectionProvider Provider = new Microsoft.AspNetCore.DataProtection.EphemeralDataProtectionProvider();
+
         private FrameworkUserVM Vm()
         {
-            var controller = MockController.CreateApi<FrameworkUserController>(NewDc(), "admin");
+            var controller = MockController.CreateApi<FrameworkUserController>(NewDc(), "admin", dataProtection: Provider);
             return controller.Wtm.CreateVM<FrameworkUserVM>();
         }
 
-        private bool Add(string itcode, Guid? photo)
+        // the form posts the proof that the user uploaded the photo (the LinkRef of the upload answer), as the clients of the framework do
+        private static void Prove(FrameworkUserVM vm, Guid? photo)
+        {
+            if (photo != null)
+            {
+                vm.UploadedFileRefs = new System.Collections.Generic.List<string> { vm.Wtm.CreateFileReference(photo.Value, FilePurpose.Link) };
+            }
+        }
+
+        private bool Add(string itcode, Guid? photo, bool proof = true)
         {
             var vm = Vm();
             vm.Entity = new FrameworkUser { ITCode = itcode, Name = "n", Password = "p", PhotoId = photo };
-            vm.DoAddAsync().GetAwaiter().GetResult();
+            if (proof)
+            {
+                Prove(vm, photo);
+            }
+            try
+            {
+                vm.DoAddAsync().GetAwaiter().GetResult();
+            }
+            catch (System.Transactions.TransactionInDoubtException)
+            {
+                // the in-memory data context has no transaction: its stand-in throws when the view model rolls back a refused save
+            }
             return vm.MSD.IsValid;
         }
 
@@ -72,6 +94,15 @@ namespace WalkingTec.Mvvm.Admin.Test
         }
 
         [TestMethod]
+        public void APictureThatTheUserDidNotUpload_IsRefused_AsThePhotoOfANewUser()
+        {
+            var photo = AddFile("png");
+            Assert.IsFalse(Add("noproof", photo, proof: false), "no LinkRef in the post");
+            Assert.AreEqual(0, NewDc().Set<FrameworkUser>().Count(x => x.ITCode == "noproof"));
+            Assert.IsTrue(Add("withproof", photo));
+        }
+
+        [TestMethod]
         public void AFileThatAnotherRecordUses_IsRefused()
         {
             var photo = AddFile("png");
@@ -99,11 +130,14 @@ namespace WalkingTec.Mvvm.Admin.Test
 
             var keep = Vm();
             keep.Entity = new FrameworkUser { ID = id, ITCode = "g", Name = "n2", PhotoId = photo };
+            // the photo is the one the record already has: no proof is needed
             keep.DoEditAsync().GetAwaiter().GetResult();
             Assert.IsTrue(keep.MSD.IsValid);
 
             var change = Vm();
-            change.Entity = new FrameworkUser { ID = id, ITCode = "g", Name = "n3", PhotoId = AddFile("svg") };
+            var svg = AddFile("svg");
+            change.Entity = new FrameworkUser { ID = id, ITCode = "g", Name = "n3", PhotoId = svg };
+            Prove(change, svg);
             change.DoEditAsync().GetAwaiter().GetResult();
             Assert.IsFalse(change.MSD.IsValid);
             Assert.AreEqual(photo, StoredPhoto("g"));

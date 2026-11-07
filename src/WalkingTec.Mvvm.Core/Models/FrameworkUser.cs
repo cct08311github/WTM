@@ -28,6 +28,9 @@ namespace WalkingTec.Mvvm.Core
         [Display(Name = "_Admin.Password")]
         [Required(AllowEmptyStrings = false, ErrorMessage = "Validate.{0}required")]
         [StringLength(128, ErrorMessage = "Validate.{0}stringmax{1}")]
+        // the generic edit (BaseCRUDVM.DoEdit) never writes the stored value; set it through the password change or reset flow,
+        // or have the view model update the property explicitly, see FORK.md section 37
+        [CanNotEdit]
         public string Password { get; set; }
 
         [Display(Name = "_Admin.Name")]

@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Query;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Primitives;
 using System;
 using System.Collections.Concurrent;
@@ -690,6 +691,16 @@ namespace WalkingTec.Mvvm.Core
                 vm = vmtype.GetConstructor(System.Type.EmptyTypes).Invoke(null) as IBaseCRUDVM<TModel>;
                 vm.CopyContext(this);
             }
+            //a file that the edit model links to every selected record must have been uploaded by this user (same proof as a saved form)
+            if (LinksUnprovenFile(pros))
+            {
+                var message = Localizer?["Sys.UploadFailed"].Value;
+                foreach (var id in idsData)
+                {
+                    ErrorMessage.Add(id, message);
+                }
+                return false;
+            }
             //循环所有数据
             for (int i = 0; i < idsData.Count; i++)
             {
@@ -779,6 +790,44 @@ namespace WalkingTec.Mvvm.Core
                 }
             }
             return rv;
+        }
+
+        /// <summary>
+        /// True when the batch edit would set a file attachment (the foreign key of a <see cref="FileAttachment"/> property) to a file that the signed-in
+        /// user did not upload: the value comes from the request, so it needs the same link reference as a saved form (<see cref="BaseVM.UploadedFileRefs"/>,
+        /// <see cref="IFileLinkPolicy"/>, <c>FileEndpoints:LegacyVmFileLinking</c>).
+        /// </summary>
+        private bool LinksUnprovenFile(System.Reflection.PropertyInfo[] linkedProperties)
+        {
+            try
+            {
+                var fresh = new List<(Guid Id, string Property)>();
+                foreach (var nav in typeof(TModel).GetAllProperties().Where(x => x.PropertyType == typeof(FileAttachment)))
+                {
+                    var fk = DC?.GetFKName2<TModel>(nav.Name);
+                    var pro = string.IsNullOrEmpty(fk) ? null : linkedProperties.FirstOrDefault(x => x.Name == fk);
+                    if (pro == null || FC.ContainsKey("LinkedVM." + pro.Name) == false)
+                    {
+                        continue;
+                    }
+                    var value = pro.GetValue(LinkedVM);
+                    if (value != null && Guid.TryParse(value.ToString(), out var id) && id != Guid.Empty)
+                    {
+                        fresh.Add((id, fk));
+                    }
+                }
+                if (fresh.Count == 0)
+                {
+                    return false;
+                }
+                var logger = Wtm?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WalkingTec.Mvvm.Core.FileLink");
+                return FileLinkChecker.Refused(Wtm, fresh, UploadedFileRefs, "BatchEdit", logger).Count > 0;
+            }
+            catch (Exception)
+            {
+                // the files cannot be listed: nothing is known to be allowed
+                return true;
+            }
         }
 
         protected void RefreshErrorList()

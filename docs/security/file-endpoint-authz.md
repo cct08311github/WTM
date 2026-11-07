@@ -16,7 +16,7 @@
 
 **本節的範圍是框架的 `/_Framework` 檔案端點。** demo／範本的 `FileApiController`（`/api/_file/*`）使用同一套機制，另見第 7 節。
 
-沒有變更的部分：`WtmFileProvider.GetFile/Upload/DeleteFile`（下游在伺服器端呼叫，例如自己的匯入 VM；內嵌標記只在 HTTP 端點處理）、`DeletedFileIds` 與匯入的 `UploadFileId` 的信任方式。
+沒有變更的部分：`WtmFileProvider.GetFile/Upload/DeleteFile`（下游在伺服器端呼叫，例如自己的匯入 VM；內嵌標記只在 HTTP 端點處理）。`DeletedFileIds`、匯入的 `UploadFileId` 與記錄儲存時新掛上的檔案不再是「信任請求內容」：表單要求移除的檔案只刪除儲存前這筆記錄掛著的檔案（可由 `IFileDeletionPolicy` 放行或拒絕，`FileEndpoints:LegacyVmFileDeletion=true` 恢復舊行為）；匯入的上傳檔案需要上傳端點發給目前使用者的 `Import` 參考（`BaseImportVM.UploadFileRef`，`FileEndpoints:LegacyImportFile=true` 或 `Legacy` 模式略過）；記錄儲存時新掛上的檔案需要上傳端點發給目前使用者的 `Link` 參考（`BaseVM.UploadedFileRefs`，可由 `IFileLinkPolicy` 放行或拒絕，`FileEndpoints:LegacyVmFileLinking=true` 或 `Legacy` 模式略過）。見 FORK.md 第 36 節與本文第 8 節。
 
 ## 2. 限制條件
 
@@ -30,7 +30,7 @@
 
 伺服器渲染的每個檔案連結都帶一個以 ASP.NET Core Data Protection 保護的不透明字串（`_DONOT_USE_FREF`），內容為：檔案 id、目的（可組合）、連線 key、使用者（匿名頁面為空）、租戶、到期時間。端點驗證簽章、到期、使用者與租戶（使用者為空的參考對該頁面的所有對象有效）、檔案 id（不分大小寫）與目的。
 
-簽發處：LayUI TagHelper（`wt:upload`、`wt:multiupload`、`wt:image`、`wt:display`）、`LayuiUIService.MakeDownloadButtonWithReference／MakeViewButtonWithReference`（由表格的下載／檢視欄 `ListVMExtension` 呼叫）、`Utils.GetUrlByFileAttachmentId(WTMContext, ...)`、公開方法 `Wtm.CreateFileReference(id, purposes, connectionKey)` 與 `Wtm.GetFileUrl(id, purpose, connectionKey)`。上傳的回應在 `Data` 增加 `Url`、`Ref`（原有的 `Id`、`Name` 不變），TagHelper 的 script 使用 `res.Data.Url ||` 原本的位址。
+簽發處：LayUI TagHelper（`wt:upload`、`wt:multiupload`、`wt:image`、`wt:display`）、`LayuiUIService.MakeDownloadButtonWithReference／MakeViewButtonWithReference`（由表格的下載／檢視欄 `ListVMExtension` 呼叫）、`Utils.GetUrlByFileAttachmentId(WTMContext, ...)`、公開方法 `Wtm.CreateFileReference(id, purposes, connectionKey)` 與 `Wtm.GetFileUrl(id, purpose, connectionKey)`。參考的目的除了讀取類（`View`、`Download`、`Name`）與 `Upload`，還有只發給上傳者、綁定使用者與檔案的 `Delete`（刪除）、`Import`（匯入的上傳檔案）與 `Link`（把檔案掛到儲存的記錄）。上傳的回應在 `Data` 增加 `Url`、`Ref`（原有的 `Id`、`Name` 不變），TagHelper 的 script 使用 `res.Data.Url ||` 原本的位址。
 
 ### 3.2 模式（`FileEndpoints:Mode`）
 
@@ -80,6 +80,11 @@
 | `FileEndpoints:ReferenceLifetimeMinutes` | `480` | 參考的有效分鐘數（小於 1 視為預設） |
 | `FileEndpoints:LegacyUploadedBefore` | 未設定 | 早於此時間上傳的檔案，在 `Enforce` 下維持用 id 取得 |
 | `FileEndpoints:RequestConnectionKeys` | 空 | 沒有參考的請求可以指定的其他連線 |
+| `FileEndpoints:LegacyVmFileDeletion` | `false` | `true`：表單列出的每個檔案 id 都刪除（恢復原行為）；預設只刪除儲存前這筆記錄掛著的檔案。啟動輸出 Warning |
+| `FileEndpoints:LegacyImportFile` | `false` | `true`：匯入的 `UploadFileId` 在 `Audit`／`Enforce` 也可不帶 `UploadFileRef`，其他檔案檢查不變。啟動輸出 Warning |
+| `FileEndpoints:LegacyVmFileLinking` | `false` | `true`：記錄儲存時新掛上的檔案可不帶 `Link` 參考（`IFileLinkPolicy` 仍被詢問，`Deny` 仍拒絕）。啟動輸出 Warning |
+
+三個設定都只接受 `true`／`false`；`Mode=Legacy` 會一併略過這三項檢查。介面：`IFileDeletionPolicy`（表單刪檔與 `api/_file/DeletedFile`）、`IFileLinkPolicy`（儲存時掛檔），都以 `TryAddSingleton` 註冊預設的「無意見」實作，應用程式先註冊自己的實作即可取代。
 
 ## 6. 測試
 
@@ -91,11 +96,27 @@ Core.Test：`FileEndpointGuardTest`（簽發、驗證、竄改、到期、使用
 
 - **讀取用 capability**：SPA 的 `<img>` 不能帶憑證，所以伺服器在資料旁寫一個不綁定使用者的短期參考（`Wtm.CreateFileCapability`，用途 `Read`，綁定檔案、連線、租戶與到期時間）。列表的純文字回應是 `<欄位>__fref`，詳細資料是 `FileRefs`（id → 參考），上傳回應是 `Ref`。持有它的人在到期前可以顯示、下載、取得該檔案的名稱；它不含刪除與上傳。已登入且租戶不同的呼叫者不能使用另一個租戶簽發的 capability；未登入的呼叫者依 capability 的租戶讀取資料（租戶有自己的資料庫時用該資料庫）。
 - **未登入且 `IsFilePublic=false`**：`Enforce` 只接受有效參考；另外，內嵌的檔案與 `LegacyUploadedBefore` 之前的檔案可以只用 id **顯示**（`GetFile`、`GetUserPhoto`），不能下載或查名稱；`Audit` 提供並記錄；`Legacy` 照舊。`IsFilePublic=true` 時依第 3.2 節。
-- **刪除**：需要登入與發給該使用者、該檔案的 `Delete` 參考（上傳回應的 `DeleteRef`，綁定使用者、租戶、到期）。沒有時拒絕並記錄，除 `Legacy` 外的所有模式（含 `Audit`）。
+- **刪除**：需要登入與發給該使用者、該檔案的 `Delete` 參考（上傳回應的 `DeleteRef`，綁定使用者、租戶、到期）。沒有時拒絕並記錄，除 `Legacy` 外的所有模式（含 `Audit`）。已登入者在參考檢查之後再詢問 `IFileDeletionPolicy`（`Operation="Endpoint"`）：`Deny` 即使參考有效也拒絕，`Allow` 在參考被拒絕時仍放行（記錄 Information，供應用程式只對管理員放行），`Default`／未註冊與原行為相同；非 Guid 的 id 不詢問。
 - **頭像**：一個檔案若是租戶內可見、有效使用者的 `PhotoId` 且為圖片類型（不含 SVG），`GetUserPhoto` 不需參考即可顯示（`Avatar`，政策仍會被詢問，`FileAccessRequest.Admission` 為 `Avatar`，應用程式可據此限制）。結果快取 30 秒。範本在新增或變更使用者的 `PhotoId` 時，只接受存在、為圖片類型且沒有被其他記錄的 `FileAttachment` 外鍵使用的檔案（`Wtm.IsPhotoAssignable`），匿名註冊不採用客戶端的 `PhotoId`。
 - **`GetFileInfo`** 在所有模式只回傳 `Id`、`FileName`、`FileExt`、`Length`、`UploadTime`。
-- **上傳**：需要登入，移除 `extra` 的內嵌標記，連線依參考決定；`UploadForEditor` 由伺服器加內嵌標記。回應保留 `Id`、`Name`、`errno`、`data.url`，新增 `Url`、`Ref`、`DeleteRef`。
+- **上傳**：需要登入，移除 `extra` 的內嵌標記，連線依參考決定；`UploadForEditor` 由伺服器加內嵌標記。回應保留 `Id`、`Name`、`errno`、`data.url`，新增 `Url`、`Ref`、`DeleteRef`、`ImportRef`、`LinkRef`（`/_Framework/Upload`、`UploadImage` 的回應同樣多 `ImportRef`、`LinkRef`）。
 - 拒絕為 HTTP 403。回應標頭見第 3.2 節（`nosniff`，內容類型來自 `FileServing`，會被瀏覽器執行的內容用 `attachment`，`DownloadFile` 一律 `attachment`）。
 - 未更新的副本：路由在 `api/_file` 的 controller 暴露 `DeletedFile`／`GetFileInfo` 而沒有 `[FileEndpoint]` 標記，啟動時輸出 Warning。更新方式見 [vue3-file-api-downstream.md](vue3-file-api-downstream.md)。
 
+## 8. 表單儲存時的檔案：刪除、匯入與掛上
 
+表單帶來的檔案 id 只應影響它自己正在處理的資料。檔案表沒有上傳者欄位，所以用三個規則處理（細節見 FORK.md 第 36 節）：
+
+| 情形 | 規則 | 證明或判斷依據 | 例外與設定 |
+|---|---|---|---|
+| 表單要求移除檔案（`DeletedFileIds`） | 只刪除「儲存前資料庫中這筆記錄掛著」的檔案，儲存成功後才刪 | 資料庫中的記錄（不是上傳者） | `IFileDeletionPolicy`、`FileEndpoints:LegacyVmFileDeletion` |
+| 匯入的上傳檔案（`BaseImportVM.UploadFileId`） | 讀取範本、產生錯誤檔、成功後刪除都要 `Import` 參考（`UploadFileRef`） | 上傳回應的 `ImportRef`：綁定使用者、租戶、檔案與到期時間 | `FileEndpoints:LegacyImportFile`、`Mode=Legacy` |
+| 記錄儲存時新掛上的檔案（`BaseCRUDVM` 的新增與編輯，含 `ISubFile` 清單；`BaseBatchVM` 批次修改的檔案外鍵） | 每個「儲存前這筆記錄沒有掛著」的檔案，需要被 `Link` 參考涵蓋，否則該屬性出現一般性錯誤、整筆不儲存 | 上傳回應的 `LinkRef`（綁定使用者、租戶、檔案與到期時間，只發給上傳者），由表單以 `UploadedFileRefs` 送回 | `IFileLinkPolicy`、`FileEndpoints:LegacyVmFileLinking`、`Mode=Legacy`、`BaseCRUDVM.RequireFileLinkProof`、`AllowFileLink(id)` |
+
+`Mode=Audit`（預設）不放寬這三項；它只放寬讀取檔案時「沒有有效參考」這一項。
+
+**重新顯示表單**：`wt:upload`、`wt:multiupload` 在表單重新顯示時，只對「記錄已掛著、請求帶有有效 `Link` 參考、或 `AllowFileLink` 宣告」的檔案簽發讀取參考；請求帶來的其他 id 照常顯示欄位內容，連結不帶參考。表單驗證失敗時，仍有效的 `Link` 參考會被寫回頁面，使用者不需重新上傳。
+
+**用戶端**：LayUI 的 `wt:upload`、`wt:multiupload` 與 Vue3 範本的 `uploadFile`、`uploadImage` 自動帶上；手寫表單、Blazor 產生的頁面與舊的 Spa React／Vue 範本需要自行帶上或設 `LegacyVmFileLinking`，見 [vue3-file-api-downstream.md](vue3-file-api-downstream.md) 與 FORK.md 第 36 節。
+
+**回滾**：上表三個相容設定各自關閉對應的檢查；`FileEndpoints:Mode=Legacy` 同時略過所有檔案參考檢查（不建議）；也可還原對應的提交。不涉及資料格式。

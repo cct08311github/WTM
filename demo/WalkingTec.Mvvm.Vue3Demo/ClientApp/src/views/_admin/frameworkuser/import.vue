@@ -2,7 +2,7 @@
 	<div>
 		<el-dialog title="导入" v-model="state.dialog.isShowDialog" draggable>
 			<el-form ref="formRef" :model="state.vmModel"  label-width="90px" >
-				<WtmImportor url="/api/_FrameworkUser/GetExcelTemplate" v-model="state.vmModel.UploadFileId" :files="state.vmModel.files"/>
+				<WtmImportor url="/api/_FrameworkUser/GetExcelTemplate" v-model="state.vmModel.UploadFileId" v-model:import-ref="state.vmModel.UploadFileRef" :files="state.vmModel.files"/>
 				<div v-if="state.errorFileId" style="margin-top: 10px;vertical-align: bottom;">
 					<el-button @click="onErrorFile" size="small" type="danger">导入数据错误，点击下载错误文件</el-button>
 				</div>
@@ -32,6 +32,7 @@ const formRef = ref();
 const state = reactive({
 	vmModel: {
 		UploadFileId:null,
+		UploadFileRef: null,
 		files:[]
 	},
 	dialog: {

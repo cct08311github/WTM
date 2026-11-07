@@ -925,7 +925,7 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 
 ## 28. `_Framework` 檔案端點的參考、模式與連線（安全強化，預設 `Audit`）
 
-**範圍**：`/_Framework/Upload`、`UploadImage`、`UploadForLayUIRichTextBox`、`UploadForLayUIUEditor`、`GetFileName`、`GetFile`、`ViewFile`。設計與取捨見 [docs/security/file-endpoint-authz.md](docs/security/file-endpoint-authz.md)。**不在範圍內**：demo／範本的 `/api/_file/*`（`FileApiController`，包括它的 `GetFile`、`GetFileName`、`DownloadFile`、`UploadImage`）不受本節的設定影響（其處理見第 29 節）。不變：`WtmFileProvider` 的伺服器端方法（下游在伺服器端直接呼叫，也不處理內嵌標記）、`DeletedFileIds` 與匯入的 `UploadFileId` 的信任方式。本節只涵蓋框架的 `/_Framework` 檔案端點。
+**範圍**：`/_Framework/Upload`、`UploadImage`、`UploadForLayUIRichTextBox`、`UploadForLayUIUEditor`、`GetFileName`、`GetFile`、`ViewFile`。設計與取捨見 [docs/security/file-endpoint-authz.md](docs/security/file-endpoint-authz.md)。**不在範圍內**：demo／範本的 `/api/_file/*`（`FileApiController`，包括它的 `GetFile`、`GetFileName`、`DownloadFile`、`UploadImage`）不受本節的設定影響（其處理見第 29 節）。不變：`WtmFileProvider` 的伺服器端方法（下游在伺服器端直接呼叫，也不處理內嵌標記）。`DeletedFileIds` 與匯入的 `UploadFileId` 的處理見第 36 節。本節只涵蓋框架的 `/_Framework` 檔案端點。
 
 **變更**：
 
@@ -970,7 +970,7 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 
 ## 29. 範本檔案 API（`/api/_file/*`）的參考、模式與刪除（安全強化，預設 `Audit`）
 
-**範圍**：demo／範本的 `FileApiController`（`/api/_file/*`，SPA 的檔案 API）改為使用第 28 節的同一套機制：`FileEndpoints:Mode`、`_DONOT_USE_FREF`、連線的決定方式與 `IFileAccessPolicy`。第 28 節的 `/_Framework` 端點不變。不變：`WtmFileProvider` 的伺服器端方法、`BaseCRUDVM.DoEdit` 與 `DeletedFileIds`、LayUI 的行為（`PrivilegeFilter` 只新增標記屬性，原有的名稱規則保留）。設計見 [docs/security/file-endpoint-authz.md](docs/security/file-endpoint-authz.md) 第 7 節；下游副本的最小修改見 [docs/security/vue3-file-api-downstream.md](docs/security/vue3-file-api-downstream.md)。
+**範圍**：demo／範本的 `FileApiController`（`/api/_file/*`，SPA 的檔案 API）改為使用第 28 節的同一套機制：`FileEndpoints:Mode`、`_DONOT_USE_FREF`、連線的決定方式與 `IFileAccessPolicy`。第 28 節的 `/_Framework` 端點不變。不變：`WtmFileProvider` 的伺服器端方法、LayUI 的行為（`PrivilegeFilter` 只新增標記屬性，原有的名稱規則保留）。`BaseCRUDVM.DoEdit` 與 `DeletedFileIds` 的處理見第 36 節。設計見 [docs/security/file-endpoint-authz.md](docs/security/file-endpoint-authz.md) 第 7 節；下游副本的最小修改見 [docs/security/vue3-file-api-downstream.md](docs/security/vue3-file-api-downstream.md)。
 
 **變更**：
 
@@ -1074,7 +1074,7 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 
 ## 33. 上傳端點的選用白名單，與 UEditor base64 分支只接受圖片（B 為預設生效的行為變更）
 
-**範圍**：框架內建的上傳端點：`/_Framework/Upload`、`UploadImage`（帶尺寸與不帶尺寸）、`UploadForLayUIRichTextBox`、`UploadForLayUIUEditor`（檔案與 base64 兩個分支），以及單頁應用檔案 API 的 `SpaFileApi.Upload`、`UploadImage`、`UploadForEditor`（demo 的 `/api/_file/*` 呼叫它們）。**不變**：`WtmFileProvider.Upload`、`GetFile`、`DeleteFile`（下游在伺服器端直接呼叫）、`IFileAccessPolicy` 與檔案讀取／刪除規則、影像 metadata 的處理、`DeletedFileIds` 與匯入的 `UploadFileId`、資料表與欄位。檢查放在端點層，不在 `WtmFileProvider` 裡。
+**範圍**：框架內建的上傳端點：`/_Framework/Upload`、`UploadImage`（帶尺寸與不帶尺寸）、`UploadForLayUIRichTextBox`、`UploadForLayUIUEditor`（檔案與 base64 兩個分支），以及單頁應用檔案 API 的 `SpaFileApi.Upload`、`UploadImage`、`UploadForEditor`（demo 的 `/api/_file/*` 呼叫它們）。**不變**：`WtmFileProvider.Upload`、`GetFile`、`DeleteFile`（下游在伺服器端直接呼叫）、`IFileAccessPolicy` 與檔案讀取／刪除規則、影像 metadata 的處理、資料表與欄位（`DeletedFileIds` 與匯入的 `UploadFileId` 的處理見第 36 節）。檢查放在端點層，不在 `WtmFileProvider` 裡。
 
 **A. 選用的白名單（預設關閉）**
 
@@ -1164,3 +1164,97 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 **維護者決定**：預設開啟，附關閉開關。
 
 **測試**：Core.Test 的 `DataPrivilegeBatchQueryTest`（SQLite；設定環境變數 `WTM_TEST_PGSQL` 時同樣在 PostgreSQL 執行）：各種查詢形狀（搜尋、`DPWhere`、`Include`、`AsNoTracking`、`Select`、`Order` 的組合）、批量與勾選匯出的同步與非同步、`SelectorValueField` 非 Id、`ReplaceWhere`、可存取全部資料／無登入／限定單一上層的使用者、全域過濾、開關開與關、單一 VM 覆寫、`WhereProtected`（含參數化）、手寫 `Where` 位於 `Select` 之後的形狀、`GenerateExcel` 的輸出，開關關閉時 SQL 與既有建構函式、與未加標記的查詢相同，以及標記的限制（覆寫 `GetBatchQuery` 的 VM 照原樣使用其查詢；手寫、未加標記的條件，或標記因重建運算式而遺失的條件，仍會被取代）。
+
+## 36. 表單要求移除的檔案只刪除所存記錄掛著的檔案，儲存時新掛上的檔案與匯入的上傳檔案需要簽名參考（安全強化，預設開啟，可關閉）
+
+**範圍**：(1) `BaseVM.DeletedFileIds`（表單在儲存時告知「這些檔案已被移除」）：`BaseCRUDVM` 的 `DoAdd`／`DoAddAsync`／`DoEdit`／`DoEditAsync` 與 `BaseImportVM` 的儲存前準備（同步與非同步的 `BatchSaveData`）。(2) 匯入的 `BaseImportVM.UploadFileId`：讀取範本檔、產生錯誤檔、匯入成功後刪除上傳檔。(3) 記錄儲存時新掛上的檔案：`BaseCRUDVM` 的 `DoAdd`／`DoAddAsync`／`DoEdit`／`DoEditAsync`（單一附件欄位與 `ISubFile` 清單），以及 `BaseBatchVM` 批次修改時設定的檔案外鍵。不在範圍：`api/_file/DeletedFile`（第 29 節的刪除參考，不變，只新增選用的政策詢問）、`BaseBatchVM` 與 `BaseCRUDVM.DoDelete` 的刪檔（id 由伺服器端從記錄取得；`DoDelete`／`DoRealDelete` 在 `Entity` 不是由 `SetEntityById` 從資料庫讀出時，改用資料庫中該筆記錄掛著的檔案，見下表「刪除記錄」）、`WtmFileProvider.DeleteFile` 等伺服器端方法本身（下游直接呼叫，不變）。
+
+**變更**：
+
+| 項目 | 行為 |
+|---|---|
+| 單一關卡 | 五處原本各自迴圈刪除的程式碼改為呼叫 `WtmFileProvider.DeleteRequestedFiles(ids, linkedIds, dc, operation)`。只刪除「儲存前資料庫裡的這筆記錄現在就掛著」的檔案（單一附件欄位的外鍵與 `ISubFile` 清單，沿用 `BaseCRUDVM` 既有的 `CollectFileIds` 邏輯，作用在資料庫中的狀態，用另一個資料內容讀取，不受請求內容影響）。其餘的 id 略過並記錄 Information（含檔案 id 與使用者；不放進給用戶端的訊息） |
+| 編輯 | `DoEdit`／`DoEditAsync` 在儲存**之前**讀取資料庫中該筆記錄掛著的檔案，儲存後再刪除與表單列出的 id 的交集。使用者 B 編輯記錄並移除使用者 A 上傳的附件，仍然會刪除（判斷依據是記錄，不是上傳者） |
+| 新增、匯入 | 沒有已存的記錄，所以預設不刪除任何 id（見「限制」） |
+| 儲存結果 | 刪檔一律在記錄儲存**成功之後**才進行（`DoAdd`／`DoAddAsync`／`DoEdit`／`DoEditAsync`、匯入的同步與非同步儲存）。儲存失敗（例外）或模型狀態（`MSD`）已有錯誤時，不刪除任何檔案，也不詢問 `IFileDeletionPolicy`；`FileEndpoints:LegacyVmFileDeletion=true` 也一樣。`DoEditAsync` 的儲存例外照舊向上拋出（不改成寫入模型錯誤） |
+| 刪除記錄 | `DoDelete`／`DoRealDelete`／`DoRealDeleteAsync`：`Entity` 由 `SetEntityById`（`Wtm.CreateVM<T>(id)`）從資料庫讀出時，行為不變（檔案取自資料庫讀出的記錄）。`Entity` 是由其他方式設定（例如表單繫結、`SetEntity`）時，刪除的檔案改取自資料庫中該筆記錄掛著的檔案，不採用 `Entity` 上的檔案 id；讀取失敗時視為沒有，不刪除 |
+| 無法判斷時 | 讀取資料庫失敗時視為沒有掛著的檔案（不刪除） |
+| 關閉開關 | `FileEndpoints:LegacyVmFileDeletion`（預設 `false`）。`true` 時恢復原行為：表單列出的每個 id 都刪除 |
+| 刪除規則掛點 | 新增選用介面 `IFileDeletionPolicy`（`Decide(FileDeletionRequest)` 回傳 `Default`／`Allow`／`Deny`），預設實作 `DefaultFileDeletionPolicy` 一律 `Default`（以 `TryAdd` 註冊，應用程式先註冊自己的實作即可取代）。`Allow`：刪除框架規則會略過的 id（例如管理員）；`Deny`：不刪除（包括規則會刪除的 id，也包括關閉開關之後）；政策拋出例外視為 `Deny` 並記錄 Error。`FileDeletionRequest` 帶 `FileId`、`RawFileId`、`IsLinked`、`Operation`（`Add`／`Edit`／`Import`，HTTP 刪除端點為 `Endpoint`）、`User`、`Tenant`、`Wtm`。表單列出的 id 不是檔案表的 id（不是 Guid）時，只有開啟 `LegacyVmFileDeletion` 才會交給檔案表處理，交出前同樣詢問政策（`FileId` 為空 Guid，原字串在 `RawFileId`），`Deny` 即略過 |
+| 匯入參考的獨立關閉開關 | `FileEndpoints:LegacyImportFile`（`bool`，預設 `false`）。`true` 時，`Audit`／`Enforce` 也接受沒有 `UploadFileRef` 的 `UploadFileId`（與 `Legacy` 模式對匯入檔的處理相同），其他檔案檢查（讀取、刪除端點、上傳）完全不變。開啟時啟動輸出 Warning。適用對象：自己手寫匯入表單、暫時無法帶上 `ImportRef` 的應用程式；其餘專案維持預設 |
+| HTTP 刪除端點的政策 | `api/_file/DeletedFile`（`SpaFileApi.DeleteFile`、`WTMContext.AuthorizeFileDeletion`）：已登入的使用者，在刪除參考檢查之後再詢問 `IFileDeletionPolicy`（`Operation="Endpoint"`、`IsLinked=false`；非 Guid 的 id 不詢問）。`Deny`：即使參考有效也拒絕（所有模式）；`Allow`：參考檢查拒絕時仍放行（新的 `FileEndpointAdmission.DeletionPolicy`，記錄 Information）；`Default`／未註冊：與原行為完全相同。未登入一律拒絕，租戶全域過濾對找檔案仍然有效。放行與否之後，`IFileAccessPolicy` 照原本方式詢問（被政策放行的請求，`Admission` 為 `DeletionPolicy`；參考有效的請求仍為 `Reference`，其他語意不變）。範例：應用程式只對管理員回傳 `Allow` |
+| 匯入的上傳檔案參考 | 新增 `FilePurpose.Import`。上傳端點（`/_Framework/Upload`、`UploadImage`、`api/_file/Upload`、`UploadImage`）的回應多一個 `ImportRef`：綁定使用者、使用者所屬租戶、目前租戶與檔案，到期時間同其他參考（`FileEndpoints:ReferenceLifetimeMinutes`），不可簽發給未登入者。`BaseImportVM` 新增屬性 `UploadFileRef`；讀取範本檔（`SetTemplateData`）、產生錯誤檔（`GetErrorJson`）與匯入成功後刪除上傳檔，都要求 `UploadFileRef` 是發給目前使用者、這個檔案的有效參考。沒有或無效時，與「找不到檔案」同樣的回應（`Sys.WrongTemplate`），檔案不被讀取也不被刪除，記錄 Warning |
+| 模式 | 與刪除參考相同：`FileEndpoints:Mode=Legacy` 略過檢查；`Audit`（預設）與 `Enforce` 都要求參考（`Audit` 不放寬） |
+| 攜帶方式 | LayUI：`wt:upload field="UploadFileId"`（含產生的匯入對話框）會多渲染一個隱藏欄位 `UploadFileRef`，上傳完成後填入 `ImportRef`，移除檔案時清空；其他 `wt:upload` 的輸出不變。SPA：`WtmImportor` 多一個 `v-model:import-ref`，匯入頁（範本、產生器 `Spa/Vue3/Import.txt`、demo）多一個 `UploadFileRef` 欄位 |
+| 連線 | `DeleteUploadFile` 改用與讀取同一個連線（`Wtm.CreateDC(false)`），原本固定使用 `default` |
+| 儲存時新掛上的檔案 | `BaseCRUDVM` 的 `DoAdd`／`DoAddAsync`／`DoEdit`／`DoEditAsync` 在儲存**之前**比較：記錄現在掛著的檔案（`CollectFileIds(Entity)`，沿用單一附件欄位的外鍵與 `ISubFile` 清單）減去「儲存前資料庫中這筆記錄已掛著的檔案」（編輯時用另一個資料內容讀取，與刪除用的是同一份讀取；新增時全部都是新的）。每個**新掛上**的檔案必須被一個有效的 `Link` 參考涵蓋，否則該屬性（`Entity.<外鍵或清單屬性>`）加一則一般性的模型錯誤（沿用既有的多語資源 `Sys.UploadFailed`，不含檔案 id），整筆不儲存（`DoEditAsync` 也只回傳模型錯誤，不拋例外）。記錄已掛著的檔案（未變更）不需要任何參考 |
+| 上傳證明 | 新增 `FilePurpose.Link`（`64`）。上傳端點（`/_Framework/Upload`、`UploadImage`、`api/_file/Upload`、`UploadImage`，含帶尺寸的圖片上傳）的回應多一個 `LinkRef`：綁定使用者、使用者所屬租戶、目前租戶與檔案，到期時間同其他參考（`FileEndpoints:ReferenceLifetimeMinutes`）；`FileEndpointGuard.Issue` 對沒有使用者或沒有檔案的 `Link`（與 `Delete`、`Import` 相同）不簽發，所以只會發給上傳者。`Read`／`Download`／`View` 參考會發給任何看到檔案的人，不能當證明，因此另設目的 |
+| 請求端的清單 | `BaseVM.UploadedFileRefs`（`List<string>`，與 `DeletedFileIds` 同樣由請求繫結，位於 `BaseVM`）。每一項是一個 `LinkRef`（內含檔案 id）。開啟的參考上限 500 項。`WTMContext.ReadFileLinkReference(reference)` 回傳參考涵蓋的檔案 id（不是目前使用者、租戶、已到期、目的不符、不是本伺服器簽發時為 `null`） |
+| 檔案外鍵的政策 | 新增選用介面 `IFileLinkPolicy`（`Decide(FileLinkRequest)` 回傳 `Default`／`Allow`／`Deny`），預設實作 `DefaultFileLinkPolicy` 一律 `Default`（以 `TryAddSingleton` 註冊，應用程式先註冊自己的實作即可取代），對每一個**新掛上**的檔案詢問一次（已掛著的不詢問）。`Allow`：沒有參考也放行（例如伺服器端掛上的檔案、管理員）；`Deny`：即使參考有效也拒絕；`Default`：照框架規則（需要有效參考）；政策拋出例外視為 `Deny` 並記錄 Error。`FileLinkRequest` 帶 `FileId`、`Property`、`Operation`（`Add`／`Edit`／`BatchEdit`）、`HasValidReference`、`User`、`Tenant`、`Wtm` |
+| 單一 VM 關閉 | `BaseCRUDVM.RequireFileLinkProof`（`protected virtual bool`，預設 `true`）：回傳 `false` 的 VM 不檢查（也不詢問政策）。較細的辦法：`protected void AllowFileLink(params Guid[] ids)`，宣告伺服器端程式碼自己掛上的檔案 id，只有這些 id 不檢查，請求帶來的其他 id 仍要檢查 |
+| 全域關閉 | `FileEndpoints:LegacyVmFileLinking`（`bool`，預設 `false`）。`true` 時沒有參考的檔案也可掛上（`IFileLinkPolicy` 仍會被詢問，`Deny` 仍然拒絕）；開啟時啟動輸出 Warning。`FileEndpoints:Mode=Legacy` 同樣略過這項檢查（同時略過其他檔案參考檢查，不建議）；`Audit`（預設）與 `Enforce` 都要求參考，`Audit` 不放寬 |
+| 伺服器端覆寫 `DoAdd`／`DoEdit` | 檢查發生在基底 `DoAdd`／`DoEdit` 內，儲存之前。子類別在呼叫基底**之前**由伺服器端程式碼設定的檔案外鍵（複製記錄、產生 PDF 後掛上、種子資料）也會被視為「新掛上」而需要證明。**沒有可靠的更早擷取點能區分這些 id 與請求帶來的 id**：`Wtm` 在表單繫結之後才指定，但 `RedoUpdateModel`、自訂繫結與先 `CreateVM` 再套用請求值的程式碼會在 `Wtm` 指定之後才把請求值放進 `Entity`，以「`Wtm` 指定時的快照」放行會讓這些寫法失去檢查，所以沒有採用。這類 VM 請用 `AllowFileLink(id)`（只放行伺服器掛上的 id）、`RequireFileLinkProof => false`，或註冊 `IFileLinkPolicy` 對特定情形回傳 `Allow` |
+| 攜帶方式 | LayUI：`wt:upload`（含 `wt:upload` 的圖片模式）上傳完成後，在所屬的 `form` 附加隱藏欄位 `UploadedFileRefs`（值以 jQuery `.val()` 設定，不拼入 HTML；重新上傳或移除檔案時一併移除）；`wt:multiupload` 對清單中每個上傳的項目各帶一個，移出清單就不再送出。表單驗證失敗重新顯示時，TagHelper 會把請求帶來且仍有效（目前使用者、此檔案）的參考原樣寫回。匯入對話框的 `wt:upload field="UploadFileId"` 不帶這個欄位。Vue3：`utils/fileRefs.ts` 記住上傳回應的 `LinkRef`，`utils/request.ts` 的請求攔截器在 `POST`／`PUT`（不含 `/api/_file/` 與 `search`）的 JSON 內容提到已記住的檔案 id 時，補上頂層的 `UploadedFileRefs`（共用的送出路徑，表單頁不需修改），儲存成功後就丟棄，登出時清除。產生器的 Vue3／Mvc 範本使用同樣的元件與 TagHelper，不需修改 |
+| 重新顯示表單的讀取參考 | `UploadTagHelper`、`MultiUploadTagHelper` 在表單重新顯示（例如驗證失敗）時，原本會對請求帶來的檔案 id 簽發 `Read`／`Name`／`Download` 參考。現在只對下列檔案簽發：記錄已掛著的檔案（`BaseCRUDVM` 由 `SetEntityById` 讀出的、或讀取資料庫確認的）、請求帶有有效 `Link` 參考的檔案、`AllowFileLink` 宣告的檔案；其他 id 照常顯示欄位內容，但連結不帶參考。判斷在 `BaseVM.MayShowFileReferences(Guid)`（預設 `true`；`BaseCRUDVM` 與 `BaseImportVM`（`UploadFileId` 且 `UploadFileRef` 有效）覆寫）。`LegacyVmFileLinking`、`Mode=Legacy`、`RequireFileLinkProof=false` 時不限制；不是 `BaseCRUDVM`／`BaseImportVM` 的 VM 行為不變。正常檢視已儲存的記錄不變 |
+| 批次修改與匯入 | `BaseBatchVM.DoBatchEdit` 把編輯模型（`LinkedVM`）的同名屬性寫入每一筆選取的記錄：編輯模型若宣告某個 `FileAttachment` 的外鍵並且表單送出了值，同樣需要 `UploadedFileRefs`（同一個檢查、同樣的政策與設定；沒有通過時每一筆都回報錯誤、不儲存；批次刪除的 id 由伺服器端取得，不受影響）。`BaseImportVM`：匯入的列來自 Excel 儲存格，框架的範本沒有檔案外鍵欄位，沒有用戶端控制的檔案外鍵路徑，這次不涵蓋；自己的範本若把檔案外鍵放進儲存格，需要自行檢查 |
+| 公開 API／設定 | `IFileDeletionPolicy`、`FileDeletionDecision`、`FileDeletionRequest`、`DefaultFileDeletionPolicy`、`WtmFileProvider.DeleteRequestedFiles`、`FilePurpose.Import`、`FileEndpointGuard.AuthorizeImport`、`WTMContext.AuthorizeImportFile`、`BaseImportVM.UploadFileRef`、`FileEndpoints:LegacyVmFileDeletion`、`FileEndpoints:LegacyImportFile`、`FileDeletionRequest.RawFileId`、`FileEndpointAdmission.DeletionPolicy`、`UploadTagHelper.ImportReferenceFieldName`、`FilePurpose.Link`、`BaseVM.UploadedFileRefs`、`BaseVM.ValidFileLinkReferences`、`BaseVM.MayShowFileReferences`、`BaseCRUDVM.RequireFileLinkProof`、`BaseCRUDVM.AllowFileLink`、`IFileLinkPolicy`、`FileLinkDecision`、`FileLinkRequest`、`DefaultFileLinkPolicy`、`WTMContext.ReadFileLinkReference`、`WTMContext.FileLinkProofSkipped`、`FileEndpoints:LegacyVmFileLinking`、上傳回應的 `LinkRef`。皆為新增 |
+
+**限制**：(1) 新增與匯入流程中，使用者上傳後、儲存前移除的檔案不再被刪除，會留在檔案表（孤兒檔，不再被任何記錄掛著，也不可被其他使用者的表單刪除）；本版不清理，需要時由應用程式以 `IFileDeletionPolicy` 或自己的排程處理。(2) 編輯時，表單列出、但儲存前這筆記錄沒有掛著的檔案（例如在同一個編輯表單中先上傳再移除）同樣不刪除。(3) 檢查的是「資料庫中的這筆記錄」：子類別覆寫 `DoEdit` 而不呼叫基底實作、或自己刪檔的程式碼不受影響。(4) `Audit` 模式下匯入也要求參考；自己手寫匯入表單、沒有走 `wt:upload` 或 `WtmImportor` 的頁面，需要自己帶上 `ImportRef`，過渡期優先使用只放寬匯入檔的 `FileEndpoints:LegacyImportFile=true`（`FileEndpoints:Mode=Legacy` 會同時關閉所有檔案參考的檢查，不建議）。(5) Blazor 產生的匯入頁（`Spa/Blazor/Import.txt`，用外部的 `WTSimpleUpload`）本 repo 沒有該元件的程式碼，不會帶 `UploadFileRef`。(6) 參考綁定使用者與租戶，不綁定登入工作階段，到期前可重複使用。(7) 沒有租戶的使用者（host）：參考的租戶為空，與目前租戶（空）比較，行為與有租戶的使用者一致。(8) 型別只是單純 `Guid` 的檔案欄位（不是 `FileAttachment` 導覽屬性／外鍵，也不是 `ISubFile` 清單）不會被「掛著的檔案」讀取看見，因此這類欄位的檔案不會經由 `DeletedFileIds` 刪除（無法判斷時不刪除）；需要時由應用程式以 `IFileDeletionPolicy` 自行處理。(9) 儲存時新掛上的檔案由上表的「儲存時新掛上的檔案」規則處理（需要上傳證明）；這個規則判斷的是記錄**儲存前**的狀態，所以刪除與掛上共用同一份讀取。(10) `LegacyImportFile`、`LegacyVmFileDeletion` 與 `LegacyVmFileLinking` 一樣是相容用的放寬，沒有計畫外的使用者應保持關閉。(11) 上傳證明綁定使用者與租戶，不綁定登入工作階段，到期前可重複使用；表單開著超過 `ReferenceLifetimeMinutes`（預設 480 分鐘）才儲存時，新上傳的檔案會被拒絕，需要重新上傳。(12) 手寫的表單（沒有走 `wt:upload`／`wt:multiupload`／Vue3 的 `uploadFile`／`uploadImage`）、Blazor 產生的頁面（外部元件 `WTSimpleUpload`，本 repo 沒有它的程式碼）與舊的 Spa React／Vue 範本不會帶 `UploadedFileRefs`，儲存新檔案會被拒絕；請改帶參考，或設 `FileEndpoints:LegacyVmFileLinking=true`／註冊 `IFileLinkPolicy`。(13) 伺服器端覆寫 `DoAdd`／`DoEdit` 並自行設定檔案外鍵的 VM，見上表「伺服器端覆寫」。(14) VM 若把請求帶來的檔案 id 從別的屬性複製到 `Entity` 的檔案外鍵（在基底 `DoAdd`／`DoEdit` 之前），因為值在 `Entity` 上，仍會被檢查；若放進 `Entity` 的是伺服器自己產生的 id 則需要宣告。(15) `IFileLinkPolicy` 對 `Allow` 的檔案，表單重新顯示時不會發讀取參考（只有已掛著、有 `Link` 參考與 `AllowFileLink` 宣告的檔案會）。(16) 非 `BaseCRUDVM`／`BaseImportVM` 的 VM（例如自己的向導 VM）上的上傳欄位，重新顯示時仍沿用 `MayShowFileReferences` 預設的 `true`。(17) 要求移除的檔案在 VM 儲存成功之後、VM 方法返回之前刪除；若應用程式在外層自己開了交易（VM 的儲存在其中，交易在 VM 返回之後才提交），VM 方法返回後外層再回滾，記錄會回到原狀，但檔案已經刪除（檔案表的刪除與外層交易不是同一個提交）。需要「記錄與檔案一起生效」的流程：不要把含刪檔的 VM 儲存放進會再回滾的外層交易；或讓 VM 的儲存成為該流程的最後一步；或不在這個 VM 的儲存裡要求刪檔（表單不傳 `DeletedFileIds`），由應用程式在外層交易提交之後自己呼叫伺服器端的刪檔方法。框架本身的儲存流程（沒有外層交易）不受影響。 (18) 表格編輯（`BasePagedListVM.UpdateEntityList`）檢查的是透過 `FileAttachment` 導覽屬性找到的檔案外鍵；沒有對應導覽屬性的檔案外鍵（例如單純的 `Guid` 欄位）不會被檢查，與表單路徑相同。(19) VM 沒有 `Wtm`（只出現在手動建立的實例，例如單元測試）時，表格編輯的檔案連結檢查不會執行。
+
+**為什麼必要**：使用者端送來的檔案 id 只應能影響它自己正在處理的資料，不應能刪除、讀取其他使用者上傳的檔案，也不應能把其他使用者上傳的檔案掛到自己的記錄上（掛上之後，記錄就成為讀取與刪除該檔案的管道）。檔案表沒有上傳者欄位，所以刪除以「這筆記錄是否掛著這個檔案」判斷；匯入的上傳檔案沒有記錄可掛，改用綁定使用者的短期簽名參考；儲存時新掛上的檔案同樣用綁定使用者與檔案的簽名參考（`Link`）證明「這個使用者上傳了這個檔案」。
+
+**考慮過的替代方案**：(1) 在檔案表新增上傳者欄位：需要資料庫遷移，且會讓「使用者 B 移除 A 上傳的附件」這個正常情形失效。(2) 在表單層要求刪除參考（同第 29 節）：LayUI 的上傳控制項只送裸 id，會弄壞 LayUI 並改變公開的 `BaseVM` 形狀。(3) 只用 `IFileAccessPolicy`：它在參考檢查之後呼叫，只能再拒絕，無法放行，且 VM 層刪檔不經過它。採用「掛著才刪」加選用政策掛點，匯入以參考處理。儲存時掛檔另考慮過：(4) 上傳時在快取記帳（`tenant:user:fileId`）：不改前端，但預設的記憶體快取在重啟與多節點時遺失，必須選擇放行或拒絕；(5) 在 `ExtraInfo` 寫入伺服器簽署的上傳者標記：新檔案強、舊檔案沒有，且可能影響解析 `ExtraInfo` 的應用程式。採用簽名參考（`Link`），沿用已有的簽發、驗證、到期與租戶綁定。
+
+**影響範圍與可觀察的變化**：
+- 編輯：行為不變（要求移除的是這筆記錄掛著的檔案）；列出別筆記錄或沒掛著的檔案時，不再刪除。
+- 新增、匯入：列出的 id 不再刪除（見限制 1）。
+- 儲存：新掛上的檔案需要 `UploadedFileRefs`（LayUI 與 Vue3 範本自動帶上）；沒有時整筆不儲存，該屬性出現一般性的錯誤。已掛著的檔案不受影響。
+- 表單重新顯示：請求帶來、記錄沒有掛著、也沒有上傳證明的檔案，連結不再帶讀取參考。
+- 匯入：沒有 `UploadFileRef` 的請求回報「範本錯誤」，不匯入。LayUI 與 Vue3 範本頁面自動帶上，不需修改。
+
+**補充（單一屬性更新與表格編輯，行為變更）**：(1) `/_Framework/UpdateModelProperty` 不寫入 `FileAttachment` 的外鍵（以資料模型的外鍵、`[ForeignKey]` 與命名慣例（導覽屬性名稱加 `Id`）判斷），不論參考清單是否列出該欄位，也不論 `GenericEndpoints:Mode`；原因是單一屬性的請求不帶上傳證明。證明被關閉時（`FileEndpoints:Mode=Legacy` 或 `FileEndpoints:LegacyVmFileLinking=true`）與儲存表單一致，外鍵可以寫入。其他 `Guid` 欄位不受影響。要由頁面直接改檔案欄位的應用程式，請改用帶 `UploadedFileRefs` 的表單儲存。(2) `BasePagedListVM.UpdateEntityList`（表格編輯的儲存）對每一列新掛上的檔案（新增的列，以及會寫入且值有變的檔案外鍵）要求同樣的上傳證明（`UploadedFileRefs`、`IFileLinkPolicy`、`LegacyVmFileLinking`、`Mode=Legacy`）；任何一個被拒絕時整批都不寫入，並在 `EntityList[i].<外鍵>` 加入一般性的錯誤（不含檔案 id）。表格編輯的請求要像表單一樣帶 `UploadedFileRefs`；其他欄位的編輯、沒有變動的檔案外鍵不需要證明。
+
+**遷移步驟**：預設即生效。(0) 儲存時掛檔：自己手寫的表單把上傳回應的 `LinkRef` 放進 `UploadedFileRefs`（欄位名稱 `UploadedFileRefs`，可重複；JSON 表單是頂層的字串陣列）；伺服器端自己掛檔案的 VM 在掛上之前呼叫 `AllowFileLink(id)`、覆寫 `RequireFileLinkProof => false`，或註冊 `IFileLinkPolicy`；暫時無法修改的應用程式（Blazor、舊的 Spa 範本、手寫表單）設 `FileEndpoints:LegacyVmFileLinking=true`，並在改完之後移除。已產生的 Vue3 專案：更新 `utils/fileRefs.ts`、`utils/request.ts`、`components/uploadFile`、`components/uploadImage`（見 demo；細節見 docs/security/vue3-file-api-downstream.md）。(1) 依賴舊刪檔行為的專案設 `FileEndpoints:LegacyVmFileDeletion=true`，或註冊 `IFileDeletionPolicy` 對特定情形回傳 `Allow`。(2) 自己手寫匯入表單／呼叫的專案：上傳回應的 `ImportRef` 放進 `UploadFileRef`；伺服器端自己建立匯入 VM 的程式碼用 `Wtm.CreateFileReference(fileId, FilePurpose.Import)` 取得。(3) 已產生的 Vue3 匯入頁：加上 `v-model:import-ref="state.vmModel.UploadFileRef"` 與 `UploadFileRef: null`，並更新 `WtmImportor`（見 demo）。
+
+**設定值**：`FileEndpoints:LegacyVmFileDeletion`、`FileEndpoints:LegacyImportFile`、`FileEndpoints:LegacyVmFileLinking` 只接受 `true` 或 `false`（不分大小寫）；無法解析的值在啟動讀取設定時由設定繫結拋出例外，應用程式不會啟動。開啟時啟動輸出 Warning。
+
+**回滾**：`FileEndpoints:LegacyVmFileLinking=true` 恢復「任何檔案都可掛上」（`IFileLinkPolicy` 的 `Deny` 仍然有效；單一 VM 可用 `RequireFileLinkProof => false`）；`FileEndpoints:LegacyVmFileDeletion=true` 恢復刪檔行為；`FileEndpoints:LegacyImportFile=true` 只略過匯入參考檢查（`FileEndpoints:Mode=Legacy` 則同時放寬其他檔案參考）；`IFileDeletionPolicy` 維持預設即與原本的刪除端點行為相同；也可還原該次提交。不涉及資料格式。
+
+**LayUI 影響**：LayUI 表單送出的 `DeletedFileIds` 與隱藏欄位格式不變；`wt:upload`／`wt:multiupload` 上傳後多送隱藏欄位 `UploadedFileRefs`（由腳本附加，不改既有欄位）；`wt:upload field="UploadFileId"` 的輸出多一個隱藏欄位與一行腳本，其他 `wt:upload` 輸出不變；`BaseCRUDVM` 與匯入 VM 是 LayUI 的受保護路徑（第 3 節），編輯與匯入的使用者可見行為不變。
+
+**維護者決定**：Jun 於 2026-11-07 核准（設計：只刪掛著的檔案、選用政策掛點、匯入簽名參考；預設開啟，附關閉開關）；同日核准儲存時掛檔以簽名參考證明（`Link`、`UploadedFileRefs`、`IFileLinkPolicy`、`LegacyVmFileLinking`）。
+
+**測試**：Core.Test 的 `FileLinkProofTest`（含表格編輯的 `ListEdit_*`）、`ModelPropertyUpdateRulesTest`（單一屬性更新拒絕檔案外鍵、仍接受一般 `Guid` 欄位、證明關閉時可寫入）；其中 `FileLinkProofTest` 涵蓋（有效參考、缺少、他人、他租戶、到期、目的不符、他檔、亂碼、已掛著的檔案、`ISubFile` 新項目、新增與編輯、同步與非同步、政策 `Allow`／`Deny`／例外、`RequireFileLinkProof=false`、`AllowFileLink`、`LegacyVmFileLinking`、`Mode=Legacy`、批次修改、先掛上再刪除的兩步情境在第一步被拒絕）、`UploadLinkReferenceTests`（TagHelper 的隱藏欄位與腳本、重新顯示時的參考限制）、`SpaFileApiTest`（回應含 `LinkRef`）、Admin.Test 的 `UserPhotoTest`（使用者照片需要上傳證明）；E2E 的 `Vue3FileApiTests.File_Api_ARecordLinksAFile_OnlyWithTheProofOfItsUpload`、`LayUiUploadTests`（表單送出 `UploadedFileRefs`）；Core.Test 的 `FileDeletionLinkageTest`（含儲存失敗與模型狀態有錯誤時不刪檔、刪除記錄時的檔案來源、非 id 項目與政策）、`SpaFileApiTest` 的 `Delete_*` 政策案例（無參考加 `Allow`、無參考加預設、有效參考加 `Deny`、有效參考加預設、未登入、政策拋出例外、`IFileAccessPolicy` 語意）、`FileEndpointGuardTest` 的 `LegacyImportFile_*`、`ExcelTemplateImportTests` 的 `UploadReference_LegacyImportFile*`；其餘沿用的測試：`FileDeletionLinkageTest`（掛著、別筆記錄的、未掛著的、未知的 id；單一附件與子檔案清單；新增、編輯、同步與非同步；政策 Allow／Deny／例外；關閉開關；請求內容不影響判斷）、`ExcelTemplateImportTests` 的 `UploadReference_*`（有效、缺少、他人、他檔、他租戶、目的不符、亂碼、到期、`Legacy`／`Audit`／`Enforce`、錯誤檔）、`UploadImportReferenceTests`（TagHelper 輸出）、`SpaFileApiTest`（回應含 `ImportRef`）；E2E 的 `GadgetBatchAndImportTests`（匯入對話框帶 `UploadFileRef`）與 `Vue3ApiTests`（匯入帶 `ImportRef`）。
+
+
+## 37. 通用編輯不再寫入使用者的密碼欄位（`FrameworkUserBase.Password` 標為 `[CanNotEdit]`，行為變更）
+
+**範圍**：`FrameworkUserBase.Password`（`FrameworkUser` 的基底類別）。`BaseCRUDVM.DoEdit`／`DoEditAsync` 以 `updateAllFields = false` 執行時，會把請求帶來的 `Entity.*` 欄位逐一寫回，只略過主鍵、`[NotMapped]`、`[CanNotEdit]` 與清單屬性；`Password` 原本沒有標記，所以通用的編輯（LayUI 表單、API 的 JSON 內容）帶了 `Entity.Password` 時，會把請求的值原樣寫入儲存的密碼欄位，繞過了密碼修改流程與雜湊。
+
+**變更**：
+
+| 項目 | 行為 |
+|---|---|
+| 屬性 | `FrameworkUserBase.Password` 加上 `[CanNotEdit]`。通用編輯（`DoEdit`／`DoEditAsync`，`updateAllFields = false`，表單與 JSON 內容、同步與非同步）不再寫入這個欄位；請求中其他欄位的處理不變 |
+| 仍然會設定密碼的流程 | 新增使用者（`FrameworkUserVM.DoAddAsync` 先雜湊再 `DoAdd`）、使用者自己修改密碼（`ChangePasswordVM.DoChange`）、管理員重設（`FrameworkUserController.Password` → `FrameworkUserVM.ChangePassword`，已明確呼叫 `DC.UpdateProperty(Entity, x => x.Password)`）、登入時的雜湊升級（`WTMContext` 直接更新，不經 `DoEdit`）、匯入與租戶建立管理員、資料初始化（皆以新增實體方式寫入）：都不依賴通用編輯，行為不變 |
+| 整筆寫入（行為變更） | `DoEdit`／`DoEditAsync` 以 `updateAllFields = true` 執行時，整個實體被設為已修改，原本不看 `[CanNotEdit]`；現在儲存前把所有 `[CanNotEdit]` 欄位標為未修改，儲存後這些欄位保持資料庫中原有的值，其他欄位照常寫入。同一次儲存的檔案掛上檢查（第 36 節）照常在此之前執行 |
+| 表格編輯（行為變更） | `BasePagedListVM.UpdateEntityList` 在兩種模式（只寫表單帶的欄位、`updateAllFields = true`）都略過 `[CanNotEdit]` 欄位，另外要求新掛上的檔案有上傳證明（見第 36 節補充） |
+| 不變 | 框架內建的使用者編輯一律傳 `false`。匯入並選擇覆蓋既有資料時，範本含 `Password` 欄的欄位仍會寫入（匯入範本是明確的設定，且內建的匯入會先雜湊）。資料表結構、欄位長度、回應不輸出密碼欄位的規則都不變 |
+
+**為什麼必要**：密碼的儲存值只應經由會雜湊、會檢查舊密碼的流程設定；通用編輯不應能直接寫入。
+
+**影響範圍與可觀察的變化**：
+- 編輯使用者時，表單或 JSON 內容裡的 `Password` 被忽略，儲存的密碼保持原樣；其他欄位照常更新。
+- 沒有資料庫結構或資料格式的變化。
+
+**遷移步驟**：自訂的 ViewModel 若原本靠通用編輯來寫入 `Password`（例如覆寫 `DoEdit`，先設 `Entity.Password` 再呼叫 `base.DoEdit`），要明確更新該屬性：先 `Entity.Password = Wtm.HashPassword(...)`，再 `DC.UpdateProperty(Entity, x => x.Password)`，之後儲存（可參考 demo 的 `FrameworkUserVM.ChangePassword`）。只透過框架內建的新增、修改密碼、重設流程的應用不需要任何改動。**行為變更（`updateAllFields`、表格編輯）**：依賴 `updateAllFields: true` 或 `UpdateEntityList` 寫入 `[CanNotEdit]` 欄位的應用（含自己標了 `[CanNotEdit]` 的欄位）要明確設定這些欄位：把值放進 `Entity`，再 `DC.UpdateProperty(Entity, x => x.欄位)`，之後儲存；沒有標 `[CanNotEdit]` 的欄位不受影響。回滾：移除該欄位上的 `[CanNotEdit]`（但同時恢復表單、表格的編輯可寫入），或還原相關提交；沒有設定開關。
+
+**限制**：(1) `[CanNotEdit]` 在 `updateAllFields = true` 時只處理實體本身的欄位；位於擁有型別（owned type）或複合型別（complex type）內的 `[CanNotEdit]` 成員不會被保留，仍會依請求內容寫入。(2) VM 沒有 `Wtm`（只出現在手動建立的實例，例如單元測試）時，表格編輯的檔案連結檢查不會執行（見第 36 節限制 19）。
+
+**回滾**：移除 `Password` 上的 `[CanNotEdit]` 即恢復原行為（單一屬性、一行）；也可還原該次提交。不涉及資料格式，沒有設定開關。
+
+**LayUI 影響**：不涉及 TagHelper 與 LayUI 受保護路徑；demo 的 Vue3 使用者編輯頁（`edit.vue`）沒有 `Password` 欄位（密碼只在新增頁與修改密碼動作），畫面行為不變。
+
+**其他欄位檢視**：`FrameworkUserBase` 沒有權杖、密鑰、鹽等其他憑證類欄位；`FrameworkTenant.TDb`（租戶連線字串）由租戶管理介面編輯，屬於預期用途，本節不處理。
+
+**測試**：Admin.Test 的 `PasswordGenericEditTest`（屬性存在；表單路徑的同步與非同步、欄位名稱大小寫、API 控制器的編輯、只帶 `Password` 的編輯：儲存的密碼不變；新增仍然雜湊並儲存；管理員重設與使用者修改密碼仍然生效；編輯後登入使用的驗證仍接受原密碼）。移除屬性後上述編輯相關的測試會失敗（變異檢查）。

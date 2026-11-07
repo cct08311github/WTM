@@ -200,5 +200,61 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.IsTrue(ModelPropertyUpdateRules.TryConvert(typeof(string), "  a\\b  ", out var text));
             Assert.AreEqual("  a/b  ", text);
         }
+
+        // ---- the key of a file attachment ------------------------------------------------------------------------------------------
+
+        private static DataContext Dc() => new DataContext(Guid.NewGuid().ToString(), DBTypeEnum.Memory);
+
+        [TestMethod]
+        [DataRow(typeof(Album), "CoverId")]
+        [DataRow(typeof(Album), "ScanId")]
+        [DataRow(typeof(AlbumPhoto), "FileId")]
+        public void FindWritableProperty_RefusesTheKeyOfAFileAttachment_WhateverTheModel(Type type, string name)
+        {
+            using var dc = Dc();
+            Assert.IsNull(ModelPropertyUpdateRules.FindWritableProperty(type, name, dc, false), "by the model of the data context");
+            Assert.IsNull(ModelPropertyUpdateRules.FindWritableProperty(type, name, null, false), "by the naming convention when there is no model");
+        }
+
+        [TestMethod]
+        public void FindWritableProperty_RefusesTheAttachmentItself()
+        {
+            using var dc = Dc();
+            Assert.IsNull(ModelPropertyUpdateRules.FindWritableProperty(typeof(Album), "Cover", dc, true));
+            Assert.IsNull(ModelPropertyUpdateRules.FindWritableProperty(typeof(Album), "Cover", dc, false));
+        }
+
+        [TestMethod]
+        public void FindWritableProperty_StillAcceptsOtherScalarsOfAModelWithFiles()
+        {
+            using var dc = Dc();
+            Assert.IsNotNull(ModelPropertyUpdateRules.FindWritableProperty(typeof(Album), "Title", dc, false));
+            Assert.IsNotNull(ModelPropertyUpdateRules.FindWritableProperty(typeof(AlbumPhoto), "Order", dc, false));
+            Assert.IsNotNull(ModelPropertyUpdateRules.FindWritableProperty(typeof(AlbumPhoto), "AlbumId", dc, false), "a key to a record that is not a file");
+        }
+
+        [TestMethod]
+        public void FindWritableProperty_AcceptsAGuidScalarThatIsNotAFileKey()
+        {
+            using var dc = Dc();
+            Assert.IsNotNull(ModelPropertyUpdateRules.FindWritableProperty(typeof(Plain), "Token", dc, false));
+            Assert.IsNotNull(ModelPropertyUpdateRules.FindWritableProperty(typeof(Plain), "Token", null, false));
+        }
+
+        [TestMethod]
+        public void FindWritableProperty_WritesTheFileKeyOnlyWhereTheProofIsSwitchedOff()
+        {
+            using var dc = Dc();
+            Assert.IsNotNull(ModelPropertyUpdateRules.FindWritableProperty(typeof(Album), "CoverId", dc, true));
+            Assert.IsNull(ModelPropertyUpdateRules.FindWritableProperty(typeof(Album), "CoverId", dc, false));
+        }
+
+        [TestMethod]
+        public void FindWritableProperty_WithTheFileRule_KeepsEveryOtherRefusal()
+        {
+            using var dc = Dc();
+            Assert.IsNull(ModelPropertyUpdateRules.FindWritableProperty(typeof(Album), "ID", dc, true));
+            Assert.IsNull(ModelPropertyUpdateRules.FindWritableProperty(typeof(Plain), "Fixed", dc, true));
+        }
     }
 }

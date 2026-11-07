@@ -3,12 +3,15 @@
  *
  * The server writes a short-lived reference ("capability") next to the data that names a file: `Field__fref` in list rows, `FileRefs`
  * (file id -> reference) on a record, `Ref` in the answer of an upload. An <img> cannot send the bearer token, so the reference travels in the
- * address (`_DONOT_USE_FREF`). `DeleteRef` of an upload is the only thing that lets this user delete that file again.
+ * address (`_DONOT_USE_FREF`). `DeleteRef` of an upload is the only thing that lets this user delete that file again. `LinkRef` is the proof that
+ * this user uploaded the file: a form that saves a record posts it as `UploadedFileRefs` (see `withLinkRefs`), without it the server does not link a file
+ * that the record did not already refer to.
  * Nothing is persisted: the registry is memory only, capped, and cleared when the session is cleared (logout).
  */
 const MAX = 2000;
 const refs = new Map<string, string>();
 const deleteRefs = new Map<string, string>();
+const linkRefs = new Map<string, string>();
 
 const norm = (id: any) => (id === null || id === undefined ? '' : String(id).toLowerCase());
 
@@ -56,9 +59,52 @@ export function forgetDeleteIn(body: any) {
 	(text.match(GUID) || []).forEach((id) => forgetDelete(id));
 }
 
+/** The `LinkRef` of an upload: the proof, posted with the form that saves the file into a record. */
+export function rememberLink(id: any, ref: any) {
+	put(linkRefs, id, ref);
+}
+
+export function linkRefFor(id: any): string | undefined {
+	return linkRefs.get(norm(id));
+}
+
+/**
+ * The body of a save request with `UploadedFileRefs`: the link references of the uploads that the body names (by file id). The body is a JSON
+ * string or an object (not copied into, not changed); anything else (FormData, an array, a body without a known upload) is returned as it is.
+ */
+export function withLinkRefs(body: any): any {
+	if (linkRefs.size === 0 || body === undefined || body === null) return body;
+	const isText = typeof body === 'string';
+	if (!isText && (typeof body !== 'object' || Array.isArray(body) || (typeof FormData !== 'undefined' && body instanceof FormData))) return body;
+	const text = isText ? body : JSON.stringify(body);
+	const found: string[] = [];
+	(text.match(GUID) || []).forEach((id) => {
+		const ref = linkRefFor(id);
+		if (ref && found.indexOf(ref) < 0) found.push(ref);
+	});
+	if (found.length === 0) return body;
+	try {
+		const record = isText ? JSON.parse(body) : { ...body };
+		if (!record || typeof record !== 'object' || Array.isArray(record)) return body;
+		const existing = Array.isArray(record.UploadedFileRefs) ? record.UploadedFileRefs : [];
+		record.UploadedFileRefs = existing.concat(found.filter((x) => existing.indexOf(x) < 0));
+		return isText ? JSON.stringify(record) : record;
+	} catch (e) {
+		return body;
+	}
+}
+
+/** After a form was saved, the uploads it names are part of the record: their link references are dropped. */
+export function forgetLinkIn(body: any) {
+	if (linkRefs.size === 0 || body === undefined || body === null) return;
+	const text = typeof body === 'string' ? body : JSON.stringify(body);
+	(text.match(GUID) || []).forEach((id) => linkRefs.delete(norm(id)));
+}
+
 export function clearFileRefs() {
 	refs.clear();
 	deleteRefs.clear();
+	linkRefs.clear();
 }
 
 /** Takes the references out of a response: `FileRefs` of a record and `<Field>__fref` of the rows of a list. */
@@ -112,4 +158,4 @@ export function refParams(id: any): Record<string, any> {
 	return r ? { _DONOT_USE_FREF: r } : {};
 }
 
-export default { forgetDeleteIn, remember, refFor, rememberDelete, deleteRefFor, forgetDelete, clearFileRefs, collect, fileUrl, downloadUrl, refParams };
+export default { forgetDeleteIn, rememberLink, linkRefFor, withLinkRefs, forgetLinkIn, remember, refFor, rememberDelete, deleteRefFor, forgetDelete, clearFileRefs, collect, fileUrl, downloadUrl, refParams };

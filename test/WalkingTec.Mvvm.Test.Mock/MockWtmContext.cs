@@ -16,7 +16,7 @@ namespace WalkingTec.Mvvm.Test.Mock
 {
     public static class MockWtmContext
     {
-        public static WTMContext CreateWtmContext(IDataContext dataContext= null, string usercode = null, string remoteToken = null, Microsoft.AspNetCore.DataProtection.IDataProtectionProvider dataProtection = null, Microsoft.Extensions.Logging.ILoggerFactory loggerFactory = null, Configs configs = null, IFileAccessPolicy fileAccessPolicy = null, Func<string, IDataContext> createDc = null, IUploadFileRule uploadFileRule = null, IServiceProvider uploadRuleProvider = null)
+        public static WTMContext CreateWtmContext(IDataContext dataContext= null, string usercode = null, string remoteToken = null, Microsoft.AspNetCore.DataProtection.IDataProtectionProvider dataProtection = null, Microsoft.Extensions.Logging.ILoggerFactory loggerFactory = null, Configs configs = null, IFileAccessPolicy fileAccessPolicy = null, Func<string, IDataContext> createDc = null, IUploadFileRule uploadFileRule = null, IServiceProvider uploadRuleProvider = null, IFileDeletionPolicy fileDeletionPolicy = null, IFileLinkPolicy fileLinkPolicy = null)
         {
             GlobalData gd = new GlobalData();
             gd.AllAccessUrls = new List<string>();
@@ -47,6 +47,14 @@ namespace WalkingTec.Mvvm.Test.Mock
             if (fileAccessPolicy != null)
             {
                 mockService.Setup(x => x.GetService(typeof(IFileAccessPolicy))).Returns(fileAccessPolicy);
+            }
+            if (fileDeletionPolicy != null)
+            {
+                mockService.Setup(x => x.GetService(typeof(IFileDeletionPolicy))).Returns(fileDeletionPolicy);
+            }
+            if (fileLinkPolicy != null)
+            {
+                mockService.Setup(x => x.GetService(typeof(IFileLinkPolicy))).Returns(fileLinkPolicy);
             }
             if (uploadFileRule != null)
             {

@@ -78,6 +78,8 @@ namespace WalkingTec.Mvvm.E2E.Tests
             var chooser = await Page.RunAndWaitForFileChooserAsync(async () => await _list.Dialog.Locator("button", new() { HasTextString = "Select" }).ClickAsync());
             await chooser.SetFilesAsync(path);
             await Expect(_list.Dialog.Locator("input[type=hidden][name$='UploadFileId']")).ToHaveValueAsync(new System.Text.RegularExpressions.Regex("^[0-9a-f-]{36}$"));
+            // the dialog also carries the reference of the upload that the import needs
+            await Expect(_list.Dialog.Locator("input[type=hidden][name$='UploadFileRef']")).Not.ToHaveValueAsync("");
             await _list.DialogButton("Submit").ClickAsync();
 
             await _list.AcceptAlertAsync("1 rows have been imported");

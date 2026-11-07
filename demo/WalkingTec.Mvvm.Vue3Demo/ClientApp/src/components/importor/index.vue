@@ -34,13 +34,14 @@ import { Local } from '/@/utils/storage';
 import fileApi from '/@/api/file';
 import { rememberDelete } from '/@/utils/fileRefs';
 
-const emit = defineEmits(['refresh','update:modelValue']);
+const emit = defineEmits(['refresh','update:modelValue','update:importRef']);
 const uploadRef = ref();
 // 定义父组件传过来的值
 const props = defineProps({
 	url: String,
 	files:Array,
-	modelValue:null
+	modelValue:null,
+	importRef:null
 });
 
 const header = computed(()=>{
@@ -59,12 +60,15 @@ const onSuccess = (res: any, uploadFile: any, uploadFiles: any)=>{
 	uploadFile.fileID = res.Id;
 	rememberDelete(res.Id, res.DeleteRef);
 	emit('update:modelValue',res.Id);
+	// the reference that lets this user import from the uploaded file
+	emit('update:importRef',res.ImportRef ?? null);
 
 }
 
 const onRemove = (file:any)=>{
 	fileApi().deleteFile(file.fileID);
 	emit('update:modelValue',null);
+	emit('update:importRef',null);
 }
 // 暴露变量
 defineExpose({

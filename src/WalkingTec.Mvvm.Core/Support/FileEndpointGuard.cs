@@ -29,6 +29,15 @@ namespace WalkingTec.Mvvm.Core
         /// <summary>Delete the file. Never part of <see cref="Read"/> and never granted to a reference that is not bound to a user.</summary>
         Delete = 16,
 
+        /// <summary>Use the file as the upload of an import (<c>BaseImportVM.UploadFileId</c>). Like <see cref="Delete"/>, only ever given to one user.</summary>
+        Import = 32,
+
+        /// <summary>
+        /// Link the file to a record that a form saves (<c>BaseVM.UploadedFileRefs</c>): proof that this user uploaded the file. Like <see cref="Delete"/>
+        /// and <see cref="Import"/>, only ever given to one user, for one file.
+        /// </summary>
+        Link = 64,
+
         /// <summary>View, download and name: what a file shown by a page needs.</summary>
         Read = View | Download | Name
     }
@@ -71,7 +80,10 @@ namespace WalkingTec.Mvvm.Core
         FileMissing,
 
         /// <summary>The file is the photo of a user the request may see (see <see cref="FileEndpointRequestContext.IsAvatar"/>).</summary>
-        Avatar
+        Avatar,
+
+        /// <summary>A deletion without a valid reference that the registered <see cref="IFileDeletionPolicy"/> allowed.</summary>
+        DeletionPolicy
     }
 
     /// <summary>What a page tells the file endpoints about a file it shows. It travels as an opaque protected string, never in clear text.</summary>
@@ -286,8 +298,8 @@ namespace WalkingTec.Mvvm.Core
             {
                 return null;
             }
-            // the right to delete a file is given to one user only
-            if ((purposes & FilePurpose.Delete) != 0 && (string.IsNullOrEmpty(user) || string.IsNullOrEmpty(fileId)))
+            // the right to delete a file, to import from it, or to link it to a record is given to one user only
+            if ((purposes & (FilePurpose.Delete | FilePurpose.Import | FilePurpose.Link)) != 0 && (string.IsNullOrEmpty(user) || string.IsNullOrEmpty(fileId)))
             {
                 return null;
             }
@@ -502,6 +514,37 @@ namespace WalkingTec.Mvvm.Core
         }
 
         /// <summary>
+        /// Decides whether the signed-in user may use the file as the upload of an import (<see cref="FilePurpose.Import"/>): it needs a reference that
+        /// was issued to that user, in that tenant, for that file, and is not expired. Only <see cref="FileEndpointMode.Legacy"/> and
+        /// <see cref="FileEndpointOptions.LegacyImportFile"/> skip the check (<see cref="FileEndpointMode.Audit"/> does not relax it, as for a delete).
+        /// </summary>
+        public static FileEndpointDecision AuthorizeImport(FileEndpointRequestContext ctx)
+        {
+            var options = ctx.Options ?? new FileEndpointOptions();
+            if (options.Mode == FileEndpointMode.Legacy || options.LegacyImportFile)
+            {
+                return FileEndpointDecision.Admit(FileEndpointAdmission.Legacy);
+            }
+            if (string.IsNullOrEmpty(ctx.User))
+            {
+                return FileEndpointDecision.Refuse(FileEndpointRefusal.UserMismatch);
+            }
+            var refusal = CheckReference(new FileEndpointRequestContext
+            {
+                Options = options,
+                FileId = ctx.FileId,
+                Purpose = FilePurpose.Import,
+                Reference = ctx.Reference,
+                User = ctx.User,
+                Tenant = ctx.Tenant,
+                HomeTenant = ctx.HomeTenant,
+                Now = ctx.Now,
+                OpenReference = ctx.OpenReference
+            }, out _);
+            return refusal == FileEndpointRefusal.None ? FileEndpointDecision.Admit(FileEndpointAdmission.Reference) : FileEndpointDecision.Refuse(refusal);
+        }
+
+        /// <summary>
         /// Opens and checks the reference of the request. Returns <see cref="FileEndpointRefusal.None"/> and the reference when it is valid for the
         /// file, purpose, user and tenant of the request (for <see cref="FilePurpose.Upload"/> the file is not compared).
         /// </summary>
@@ -540,8 +583,8 @@ namespace WalkingTec.Mvvm.Core
             {
                 return FileEndpointRefusal.PurposeMismatch;
             }
-            // the right to delete is never open to the audience of a page
-            if ((ctx.Purpose & FilePurpose.Delete) != 0 && string.IsNullOrEmpty(opened.User))
+            // the right to delete, to import from, or to link the file is never open to the audience of a page
+            if ((ctx.Purpose & (FilePurpose.Delete | FilePurpose.Import | FilePurpose.Link)) != 0 && string.IsNullOrEmpty(opened.User))
             {
                 return FileEndpointRefusal.UserMismatch;
             }
@@ -575,6 +618,18 @@ namespace WalkingTec.Mvvm.Core
             if (options.LegacyUploadedBefore != null && options.LegacyUploadedBefore.Value > DateTime.Now)
             {
                 logger.LogWarning("FileEndpoints:LegacyUploadedBefore ({Cutoff:s}) is in the future: every file uploaded until then, including new uploads, is served by its id in Enforce mode. The value is compared with the upload time in the local time of the server.", options.LegacyUploadedBefore.Value);
+            }
+            if (options.LegacyVmFileDeletion)
+            {
+                logger.LogWarning("FileEndpoints:LegacyVmFileDeletion is on: the files a form asks to remove when a record is saved are deleted even when the record does not refer to them.");
+            }
+            if (options.LegacyImportFile)
+            {
+                logger.LogWarning("FileEndpoints:LegacyImportFile is on: an import uses its uploaded file without the reference that the upload endpoints return.");
+            }
+            if (options.LegacyVmFileLinking)
+            {
+                logger.LogWarning("FileEndpoints:LegacyVmFileLinking is on: a form may link any existing file to the record it saves without the reference that the upload endpoints return.");
             }
             if (options.RequestConnectionKeys != null && options.RequestConnectionKeys.Count > 0)
             {

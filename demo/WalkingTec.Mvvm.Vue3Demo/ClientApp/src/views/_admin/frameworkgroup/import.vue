@@ -2,7 +2,7 @@
 	<div class="card-fill layout-padding">
 		<el-card shadow="hover" class="layout-padding-auto">
 			<el-form ref="formRef" :model="state.vmModel" label-width="90px">
-				<WtmImportor url="/api/_frameworkgroup/GetExcelTemplate" v-model="state.vmModel.UploadFileId"
+				<WtmImportor url="/api/_frameworkgroup/GetExcelTemplate" v-model="state.vmModel.UploadFileId" v-model:import-ref="state.vmModel.UploadFileRef"
 					:files="state.vmModel.files" />
 				<div v-if="state.errorFileId" style="margin-top: 10px;vertical-align: bottom;">
 					<el-button @click="onErrorFile" size="small" type="danger">{{ $t('message._system.common.vm.importtip')
@@ -36,6 +36,7 @@ const formRef = ref();
 const state = reactive({
 	vmModel: {
 		UploadFileId: null,
+		UploadFileRef: null,
 		files: []
 	},
 	errorFileId: null

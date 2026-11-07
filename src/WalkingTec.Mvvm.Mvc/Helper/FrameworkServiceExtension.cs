@@ -548,6 +548,9 @@ namespace WalkingTec.Mvvm.Mvc
             services.AddScoped<WtmFileProvider>();
             // the rule applications may add after the file endpoints have admitted a request; replace it by registering your own first
             services.TryAddSingleton<IFileAccessPolicy, AllowAllFileAccessPolicy>();
+            // the optional rule for the files a form asks to remove when a record is saved (no opinion by default); replace it by registering your own first
+            services.TryAddSingleton<IFileDeletionPolicy, DefaultFileDeletionPolicy>();
+            services.TryAddSingleton<IFileLinkPolicy, DefaultFileLinkPolicy>();
             // the optional rule for uploads (off until FileEndpoints:UploadAllowList is configured); replace it by registering your own first
             services.TryAddSingleton<IUploadFileRule, ConfiguredUploadFileRule>();
             services.Configure<FormOptions>(y =>

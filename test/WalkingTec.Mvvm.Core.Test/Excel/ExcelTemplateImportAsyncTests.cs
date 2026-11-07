@@ -223,7 +223,7 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
 
         private static WTMContext NewWtm(string seed, DBTypeEnum configuredDbType = DBTypeEnum.Memory)
         {
-            var wtm = MockWtmContext.CreateWtmContext(new DataContext(seed, DBTypeEnum.Memory), "importuser");
+            var wtm = MockWtmContext.CreateWtmContext(new DataContext(seed, DBTypeEnum.Memory), "importuser", dataProtection: ImportUploadRef.Provider);
             // WTMContext.CreateDC() inspects the Referer header; the shared mock leaves Request.Headers unset (null)
             Moq.Mock.Get(wtm.HttpContext.Request).Setup(x => x.Headers).Returns(new Microsoft.AspNetCore.Http.HeaderDictionary());
             // the import reads/deletes the uploaded file through WtmFileProvider using Wtm.CreateDC(), which goes through Configs.Connections
@@ -289,7 +289,7 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
         private static TVm NewImportVm<TVm>(WTMContext wtm, byte[] xlsx) where TVm : BaseVM, new()
         {
             var vm = new TVm { Wtm = wtm };
-            vm.GetType().GetProperty("UploadFileId").SetValue(vm, Upload(wtm, xlsx));
+            ImportUploadRef.Apply(wtm, vm, Upload(wtm, xlsx));
             return vm;
         }
 

@@ -92,7 +92,7 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         private Harness Make(string user = "alice", FileEndpointMode mode = FileEndpointMode.Audit, bool filePublic = false, IFileAccessPolicy policy = null,
-            Action<Configs> configure = null, string requestContentType = null, IEnumerable<IFormFile> files = null, IDataProtectionProvider provider = null, Func<IDataContext> dcFactory = null)
+            Action<Configs> configure = null, string requestContentType = null, IEnumerable<IFormFile> files = null, IDataProtectionProvider provider = null, Func<IDataContext> dcFactory = null, IFileDeletionPolicy deletionPolicy = null)
         {
             var seed = _seed;
             Func<IDataContext> newDc = dcFactory ?? (() => new LoginTestContext(seed));
@@ -106,7 +106,7 @@ namespace WalkingTec.Mvvm.Core.Test
             };
             configure?.Invoke(configs);
             var logs = new CapturingLoggerFactory();
-            var wtm = MockWtmContext.CreateWtmContext(newDc(), user ?? "alice", dataProtection: provider ?? _provider, loggerFactory: logs, configs: configs, fileAccessPolicy: policy, createDc: key => newDc());
+            var wtm = MockWtmContext.CreateWtmContext(newDc(), user ?? "alice", dataProtection: provider ?? _provider, loggerFactory: logs, configs: configs, fileAccessPolicy: policy, createDc: key => newDc(), fileDeletionPolicy: deletionPolicy);
             wtm.GlobaInfo.CustomUserType = typeof(LoginTestUser);
             if (user == null)
             {
@@ -747,6 +747,13 @@ namespace WalkingTec.Mvvm.Core.Test
                 var capability = body.GetProperty("Ref").GetString();
                 StringAssert.Contains(url, "_DONOT_USE_FREF=" + Uri.EscapeDataString(capability));
                 Assert.IsFalse(string.IsNullOrEmpty(body.GetProperty("DeleteRef").GetString()));
+                Assert.IsFalse(string.IsNullOrEmpty(body.GetProperty("ImportRef").GetString()), "the reference an import needs to use the file");
+                // the proof of the upload for linking the file to a record: the uploader only, for this file only
+                var linkRef = body.GetProperty("LinkRef").GetString();
+                Assert.IsFalse(string.IsNullOrEmpty(linkRef), "the reference a form needs to link the file to a record");
+                Assert.AreEqual(Guid.Parse(id), Make("alice", mode).Controller.Wtm.ReadFileLinkReference(linkRef), "the uploader");
+                Assert.IsNull(Make("bob", mode).Controller.Wtm.ReadFileLinkReference(linkRef), "nobody else");
+                Assert.AreNotEqual(capability, linkRef, "not the reference that shows the file");
 
                 // the capability shows, downloads and names the file for anybody
                 foreach (var action in new[] { "GetFile", "DownloadFile", "GetFileName", "GetFileInfo" })
@@ -807,6 +814,7 @@ namespace WalkingTec.Mvvm.Core.Test
                 CollectionAssert.AreEqual(small, dc.Set<FileAttachment>().Single(x => x.ID == Guid.Parse(body.GetProperty("Id").GetString())).FileData);
             }
             Assert.IsFalse(string.IsNullOrEmpty(body.GetProperty("DeleteRef").GetString()));
+            Assert.AreEqual(Guid.Parse(body.GetProperty("Id").GetString()), Make("alice", FileEndpointMode.Enforce).Controller.Wtm.ReadFileLinkReference(body.GetProperty("LinkRef").GetString()), "the picture carries its own proof too");
 
             var before = new LoginTestContext(_seed).Set<FileAttachment>().Count();
             var h2 = Make("alice", FileEndpointMode.Enforce, files: new[] { Form("a.png", Png) });
@@ -943,6 +951,132 @@ namespace WalkingTec.Mvvm.Core.Test
             Assert.AreEqual(403, Status(SpaFileApi.DeleteFile(h.Controller, h.Provider, id, null, deleteRef)));
             Assert.AreEqual(1, policy.Calls);
             Assert.IsTrue(Exists(Guid.Parse(id)));
+        }
+
+        private sealed class DeletionPolicy : IFileDeletionPolicy
+        {
+            public FileDeletionDecision Answer = FileDeletionDecision.Default;
+            public List<FileDeletionRequest> Asked = new List<FileDeletionRequest>();
+
+            public FileDeletionDecision Decide(FileDeletionRequest request)
+            {
+                Asked.Add(request);
+                return Answer;
+            }
+        }
+
+        [TestMethod]
+        public void Delete_WithoutAReference_ThePolicyCanAllowIt()
+        {
+            foreach (var mode in new[] { FileEndpointMode.Audit, FileEndpointMode.Enforce })
+            {
+                var id = AddFile();
+                var policy = new DeletionPolicy { Answer = FileDeletionDecision.Allow };
+                var h = Make("alice", mode, deletionPolicy: policy);
+                Assert.AreEqual(200, Status(SpaFileApi.DeleteFile(h.Controller, h.Provider, id.ToString(), null, null)), mode.ToString());
+                Assert.IsFalse(Exists(id), mode.ToString());
+                var asked = policy.Asked.Single();
+                Assert.AreEqual("Endpoint", asked.Operation);
+                Assert.IsFalse(asked.IsLinked);
+                Assert.AreEqual(id, asked.FileId);
+                Assert.AreEqual("alice", asked.User);
+                Assert.IsTrue(h.Logs.Entries.Any(x => x.Level == Microsoft.Extensions.Logging.LogLevel.Information && x.Message.Contains("file deletion policy allowed")), mode + ": logged at Information");
+            }
+        }
+
+        [TestMethod]
+        public void Delete_WithoutAReference_TheDefaultPolicyChangesNothing()
+        {
+            foreach (var policy in new IFileDeletionPolicy[] { new DeletionPolicy(), new DefaultFileDeletionPolicy(), null })
+            {
+                var id = AddFile();
+                var h = Make("alice", FileEndpointMode.Enforce, deletionPolicy: policy);
+                Assert.AreEqual(403, Status(SpaFileApi.DeleteFile(h.Controller, h.Provider, id.ToString(), null, null)));
+                Assert.IsTrue(Exists(id));
+            }
+        }
+
+        [TestMethod]
+        public void Delete_WithAValidReference_ThePolicyCanDenyIt_AndDefaultStillDeletes()
+        {
+            var deleteRef = UploadAs("alice", FileEndpointMode.Enforce, out var id);
+            var deny = new DeletionPolicy { Answer = FileDeletionDecision.Deny };
+            var h = Make("alice", FileEndpointMode.Enforce, deletionPolicy: deny);
+            Assert.AreEqual(403, Status(SpaFileApi.DeleteFile(h.Controller, h.Provider, id, null, deleteRef)));
+            Assert.IsTrue(Exists(Guid.Parse(id)), "denied even though the reference is valid");
+
+            var def = Make("alice", FileEndpointMode.Enforce, deletionPolicy: new DeletionPolicy());
+            Assert.AreEqual(200, Status(SpaFileApi.DeleteFile(def.Controller, def.Provider, id, null, deleteRef)));
+            Assert.IsFalse(Exists(Guid.Parse(id)));
+        }
+
+        [TestMethod]
+        public void Delete_ThePolicyDoesNotAdmitACallerWhoIsNotSignedIn_OrAThrowingPolicy()
+        {
+            var id = AddFile();
+            var allow = new DeletionPolicy { Answer = FileDeletionDecision.Allow };
+            var anonymous = Make(null, FileEndpointMode.Enforce, deletionPolicy: allow);
+            Assert.AreEqual(401, Status(SpaFileApi.DeleteFile(anonymous.Controller, anonymous.Provider, id.ToString(), null, null)));
+            Assert.IsTrue(Exists(id));
+            Assert.AreEqual(0, allow.Asked.Count);
+
+            var deleteRef = UploadAs("alice", FileEndpointMode.Enforce, out var uploaded);
+            var broken = Make("alice", FileEndpointMode.Enforce, deletionPolicy: new ThrowingDeletionPolicy());
+            Assert.AreEqual(403, Status(SpaFileApi.DeleteFile(broken.Controller, broken.Provider, uploaded, null, deleteRef)), "a policy that fails keeps the file");
+            Assert.IsTrue(Exists(Guid.Parse(uploaded)));
+        }
+
+        [TestMethod]
+        public void AuthorizeFileDeletion_ThePolicyNeverAdmitsACallerWhoIsNotSignedIn()
+        {
+            var id = AddFile().ToString();
+            var allow = new DeletionPolicy { Answer = FileDeletionDecision.Allow };
+            foreach (var mode in new[] { FileEndpointMode.Audit, FileEndpointMode.Enforce })
+            {
+                var anonymous = Make(null, mode, deletionPolicy: allow);
+                var decision = anonymous.Wtm.AuthorizeFileDeletion("DeletedFile", id, null);
+                Assert.IsFalse(decision.Allowed, mode.ToString());
+                Assert.AreEqual(0, allow.Asked.Count, "the policy is not asked about a caller who is not signed in");
+            }
+        }
+
+        private sealed class ThrowingDeletionPolicy : IFileDeletionPolicy
+        {
+            public FileDeletionDecision Decide(FileDeletionRequest request) => throw new InvalidOperationException("boom");
+        }
+
+        [TestMethod]
+        public void Delete_AnAdmissionByThePolicy_IsStillAskedOfTheFileAccessPolicy()
+        {
+            var id = AddFile();
+            var access = new DenyingPolicy();
+            var allow = new DeletionPolicy { Answer = FileDeletionDecision.Allow };
+            var h = Make("alice", FileEndpointMode.Enforce, policy: access, deletionPolicy: allow);
+            Assert.AreEqual(403, Status(SpaFileApi.DeleteFile(h.Controller, h.Provider, id.ToString(), null, null)));
+            Assert.AreEqual(1, access.Calls);
+            Assert.IsTrue(Exists(id));
+        }
+
+        [TestMethod]
+        public void Delete_TheFileAccessPolicy_IsAskedExactlyAsBefore_ForAValidReference()
+        {
+            var deleteRef = UploadAs("alice", FileEndpointMode.Enforce, out var id);
+            var access = new RecordingAccessPolicy();
+            var h = Make("alice", FileEndpointMode.Enforce, policy: access, deletionPolicy: new DeletionPolicy());
+            Assert.AreEqual(200, Status(SpaFileApi.DeleteFile(h.Controller, h.Provider, id, null, deleteRef)));
+            var asked = access.Requests.Single();
+            Assert.AreEqual(FilePurpose.Delete, asked.Purpose);
+            Assert.AreEqual(FileEndpointAdmission.Reference, asked.Admission);
+        }
+
+        private sealed class RecordingAccessPolicy : IFileAccessPolicy
+        {
+            public List<FileAccessRequest> Requests = new List<FileAccessRequest>();
+            public bool IsAllowed(FileAccessRequest request)
+            {
+                Requests.Add(request);
+                return true;
+            }
         }
 
         [TestMethod]
