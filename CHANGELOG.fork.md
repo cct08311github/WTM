@@ -10,7 +10,7 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
-## 未发布
+## 10.0.0.21(2026-11-07)
 
 * **变更（行为变更，不涉及 LayUI 受保护路径）：**   (1) `/_Framework/UpdateModelProperty` 不再写入 `FileAttachment` 的外键（按数据模型外键、`[ForeignKey]`、命名惯例判断），与参考清单、`GenericEndpoints:Mode` 无关；`FileEndpoints:Mode=Legacy` 或 `LegacyVmFileLinking=true` 时与保存表单一致，仍可写入；其他 `Guid` 字段不变。(2) `BaseCRUDVM.DoEdit`/`DoEditAsync` 以 `updateAllFields = true` 执行时，`[CanNotEdit]` 成员保持已存的值（原本整笔写入会写这些成员），其他字段照常更新；依赖 `updateAllFields` 写入 `[CanNotEdit]` 成员的应用要明确设置这些成员（赋值后 `DC.UpdateProperty`）。(3) `BasePagedListVM.UpdateEntityList`（表格编辑保存）在两种模式都跳过 `[CanNotEdit]` 成员，并对新挂上的文件要求与保存表单相同的上传证明（`UploadedFileRefs`、`IFileLinkPolicy`、`LegacyVmFileLinking`、`Mode=Legacy`），任一被拒绝则整批不写入。(4) 文档：FORK.md 第 36 节限制新增“要求移除的文件在 VM 保存后、外层事务提交前删除，外层回滚时文件已删除”的说明与建议。详见 FORK.md 第 36、37 节。
 * **变更（行为变更，不涉及 LayUI 受保护路径）：**   `FrameworkUserBase.Password` 标为 `[CanNotEdit]`：通用编辑（`BaseCRUDVM.DoEdit`/`DoEditAsync`，`updateAllFields = false`，表单与 JSON 内容、同步与异步）不再写入密码字段，其他字段照常更新。新增使用者、修改密码、管理员重设、登录时的哈希升级不依赖通用编辑，行为不变。自定义 ViewModel 若原本靠通用编辑写入 `Password`，需要明确 `DC.UpdateProperty(Entity, x => x.Password)`（并先哈希）。回滚：移除该属性即可，不涉及数据格式。详见 FORK.md 第 37 节。
