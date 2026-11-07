@@ -317,6 +317,44 @@ namespace WalkingTec.Mvvm.Core.Test
         }
 
         [TestMethod]
+        public void LegacyImportFile_IsOffByDefault_AndReportedAtStartUpWhenOn()
+        {
+            Assert.IsFalse(new FileEndpointOptions().LegacyImportFile);
+            var off = new WalkingTec.Mvvm.Test.Mock.CapturingLoggerFactory();
+            FileEndpointGuard.LogRelaxedWarning(new Configs(), off.CreateLogger("t"));
+            Assert.IsFalse(off.Entries.Any(x => x.Message.Contains("LegacyImportFile")));
+
+            var on = new WalkingTec.Mvvm.Test.Mock.CapturingLoggerFactory();
+            var configs = new Configs();
+            configs.FileEndpoints.LegacyImportFile = true;
+            FileEndpointGuard.LogRelaxedWarning(configs, on.CreateLogger("t"));
+            Assert.IsTrue(on.Entries.Any(x => x.Level == Microsoft.Extensions.Logging.LogLevel.Warning && x.Message.Contains("LegacyImportFile")));
+        }
+
+        [TestMethod]
+        public void LegacyImportFile_OnlyRelaxesTheImportCheck()
+        {
+            FileEndpointRequestContext Ask(bool legacyImport, FileEndpointMode mode) => new FileEndpointRequestContext
+            {
+                Options = new FileEndpointOptions { Mode = mode, LegacyImportFile = legacyImport },
+                FileId = "abc", Purpose = FilePurpose.Import, Reference = null, User = "importuser", Now = DateTimeOffset.UtcNow,
+                OpenReference = r => null
+            };
+            foreach (var mode in new[] { FileEndpointMode.Audit, FileEndpointMode.Enforce })
+            {
+                Assert.IsFalse(FileEndpointGuard.AuthorizeImport(Ask(false, mode)).Allowed, mode + ": the reference is required");
+                Assert.IsTrue(FileEndpointGuard.AuthorizeImport(Ask(true, mode)).Allowed, mode + ": the setting accepts the file without one");
+                // the delete check does not look at the setting
+                var del = Ask(true, mode);
+                del.Purpose = FilePurpose.Delete;
+                Assert.IsFalse(FileEndpointGuard.AuthorizeDeletion(del).Allowed, mode + ": delete");
+                // nor does the read check
+                var read = FileEndpointGuard.Authorize(Request(null, mode: mode, file: Plain(DateTime.Now), configure: o => o.LegacyImportFile = true));
+                Assert.AreEqual(mode == FileEndpointMode.Audit, read.Allowed, mode + ": read");
+            }
+        }
+
+        [TestMethod]
         public void FilesUploadedBeforeTheCutOff_KeepIdBasedAccess_InEnforce()
         {
             Action<FileEndpointOptions> cutoff = o => o.LegacyUploadedBefore = new DateTime(2026, 6, 1);

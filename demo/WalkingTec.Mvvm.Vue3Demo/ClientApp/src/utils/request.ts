@@ -3,7 +3,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Local, Session } from '/@/utils/storage';
 import qs from 'qs';
 import { i18n } from '/@/i18n/index';
-import { collect, forgetDeleteIn } from '/@/utils/fileRefs';
+import { collect, forgetDeleteIn, forgetLinkIn, withLinkRefs } from '/@/utils/fileRefs';
 
 
 // 配置新建一个 axios 实例
@@ -26,6 +26,12 @@ service.interceptors.request.use(
 			config.headers!['Authorization'] = `Bearer ${Local.get('token')}`;
 		}
 		config.headers!['Accept-Language'] = Local.get('themeConfig')['globalI18n'];
+		// a form that saves files this user just uploaded carries the proof of the upload (UploadedFileRefs, the LinkRef of the upload answer)
+		const sendMethod = (config.method ?? '').toLowerCase();
+		const sendUrl = (config.url ?? '').toLowerCase();
+		if ((sendMethod === 'put' || sendMethod === 'post') && sendUrl.includes('/api/_file/') === false && sendUrl.includes('search') === false) {
+			config.data = withLinkRefs(config.data);
+		}
 		return config;
 	},
 	(error) => {
@@ -48,6 +54,7 @@ service.interceptors.response.use(
 		const url = (response.config?.url ?? '').toLowerCase();
 		if ((method === 'put' || method === 'post') && url.includes('/api/_file/') === false && url.includes('search') === false) {
 			forgetDeleteIn(response.config?.data);
+			forgetLinkIn(response.config?.data);
 		}
 		return response.data;
 	},

@@ -67,6 +67,21 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
         /// For a value that ends up inside an HTML attribute of markup built within a JavaScript string
         /// literal: HTML-attribute-encode first, then JavaScript-escape the result.
         /// </summary>
+        /// <summary>
+        /// The name of the form field that carries the import reference for an upload field named <c>UploadFileId</c> (the upload of
+        /// <c>BaseImportVM</c>, possibly with a prefix): <c>UploadFileRef</c> with the same prefix. Null for any other field.
+        /// </summary>
+        public static string ImportReferenceFieldName(string fieldName)
+        {
+            const string idName = "UploadFileId";
+            if (fieldName == null || fieldName.EndsWith(idName, StringComparison.Ordinal) == false
+                || (fieldName.Length > idName.Length && fieldName[fieldName.Length - idName.Length - 1] != '.'))
+            {
+                return null;
+            }
+            return fieldName.Substring(0, fieldName.Length - idName.Length) + "UploadFileRef";
+        }
+
         private static string JsAttr(string value)
         {
             return JsStringEncoder.Escape(HtmlAttributeEncoder.Encode(value));
@@ -184,7 +199,25 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 
             output.PostElement.SetHtmlContent($@"
 <input type='hidden' id='{Id}' name='{Field.Name}' value='{HtmlAttributeEncoder.Encode(Field.Model)}' {requiredtext} />
-");    
+");
+            // the upload of an import: the form also carries the reference that lets this user import from the file (BaseImportVM.UploadFileRef)
+            var importRefName = ImportReferenceFieldName(Field.Name);
+            // a file that was uploaded in this form carries the proof that its user uploaded it (BaseVM.UploadedFileRefs); a form that is shown again keeps it
+            var linkRef = importRefName == null ? LinkReferenceOf(vm, Field.Model) : null;
+            if (linkRef != null)
+            {
+                output.PostElement.AppendHtml($@"
+<input type='hidden' id='{Id}LinkRef' name='UploadedFileRefs' value='{HtmlAttributeEncoder.Encode(linkRef)}' />
+");
+            }
+            if (importRefName != null)
+            {
+                var importRefValue = vm?.GetType().GetProperty("UploadFileRef")?.GetValue(vm) as string;
+                output.PostElement.AppendHtml($@"
+<input type='hidden' id='{Id}ImportRef' name='{HtmlAttributeEncoder.Encode(importRefName)}' value='{HtmlAttributeEncoder.Encode(importRefValue ?? string.Empty)}' />
+");
+            }
+
             if (ShowProgress != null)
             {
                 if (ShowProgress == true)
@@ -205,6 +238,8 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     $('#{Id}').parents('form').append(""<input type='hidden' id='DeletedFileIds' name='DeletedFileIds' value='""+{Id}HtmlEnc(fileid)+""' />"");
     $('#{Id}label').html('');
     $('#{Id}').val('');
+    {(importRefName == null ? $"$('#{Id}LinkRef').remove();" : "")}
+    {(importRefName != null ? $"$('#{Id}ImportRef').val('');" : "")}
     $('.layui-progress .layui-progress-bar').css('width', '0%');
   }}
 var {Id}PreviewUrls = {{}};
@@ -249,6 +284,11 @@ layui.use(['upload'],function(){{
       else{{
             $('#{Id}label').html('');
         $('#{Id}').val(res.Data.Id);
+        {(importRefName != null ? $"$('#{Id}ImportRef').val(res.Data.ImportRef || '');" : $@"
+        /* the proof that this user uploaded the file: the form posts it as UploadedFileRefs, a replaced file leaves with its own */
+        $('#{Id}LinkRef').remove();
+        if (res.Data.LinkRef) {{ $('#{Id}').parents('form').append($('<input type=""hidden"" name=""UploadedFileRefs"" />').attr('id', '{Id}LinkRef').val(res.Data.LinkRef)); }}
+")}
         if (res.Data.Url) {{ {Id}PreviewUrls[res.Data.Id] = res.Data.Url; }}
       {(ShowPreview == true ? $@"
        {Id}preview.preview(function(index, file, result){{
@@ -306,14 +346,19 @@ layui.use(['upload'],function(){{
                     geturl += $"?_DONOT_USE_CS={vm.CurrentCS}";
                     downloadurl += $"?_DONOT_USE_CS={JsAttr(vm.CurrentCS)}";
                 }
-                // the links of a file this page shows carry a reference the file endpoints check
-                geturl = WithFileReference(geturl, vm, modelId, fileConnection, FilePurpose.Name);
-                var fileReferenceQuery = FileReferenceQuery(vm, modelId, fileConnection, FilePurpose.Read);
+                // the links of a file this page shows carry a reference the file endpoints check; the id of a form that was posted comes from the
+                // request, so a file that the record does not refer to and the request does not prove is shown without them
+                var showReferences = MayShowFileReferences(vm, modelId);
+                if (showReferences)
+                {
+                    geturl = WithFileReference(geturl, vm, modelId, fileConnection, FilePurpose.Name);
+                }
+                var fileReferenceQuery = showReferences ? FileReferenceQuery(vm, modelId, fileConnection, FilePurpose.Read) : null;
                 if (fileReferenceQuery != null)
                 {
                     downloadurl += (downloadurl.Contains('?') ? "&" : "?") + JsAttr(fileReferenceQuery);
                 }
-                var previewUrl = GetWtm(vm)?.GetFileUrl(modelId, FilePurpose.Download, fileConnection) ?? string.Empty;
+                var previewUrl = showReferences ? GetWtm(vm)?.GetFileUrl(modelId, FilePurpose.Download, fileConnection) ?? string.Empty : string.Empty;
                 var picurl = $"/_Framework/GetFile?id={JsAttr(modelId)}&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}";
                 if (vm != null)
                 {

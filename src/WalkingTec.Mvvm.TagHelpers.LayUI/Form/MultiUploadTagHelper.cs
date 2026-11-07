@@ -186,6 +186,17 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
                 initselected = initselected.Substring(0, initselected.Length - 1);
             }
             initselected += "]";
+            // the proof that this user uploaded a file of the list (BaseVM.UploadedFileRefs): a form that is shown again keeps it
+            var initrefs = "{";
+            foreach (var fileId in idstring.Split('|', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var linkRef = LinkReferenceOf(vm, fileId);
+                if (linkRef != null)
+                {
+                    initrefs += $"\"{JsStringEncoder.Escape(fileId)}\":\"{JsStringEncoder.Escape(linkRef)}\",";
+                }
+            }
+            initrefs = initrefs.TrimEnd(',') + "}";
             var requiredtext = "";
             if (Field.Metadata.IsRequired)
             {
@@ -206,6 +217,8 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     img.attr('layer-src', (img.attr('layer-src') || '') + q);
   }}
   var {Id}selected = {initselected};
+  /* file id -> the reference that proves this user uploaded it; posted as UploadedFileRefs while the file stays in the list */
+  var {Id}refs = {initrefs};
 {Id}SetValues();
   function {Id}SetValues(){{
     var f = $('#{Id}').parents('form');
@@ -214,6 +227,9 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     for(count=0; count< {Id}selected.length;count++){{
         var name = ""{Field.Name}["" + count + ""].FileId"";
         f.append($('<input {Id}hidden=""{Id}"" type=""hidden"" name=""' + name + '"" value=""' + {Id}HtmlEnc({Id}selected[count]) + '"">'));
+        if ({Id}refs[{Id}selected[count]]) {{
+            f.append($('<input {Id}hidden=""{Id}"" type=""hidden"" name=""UploadedFileRefs"" />').val({Id}refs[{Id}selected[count]]));
+        }}
     }}
     if(count > 0){{
         f.find(""#{Id}"").val(""1"");
@@ -229,6 +245,7 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
     {Id}selected = {Id}selected.filter(function(item) {{
         return item != fileid;
     }});
+    delete {Id}refs[fileid];
     {Id}SetValues();
   }}
 function {Id}DoPreview(){{
@@ -261,6 +278,7 @@ layui.use(['upload'],function(){{
       }}
       else{{
         {Id}selected.push(res.Data.Id);
+        if (res.Data.LinkRef) {{ {Id}refs[res.Data.Id] = res.Data.LinkRef; }}
         {Id}SetValues();
         {(ShowPreview == true ? $@"
             $('#{Id}label').append('<label id=""label'+{Id}HtmlEnc(res.Data.Id)+'""><img alt=""'+{Id}HtmlEnc(res.Data.Name)+'"" layer-src=""/_Framework/GetFile?id='+ {Id}HtmlEnc(res.Data.Id)+'&_DONOT_USE_CS={JsAttr(vm != null ? vm.CurrentCS : "")}"" src=""/_Framework/GetFile?id='+ {Id}HtmlEnc(res.Data.Id)+'&stream=true&width={PreviewWidth ?? 64}&height={PreviewHeight ?? 64}&_DONOT_USE_CS={JsAttr(vm!=null?vm.CurrentCS:"")}""  class=""layui-upload-img"" width={PreviewWidth ?? 64} height={PreviewHeight ?? 64} id=""preview'+{Id}HtmlEnc(res.Data.Id)+'"" style=""cursor:pointer;margin-bottom:5px"" /><i class=""layui-icon layui-icon-close"" style=""font-size: 20px;position:relative;left:-10px;top:-27px;color: #ff0000;cursor: pointer;"" id=""del'+{Id}HtmlEnc(res.Data.Id)+'""></i></label> ');
@@ -313,7 +331,8 @@ layui.use(['upload'],function(){{
                         picurl += $"&_DONOT_USE_CS={JsAttr(vm.CurrentCS)}";
                     }
                     // the links of a file this page shows carry a reference the file endpoints check
-                    var fileReferenceQuery = FileReferenceQuery(vm, rawFileId, vm?.CurrentCS, FilePurpose.Read);
+                    // (a file that the record does not refer to and the request does not prove is shown without them)
+                    var fileReferenceQuery = MayShowFileReferences(vm, rawFileId) ? FileReferenceQuery(vm, rawFileId, vm?.CurrentCS, FilePurpose.Read) : null;
                     if (fileReferenceQuery != null)
                     {
                         var referenceJs = JsAttr(fileReferenceQuery);

@@ -73,7 +73,11 @@ namespace WalkingTec.Mvvm.E2E.Tests
 
             await Lab.SubmitAsync("Save", "/Lab/Save");
             await AcceptAlertAsync("Saved Pickers");
-            CollectionAssert.AreEqual(new[] { id }, (await Lab.LastPostAsync("Pickers"))["AttachmentId"]);
+            var posted = await Lab.LastPostAsync("Pickers");
+            CollectionAssert.AreEqual(new[] { id }, posted["AttachmentId"]);
+            // the form also carries the proof that this user uploaded the file (the LinkRef of the upload answer, posted as UploadedFileRefs)
+            var proof = posted["UploadedFileRefs"].Single();
+            Assert.IsFalse(string.IsNullOrEmpty(proof) || proof == id, "a reference of its own");
 
             // download it again: GetFile returns the bytes, GetFileName the name
             var file = await Page.Context.APIRequest.GetAsync(await WithRefAsync("/_Framework/GetFile/" + id, id));
@@ -113,8 +117,10 @@ namespace WalkingTec.Mvvm.E2E.Tests
             await Expect(Body.Locator("#LabFormVM_AttachmentIdlabel")).ToHaveTextAsync("");
             await Lab.SubmitAsync("Save", "/Lab/Save");
             await AcceptAlertAsync("Saved Pickers");
-            // the form tells the server which file was removed
-            CollectionAssert.AreEqual(new[] { id }, (await Lab.LastPostAsync("Pickers"))["DeletedFileIds"]);
+            // the form tells the server which file was removed, and the proof of its upload leaves with it
+            var posted = await Lab.LastPostAsync("Pickers");
+            CollectionAssert.AreEqual(new[] { id }, posted["DeletedFileIds"]);
+            Assert.IsFalse(posted.ContainsKey("UploadedFileRefs"), "Keys: " + string.Join(",", posted.Keys));
         }
 
         [TestMethod]
@@ -222,6 +228,8 @@ namespace WalkingTec.Mvvm.E2E.Tests
             var form = await Lab.LastPostAsync("Pickers");
             // only the remaining file is posted, and the form tells the server which file was removed (as the single upload does)
             Assert.IsFalse(form.ContainsKey("Files[1].FileId"), "Keys: " + string.Join(",", form.Keys));
+            // and so is the proof of that one file only
+            Assert.AreEqual(1, form["UploadedFileRefs"].Length, "the proof of the removed file is not posted");
             var kept = form["Files[0].FileId"].Single();
             var removed = form["DeletedFileIds"].Single();
             CollectionAssert.AreEquivalent(ids, new[] { kept, removed });

@@ -201,6 +201,45 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         public List<string> DeletedFileIds { get; set; } = new List<string>();
 
+        /// <summary>
+        /// The references (<c>LinkRef</c> in the answers of the upload endpoints, <see cref="FilePurpose.Link"/>) of the files that the form uploaded.
+        /// When a record is saved, a file that the record newly refers to must be covered by one of them (issued to the signed-in user), see
+        /// <c>BaseCRUDVM.RequireFileLinkProof</c>. A request-bound list like <see cref="DeletedFileIds"/>; the forms of the framework fill it.
+        /// </summary>
+        public List<string> UploadedFileRefs { get; set; } = new List<string>();
+
+        /// <summary>
+        /// The references in <see cref="UploadedFileRefs"/> that are valid for the signed-in user (issued to this user and tenant, not expired, made for
+        /// linking), by the file each one covers. Used to show a form again with the proof of the files it holds.
+        /// </summary>
+        public Dictionary<Guid, string> ValidFileLinkReferences()
+        {
+            var rv = new Dictionary<Guid, string>();
+            if (Wtm == null || UploadedFileRefs == null)
+            {
+                return rv;
+            }
+            foreach (var reference in UploadedFileRefs.Where(x => string.IsNullOrEmpty(x) == false).Take(500))
+            {
+                var id = Wtm.ReadFileLinkReference(reference);
+                if (id != null && rv.ContainsKey(id.Value) == false)
+                {
+                    rv[id.Value] = reference;
+                }
+            }
+            return rv;
+        }
+
+        /// <summary>
+        /// Whether a form that is shown again may hand out the references that let the page read the file (name, preview, download). The id comes
+        /// from the request on a form that was posted, so a view model that saves records only does it for a file the stored record refers to or
+        /// that the request proves was uploaded by this user (<see cref="BaseCRUDVM{TModel}"/>, <see cref="BaseImportVM{T,P}"/>). The default is true.
+        /// </summary>
+        public virtual bool MayShowFileReferences(Guid fileId)
+        {
+            return true;
+        }
+
         [JsonIgnore]
         public string ControllerName { get; set; }
 

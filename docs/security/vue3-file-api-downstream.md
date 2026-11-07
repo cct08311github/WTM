@@ -51,6 +51,10 @@ public IActionResult GetFile([FromServices] WtmFileProvider fp, string id, strin
 
 ## 4. 行為變更
 
-- 移除已儲存的附件只清除欄位，取消編輯會保留檔案；被取代的檔案留在原處（本版不清理，`DoEdit` 與 `DeletedFileIds` 不變）。
+- 移除已儲存的附件只清除欄位，取消編輯會保留檔案；被取代的檔案留在原處（本版不清理）。伺服器端 `DoEdit` 對 `DeletedFileIds` 的處理另見 FORK.md 第 36 節：只刪除儲存前這筆記錄掛著的檔案。
+- 匯入頁：`WtmImportor` 上傳後把回應的 `ImportRef` 以 `v-model:import-ref` 放進 `UploadFileRef`，與 `UploadFileId` 一起送到匯入 API；沒有有效的 `UploadFileRef`（`Legacy` 模式除外）時匯入回報「範本錯誤」。副本的匯入頁與 `WtmImportor` 需要同樣的修改。
+- **儲存時新掛上的檔案需要上傳證明**：上傳回應多一個 `LinkRef`（綁定使用者、租戶與檔案）。新增或編輯記錄時，記錄新掛上的檔案（單一附件欄位與 `ISubFile` 清單，以及批次修改設定的檔案外鍵）必須被請求中 `UploadedFileRefs`（頂層的字串陣列，與 `DeletedFileIds` 並列）的某個 `LinkRef` 涵蓋；沒有時整筆不儲存，回 400，錯誤在 `Entity.<屬性>`（一般性文字，不含檔案 id）。記錄原本就掛著的檔案不需要。用戶端：`utils/fileRefs.ts` 新增 `rememberLink`、`withLinkRefs`、`forgetLinkIn`；`components/uploadFile`、`components/uploadImage` 在 `onSuccess` 呼叫 `rememberLink(res.Id, res.LinkRef)`；`utils/request.ts` 的請求攔截器在 `POST`／`PUT`（不含 `/api/_file/` 與 `search`）的 JSON 內容提到已記住的檔案 id 時補上 `UploadedFileRefs`，儲存成功後 `forgetLinkIn`，所以表單頁不需修改。自己組送出內容、沒有走這個攔截器的頁面，要把 `LinkRef` 放進 `UploadedFileRefs`。
+- 伺服器端自己在 `DoAdd`／`DoEdit` 覆寫中掛檔案的 VM：在掛上之前呼叫 `AllowFileLink(id)`，或覆寫 `RequireFileLinkProof => false`，或註冊 `IFileLinkPolicy` 對特定情形回傳 `Allow`。暫時無法修改的用戶端：`FileEndpoints:LegacyVmFileLinking=true`（啟動輸出 Warning，改完後移除）。部署順序：用戶端與伺服器一起部署；只更新伺服器時，新上傳的檔案儲存會被拒絕。
+- 表單重新顯示時，請求帶來、記錄沒有掛著、也沒有上傳證明的檔案不再得到讀取參考（LayUI 的 `wt:upload`、`wt:multiupload`）。
 - `GetFileInfo` 只回傳 `Id`、`FileName`、`FileExt`、`Length`、`UploadTime`。
 - 拒絕為 HTTP 403。

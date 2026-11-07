@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Playwright;
@@ -61,11 +62,33 @@ namespace WalkingTec.Mvvm.E2E.Pages.Vue3
         // the demo binds JSON property names as written (Pascal case), so the body is serialized without a naming policy
         private static readonly JsonSerializerOptions BodyOptions = new() { PropertyNamingPolicy = null };
 
-        private static APIRequestContextOptions Body(object body) => new()
+        private static readonly System.Text.RegularExpressions.Regex Guid36 = new("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
+
+        // the LinkRef of every upload this client made, by file id: like the single page application, a save that names an uploaded file
+        // carries the proof of the upload (UploadedFileRefs); pass withLinkRefs: false to post without it
+        private readonly Dictionary<string, string> _linkRefs = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The LinkRef this client received when it uploaded the file; null for any other file.</summary>
+        public string LinkRefOf(string fileId) => fileId != null && _linkRefs.TryGetValue(fileId, out var reference) ? reference : null;
+
+        private APIRequestContextOptions Body(object body, bool withLinkRefs = true)
         {
-            DataString = JsonSerializer.Serialize(body, BodyOptions),
-            Headers = new Dictionary<string, string> { ["Content-Type"] = "application/json" }
-        };
+            var json = JsonSerializer.Serialize(body, BodyOptions);
+            if (withLinkRefs && _linkRefs.Count > 0)
+            {
+                var found = Guid36.Matches(json).Select(m => LinkRefOf(m.Value)).Where(x => x != null).Distinct().ToList();
+                if (found.Count > 0 && System.Text.Json.Nodes.JsonNode.Parse(json) is System.Text.Json.Nodes.JsonObject record)
+                {
+                    record["UploadedFileRefs"] = new System.Text.Json.Nodes.JsonArray(found.Select(x => (System.Text.Json.Nodes.JsonNode)System.Text.Json.Nodes.JsonValue.Create(x)).ToArray());
+                    json = record.ToJsonString();
+                }
+            }
+            return new()
+            {
+                DataString = json,
+                Headers = new Dictionary<string, string> { ["Content-Type"] = "application/json" }
+            };
+        }
 
         public async Task<JsonElement> PostAsync(string url, object body, int expected = 200)
         {
@@ -78,9 +101,9 @@ namespace WalkingTec.Mvvm.E2E.Pages.Vue3
         }
 
         /// <summary>Posts and returns the raw response (for downloads, error bodies and expected failures).</summary>
-        public Task<IAPIResponse> PostRawAsync(string url, object body) => _context.PostAsync(url, Body(body));
+        public Task<IAPIResponse> PostRawAsync(string url, object body, bool withLinkRefs = true) => _context.PostAsync(url, Body(body, withLinkRefs));
 
-        public Task<IAPIResponse> PutRawAsync(string url, object body) => _context.PutAsync(url, Body(body));
+        public Task<IAPIResponse> PutRawAsync(string url, object body, bool withLinkRefs = true) => _context.PutAsync(url, Body(body, withLinkRefs));
 
         public Task<IAPIResponse> GetRawAsync(string url) => _context.GetAsync(url);
 
@@ -96,6 +119,7 @@ namespace WalkingTec.Mvvm.E2E.Pages.Vue3
                 throw new InvalidOperationException($"Upload of {fileName} failed: {res.Status} {text}");
             }
             using var doc = JsonDocument.Parse(text);
+            Remember(doc.RootElement);
             return doc.RootElement.GetProperty("Id").GetString();
         }
 
@@ -111,7 +135,17 @@ namespace WalkingTec.Mvvm.E2E.Pages.Vue3
                 throw new InvalidOperationException($"Upload of {fileName} failed: {res.Status} {text}");
             }
             using var doc = JsonDocument.Parse(text);
+            Remember(doc.RootElement);
             return doc.RootElement.Clone();
+        }
+
+        private void Remember(JsonElement answer)
+        {
+            if (answer.TryGetProperty("Id", out var id) && id.ValueKind == JsonValueKind.String
+                && answer.TryGetProperty("LinkRef", out var reference) && reference.ValueKind == JsonValueKind.String)
+            {
+                _linkRefs[id.GetString()] = reference.GetString();
+            }
         }
 
         /// <summary>A client without credentials, like the <c>img</c> tags of the SPA.</summary>

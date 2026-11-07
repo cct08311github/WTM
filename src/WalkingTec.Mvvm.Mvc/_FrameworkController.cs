@@ -314,9 +314,11 @@ namespace WalkingTec.Mvvm.Mvc
                     return UpdateModelPropertyRefused(null);
                 }
                 var entity = vm.Entity;
-                // what this endpoint never writes (key, tenant, validity flag, create/update stamps, non-scalar or non-editable members) is
-                // refused whatever the reference lists and in every GenericEndpoints:Mode
-                var property = ModelPropertyUpdateRules.FindWritableProperty(entity.GetType(), field);
+                // what this endpoint never writes (key, tenant, validity flag, create/update stamps, non-scalar or non-editable members, and the
+                // key of a file attachment, which a form links only with the proof of the upload) is refused whatever the reference lists and in
+                // every GenericEndpoints:Mode; the file key is written only where the proof of a file link is switched off (Mode=Legacy or
+                // LegacyVmFileLinking), as for a saved form
+                var property = ModelPropertyUpdateRules.FindWritableProperty(entity.GetType(), field, DC, Wtm.FileLinkProofSkipped);
                 if (property == null)
                 {
                     return UpdateModelPropertyRefused(null);
@@ -539,7 +541,11 @@ namespace WalkingTec.Mvvm.Mvc
                 Id = id,
                 Name = file.FileName,
                 Url = Wtm.GetFileUrl(id, FilePurpose.Download, connectionKey),
-                Ref = Wtm.CreateFileReference(id, FilePurpose.Read, connectionKey)
+                Ref = Wtm.CreateFileReference(id, FilePurpose.Read, connectionKey),
+                // lets the user who uploaded the file use it as the upload of an import (BaseImportVM.UploadFileRef)
+                ImportRef = Wtm.CreateFileReference(id, FilePurpose.Import, connectionKey),
+                // proof that the user uploaded the file: a form that links it to a record carries it (BaseVM.UploadedFileRefs)
+                LinkRef = Wtm.CreateFileReference(id, FilePurpose.Link, connectionKey)
             };
         }
 

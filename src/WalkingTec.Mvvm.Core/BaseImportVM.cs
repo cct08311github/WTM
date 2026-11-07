@@ -55,6 +55,32 @@ namespace WalkingTec.Mvvm.Core
         public string UploadFileId { get; set; }
 
         /// <summary>
+        /// The reference that the upload endpoints give to the user who uploaded the file (<c>ImportRef</c> in the answer of the upload,
+        /// <see cref="FilePurpose.Import"/>): bound to the user, the tenant and the file, and short-lived. The import reads and deletes the file named
+        /// by <see cref="UploadFileId"/> only with a valid one (<c>FileEndpoints:Mode=Legacy</c> skips the check). The LayUI upload control and the
+        /// single page application import component carry it; code that creates the view model itself sets it from
+        /// <see cref="WTMContext.CreateFileReference(string, FilePurpose, string)"/>.
+        /// </summary>
+        public string UploadFileRef { get; set; }
+
+        /// <summary>The file of the import may be shown with references only when the request proves that this user uploaded it.</summary>
+        public override bool MayShowFileReferences(Guid fileId)
+        {
+            if (Wtm == null || Wtm.FileLinkProofSkipped || ValidFileLinkReferences().ContainsKey(fileId))
+            {
+                return true;
+            }
+            // a form shown again names the file of the import by UploadFileId: it counts when the import reference of this user covers it
+            return Guid.TryParse(UploadFileId, out var uploaded) && uploaded == fileId && IsUploadFileAuthorized();
+        }
+
+        /// <summary>True when this user may use <see cref="UploadFileId"/> as the upload of this import.</summary>
+        private bool IsUploadFileAuthorized()
+        {
+            return Wtm != null && Wtm.AuthorizeImportFile(UploadFileId, UploadFileRef).Allowed;
+        }
+
+        /// <summary>
         /// 下载模板显示名称
         /// </summary>
         [JsonIgnore]
@@ -223,7 +249,7 @@ namespace WalkingTec.Mvvm.Core
                     return;
                 }
                 Models.IWtmFile file = null;
-                if (Wtm.ServiceProvider != null)
+                if (Wtm.ServiceProvider != null && IsUploadFileAuthorized())
                 {
                     var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
                     file = fp.GetFile(UploadFileId, true, Wtm.CreateDC(false));
@@ -1074,6 +1100,7 @@ namespace WalkingTec.Mvvm.Core
                     return false;
                 }
             }
+            DeleteRequestedFilesAfterSave();
             DeleteUploadFile();
 
             return true;
@@ -1140,9 +1167,24 @@ namespace WalkingTec.Mvvm.Core
                     return false;
                 }
             }
+            DeleteRequestedFilesAfterSave();
             DeleteUploadFile();
 
             return true;
+        }
+
+        /// <summary>
+        /// Deletes the files that the form asked to remove (<see cref="BaseVM.DeletedFileIds"/>) once the import has been saved; an import that
+        /// failed or was refused leaves them alone. An import has no stored record that refers to files: only a policy (or the compatibility
+        /// setting) lets an id through.
+        /// </summary>
+        private void DeleteRequestedFilesAfterSave()
+        {
+            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm.ServiceProvider != null)
+            {
+                var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
+                fp.DeleteRequestedFiles(DeletedFileIds, null, Wtm.CreateDC(false), "Import");
+            }
         }
 
         private static readonly ConcurrentDictionary<Type, bool> _overridesBatchSaveData = new ConcurrentDictionary<Type, bool>();
@@ -1160,23 +1202,13 @@ namespace WalkingTec.Mvvm.Core
         }
 
         /// <summary>
-        /// 保存前的准备：删除指定的文件、解析数据、验证数据；有错误时返回 false。同步与异步的 BatchSaveData 共用
+        /// 保存前的准备：解析数据、验证数据；有错误时返回 false。同步与异步的 BatchSaveData 共用
         /// </summary>
         private bool PrepareBatchSave()
         {
             //每次保存都重新记录已被对应到的既有数据，不沿用上一次保存的状态
             _matchedExistRows.Clear();
             _matchedExistRowsByInstance.Clear();
-            ///
-            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm.ServiceProvider != null)
-            {
-                var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
-
-                foreach (var item in DeletedFileIds)
-                {
-                    fp.DeleteFile(item.ToString(), Wtm.CreateDC(false));
-                }
-            }
 
             //进行赋值
             SetEntityList();
@@ -1400,10 +1432,11 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         private void DeleteUploadFile()
         {
-            if (string.IsNullOrEmpty(UploadFileId) == false && Wtm.ServiceProvider != null)
+            if (string.IsNullOrEmpty(UploadFileId) == false && Wtm.ServiceProvider != null && IsUploadFileAuthorized())
             {
                 var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
-                fp.DeleteFile(UploadFileId, Wtm.CreateDC(false, "default"));
+                // the connection the file was read from
+                fp.DeleteFile(UploadFileId, Wtm.CreateDC(false));
             }
         }
 
@@ -1753,6 +1786,11 @@ namespace WalkingTec.Mvvm.Core
             {
                 Models.IWtmFile fa = null;
                 if(Wtm.ServiceProvider == null) {
+                    return mse;
+                }
+                if (IsUploadFileAuthorized() == false)
+                {
+                    mse.Form.Add("Entity.Import", CoreProgram._localizer?["Sys.WrongTemplate"]);
                     return mse;
                 }
                 var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();

@@ -134,7 +134,7 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
         private static WTMContext NewWtm(string seed, bool noTracking = false)
         {
             IDataContext initialDc = noTracking ? new NoTrackingImportTestDataContext(new CS { Value = seed }) : new DataContext(seed, DBTypeEnum.Memory);
-            var wtm = MockWtmContext.CreateWtmContext(initialDc, "importuser");
+            var wtm = MockWtmContext.CreateWtmContext(initialDc, "importuser", dataProtection: ImportUploadRef.Provider);
             Moq.Mock.Get(wtm.HttpContext.Request).Setup(x => x.Headers).Returns(new Microsoft.AspNetCore.Http.HeaderDictionary());
             wtm.ConfigInfo.Connections = new List<CS>
             {
@@ -193,7 +193,7 @@ namespace WalkingTec.Mvvm.Core.Test.Excel
         private static TVm NewImportVm<TVm>(WTMContext wtm, byte[] xlsx) where TVm : BaseVM, new()
         {
             var vm = new TVm { Wtm = wtm };
-            vm.GetType().GetProperty("UploadFileId").SetValue(vm, Upload(wtm, xlsx));
+            ImportUploadRef.Apply(wtm, vm, Upload(wtm, xlsx));
             return vm;
         }
 

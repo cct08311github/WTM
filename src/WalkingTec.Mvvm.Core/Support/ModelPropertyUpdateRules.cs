@@ -1,7 +1,10 @@
 using System;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Globalization;
+using System.Linq;
 using System.Reflection;
+using Microsoft.EntityFrameworkCore;
+using WalkingTec.Mvvm.Core.Extensions;
 
 namespace WalkingTec.Mvvm.Core
 {
@@ -43,6 +46,74 @@ namespace WalkingTec.Mvvm.Core
                 return null;
             }
             return property;
+        }
+
+        /// <summary>
+        /// Like <see cref="FindWritableProperty(Type, string)"/>, and also null for the key of a <see cref="FileAttachment"/> (a file the record links to):
+        /// a form links a file only with the proof that the signed-in user uploaded it (<see cref="BaseVM.UploadedFileRefs"/>), which a single-property
+        /// request does not carry. The key is writable again only where the proof is switched off (<paramref name="fileLinkProofSkipped"/>:
+        /// <c>FileEndpoints:Mode=Legacy</c> or <c>FileEndpoints:LegacyVmFileLinking</c>), as for a saved form. The attachment property itself is not a scalar
+        /// and is never written.
+        /// </summary>
+        public static PropertyInfo FindWritableProperty(Type entityType, string name, IDataContext dc, bool fileLinkProofSkipped)
+        {
+            var property = FindWritableProperty(entityType, name);
+            if (property == null)
+            {
+                return null;
+            }
+            if (fileLinkProofSkipped == false && IsFileAttachmentKey(entityType, property.Name, dc))
+            {
+                return null;
+            }
+            return property;
+        }
+
+        /// <summary>
+        /// True when the property is the foreign key of a <see cref="FileAttachment"/>: by the model of the data context (a foreign key to the file table, with
+        /// or without a navigation property), by <see cref="ForeignKeyAttribute"/>, or by the naming convention (the navigation name plus Id).
+        /// </summary>
+        public static bool IsFileAttachmentKey(Type entityType, string name, IDataContext dc)
+        {
+            if (entityType == null || string.IsNullOrEmpty(name))
+            {
+                return false;
+            }
+            try
+            {
+                var properties = entityType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+                foreach (var navigation in properties.Where(x => typeof(FileAttachment).IsAssignableFrom(x.PropertyType)))
+                {
+                    if (name == navigation.Name + "Id" || name == navigation.Name + "ID"
+                        || navigation.GetCustomAttribute<ForeignKeyAttribute>()?.Name == name
+                        || (dc != null && dc.GetFKName2(entityType, navigation.Name) == name))
+                    {
+                        return true;
+                    }
+                }
+                var self = properties.FirstOrDefault(x => x.Name == name);
+                var declared = self?.GetCustomAttribute<ForeignKeyAttribute>()?.Name;
+                if (string.IsNullOrEmpty(declared) == false
+                    && properties.Any(x => x.Name == declared && typeof(FileAttachment).IsAssignableFrom(x.PropertyType)))
+                {
+                    return true;
+                }
+            }
+            catch (Exception)
+            {
+                // the type cannot be inspected: nothing is known to be safe
+                return true;
+            }
+            try
+            {
+                var mapped = dc?.Model?.FindEntityType(entityType);
+                return mapped != null
+                    && mapped.GetForeignKeys().Any(fk => typeof(FileAttachment).IsAssignableFrom(fk.PrincipalEntityType.ClrType) && fk.Properties.Any(x => x.Name == name));
+            }
+            catch (Exception)
+            {
+                return true;
+            }
         }
 
         /// <summary>Members the endpoint refuses for every record type, whatever the reference lists.</summary>

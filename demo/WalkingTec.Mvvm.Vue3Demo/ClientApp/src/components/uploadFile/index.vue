@@ -11,7 +11,7 @@
 import { ref, computed, watch } from 'vue';
 import { Local } from '/@/utils/storage';
 import fileApi from '/@/api/file';
-import { fileUrl, remember, rememberDelete } from '/@/utils/fileRefs';
+import { fileUrl, remember, rememberDelete, rememberLink } from '/@/utils/fileRefs';
 import { useI18n } from 'vue-i18n';
 
 
@@ -95,6 +95,7 @@ const onSuccess = (res: any, uploadFile: any, uploadFiles: any) => {
   uploadFile.FileId = res.Id;
   remember(res.Id, res.Ref);
   rememberDelete(res.Id, res.DeleteRef);
+  rememberLink(res.Id, res.LinkRef);
   if (props.multi == false) {    
     filevalue.value = res.Id;
     if (files.value.length > 1) {

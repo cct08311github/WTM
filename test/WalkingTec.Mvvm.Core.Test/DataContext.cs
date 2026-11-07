@@ -11,6 +11,12 @@ namespace WalkingTec.Mvvm.Core.Test
         {
         }
 
+        // IDataContext.ReCreate looks for this shape (the generated data contexts of an application have it)
+        public DataContext(string cs, DBTypeEnum dbtype)
+             : base(cs, dbtype, null)
+        {
+        }
+
         public DbSet<Major> Majors { get; set; }
         public DbSet<OptMajor> OptMajors { get; set; }
         public DbSet<School> Schools { get; set; }

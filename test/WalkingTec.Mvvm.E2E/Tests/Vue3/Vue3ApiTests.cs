@@ -52,8 +52,9 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
         private async Task<JsonElement> ImportAsync(Vue3Api api, string module, params string[][] rows)
         {
             var template = await TemplateAsync(api, $"/api/{module}/GetExcelTemplate");
-            var fileId = await api.UploadAsync("import.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ExcelTemplate.WithRows(template, rows));
-            return await api.PostAsync($"/api/{module}/Import", new { UploadFileId = fileId });
+            var upload = await api.UploadFullAsync("import.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ExcelTemplate.WithRows(template, rows));
+            // the import component posts the reference of the upload (ImportRef) next to the id
+            return await api.PostAsync($"/api/{module}/Import", new { UploadFileId = upload.GetProperty("Id").GetString(), UploadFileRef = upload.GetProperty("ImportRef").GetString() });
         }
 
         // ---- account ----

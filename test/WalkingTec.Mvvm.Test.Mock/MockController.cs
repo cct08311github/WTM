@@ -21,10 +21,10 @@ namespace WalkingTec.Mvvm.Test.Mock
             return _controller;
         }
 
-        public static T CreateApi<T>(IDataContext dataContext, string usercode) where T : BaseApiController, new()
+        public static T CreateApi<T>(IDataContext dataContext, string usercode, Configs configs = null, Microsoft.AspNetCore.DataProtection.IDataProtectionProvider dataProtection = null) where T : BaseApiController, new()
         {
             var _controller = new T();
-            _controller.Wtm = MockWtmContext.CreateWtmContext(dataContext, usercode);
+            _controller.Wtm = MockWtmContext.CreateWtmContext(dataContext, usercode, dataProtection: dataProtection, configs: configs);
             Mock<HttpContext> mockHttpContext = new Mock<HttpContext>();
             MockHttpSession mockSession = new MockHttpSession();
             mockHttpContext.Setup(s => s.Session).Returns(mockSession);

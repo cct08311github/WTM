@@ -1299,6 +1299,85 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        /// <summary>
+        /// Before <see cref="UpdateEntityList"/> writes: every file that a row newly refers to (the foreign key of a <see cref="FileAttachment"/>: a row that is
+        /// added, or a stored row whose key changes and is written) must be covered by a valid link reference of the current user
+        /// (<see cref="BaseVM.UploadedFileRefs"/>) or allowed by the <see cref="IFileLinkPolicy"/>, as for <see cref="BaseCRUDVM{TModel}"/>. A refusal adds a generic
+        /// model error to the property and returns false; nothing is written then. Members marked <see cref="CanNotEditAttribute"/> are not written for a stored row.
+        /// </summary>
+        private bool CheckFileLinksOfList(IEnumerable<TopBasePoco> stored, IEnumerable<TopBasePoco> toadd, List<string> setnames, bool updateAllFields)
+        {
+            if (Wtm == null || EntityList == null)
+            {
+                return true;
+            }
+            try
+            {
+                var rowType = typeof(TModel);
+                var keys = new List<System.Reflection.PropertyInfo>();
+                foreach (var nav in rowType.GetAllProperties().Where(x => typeof(FileAttachment).IsAssignableFrom(x.PropertyType)))
+                {
+                    var name = DC?.GetFKName2(rowType, nav.Name);
+                    var key = string.IsNullOrEmpty(name) ? null : rowType.GetSingleProperty(name);
+                    if (key != null)
+                    {
+                        keys.Add(key);
+                    }
+                }
+                if (keys.Count == 0)
+                {
+                    return true;
+                }
+                var storedById = stored.ToDictionary(x => x.GetID().ToString(), x => x);
+                var added = new HashSet<TopBasePoco>(toadd ?? Enumerable.Empty<TopBasePoco>());
+                var fresh = new List<(Guid Id, string Property)>();
+                var rows = new Dictionary<string, int>();
+                for (var index = 0; index < EntityList.Count; index++)
+                {
+                    var row = EntityList[index];
+                    var isNew = added.Contains(row) || storedById.ContainsKey(row.GetID().ToString()) == false;
+                    storedById.TryGetValue(row.GetID().ToString(), out var before);
+                    foreach (var key in keys)
+                    {
+                        if (isNew == false && (key.GetCustomAttribute<CanNotEditAttribute>() != null || (updateAllFields == false && setnames.Contains(key.Name) == false)))
+                        {
+                            continue;
+                        }
+                        var value = key.GetValue(row);
+                        if (value == null || Guid.TryParse(value.ToString(), out var id) == false || id == Guid.Empty)
+                        {
+                            continue;
+                        }
+                        if (isNew == false && before != null && string.Equals(key.GetValue(before)?.ToString(), value.ToString(), StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+                        fresh.Add((id, key.Name));
+                        rows[id + "|" + key.Name] = index;
+                    }
+                }
+                if (fresh.Count == 0)
+                {
+                    return true;
+                }
+                var logger = (Wtm.ServiceProvider == null ? null : Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetService<Microsoft.Extensions.Logging.ILoggerFactory>(Wtm.ServiceProvider))?.CreateLogger("WalkingTec.Mvvm.Core.FileLink");
+                var ok = true;
+                foreach (var link in FileLinkChecker.Refused(Wtm, fresh.GroupBy(x => x).Select(x => x.First()).ToList(), UploadedFileRefs, "EditList", logger))
+                {
+                    ok = false;
+                    // generic text, and the id of a file that the user does not own is not echoed
+                    MSD?.AddModelError("EntityList[" + rows[link.Id + "|" + link.Property] + "]." + link.Property, Localizer?["Sys.UploadFailed"]);
+                }
+                return ok;
+            }
+            catch (Exception)
+            {
+                // the files cannot be listed: nothing is known to be allowed
+                MSD?.AddModelError(" ", Localizer?["Sys.UploadFailed"]);
+                return false;
+            }
+        }
+
         public virtual void UpdateEntityList(bool updateAllFields = false)
         {
             if (EntityList != null)
@@ -1353,6 +1432,12 @@ namespace WalkingTec.Mvvm.Core
                     }
                 }
 
+                // a file that a row newly refers to needs the same proof as a saved form; nothing is written when one is refused
+                if (CheckFileLinksOfList(data, toadd, setnames, updateAllFields) == false)
+                {
+                    return;
+                }
+
                 //前台传过来的数据
                 foreach (var newitem in EntityList)
                 {
@@ -1369,7 +1454,8 @@ namespace WalkingTec.Mvvm.Core
                                 if (!itempro.PropertyType.IsSubclassOf(typeof(TopBasePoco)) && (updateAllFields == true || setnames.Contains(itempro.Name)))
                                 {
                                     var notmapped = itempro.GetCustomAttribute<NotMappedAttribute>();
-                                    if (itempro.Name != "ID" && notmapped == null && itempro.PropertyType.IsList() == false)
+                                    var cannotedit = itempro.GetCustomAttribute<CanNotEditAttribute>();
+                                    if (itempro.Name != "ID" && notmapped == null && itempro.PropertyType.IsList() == false && cannotedit == null)
                                     {
                                         DC.UpdateProperty(i, itempro.Name);
                                     }

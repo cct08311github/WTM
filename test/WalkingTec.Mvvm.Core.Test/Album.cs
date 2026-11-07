@@ -11,6 +11,10 @@ namespace WalkingTec.Mvvm.Core.Test
         [Display(Name = "Title")]
         public string Title { get; set; }
 
+        /// <summary>A member that the generic edit never writes.</summary>
+        [CanNotEdit]
+        public string Owner { get; set; }
+
         public Guid? CoverId { get; set; }
         public FileAttachment Cover { get; set; }
 

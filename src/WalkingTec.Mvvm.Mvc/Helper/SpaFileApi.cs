@@ -356,7 +356,7 @@ namespace WalkingTec.Mvvm.Mvc
         /// <summary>
         /// Stores an uploaded file. Needs a signed-in caller. The answer keeps <c>Id</c>, <c>Name</c>, <c>errno</c> and <c>data.url</c> and adds
         /// <c>Url</c> (the address of the file with a reference), <c>Ref</c> (the reference, for pictures and downloads) and <c>DeleteRef</c> (the
-        /// reference that lets this user delete the file again).
+        /// reference that lets this user delete the file again) <c>ImportRef</c> (the reference that lets this user use the file as the upload of an import) and <c>LinkRef</c> (the proof that this user uploaded the file, for linking it to a record that a form saves: <c>UploadedFileRefs</c>).
         /// </summary>
         public static IActionResult Upload(BaseApiController c, WtmFileProvider fp, string sm, string groupName, string subdir, string extra, string csName, string reference)
         {
@@ -507,7 +507,9 @@ namespace WalkingTec.Mvvm.Mvc
                 data = new { url = $"{BasePath}/getfile/{id}" },
                 Url = FileEndpointGuard.BuildUrl(BasePath + "/GetFile", id, ConnectionParameter, key, capability),
                 Ref = capability,
-                DeleteRef = wtm.CreateFileReference(id, FilePurpose.Delete, key)
+                DeleteRef = wtm.CreateFileReference(id, FilePurpose.Delete, key),
+                ImportRef = wtm.CreateFileReference(id, FilePurpose.Import, key),
+                LinkRef = wtm.CreateFileReference(id, FilePurpose.Link, key)
             });
             return c.Ok(body);
         }

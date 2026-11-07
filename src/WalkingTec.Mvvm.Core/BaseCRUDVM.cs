@@ -6,6 +6,7 @@ using Elsa.Services.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NodaTime;
 using System;
 using System.Collections;
@@ -156,40 +157,213 @@ namespace WalkingTec.Mvvm.Core
 
         private List<Guid> CollectFileIds()
         {
-            if (Entity == null)
+            return CollectFileIds(Entity);
+        }
+
+        private List<Guid> CollectFileIds(TModel entity)
+        {
+            if (entity == null)
+            {
+                return null;
+            }
+            return CollectFileLinks(entity)?.Select(x => x.Id).Distinct().ToList();
+        }
+
+        /// <summary>The files a record refers to (single attachments and <see cref="ISubFile"/> lists) with the property that carries each; null when they cannot be read.</summary>
+        private List<(Guid Id, string Property)> CollectFileLinks(TModel entity)
+        {
+            if (entity == null)
             {
                 return null;
             }
             try
             {
-                var ids = new List<Guid>();
+                var links = new List<(Guid Id, string Property)>();
                 var pros = typeof(TModel).GetAllProperties();
                 foreach (var f in pros.Where(x => x.PropertyType == typeof(FileAttachment)))
                 {
                     var fname = DC?.GetFKName2<TModel>(f.Name);
-                    var fk = string.IsNullOrEmpty(fname) ? null : typeof(TModel).GetSingleProperty(fname)?.GetValue(Entity);
+                    var fk = string.IsNullOrEmpty(fname) ? null : typeof(TModel).GetSingleProperty(fname)?.GetValue(entity);
                     if (fk != null && Guid.TryParse(fk.ToString(), out var fid))
                     {
-                        ids.Add(fid);
+                        links.Add((fid, fname));
                     }
-                    else if (f.GetValue(Entity) is FileAttachment attachment && attachment.ID != Guid.Empty)
+                    else if (f.GetValue(entity) is FileAttachment attachment && attachment.ID != Guid.Empty)
                     {
-                        ids.Add(attachment.ID);
+                        links.Add((attachment.ID, string.IsNullOrEmpty(fname) ? f.Name : fname));
                     }
                 }
                 foreach (var f in pros.Where(x => typeof(IEnumerable<ISubFile>).IsAssignableFrom(x.PropertyType)))
                 {
-                    if (f.GetValue(Entity) is IEnumerable<ISubFile> subs)
+                    if (f.GetValue(entity) is IEnumerable<ISubFile> subs)
                     {
-                        ids.AddRange(subs.Where(x => x != null && x.FileId != Guid.Empty).Select(x => x.FileId));
+                        // an item names its file by FileId, or (FileId empty) by the key of the attachment it carries
+                        links.AddRange(subs.Where(x => x != null).Select(x => (Id: x.FileId != Guid.Empty ? x.FileId : (x.File?.ID ?? Guid.Empty), Property: f.Name)).Where(x => x.Id != Guid.Empty));
                     }
                 }
-                return ids.Distinct().ToList();
+                return links;
             }
             catch (Exception)
             {
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Whether a record that is saved must prove that the files it newly refers to were uploaded by the signed-in user (default <c>true</c>): each
+        /// file that the stored record did not already refer to (a single attachment or an <see cref="ISubFile"/> list) needs a valid
+        /// <see cref="FilePurpose.Link"/> reference (<see cref="BaseVM.UploadedFileRefs"/>) of the current user, or an <see cref="IFileLinkPolicy"/> that allows it.
+        /// A view model that attaches files by server code in an override of <c>DoAdd</c>/<c>DoEdit</c> returns <c>false</c>, or declares those files
+        /// with <see cref="AllowFileLink"/>. <c>FileEndpoints:Mode=Legacy</c> and <c>FileEndpoints:LegacyVmFileLinking</c> turn the proof off for every view model.
+        /// </summary>
+        protected virtual bool RequireFileLinkProof => true;
+
+        private HashSet<Guid> _allowedFileLinks;
+        private HashSet<Guid> _shownStoredFileIds;
+
+        /// <summary>
+        /// A form that is shown again hands out the references that let the page read a file only for a file the stored record refers to, a file that
+        /// the request proves this user uploaded (<see cref="BaseVM.UploadedFileRefs"/>) or a file declared with <see cref="AllowFileLink"/>; the id of any
+        /// other file in the posted values is shown without them. <c>FileEndpoints:Mode=Legacy</c> and <c>LegacyVmFileLinking</c> turn this off.
+        /// </summary>
+        public override bool MayShowFileReferences(Guid fileId)
+        {
+            if (Wtm == null || RequireFileLinkProof == false || Wtm.FileLinkProofSkipped || (_allowedFileLinks != null && _allowedFileLinks.Contains(fileId)))
+            {
+                return true;
+            }
+            if (ReferenceEquals(Entity, _loadedEntity) && _loadedFileIds != null && _loadedFileIds.Contains(fileId))
+            {
+                return true;
+            }
+            if (ValidFileLinkReferences().ContainsKey(fileId))
+            {
+                return true;
+            }
+            _shownStoredFileIds ??= ReadStoredFileIds();
+            return _shownStoredFileIds.Contains(fileId);
+        }
+
+        /// <summary>
+        /// Declares files that server code attached to <see cref="Entity"/> on purpose (for example in an override of <c>DoAdd</c> before it calls the base
+        /// implementation): they are not checked for a reference when the record is saved. Call it with the ids that server code set, never with
+        /// ids that came from the request.
+        /// </summary>
+        protected void AllowFileLink(params Guid[] fileIds)
+        {
+            if (fileIds == null)
+            {
+                return;
+            }
+            _allowedFileLinks ??= new HashSet<Guid>();
+            foreach (var id in fileIds)
+            {
+                _allowedFileLinks.Add(id);
+            }
+        }
+
+        /// <summary>
+        /// Before a record is saved: every file the record newly refers to (not in <paramref name="readStored"/>, which is read only when needed; null for
+        /// a record that is added) must be covered by a valid link reference of the current user, see <see cref="RequireFileLinkProof"/>. A refusal
+        /// adds a generic model error to the property and returns false; nothing is saved then.
+        /// </summary>
+        private bool CheckFileLinks(string operation, Func<ISet<Guid>> readStored)
+        {
+            if (RequireFileLinkProof == false || Wtm == null || Entity == null)
+            {
+                return true;
+            }
+            var links = CollectFileLinks(Entity);
+            var logger = Wtm.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("WalkingTec.Mvvm.Core.FileLink");
+            if (links == null)
+            {
+                // the files of the record cannot be listed: nothing is known to be allowed
+                MSD.AddModelError(" ", Localizer["Sys.UploadFailed"]);
+                logger?.LogWarning("A {Operation} was refused: the files of the record could not be read (user {User})", operation, LogText.Sanitize(LoginUserInfo?.ITCode, 100));
+                return false;
+            }
+            links = links.Where(x => x.Id != Guid.Empty && (_allowedFileLinks == null || _allowedFileLinks.Contains(x.Id) == false)).ToList();
+            if (links.Count == 0)
+            {
+                return true;
+            }
+            var stored = readStored?.Invoke();
+            var fresh = links.Where(x => stored == null || stored.Contains(x.Id) == false).GroupBy(x => x.Id).Select(x => x.First()).ToList();
+            if (fresh.Count == 0)
+            {
+                return true;
+            }
+            var ok = true;
+            foreach (var link in FileLinkChecker.Refused(Wtm, fresh, UploadedFileRefs, operation, logger))
+            {
+                ok = false;
+                // generic text, and the id of a file that the user does not own is not echoed
+                MSD.AddModelError("Entity." + link.Property, Localizer["Sys.UploadFailed"]);
+            }
+            return ok;
+        }
+
+        /// <summary>
+        /// The files the stored copy of the current record refers to, read through a separate data context so that it is not affected by what the
+        /// request changed on <see cref="Entity"/>. Only read when files were asked to be removed and the compatibility setting
+        /// (<c>FileEndpoints:LegacyVmFileDeletion</c>) is off. Empty when nothing can be read, so that no file is deleted on a doubt.
+        /// </summary>
+        private HashSet<Guid> ReadStoredFileIdsIfNeeded()
+        {
+            // LegacyVmFileDeletion is read here and again in WtmFileProvider.DeleteRequestedFiles. Both reads come from the same configuration
+            // object; if a value ever differed between them, linkedIds would be null while the setting is on, which only means "no link known"
+            // and deletes nothing that the rule would not delete, so the worst case is the strict rule, never a wider deletion.
+            if (DeletedFileIds == null || DeletedFileIds.Count == 0 || Wtm?.ServiceProvider == null
+                || Wtm.ConfigInfo?.FileEndpoints?.LegacyVmFileDeletion == true)
+            {
+                return null;
+            }
+            return ReadStoredFileIds();
+        }
+
+        /// <summary>
+        /// The files that the stored copy of the current record refers to, read through a separate data context. Empty when nothing can be read.
+        /// </summary>
+        private HashSet<Guid> ReadStoredFileIds()
+        {
+            var rv = new HashSet<Guid>();
+            try
+            {
+                var key = Entity?.GetID();
+                if (key == null)
+                {
+                    return rv;
+                }
+                var dc = DC.ReCreate();
+                try
+                {
+                    IQueryable<TModel> query = dc.Set<TModel>().AsNoTracking();
+                    foreach (var f in typeof(TModel).GetAllProperties().Where(x => typeof(IEnumerable<ISubFile>).IsAssignableFrom(x.PropertyType)))
+                    {
+                        query = query.Include(f.Name);
+                    }
+                    var stored = query.CheckID(key).FirstOrDefault();
+                    var ids = CollectFileIds(stored);
+                    if (ids != null)
+                    {
+                        rv.UnionWith(ids);
+                    }
+                }
+                finally
+                {
+                    // inside a transaction ReCreate gives back the context itself, which is not ours to dispose
+                    if (ReferenceEquals(dc, DC) == false)
+                    {
+                        dc.Dispose();
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // fail closed: with nothing known to be linked, nothing is deleted
+                rv.Clear();
+            }
+            return rv;
         }
 
         //保存读取时Include的内容
@@ -443,34 +617,45 @@ namespace WalkingTec.Mvvm.Core
         /// </summary>
         public virtual void DoAdd()
         {
-            DoAddPrepare();
-            //删除不需要的附件
-            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm.ServiceProvider != null)
+            if (CheckFileLinks("Add", null) == false)
             {
-                var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
-
-                foreach (var item in DeletedFileIds)
-                {
-                    fp.DeleteFile(item.ToString(), DC);
-                }
+                return;
             }
+            DoAddPrepare();
             DC.SaveChanges();
+            // only after the record was saved: a failed save must not cost the user the files
+            DeleteRequestedFilesAfterSave(null, () => DC, "Add");
         }
 
         public virtual async Task DoAddAsync()
         {
-            DoAddPrepare();
-            //删除不需要的附件
-            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm.ServiceProvider != null)
+            if (CheckFileLinks("Add", null) == false)
             {
-                var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
-
-                foreach (var item in DeletedFileIds)
-                {
-                    fp.DeleteFile(item.ToString(), DC.ReCreate());
-                }
+                return;
             }
+            DoAddPrepare();
             await DC.SaveChangesAsync();
+            DeleteRequestedFilesAfterSave(null, () => DC.ReCreate(), "Add");
+        }
+
+        /// <summary>
+        /// Deletes the files that the form asked to remove (<see cref="BaseVM.DeletedFileIds"/>) once the record has been saved. Nothing is deleted
+        /// when the model state holds an error (for example a failed save).
+        /// </summary>
+        private void DeleteRequestedFilesAfterSave(ISet<Guid> linkedFileIds, Func<IDataContext> dc, string operation)
+        {
+            if (DeletedFileIds == null || DeletedFileIds.Count == 0 || Wtm?.ServiceProvider == null)
+            {
+                return;
+            }
+            if (MSD != null && MSD.IsValid == false)
+            {
+                return;
+            }
+            var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
+            // an id is deleted when the stored record referred to it; a record that is being added has none, so there only a policy
+            // (or the compatibility setting) lets an id through
+            fp.DeleteRequestedFiles(DeletedFileIds, linkedFileIds, dc(), operation);
         }
 
         private void DoAddPrepare()
@@ -618,6 +803,12 @@ namespace WalkingTec.Mvvm.Core
         /// <param name="updateAllFields">为true时，框架会更新当前Entity的全部值，为false时，框架会检查Request.Form里的key，只更新表单提交的字段</param>
         public virtual void DoEdit(bool updateAllFields = false)
         {
+            // the files the stored record refers to, read before the save changes them
+            var linkedFileIds = ReadStoredFileIdsIfNeeded();
+            if (CheckFileLinks("Edit", () => linkedFileIds ?? ReadStoredFileIds()) == false)
+            {
+                return;
+            }
             DoEditPrepare(updateAllFields);
 
             try
@@ -628,34 +819,22 @@ namespace WalkingTec.Mvvm.Core
             {
                 MSD.AddModelError(" ", Localizer["Sys.EditFailed"]);
             }
-            //删除不需要的附件
-            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm.ServiceProvider != null)
-            {
-                var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
-
-                foreach (var item in DeletedFileIds)
-                {
-                    fp.DeleteFile(item.ToString(), DC.ReCreate());
-                }
-            }
-
+            //删除不需要的附件：保存失败时（模型状态里有错误）不删除
+            DeleteRequestedFilesAfterSave(linkedFileIds, () => DC.ReCreate(), "Edit");
         }
 
         public virtual async Task DoEditAsync(bool updateAllFields = false)
         {
+            var linkedFileIds = ReadStoredFileIdsIfNeeded();
+            if (CheckFileLinks("Edit", () => linkedFileIds ?? ReadStoredFileIds()) == false)
+            {
+                return;
+            }
             DoEditPrepare(updateAllFields);
 
+            // a failed save throws here, so the deletion below is not reached; an error in the model state also skips it
             await DC.SaveChangesAsync();
-            //删除不需要的附件
-            if (DeletedFileIds != null && DeletedFileIds.Count > 0 && Wtm.ServiceProvider != null)
-            {
-                var fp = Wtm.ServiceProvider.GetRequiredService<WtmFileProvider>();
-
-                foreach (var item in DeletedFileIds)
-                {
-                    fp.DeleteFile(item.ToString(), DC);
-                }
-            }
+            DeleteRequestedFilesAfterSave(linkedFileIds, () => DC, "Edit");
         }
 
         private void DoEditPrepare(bool updateAllFields)
@@ -1001,6 +1180,8 @@ namespace WalkingTec.Mvvm.Core
                     }
                 }
                 DC.UpdateEntity(Entity);
+                // writing the whole record still leaves the members marked CanNotEdit as stored (FORK.md section 37)
+                CanNotEditGuard.KeepStoredValues(DC, Entity);
             }
         }
 
@@ -1077,6 +1258,9 @@ namespace WalkingTec.Mvvm.Core
             try
             {
                 List<Guid> fileids = new List<Guid>();
+                // an Entity that was not read from the store by SetEntityById (it was bound from the request, or set by code) says nothing
+                // reliable about which files the record refers to: those ids come from the stored record
+                var storedFileIds = ReferenceEquals(Entity, _loadedEntity) ? null : ReadStoredFileIds();
                 var pros = typeof(TModel).GetAllProperties();
 
                 //如果包含附件，则先删除附件
@@ -1107,6 +1291,10 @@ namespace WalkingTec.Mvvm.Core
                         }
                         f.SetValue(Entity, null);
                     }
+                }
+                if (storedFileIds != null)
+                {
+                    fileids = storedFileIds.ToList();
                 }
                 if (typeof(TModel) != typeof(FileAttachment))
                 {
@@ -1154,6 +1342,9 @@ namespace WalkingTec.Mvvm.Core
             try
             {
                 List<Guid> fileids = new List<Guid>();
+                // an Entity that was not read from the store by SetEntityById (it was bound from the request, or set by code) says nothing
+                // reliable about which files the record refers to: those ids come from the stored record
+                var storedFileIds = ReferenceEquals(Entity, _loadedEntity) ? null : ReadStoredFileIds();
                 var pros = typeof(TModel).GetAllProperties();
 
                 //如果包含附件，则先删除附件
@@ -1171,11 +1362,23 @@ namespace WalkingTec.Mvvm.Core
                 foreach (var f in fas)
                 {
                     var subs = f.GetValue(Entity) as IEnumerable<ISubFile>;
-                    foreach (var sub in subs)
+                    if (subs == null)
                     {
-                        fileids.Add(sub.FileId);
+                        var fullEntity = DC.Set<TModel>().AsQueryable().Include(f.Name).AsNoTracking().CheckID(Entity.ID).FirstOrDefault();
+                        subs = f.GetValue(fullEntity) as IEnumerable<ISubFile>;
+                    }
+                    if (subs != null)
+                    {
+                        foreach (var sub in subs)
+                        {
+                            fileids.Add(sub.FileId);
+                        }
                     }
                     f.SetValue(Entity, null);
+                }
+                if (storedFileIds != null)
+                {
+                    fileids = storedFileIds.ToList();
                 }
                 if (typeof(TModel) != typeof(FileAttachment))
                 {

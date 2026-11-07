@@ -298,6 +298,52 @@ namespace WalkingTec.Mvvm.E2E.Tests.Vue3
         }
 
         [TestMethod]
+        public async Task File_Api_ARecordLinksAFile_OnlyWithTheProofOfItsUpload()
+        {
+            var api = await StartAsync();
+            var upload = await api.UploadFullAsync("proof.png", "image/png", Png);
+            var photo = upload.GetProperty("Id").GetString();
+            Assert.IsFalse(string.IsNullOrEmpty(upload.GetProperty("LinkRef").GetString()), "the upload answers with the proof");
+            var city = UniqueName("Place ");
+            await api.PostAsync("/api/City/Add", new { Entity = new { Name = city, Level = 1 } });
+            var cityId = Ids(await api.PostAsync("/api/City/Search", new { Name = city })).Single();
+            var name = UniqueName("School ");
+            object Record(string schoolName) => new { Entity = new { SchoolCode = UniqueDigits(3), SchoolName = schoolName, Level = 1, PlaceId = cityId, IsSchool = true, PhotoId = photo } };
+
+            // the file is only named: the save is refused and nothing is stored
+            var bare = await api.PostRawAsync("/api/SchoolVue3/Add", Record(name), withLinkRefs: false);
+            Assert.AreEqual(400, bare.Status, await bare.TextAsync());
+            StringAssert.Contains(await bare.TextAsync(), "Entity.PhotoId");
+            Assert.IsFalse(Ids(await api.PostAsync("/api/SchoolVue3/Search", new { SchoolName = name })).Any());
+
+            // the proof of another user does not count: a second user names the file of the first with the first user's proof
+            var account = UniqueName("linku").ToLowerInvariant();
+            var password = "Pw-" + UniqueName("");
+            await api.PostAsync("/api/_FrameworkUser/Add", new { Entity = new { ITCode = account, Password = password, Name = "Link User" }, SelectedRolesCodes = new[] { "001" }, SelectedGroupCodes = new string[0] });
+            var userId = Ids(await api.PostAsync("/api/_FrameworkUser/Search", new { ITCode = account })).Single();
+            var other = await Vue3Api.CreateAsync(Playwright, Site, account, password);
+            try
+            {
+                var withOthersProof = await other.PostRawAsync("/api/SchoolVue3/Add", new { Entity = ((dynamic)Record(name)).Entity, UploadedFileRefs = new[] { upload.GetProperty("LinkRef").GetString() } }, withLinkRefs: false);
+                Assert.AreEqual(400, withOthersProof.Status, await withOthersProof.TextAsync());
+            }
+            finally
+            {
+                await other.DisposeAsync();
+                await api.PostAsync("/api/_FrameworkUser/BatchDelete", new[] { userId });
+            }
+            Assert.IsFalse(Ids(await api.PostAsync("/api/SchoolVue3/Search", new { SchoolName = name })).Any());
+
+            // with its own proof the file is linked, and a later save of the same record needs none
+            await api.PostAsync("/api/SchoolVue3/Add", Record(name));
+            var id = Ids(await api.PostAsync("/api/SchoolVue3/Search", new { SchoolName = name })).Single();
+            var again = await api.PutRawAsync("/api/SchoolVue3/Edit", new { Entity = new { ID = id, SchoolCode = UniqueDigits(3), SchoolName = name, Level = 1, PlaceId = cityId, IsSchool = true, PhotoId = photo } }, withLinkRefs: false);
+            Assert.AreEqual(200, again.Status, await again.TextAsync());
+            await api.PostAsync("/api/SchoolVue3/BatchDelete", new[] { id });
+            await api.PostAsync("/api/City/BatchDelete", new[] { cityId });
+        }
+
+        [TestMethod]
         public async Task File_Api_Upload_NeedsASignedInCaller()
         {
             await StartAsync();
