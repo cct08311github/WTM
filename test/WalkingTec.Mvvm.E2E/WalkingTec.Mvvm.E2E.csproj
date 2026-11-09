@@ -20,7 +20,7 @@
     <PackageReference Include="MSTest.TestFramework" Version="3.11.1" />
     <PackageReference Include="Microsoft.Playwright.MSTest" Version="1.63.0" />
     <!-- installs the generated administrator password into the throw-away SQLite database of the Vue3Demo target -->
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.13" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.14" />
   </ItemGroup>
 
   <ItemGroup>
