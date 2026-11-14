@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Transactions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using WalkingTec.Mvvm.Core.Support.Json;
 
 namespace WalkingTec.Mvvm.Core.Extensions
@@ -372,6 +373,94 @@ namespace WalkingTec.Mvvm.Core.Extensions
         //    return DPWhere(baseQuery, wtmcontext, tableNameList, IdFields);
         //}
 
+        private static Microsoft.EntityFrameworkCore.Metadata.IModel GetModelOrNull(WTMContext wtmcontext)
+        {
+            try
+            {
+                return wtmcontext?.DC?.Model;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        //EF 不认识的类型当作实体处理（保持原来的行为）
+        private static bool IsMappedEntity(Microsoft.EntityFrameworkCore.Metadata.IModel model, Type type)
+        {
+            try
+            {
+                return model.FindEntityType(type) != null;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// 无法确定数据权限设置的类型：没有配置任何数据权限，或者使用者对每个已配置的表都可以访问全部数据（RelateId 为 null）时，
+        /// 没有东西需要保护，不记录日志也不加条件。
+        /// </summary>
+        private static bool UnresolvedFieldNeedsHandling(WTMContext wtmcontext, List<SimpleDataPri> dps)
+        {
+            var settings = wtmcontext?.DataPrivilegeSettings;
+            if (settings == null || settings.Count == 0)
+            {
+                return false;
+            }
+            if (dps == null)
+            {
+                return true;
+            }
+            foreach (var setting in settings)
+            {
+                if (dps.Any(x => x.TableName == setting.ModelName && x.RelateId == null) == false)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        //原来的解析方式：不经过模型，直接用成员所属的类型
+        private static string ResolveTableNameLegacy(WTMContext wtmcontext, Type ownerType, string fieldname)
+        {
+            if (fieldname.ToLower() == "id")
+            {
+                return ownerType.Name;
+            }
+            var pro2 = wtmcontext.DC.GetPropertyNameByFk(ownerType, fieldname);
+            if (string.IsNullOrEmpty(pro2) == false)
+            {
+                return ownerType.GetSingleProperty(pro2).PropertyType.Name;
+            }
+            return "";
+        }
+
+        //每个（类型，字段，模式）在进程内只记录一次，避免热点查询刷屏；记录与否不影响 Enforce 的过滤
+        private const int MaxLoggedUnresolvedKeys = 1000;
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> LoggedUnresolvedKeys = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>();
+
+        private static void LogUnresolvedType(WTMContext wtmcontext, Type type, string field, DataPrivilegeUnresolvedTypeMode mode)
+        {
+            try
+            {
+                var key = (type?.FullName ?? "") + "|" + field + "|" + mode;
+                //已达上限后不再加入新的键，也不再记录新的组合；已有的键仍只记录一次
+                if (LoggedUnresolvedKeys.Count >= MaxLoggedUnresolvedKeys || LoggedUnresolvedKeys.TryAdd(key, 0) == false)
+                {
+                    return;
+                }
+                var logger = wtmcontext?.LoggerFactory?.CreateLogger("WalkingTec.Mvvm.Core.Extensions.DPWhere");
+                logger?.LogWarning("DPWhere: the type {Type} is not a mapped entity and has no mapped base type, so the data privilege setting for the field {Field} cannot be determined (UnresolvedTypeMode={Mode}, {Effect}). Apply DPWhere on the entity query before the projection, or select into a type derived from the entity. This is logged once per process for each type, field and mode.",
+                    type?.FullName, field, mode, mode == DataPrivilegeUnresolvedTypeMode.Enforce ? "no rows are returned" : "the query is returned without the condition");
+            }
+            catch
+            {
+            }
+        }
+
         #region AddBy YOUKAI 20160310
         /// <summary>
         /// 为查询语句添加关联表的权限过滤
@@ -393,6 +482,9 @@ namespace WalkingTec.Mvvm.Core.Extensions
             Expression falseExp = Expression.NotEqual(left1, right1);
             Expression finalExp = null;
             int tindex = 0;
+            var dpOptions = wtmcontext?.ConfigInfo?.DataPrivilegeOptions;
+            bool resolveProjected = dpOptions?.ResolveProjectedTypes ?? true;
+            var unresolvedMode = dpOptions?.UnresolvedTypeMode ?? DataPrivilegeUnresolvedTypeMode.Audit;
             //循环所有关联外键
             foreach (var IdField in IdFields)
             {
@@ -442,27 +534,97 @@ namespace WalkingTec.Mvvm.Core.Extensions
 
                 //确定最终关联的表名
                 string tableName = "";
+                bool unresolved = false;
+                Type unresolvedType = null;
+                bool legacyResolved = false;
                 if (data.Count > 0)
                 {
                     var last = data.Last().exp as MemberExpression;
                     string fieldname = last?.Member?.Name;
                     if (string.IsNullOrEmpty(fieldname) == false)
                     {
-                        if (fieldname.ToLower() == "id")
+                        //成员所属的类型。如果它是 Select 出来的视图类型（不是数据模型里的实体），则沿着基类找到第一个实体类型，
+                        //用它去查数据权限设置和外键；条件仍然对 T 自己的成员生成，EF 才能在投影上翻译
+                        Type lookupType = last.Member.ReflectedType;
+                        var model = GetModelOrNull(wtmcontext);
+                        if (model != null && IsMappedEntity(model, lookupType) == false)
                         {
-                            tableName = last.Member.ReflectedType.Name;
-                        }
-                        else
-                        {
-                            var pro2 = wtmcontext.DC.GetPropertyNameByFk(last.Member.ReflectedType, fieldname);
-                            if (string.IsNullOrEmpty(pro2) == false)
+                            //先按原来的方式解析（ID 用成员所属类型的名称，其他字段用外键对应的导航属性类型）：
+                            //结果对得到已配置的数据权限设置时直接使用，与原来完全一致（例如以类型自己的名称注册的设置，或另一个 DbContext 里的实体子类）
+                            var legacyName = ResolveTableNameLegacy(wtmcontext, last.Member.ReflectedType, fieldname);
+                            if (legacyName != "" && wtmcontext.DataPrivilegeSettings?.Any(x => x.ModelName == legacyName) == true)
                             {
-                                tableName = last.Member.ReflectedType.GetSingleProperty(pro2).PropertyType.Name;
+                                legacyResolved = true;
+                                tableName = legacyName;
+                            }
+                            else
+                            {
+                                //对不到设置：沿基类找到第一个实体类型，用它去查数据权限设置和外键；条件仍然对 T 自己的成员生成，EF 才能在投影上翻译
+                                Type mappedBase = null;
+                                if (resolveProjected == true)
+                                {
+                                    for (var bt = lookupType.BaseType; bt != null && bt != typeof(object); bt = bt.BaseType)
+                                    {
+                                        if (IsMappedEntity(model, bt))
+                                        {
+                                            mappedBase = bt;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (mappedBase != null)
+                                {
+                                    lookupType = mappedBase;
+                                }
+                                else
+                                {
+                                    //WTMContext.DC 的模型里没有这个类型，也找不到实体基类，但查询可能来自另一个 DbContext（多连接字符串／CreateDC），那里它是实体。
+                                    //不能让原来会加上的条件被拿掉：只有原来的解析结果也对不到任何数据权限设置时（原来会静默略过），才按无法判断处理。
+                                    //dps 为空时原来只要解析出表名就会拼接永远为假的条件，这里保持一致
+                                    legacyResolved = true;
+                                    tableName = legacyName;
+                                    if (tableName == "" || (dps != null && wtmcontext.DataPrivilegeSettings?.Any(x => x.ModelName == tableName) != true))
+                                    {
+                                        tableName = "";
+                                        unresolved = true;
+                                        unresolvedType = last.Member.ReflectedType;
+                                    }
+                                }
+                            }
+                        }
+                        if (unresolved == false && legacyResolved == false)
+                        {
+                            if (fieldname.ToLower() == "id")
+                            {
+                                tableName = lookupType.Name;
+                            }
+                            else
+                            {
+                                var pro2 = wtmcontext.DC.GetPropertyNameByFk(lookupType, fieldname);
+                                if (string.IsNullOrEmpty(pro2) == false)
+                                {
+                                    tableName = lookupType.GetSingleProperty(pro2).PropertyType.Name;
+                                }
                             }
                         }
                     }
                 }
 
+                //类型既不是实体，也找不到实体基类：无法确定数据权限设置，按 UnresolvedTypeMode 处理
+                if (unresolved == true)
+                {
+                    if (unresolvedMode == DataPrivilegeUnresolvedTypeMode.Legacy || UnresolvedFieldNeedsHandling(wtmcontext, dps) == false)
+                    {
+                        continue;
+                    }
+                    LogUnresolvedType(wtmcontext, unresolvedType, fullname, unresolvedMode);
+                    if (unresolvedMode == DataPrivilegeUnresolvedTypeMode.Audit)
+                    {
+                        continue;
+                    }
+                    exp = falseExp;
+                }
+                else
                 //如果dps为空，则拼接一个返回假的表达式，这样就查询不出任何数据
                 if (dps == null)
                 {
