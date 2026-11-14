@@ -13,18 +13,22 @@ namespace WalkingTec.Mvvm.Core
     {
         /// <summary>
         /// For a record that was set to the modified state as a whole: marks every <see cref="CanNotEditAttribute"/> column as not modified, so that the
-        /// save writes the other columns and leaves these as stored. A column that cannot be marked (the data context is not an EF context) is not written
+        /// save writes the other columns and leaves these as stored. With <paramref name="protectFrameworkMembers"/> the members the generic edit never
+        /// writes from a request (<see cref="ModelPropertyUpdateRules.IsProtectedEditMember"/>: tenant code, validity flag, create time and creator) are
+        /// kept as well; the update stamps are not touched. A column that cannot be marked (the data context is not an EF context) is not written
         /// by this code path either.
         /// </summary>
-        public static void KeepStoredValues(IDataContext dc, object entity)
+        public static void KeepStoredValues(IDataContext dc, object entity, bool protectFrameworkMembers = true)
         {
             if (entity == null || dc is not DbContext db)
             {
                 return;
             }
             var entry = db.Entry(entity);
-            foreach (var property in entity.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                .Where(x => x.GetCustomAttribute<CanNotEditAttribute>() != null))
+            var type = entity.GetType();
+            foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(x => x.GetCustomAttribute<CanNotEditAttribute>() != null
+                    || (protectFrameworkMembers && ModelPropertyUpdateRules.IsProtectedEditMember(type, x.Name))))
             {
                 var column = entry.Metadata.FindProperty(property.Name);
                 if (column != null && column.IsPrimaryKey() == false)

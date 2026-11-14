@@ -222,6 +222,7 @@ git merge --no-ff upstream/dotnet10
 | `src/WalkingTec.Mvvm.Core/Extensions/DCExtension.cs`、`Extensions/ProtectedCondition.cs`（新增）、`Support/ExpressionVisitors.cs`、`ConfigOptions/DataPrivilegeOptions.cs`（新增）、`ConfigOptions/Configs.cs`、`BasePagedListVM.cs`、`test/WalkingTec.Mvvm.Core.Test/VM/DataPrivilegeBatchQueryTest.cs`（新增） | 列表查詢縮小為勾選的資料時保留數據權限條件：`DPWhere` 的條件以 lambda 名稱標記；`WhereReplaceModifier` 新增 `(where, keepProtected)` 建構函式；`BasePagedListVM.KeepDataPrivilegeInBatchQuery`（`protected virtual`）；設定 `DataPrivilegeOptions:KeepInBatchQuery`（預設 true）；新增 `WhereProtected` | 第 35 節 |
 | `src/WalkingTec.Mvvm.Core/BasePagedListVM.cs`、`demo/WalkingTec.Mvvm.Vue3Demo/Areas/_Admin/ViewModels/FrameworkGroupVMs/FrameworkGroupListVM.cs`、`test/WalkingTec.Mvvm.Core.Test/Excel/ExcelExportAfterDoSearcherTests.cs`（新增） | `GenerateExcel` 在寫出檔案前對要匯出的列執行 `AfterDoSearcher()`；新增 `protected virtual bool RunAfterDoSearcherOnExport`（預設 true，可關閉）；demo 的 `FrameworkGroupListVM` 設為 false | #437，第 38 節 |
 | `src/WalkingTec.Mvvm.Core/Extensions/DCExtension.cs`、`ConfigOptions/DataPrivilegeOptions.cs`、`test/WalkingTec.Mvvm.Core.Test/VM/DataPrivilegeBatchQueryTest.cs` | `DPWhere` 作用在投影後的檢視型別（`X_View : X`）時也套用數據權限：沿基類解析表名與外鍵；新增設定 `DataPrivilegeOptions:ResolveProjectedTypes`（預設 true）、`DataPrivilegeOptions:UnresolvedTypeMode`（`Legacy`／`Audit`／`Enforce`，預設 `Audit`） | 第 39 節 |
+| `src/WalkingTec.Mvvm.Core/BaseCRUDVM.cs`、`BaseBatchVM.cs`、`BaseImportVM.cs`、`BasePagedListVM.cs`、`BaseVM.cs`、`Support/GenericEditGuard.cs`（新增）、`Support/CanNotEditGuard.cs`、`Support/ModelPropertyUpdateRules.cs`、`ConfigOptions/GenericEditOptions.cs`（新增）、`ConfigOptions/Configs.cs`、`test/WalkingTec.Mvvm.Core.Test/GenericEditProtectedMembersTest.cs`（新增）、`test/WalkingTec.Mvvm.Admin.Test/FrameworkUserProtectedMembersEditTest.cs`（新增） | 通用編輯路徑（表單編輯、批次編輯、匯入、列表編輯）不再從請求資料寫入由框架管理的成員（租戶代碼、有效旗標、建立時間與建立者）；列表編輯以目前租戶讀取已儲存的列；新增 `GenericEditOptions` 設定（見第 40 節） | 第 40 節 |
 | Dependabot 的依賴升級 | 各 csproj／`package-lock.json` 的版本號 | 見各 `dependencies` PR |
 
 fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder,GenericEndpointGuard,UploadFileRule}.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/GenericEndpointOptions.cs`、`docs/security/generic-endpoint-authz.md`、`test/WalkingTec.Mvvm.LayUI.E2EHost/Controllers/ReportController.cs`（授權測試用頁面）、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270、#272）、`test/WalkingTec.Mvvm.E2E.Instrumentation/`（E2E 的路由覆蓋與 hosting startup，#272）。
@@ -1326,3 +1327,45 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 **已知限制**：(1) 不是由實體衍生的檢視型別（含匿名型別）只受 `UnresolvedTypeMode` 涵蓋，無法由框架得知它對應哪個實體。(2) 解析只看欄位所屬型別的基類；經由導覽屬性到達的實體（例如 `x => x.Parent.ID`）本來就以實體型別查設定。(3) 多次投影：每次 `Select` 之後的型別各自判斷，條件作用在套用 `DPWhere` 當下的 `T`；中間的投影必須帶著要過濾的成員。(4) `GetSelectListItems`／`GetTreeSelectListItems` 內部的 `AppendSelfDPWhere` 以查詢元素型別的名稱對應設定，若對衍生檢視型別的查詢呼叫，會遇到同樣的情形，本次不處理。(5) 無法判斷型別的 Warning 在每個行程內，對每一組（型別、欄位、模式）只記錄一次（以靜態的 `ConcurrentDictionary` 記錄；鍵數達 1000 之後不再加入新的組合，也不再為新組合記錄，已記錄的組合仍只記一次）；是否記錄不影響 `Enforce` 的過濾，重複的呼叫照樣回傳空集合。因此行程啟動後首次出現的組合才看得到 Warning，不要用 Warning 的數量判斷受影響的查詢數。(6) 查詢來自 `WTMContext.DC` 以外的 DbContext（多連接字串／`CreateDC`）、而實體只在那個 context 的模型中時：框架只看 `WTMContext.DC.Model`，不取查詢自己 provider 的模型（沒有不依賴內部 API 的做法）。為避免比原本更寬鬆，這種情況先走原本的解析（`ID` 用成員所屬型別的名稱、其他欄位用 `GetPropertyNameByFk`），只有原本的結果也對不到任何數據權限設定時才當作無法判斷：`ID` 欄位與原本一致照樣過濾（沒有登入資訊時原本拼接永遠為假的條件，同樣保留），外鍵欄位原本就因 `DC` 的模型沒有該實體而被略過，現在依 `UnresolvedTypeMode` 記錄或拒絕。
 
 **維護者決定**：預設開啟，附兩個關閉／降級的開關。
+
+## 40. 通用編輯不再寫入由框架管理的成員：租戶代碼、有效旗標、建立時間與建立者（安全強化／行為變更，預設開啟，可關閉）
+
+**範圍**：通用編輯的六條路徑：(1) 表單編輯 `BaseCRUDVM.DoEdit`／`DoEditAsync` 的主實體（`updateAllFields = false`，逐欄寫入）；(2) 表單帶來的子表資料列；(3) 表單編輯的整筆更新（`updateAllFields = true`）；(4) 表格編輯 `BasePagedListVM.UpdateEntityList`；(5) 批量修改 `BaseBatchVM.DoBatchEdit`／`DoBatchEditAsync`；(6) 匯入並選擇覆蓋既有資料時的 `BaseImportVM`（同步與非同步儲存共用的 `PrepareItemForSave`）。這些路徑原本會把請求帶來的實體成員全部寫回，只略過 `[CanNotEdit]`。租戶代碼、有效旗標、建立時間與建立者屬於由框架管理的成員，現在不再由請求資料寫入。單一屬性端點（`/_Framework/UpdateModelProperty`）早已拒絕這些成員（`ModelPropertyUpdateRules.IsRefusedMember`），本節讓通用編輯採用同一類規則。
+
+**變更**：
+
+| 項目 | 行為 |
+|---|---|
+| 共用判斷 | `ModelPropertyUpdateRules.IsProtectedEditMember(entityType, name, exemptIsValid)`：`TenantCode`（實體實作 `ITenant`）、`IsValid`（實作 `IPersistPoco`）、`CreateTime` 與 `CreateBy`（實作 `IBasePoco`）。以解析後的屬性名稱與實體型別上的介面判斷，名稱完全相同才算；不是只看名稱，也不是比對請求中轉成小寫的欄位鍵。符合的成員與 `[CanNotEdit]` 一樣被**靜默略過**，不產生模型錯誤。主鍵 `ID` 照舊依名稱略過；`UpdateTime`、`UpdateBy` 不在這個判斷內（見下一列） |
+| 表單編輯（`updateAllFields = false`） | 主實體的欄位迴圈與子表資料列的欄位迴圈都套用上述判斷 |
+| 表單編輯（`updateAllFields = true`） | `CanNotEditGuard.KeepStoredValues` 除了 `[CanNotEdit]` 欄位，也把 `TenantCode`、`CreateBy`、`CreateTime`、`IsValid`（依介面）標為未修改：請求本文沒有這些欄位時，不會再把已存的建立者、建立時間、租戶代碼寫成空值。`UpdateBy`、`UpdateTime` 不在此重設 |
+| 軟刪除 | `DoDelete`／`DoDeleteAsync` 對 `IPersistPoco` 以 `FC["Entity.IsValid"] = 0` 加上 `DoEditPrepare(false)` 設定 `IsValid = false`。這兩個方法以內部（私有、不可覆寫）的參數只在該次呼叫豁免 `IsValid`；`DoDelete`、`DoDeleteAsync` 的公開與受保護介面不變，請求無法設定這個參數。同一次呼叫中的 `TenantCode`、`CreateBy`、`CreateTime` 仍被略過 |
+| 更新戳記（不受開關影響） | 子表資料列（表單編輯）、表格編輯的資料列、批量修改的實體，其 `UpdateTime`、`UpdateBy` 改為由框架無條件設定，與主實體一致；請求帶來的值被取代（原本只在欄位為空時才設定） |
+| 表格編輯讀取既有資料列 | 表格編輯比對用的既有資料列改為在目前租戶內讀取（比對用的資料內容 `CreateNew()` 不帶租戶，現在明確設定為與目前資料內容相同的租戶）。行為變化：租戶使用者的表格編輯原本在既有資料列上會失敗（比對時看不到自己租戶的資料列，被當成新增而主鍵重複）；現在可以正常編輯。目前租戶以外的資料列（其他租戶或沒有租戶）不會被比對到，請求帶來這類資料列的 ID 時被當成新增，與既有主鍵衝突，整批儲存失敗、不寫入任何資料。宿主使用者（沒有租戶）行為不變。這是修正，不受開關影響 |
+| 表格編輯新增的資料列 | 新增的資料列（`ITenant` 實體）的 `TenantCode` 改為目前登入使用者的租戶，與表單新增一致；請求帶來的值被取代。不受開關影響 |
+| 新增資料列的框架成員 | 表格編輯新增的資料列與表單帶來的子表新增資料列（`IBasePoco`）的 `CreateTime`、`CreateBy` 由框架設定，`IPersistPoco` 的 `IsValid` 設為 `true`，請求帶來的值被取代；開關開啟（舊行為）時，`CreateTime`、`CreateBy` 只在為空時設定，`IsValid` 保持請求的值。主實體新增（`DoAdd`）與匯入新增不變 |
+| `KeepStoredValues` | `CanNotEditGuard.KeepStoredValues(dc, entity)` 的雙參數形式現在也保留上述由框架管理的成員（第三個參數 `protectFrameworkMembers` 預設為 `true`；自行呼叫它的程式碼會受影響，開關開啟時框架自己傳 `false`） |
+| 批量修改 | 除了上述判斷，批量修改現在也略過 `[CanNotEdit]`、`ID`、`[NotMapped]` 的同名屬性（原本沒有這三項略過，與其他編輯路徑不一致） |
+| 匯入覆蓋既有資料 | 只拒絕 `TenantCode`（`ITenant`）與 `IsValid`（`IPersistPoco`）：範本是伺服器端宣告的，所以 `CreateTime`、`CreateBy` 仍可由範本寫入（例如 ConsoleDemo 的 `SchoolImportVM` 對應 `CreateTime`）；範本沒有對應 `UpdateTime`／`UpdateBy` 時由框架設定的既有行為不變。匯入新增資料列的行為不變 |
+| 不變 | `FrameworkUserBase.IsValid`（宣告在使用者實體本身，不是 `IPersistPoco`）與其他非 `IPersistPoco` 的 `IsValid` 成員仍可編輯；請求中的 `ID` 照舊靜默略過；單一屬性端點、新增流程、資料表結構與資料格式都不變；Vue3 範例的 E2E（`Vue3ApiTests`：對 `BasePoco` 學生編輯送出 `IsValid`）不受影響 |
+
+**為什麼必要**：租戶代碼決定資料屬於哪個租戶、有效旗標決定資料是否仍在使用、建立時間與建立者是稽核資料；這些應由框架在新增、刪除與租戶流程中設定，不應能由一般編輯請求直接寫入。
+
+**影響範圍與可觀察的變化**：
+- 編輯表單或 JSON 內容帶了 `Entity.TenantCode`、`Entity.IsValid`、`Entity.CreateBy`、`Entity.CreateTime`（`IsValid` 僅限 `IPersistPoco`）時，這些值被忽略，其他欄位照常儲存；沒有錯誤訊息。
+- 以 `updateAllFields: true` 儲存且本文沒有這些欄位時，已存的 `CreateBy`、`CreateTime`、`TenantCode`、`IsValid` 保持原值。
+- 子表、表格、批量修改的 `UpdateBy`、`UpdateTime` 一律是目前使用者與目前時間。
+- 批量修改的編輯模型若含有 `[CanNotEdit]`、`ID` 或 `[NotMapped]` 對應的屬性，這些屬性不再寫入實體。
+- 沒有資料庫結構或資料格式的變化。
+
+**遷移步驟**：(1) 產生的表單（含自訂範本）若會送出 `Entity.TenantCode`、`Entity.IsValid`、`Entity.CreateBy`、`Entity.CreateTime`，這些欄位現在不會被儲存；需要由使用者維護的欄位請改用專屬的業務欄位，或在自訂 ViewModel 內明確寫入（賦值後 `DC.UpdateProperty`）。(2) 自行在子表、表格或批量修改的資料列帶 `UpdateBy`、`UpdateTime` 的用戶端，這些值會被取代為框架的戳記；若需要保留自己的值，請在自訂 ViewModel 內處理。(3) 批量修改的編輯模型若依賴寫入 `[CanNotEdit]` 或 `[NotMapped]` 屬性，請改為在覆寫的 `DoBatchEdit` 內明確設定。(4) 確實需要舊行為（例如用戶端仍須透過通用編輯改租戶）時，設定 `GenericEdit:LegacyProtectedMemberWrites=true`，並規劃改為專屬流程。
+
+**設定值**：`GenericEdit:LegacyProtectedMemberWrites`（`bool`，預設 `false` 即保護）。嚴格的 `true`／`false` 繫結，`0`、`1`、空字串等值在載入設定時被拒絕（與 `DataPrivilegeOptions:KeepInBatchQuery` 相同）。設為 `true` 時，上述各路徑的成員略過（共用判斷、批量修改新增的三項略過、匯入的略過、`updateAllFields` 的保留）全部關閉，恢復原行為；更新戳記改為無條件，以及表格編輯新增資料列的 `TenantCode` 設定，不受此設定影響。啟動時若為 `true`，`GenericEditGuard.LogRelaxedWarning`（在 `FrameworkServiceExtension` 與 `FileEndpointGuard` 並列呼叫）會記錄一則警告。沒有既有的 `GenericEdit` 區段，所以新增類別 `GenericEditOptions`（`Configs.GenericEdit`）。
+
+**限制**：(1) 擁有型別（owned type）與複合型別（complex type）內的成員不在處理範圍。(2) 主鍵不叫 `ID` 的實體，批量修改的 `ID` 略過與表單編輯的 `ID` 略過都依名稱 `ID` 判斷，不涵蓋其他名稱的主鍵。(3) 本節不驗證被編輯的記錄屬於目前租戶；通用編輯是否限制在目前租戶的資料內，由全域查詢過濾與各 ViewModel 的查詢決定，不在本變更範圍。(4) 以介面判斷成員：實體自行宣告、沒有實作對應介面的 `TenantCode`、`IsValid` 成員不受保護（例如 `FrameworkUserBase.IsValid`，這是刻意保留的行為）。(5) `BaseVM` 沒有 `Wtm`（只出現在手動建立的實例，例如單元測試）時，設定值視為預設（保護開啟）。(6) 新增資料列的框架成員只處理一層：新增的子表資料列之下再有子資料列（更深的層級）不會重新設定。(7) 主實體新增（`DoAdd`）沒有變更。(8) 表單編輯路徑仍不驗證被編輯的記錄屬於目前租戶（見 (3)）。
+
+**回滾**：設定 `GenericEdit:LegacyProtectedMemberWrites=true`（不需重新編譯）即可恢復成員寫入；或還原該次提交。不涉及資料格式。
+
+**LayUI 影響**：不修改 LayUI 的 TagHelper、檢視或受保護路徑。LayUI 表單送出的 `Entity.*` 欄位照舊處理，只有上述成員被略過；產生器產生的編輯頁若含有這些欄位（例如 `IsValid` 開關），畫面照常顯示，但送出後該欄位不會被儲存（見遷移步驟 1）。刪除按鈕走軟刪除流程，行為不變。
+
+**測試**：Core.Test 的 `GenericEditProtectedMembersTest`（共用判斷的介面與名稱規則；表單編輯的同步與非同步、欄位名稱大小寫、`updateAllFields` 本文不含成員時不再寫成空值；軟刪除的同步與非同步、有無送出 `IsValid`、豁免只限 `IsValid`；子表資料列；表格編輯與新增資料列的 `TenantCode`（使用一般測試資料內容並以 `SetTenantCode` 設定租戶：租戶使用者編輯自己的資料列；請求帶來其他租戶或沒有租戶的資料列 ID 時不被更新且整批失敗；宿主使用者編輯沒有租戶的資料列）；新增資料列（表格編輯與子表）的框架成員與舊行為；`ITenant` 實作在基底類別、衍生實體、以 `new` 隱藏屬性；軟刪除請求帶 `Entity.TenantCode`；批量修改的同步與非同步；匯入覆蓋；非 `IPersistPoco` 的 `IsValid` 仍可編輯；開關開啟時各路徑恢復寫入；設定繫結拒絕非布林值；啟動警告）。Admin.Test 的 `FrameworkUserProtectedMembersEditTest`（使用者編輯：`IsValid` 仍可改，`TenantCode`、建立者不被寫入）。停用共用判斷、停用匯入判斷、移除軟刪除豁免、移除表格新增的租戶設定或讓更新戳記恢復為有條件時，上述測試會失敗（變異檢查）。

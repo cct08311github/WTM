@@ -141,6 +141,12 @@ namespace WalkingTec.Mvvm.Core
         [JsonIgnore]
         public Configs ConfigInfo { get => Wtm?.ConfigInfo; }
 
+        /// <summary>
+        /// Whether the generic edit paths skip the members the framework owns when a request carries them (the configuration
+        /// <c>GenericEdit:LegacyProtectedMemberWrites</c> is off, which is the default). See <see cref="GenericEditOptions"/>.
+        /// </summary>
+        internal bool ProtectGenericEditMembers => ConfigInfo?.GenericEdit?.LegacyProtectedMemberWrites != true;
+
 
         [JsonIgnore]
         public IUIService UIService { get => Wtm?.UIService; }

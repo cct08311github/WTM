@@ -1414,21 +1414,17 @@ namespace WalkingTec.Mvvm.Core
             {
                 var ftype = EntityList.GetType().GenericTypeArguments.First();
                 var itemPros = ftype.GetAllProperties();
+                var protectMembers = ProtectGenericEditMembers;
 
                 foreach (var newitem in EntityList)
                 {
                     var subtype = newitem.GetType();
                     if (typeof(IBasePoco).IsAssignableFrom( subtype))
                     {
+                        //the update stamps belong to the framework: a value the request carries is replaced
                         IBasePoco ent = newitem as IBasePoco;
-                        if (ent.UpdateTime == null)
-                        {
-                            ent.UpdateTime = DateTime.Now;
-                        }
-                        if (string.IsNullOrEmpty(ent.UpdateBy))
-                        {
-                            ent.UpdateBy = LoginUserInfo?.ITCode;
-                        }
+                        ent.UpdateTime = DateTime.Now;
+                        ent.UpdateBy = LoginUserInfo?.ITCode;
                     }
                     //循环页面传过来的子表数据,将关联到TopBasePoco的字段设为null,并且把外键字段的值设定为主表ID
                     foreach (var itempro in itemPros)
@@ -1444,6 +1440,8 @@ namespace WalkingTec.Mvvm.Core
                 //打开新的数据库联接,获取数据库中的主表和子表数据
                 using (var ndc = DC.CreateNew())
                 {
+                    //CreateNew does not carry the tenant: the stored rows are read in the tenant of the current context, like every other read of the request
+                    ndc.SetTenantCode(DC.TenantCode);
                     var ids = EntityList.Select(x => x.GetID().ToString()).ToList();
                     data = ndc.Set<TModel>().AsNoTracking().Where(ids.GetContainIdExpression<TModel>()).ToList();
                 }
@@ -1485,7 +1483,8 @@ namespace WalkingTec.Mvvm.Core
                                 {
                                     var notmapped = itempro.GetCustomAttribute<NotMappedAttribute>();
                                     var cannotedit = itempro.GetCustomAttribute<CanNotEditAttribute>();
-                                    if (itempro.Name != "ID" && notmapped == null && itempro.PropertyType.IsList() == false && cannotedit == null)
+                                    if (itempro.Name != "ID" && notmapped == null && itempro.PropertyType.IsList() == false && cannotedit == null
+                                        && !(protectMembers && ModelPropertyUpdateRules.IsProtectedEditMember(ftype, itempro.Name)))
                                     {
                                         DC.UpdateProperty(i, itempro.Name);
                                     }
@@ -1530,17 +1529,11 @@ namespace WalkingTec.Mvvm.Core
                 //需要添加的数据
                 foreach (var item in toadd)
                 {
-                    if (typeof(IBasePoco).IsAssignableFrom( item.GetType()))
+                    GenericEditGuard.StampAddedRow(item, LoginUserInfo?.ITCode, protectMembers);
+                    if (typeof(ITenant).IsAssignableFrom(item.GetType()))
                     {
-                        IBasePoco ent = item as IBasePoco;
-                        if (ent.CreateTime == null)
-                        {
-                            ent.CreateTime = DateTime.Now;
-                        }
-                        if (string.IsNullOrEmpty(ent.CreateBy))
-                        {
-                            ent.CreateBy = LoginUserInfo?.ITCode;
-                        }
+                        //the tenant of a new row is the tenant of the signed-in user, as for a record added by a form
+                        (item as ITenant).TenantCode = LoginUserInfo?.CurrentTenant;
                     }
                     DC.AddEntity(item);
 
