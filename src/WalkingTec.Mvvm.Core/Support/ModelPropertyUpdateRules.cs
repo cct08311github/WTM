@@ -140,6 +140,50 @@ namespace WalkingTec.Mvvm.Core
         }
 
         /// <summary>
+        /// Members the generic edit paths (form edit, list edit, batch edit) do not write from a request: <c>TenantCode</c> of an
+        /// <see cref="ITenant"/>, <c>IsValid</c> of an <see cref="IPersistPoco"/>, <c>CreateTime</c> and <c>CreateBy</c> of an
+        /// <see cref="IBasePoco"/>. <paramref name="name"/> is the name of the resolved property (not the key a request used), compared exactly,
+        /// and the member counts only when the entity type implements the interface that declares it. The key and the update stamps are not
+        /// part of this rule (the key is skipped by name, the update stamps are written by the framework). The soft delete of a record sets
+        /// <c>IsValid</c> through the form edit; it passes <paramref name="exemptIsValid"/> so that member is not refused for that call.
+        /// </summary>
+        public static bool IsProtectedEditMember(Type entityType, string name, bool exemptIsValid = false)
+        {
+            if (entityType == null || string.IsNullOrEmpty(name))
+            {
+                return false;
+            }
+            if (name == nameof(ITenant.TenantCode) && typeof(ITenant).IsAssignableFrom(entityType))
+            {
+                return true;
+            }
+            if (exemptIsValid == false && name == nameof(IPersistPoco.IsValid) && typeof(IPersistPoco).IsAssignableFrom(entityType))
+            {
+                return true;
+            }
+            if (typeof(IBasePoco).IsAssignableFrom(entityType) && (name == nameof(IBasePoco.CreateTime) || name == nameof(IBasePoco.CreateBy)))
+            {
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The members an import that overwrites existing records does not write, whatever the template maps: <c>TenantCode</c> of an
+        /// <see cref="ITenant"/> and <c>IsValid</c> of an <see cref="IPersistPoco"/>. <c>CreateTime</c> and <c>CreateBy</c> stay writable
+        /// there, because the template is declared on the server.
+        /// </summary>
+        public static bool IsProtectedImportMember(Type entityType, string name)
+        {
+            if (entityType == null || string.IsNullOrEmpty(name))
+            {
+                return false;
+            }
+            return (name == nameof(ITenant.TenantCode) && typeof(ITenant).IsAssignableFrom(entityType))
+                || (name == nameof(IPersistPoco.IsValid) && typeof(IPersistPoco).IsAssignableFrom(entityType));
+        }
+
+        /// <summary>
         /// Turns the text of a request into a value of <paramref name="type"/>. Numbers are parsed with the invariant culture; dates accept
         /// ISO 8601 (and the other formats the invariant culture knows). Empty text is null for a string or a nullable type and not accepted
         /// otherwise. A string has its backslashes turned into slashes, as the endpoint always did. Returns false when the text is not a value

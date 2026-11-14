@@ -837,8 +837,12 @@ namespace WalkingTec.Mvvm.Core
             DeleteRequestedFilesAfterSave(linkedFileIds, () => DC, "Edit");
         }
 
-        private void DoEditPrepare(bool updateAllFields)
+        /// <param name="updateAllFields">Write the whole record instead of the posted fields.</param>
+        /// <param name="softDelete">Set only by <see cref="DoDelete"/> and <see cref="DoDeleteAsync"/>: the soft delete sets <c>IsValid</c> through
+        /// this method, so that one member is not refused for that call (FORK.md section 40). Private on purpose: nothing a request carries sets it.</param>
+        private void DoEditPrepare(bool updateAllFields, bool softDelete = false)
         {
+            var protectMembers = ProtectGenericEditMembers;
             if (typeof(IBasePoco).IsAssignableFrom(typeof(TModel)))
             {
                 IBasePoco ent = Entity as IBasePoco;
@@ -904,15 +908,10 @@ namespace WalkingTec.Mvvm.Core
                                 var subtype = newitem.GetType();
                                 if (typeof(IBasePoco).IsAssignableFrom(subtype))
                                 {
+                                    //the update stamps belong to the framework: a value the request carries is replaced
                                     IBasePoco ent = newitem as IBasePoco;
-                                    if (ent.UpdateTime == null)
-                                    {
-                                        ent.UpdateTime = DateTime.Now;
-                                    }
-                                    if (string.IsNullOrEmpty(ent.UpdateBy))
-                                    {
-                                        ent.UpdateBy = LoginUserInfo?.ITCode;
-                                    }
+                                    ent.UpdateTime = DateTime.Now;
+                                    ent.UpdateBy = LoginUserInfo?.ITCode;
                                 }
                                 //循环页面传过来的子表数据,将关联到TopBasePoco的字段设为null,并且把外键字段的值设定为主表ID
                                 foreach (var itempro in itemPros)
@@ -990,7 +989,8 @@ namespace WalkingTec.Mvvm.Core
                                             {
                                                 var notmapped = itempro.GetCustomAttribute<NotMappedAttribute>();
                                                 var cannotedit = itempro.GetCustomAttribute<CanNotEditAttribute>();
-                                                if (itempro.Name != "ID" && notmapped == null && itempro.PropertyType.IsList() == false && cannotedit == null)
+                                                if (itempro.Name != "ID" && notmapped == null && itempro.PropertyType.IsList() == false && cannotedit == null
+                                                    && !(protectMembers && ModelPropertyUpdateRules.IsProtectedEditMember(ftype, itempro.Name)))
                                                 {
                                                     DC.UpdateProperty(i, itempro.Name);
                                                 }
@@ -1035,18 +1035,7 @@ namespace WalkingTec.Mvvm.Core
                             //需要添加的数据
                             foreach (var item in toadd)
                             {
-                                if (typeof(IBasePoco).IsAssignableFrom(item.GetType()))
-                                {
-                                    IBasePoco ent = item as IBasePoco;
-                                    if (ent.CreateTime == null)
-                                    {
-                                        ent.CreateTime = DateTime.Now;
-                                    }
-                                    if (string.IsNullOrEmpty(ent.CreateBy))
-                                    {
-                                        ent.CreateBy = LoginUserInfo?.ITCode;
-                                    }
-                                }
+                                GenericEditGuard.StampAddedRow(item, LoginUserInfo?.ITCode, ProtectGenericEditMembers);
                                 if (typeof(ITenant).IsAssignableFrom(item.GetType()))
                                 {
                                     ITenant ent = item as ITenant;
@@ -1138,7 +1127,8 @@ namespace WalkingTec.Mvvm.Core
                             var itempro = pros.Where(x => x.Name.ToLower() == name).FirstOrDefault();
                             var notmapped = itempro.GetCustomAttribute<NotMappedAttribute>();
                             var cannotedit = itempro.GetCustomAttribute<CanNotEditAttribute>();
-                            if (itempro.Name != "ID" && notmapped == null && itempro.PropertyType.IsList() == false && cannotedit == null)
+                            if (itempro.Name != "ID" && notmapped == null && itempro.PropertyType.IsList() == false && cannotedit == null
+                                && !(protectMembers && ModelPropertyUpdateRules.IsProtectedEditMember(typeof(TModel), itempro.Name, softDelete)))
                             {
                                 DC.UpdateProperty(Entity, itempro.Name);
                             }
@@ -1181,7 +1171,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 DC.UpdateEntity(Entity);
                 // writing the whole record still leaves the members marked CanNotEdit as stored (FORK.md section 37)
-                CanNotEditGuard.KeepStoredValues(DC, Entity);
+                CanNotEditGuard.KeepStoredValues(DC, Entity, protectMembers);
             }
         }
 
@@ -1204,7 +1194,7 @@ namespace WalkingTec.Mvvm.Core
                     f.SetValue(Entity, f.PropertyType.GetConstructor(Type.EmptyTypes).Invoke(null));
                 }
 
-                DoEditPrepare(false);
+                DoEditPrepare(false, softDelete: true);
                 DC.SaveChanges();
             }
             //如果是普通的TopBasePoco，则进行物理删除
@@ -1233,7 +1223,7 @@ namespace WalkingTec.Mvvm.Core
                 {
                     f.SetValue(Entity, null);
                 }
-                DoEditPrepare(false);
+                DoEditPrepare(false, softDelete: true);
                 try
                 {
                     await DC.SaveChangesAsync();

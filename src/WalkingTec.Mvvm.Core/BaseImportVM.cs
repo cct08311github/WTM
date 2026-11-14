@@ -1343,10 +1343,16 @@ namespace WalkingTec.Mvvm.Core
                 {
                     //如果有重复数据，则进行修改
                     var tempPros = typeof(T).GetFields();
+                    var protectMembers = ProtectGenericEditMembers;
                     foreach (var pro in tempPros)
                     {
                         var excelProp = Template.GetType().GetField(pro.Name).GetValue(Template) as ExcelPropety;
                         var proToSet = typeof(P).GetSingleProperty(excelProp.FieldName);
+                        //the tenant code and the validity flag of an existing record are not overwritten by an import (FORK.md section 40)
+                        if (proToSet != null && protectMembers && ModelPropertyUpdateRules.IsProtectedImportMember(typeof(P), proToSet.Name))
+                        {
+                            continue;
+                        }
                         if (proToSet != null)
                         {
                             var val = proToSet.GetValue(item);

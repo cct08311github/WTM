@@ -246,6 +246,31 @@ namespace WalkingTec.Mvvm.Core
 
         #endregion
 
+        #region Generic edit options
+
+        private GenericEditOptions _genericEdit;
+
+        /// <summary>
+        /// Settings of the members that the generic edit paths do not write. Secure by default; see <see cref="GenericEditOptions"/>.
+        /// </summary>
+        public GenericEditOptions GenericEdit
+        {
+            get
+            {
+                if (_genericEdit == null)
+                {
+                    _genericEdit = new GenericEditOptions();
+                }
+                return _genericEdit;
+            }
+            set
+            {
+                _genericEdit = value;
+            }
+        }
+
+        #endregion
+
         #region File endpoint options
 
         private FileEndpointOptions _fileEndpoints;

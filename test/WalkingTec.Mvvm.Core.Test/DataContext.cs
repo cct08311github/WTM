@@ -44,6 +44,12 @@ namespace WalkingTec.Mvvm.Core.Test
         public DbSet<VM.BatchStringKeyDoc> BatchStringKeyDocs { get; set; }
         public DbSet<ImportOverwriteDoc> ImportOverwriteDocs { get; set; }
         public DbSet<ImportSameRecordDoc> ImportSameRecordDocs { get; set; }
+        public DbSet<GeDoc> GeDocs { get; set; }
+        public DbSet<GeLine> GeLines { get; set; }
+        public DbSet<GePlain> GePlains { get; set; }
+        public DbSet<GeImportDoc> GeImportDocs { get; set; }
+        public DbSet<GeDerived> GeDeriveds { get; set; }
+        public DbSet<GeShadow> GeShadows { get; set; }
         public DbSet<ImportSameRecordIntDoc> ImportSameRecordIntDocs { get; set; }
         public DbSet<ImportSameRecordStringDoc> ImportSameRecordStringDocs { get; set; }
 

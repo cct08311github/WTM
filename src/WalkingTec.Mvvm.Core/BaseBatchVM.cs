@@ -701,6 +701,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 return false;
             }
+            var protectMembers = ProtectGenericEditMembers;
             //循环所有数据
             for (int i = 0; i < idsData.Count; i++)
             {
@@ -713,6 +714,15 @@ namespace WalkingTec.Mvvm.Core
                     foreach (var pro in pros)
                     {
                         var proToSet = entity.GetType().GetSingleProperty(pro.Name);
+                        //members the generic edit does not write: the key, [NotMapped], [CanNotEdit] and the members the framework owns
+                        if (proToSet != null && protectMembers
+                            && (proToSet.Name == "ID"
+                                || proToSet.GetCustomAttribute<System.ComponentModel.DataAnnotations.Schema.NotMappedAttribute>() != null
+                                || proToSet.GetCustomAttribute<CanNotEditAttribute>() != null
+                                || ModelPropertyUpdateRules.IsProtectedEditMember(typeof(TModel), proToSet.Name)))
+                        {
+                            continue;
+                        }
                         var val = FC.ContainsKey("LinkedVM." + pro.Name) ? FC["LinkedVM." + pro.Name] : null;
                         if(val == null && FC.ContainsKey("LinkedVM." + pro.Name + "[]"))
                         {
@@ -765,17 +775,12 @@ namespace WalkingTec.Mvvm.Core
                     }
                     if (typeof(IBasePoco).IsAssignableFrom( typeof(TModel)))
                     {
+                        //the update stamps belong to the framework: a value the request carries is replaced
                         IBasePoco ent = entity as IBasePoco;
-                        if (ent.UpdateTime == null)
-                        {
-                            ent.UpdateTime = DateTime.Now;
-                            DC.UpdateProperty(entity, nameof(ent.UpdateTime));
-                        }
-                        if (string.IsNullOrEmpty(ent.UpdateBy))
-                        {
-                            ent.UpdateBy = LoginUserInfo?.ITCode;
-                            DC.UpdateProperty(entity, nameof(ent.UpdateBy));
-                        }
+                        ent.UpdateTime = DateTime.Now;
+                        DC.UpdateProperty(entity, nameof(ent.UpdateTime));
+                        ent.UpdateBy = LoginUserInfo?.ITCode;
+                        DC.UpdateProperty(entity, nameof(ent.UpdateBy));
                     }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
