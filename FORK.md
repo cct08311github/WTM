@@ -233,6 +233,7 @@ fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.
 - **Dependabot**：`.github/dependabot.yml`
   - demo 前端的 npm 更新，每週合併成一個 PR
   - NuGet 不提出 major 版本的一般更新（安全更新不受這條限制）
+  - NuGet 同一個套件的 minor／patch 更新，會跨所有專案合併成一個 PR（避免各專案版本不一致造成還原失敗）
 - **每日排程**：維護者機器上的排程任務會每天掃描 Dependabot PR。它會開追蹤 Issue、確認所有 check 通過並評估相容性；patch 或 minor 升級沒有疑慮就合併，major 升級或有疑慮的則加上 `needs-decision`，留給維護者決定
 - **合併方式**：一般 PR 用 squash；同步上游的 PR 用 merge commit（見第 5 節）。高風險的合併由維護者確認，包括：
   - breaking change 或預設行為變更

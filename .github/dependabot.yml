@@ -56,6 +56,16 @@ updates:
       time: "06:00"
       timezone: Asia/Taipei
     open-pull-requests-limit: 5
+    groups:
+      # A package referenced from several projects must move in all of them at
+      # once, otherwise restore fails with a package-downgrade error (#456).
+      # group-by raises one PR per package across all directories above.
+      # Version updates only; security updates stay individual PRs.
+      nuget-cross-directory:
+        applies-to: version-updates
+        group-by: dependency-name
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     ignore:
       # Skip major bumps for version updates (breaking changes, handled by hand).
       # Per GitHub docs, `update-types` only affects version updates; security
