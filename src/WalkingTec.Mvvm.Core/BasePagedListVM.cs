@@ -161,7 +161,7 @@ namespace WalkingTec.Mvvm.Core
             //如果是1，直接下载Excel，如果是多个，下载ZIP包
             if (ExportExcelCount == 1)
             {
-                var data = query.ToList();
+                var data = RunAfterDoSearcherForExport(query.ToList());
                 return DownLoadExcel(data);
             }
             else
@@ -203,7 +203,7 @@ namespace WalkingTec.Mvvm.Core
                 }
                 for (int i = 0; i < ExportExcelCount; i++)
                 {
-                    var data = query.Skip(i * ExportMaxCount).Take(ExportMaxCount).ToList();
+                    var data = RunAfterDoSearcherForExport(query.Skip(i * ExportMaxCount).Take(ExportMaxCount).ToList());
                     var WorkBook = GenerateWorkBook(data);
                     string SavePath = Path.Combine(FilePath, $"{FileName}_{i + 1}.xlsx");
                     File.WriteAllBytes(SavePath, WorkBook);
@@ -226,6 +226,36 @@ namespace WalkingTec.Mvvm.Core
                 }
                 return bt;
             }
+        }
+
+        /// <summary>
+        /// Whether <see cref="GenerateExcel"/> runs <see cref="AfterDoSearcher"/> on the rows it is about to export, so that columns filled in
+        /// <see cref="AfterDoSearcher"/> are exported with the same content as the grid shows. The default is <c>true</c>.
+        /// The rows are assigned to <see cref="EntityList"/> first (as <see cref="DoSearch"/> does), <see cref="SearcherMode"/> is whatever the caller set
+        /// (<see cref="ListVMSearchModeEnum.Export"/> or <see cref="ListVMSearchModeEnum.CheckExport"/> for the framework's export entry points),
+        /// and the rows written to the file are the ones in <see cref="EntityList"/> afterwards. When the export is split into several files,
+        /// it runs once for each file's rows.
+        /// Override to return <c>false</c> for a view model whose <see cref="AfterDoSearcher"/> only makes sense for one page of the grid
+        /// (for example markup for display, or a lookup per row), or branch on <see cref="SearcherMode"/> inside <see cref="AfterDoSearcher"/>.
+        /// </summary>
+        protected virtual bool RunAfterDoSearcherOnExport
+        {
+            get { return true; }
+        }
+
+        /// <summary>
+        /// Runs <see cref="AfterDoSearcher"/> on the rows to export (unless <see cref="RunAfterDoSearcherOnExport"/> is <c>false</c>)
+        /// and returns the rows that are left in <see cref="EntityList"/>.
+        /// </summary>
+        private List<TModel> RunAfterDoSearcherForExport(List<TModel> data)
+        {
+            if (RunAfterDoSearcherOnExport == false)
+            {
+                return data;
+            }
+            EntityList = data;
+            AfterDoSearcher();
+            return EntityList ?? new List<TModel>();
         }
 
         /// <summary>

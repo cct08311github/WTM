@@ -10,6 +10,10 @@ fork 的版本号为四段式：`<上游版本>.<fork 修订号>`，例如 `10.0
 * 四段式版本不会与上游在 nuget.org 上发布的三段式版本冲突，且大于对应的上游版本（`10.0.0.2` > `10.0.0`）
 * 每次发布 fork 版本时 `ForkRevision` 加 1；合并上游的版本号升级后重置为 1
 
+## 未发布
+
+* **变更（默认行为变更，涉及 LayUI 受保护路径，可关闭）：**   列表导出（`BasePagedListVM.GenerateExcel`，含勾选导出，LayUI 的 `/_Framework/ExportExcel`、`GetExportData` 与各 SPA 控制器都经由它）现在会在写出文件之前执行 `AfterDoSearcher()`（#437）。原本 `AfterDoSearcher()` 只在 `DoSearch`/`DoSearchAsync` 中调用，导出直接把查询结果写成文件，因此在 `AfterDoSearcher` 里补上的显示栏位（例如先以空值投影、再在 `AfterDoSearcher` 填入名称的栏位）画面上有值，导出的同一栏却是空的。现在导出的行会先赋给 `EntityList`（与搜索路径相同），再调用 `AfterDoSearcher()`，写入文件的是此时 `EntityList` 中的行；`SearcherMode` 保持调用端设置的值（框架的导出入口都设为 `Export` 或 `CheckExport`），覆写者可据此分支。导出拆成多个文件时，每个文件的那批行各调用一次。**关闭：** 新增 `protected virtual bool RunAfterDoSearcherOnExport`（默认 `true`），覆写为 `false` 即恢复原行为（单个 ListVM 可自行选择）。**影响：** 其 `AfterDoSearcher` 只适用于单页数据（例如输出显示用的标记、每行一次查询、重排或替换 `EntityList`）的 ListVM，需在 `AfterDoSearcher` 内按 `SearcherMode` 分支，或覆写该开关为 `false`；导出全部数据时该方法会处理所有行。demo 的 `FrameworkGroupListVM`（树状排列与缩进，仅供显示）已设为 `false`，导出行为不变；demo 的 `DataPrivilegeListVM`（群组模式）的“授权对象”栏现在会在导出中有值。LayUI 的 TagHelper 与视图不变。无数据格式变更。**回滚：** 覆写开关为 `false`，或退回前一个 fork 版本。详见 FORK.md 第 38 节。
+
 ## 10.0.0.21(2026-11-07)
 
 * **变更（行为变更，不涉及 LayUI 受保护路径）：**   (1) `/_Framework/UpdateModelProperty` 不再写入 `FileAttachment` 的外键（按数据模型外键、`[ForeignKey]`、命名惯例判断），与参考清单、`GenericEndpoints:Mode` 无关；`FileEndpoints:Mode=Legacy` 或 `LegacyVmFileLinking=true` 时与保存表单一致，仍可写入；其他 `Guid` 字段不变。(2) `BaseCRUDVM.DoEdit`/`DoEditAsync` 以 `updateAllFields = true` 执行时，`[CanNotEdit]` 成员保持已存的值（原本整笔写入会写这些成员），其他字段照常更新；依赖 `updateAllFields` 写入 `[CanNotEdit]` 成员的应用要明确设置这些成员（赋值后 `DC.UpdateProperty`）。(3) `BasePagedListVM.UpdateEntityList`（表格编辑保存）在两种模式都跳过 `[CanNotEdit]` 成员，并对新挂上的文件要求与保存表单相同的上传证明（`UploadedFileRefs`、`IFileLinkPolicy`、`LegacyVmFileLinking`、`Mode=Legacy`），任一被拒绝则整批不写入。(4) 文档：FORK.md 第 36 节限制新增“要求移除的文件在 VM 保存后、外层事务提交前删除，外层回滚时文件已删除”的说明与建议。详见 FORK.md 第 36、37 节。

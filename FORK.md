@@ -220,6 +220,7 @@ git merge --no-ff upstream/dotnet10
 | `test/WalkingTec.Mvvm.Test.Mock/MockWtmContext.cs` | 選用參數 `uploadFileRule` | 第 33 節 |
 | `test/WalkingTec.Mvvm.LayUI.E2EHost/Startup.cs`、`appsettings.json`、`Fixtures/E2EUploadFileRule.cs`（新增） | 測試用：預設上傳規則只對帶 `X-E2E-Upload-AllowList` 標頭的請求生效，設定了 `FileEndpoints:UploadAllowList` | 第 33 節 |
 | `src/WalkingTec.Mvvm.Core/Extensions/DCExtension.cs`、`Extensions/ProtectedCondition.cs`（新增）、`Support/ExpressionVisitors.cs`、`ConfigOptions/DataPrivilegeOptions.cs`（新增）、`ConfigOptions/Configs.cs`、`BasePagedListVM.cs`、`test/WalkingTec.Mvvm.Core.Test/VM/DataPrivilegeBatchQueryTest.cs`（新增） | 列表查詢縮小為勾選的資料時保留數據權限條件：`DPWhere` 的條件以 lambda 名稱標記；`WhereReplaceModifier` 新增 `(where, keepProtected)` 建構函式；`BasePagedListVM.KeepDataPrivilegeInBatchQuery`（`protected virtual`）；設定 `DataPrivilegeOptions:KeepInBatchQuery`（預設 true）；新增 `WhereProtected` | 第 35 節 |
+| `src/WalkingTec.Mvvm.Core/BasePagedListVM.cs`、`demo/WalkingTec.Mvvm.Vue3Demo/Areas/_Admin/ViewModels/FrameworkGroupVMs/FrameworkGroupListVM.cs`、`test/WalkingTec.Mvvm.Core.Test/Excel/ExcelExportAfterDoSearcherTests.cs`（新增） | `GenerateExcel` 在寫出檔案前對要匯出的列執行 `AfterDoSearcher()`；新增 `protected virtual bool RunAfterDoSearcherOnExport`（預設 true，可關閉）；demo 的 `FrameworkGroupListVM` 設為 false | #437，第 38 節 |
 | Dependabot 的依賴升級 | 各 csproj／`package-lock.json` 的版本號 | 見各 `dependencies` PR |
 
 fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder,GenericEndpointGuard,UploadFileRule}.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/GenericEndpointOptions.cs`、`docs/security/generic-endpoint-authz.md`、`test/WalkingTec.Mvvm.LayUI.E2EHost/Controllers/ReportController.cs`（授權測試用頁面）、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270、#272）、`test/WalkingTec.Mvvm.E2E.Instrumentation/`（E2E 的路由覆蓋與 hosting startup，#272）。
@@ -1258,3 +1259,33 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 **其他欄位檢視**：`FrameworkUserBase` 沒有權杖、密鑰、鹽等其他憑證類欄位；`FrameworkTenant.TDb`（租戶連線字串）由租戶管理介面編輯，屬於預期用途，本節不處理。
 
 **測試**：Admin.Test 的 `PasswordGenericEditTest`（屬性存在；表單路徑的同步與非同步、欄位名稱大小寫、API 控制器的編輯、只帶 `Password` 的編輯：儲存的密碼不變；新增仍然雜湊並儲存；管理員重設與使用者修改密碼仍然生效；編輯後登入使用的驗證仍接受原密碼）。移除屬性後上述編輯相關的測試會失敗（變異檢查）。
+
+## 38. 匯出會執行 `AfterDoSearcher`（行為變更，預設開啟，可關閉）
+
+**範圍**：`BasePagedListVM.GenerateExcel`（LayUI 的 `/_Framework/ExportExcel`、`GetExportData` 擴充方法與各 SPA 控制器的 `ExportExcel` 都經由它，含勾選匯出 `CheckExport`）。
+
+**變更**：
+
+| 項目 | 行為 |
+|---|---|
+| 匯出流程 | 取得 `GetExportQuery()`／`GetCheckedExportQuery()` 的列（`ToList()`）之後，先指定給 `EntityList`（與 `DoSearch` 相同），再呼叫 `AfterDoSearcher()`，最後以此時 `EntityList` 中的列產生檔案。匯出拆成多個檔案時，每個檔案的那批列各呼叫一次 |
+| `SearcherMode` | 沿用呼叫端的設定；框架的匯出入口（`GetExportData`、`_FrameworkController.ExportExcel`、產生的控制器）都在呼叫前設為 `Export` 或 `CheckExport`。直接呼叫 `GenerateExcel` 而未設定時維持原值（框架不替呼叫端改寫），覆寫者可在 `AfterDoSearcher` 內依此分支 |
+| 開關 | `protected virtual bool RunAfterDoSearcherOnExport`，預設 `true`；覆寫為 `false` 即恢復原行為（不呼叫 `AfterDoSearcher`、不改 `EntityList`） |
+| 不變 | `DoSearch`／`DoSearchAsync` 的行為、匯出查詢、欄位格式化與檔案內容的產生方式、公開 API（只新增 `protected` 成員） |
+
+**為什麼必要**：`AfterDoSearcher` 只在搜尋路徑被呼叫，ListVM 在其中補上的顯示欄位，畫面有值、匯出的同一欄卻是空的。匯出應與畫面內容一致，且應用程式不需要為此另外覆寫 `GenerateExcel`。
+
+**影響範圍與可觀察的變化**：
+- 在 `AfterDoSearcher` 補上欄位的 ListVM，匯出的欄位現在有值（例如 demo 的資料權限列表「群組」模式的「授權對象」）。
+- 匯出全部資料時，`AfterDoSearcher` 處理的是全部的列，不是單頁；其中每列一次的查詢（N+1）會在整批匯出時放大。
+- `AfterDoSearcher` 若替換或重排 `EntityList`，匯出的內容與順序以替換後為準。
+
+**遷移步驟**：`AfterDoSearcher` 只適用於單頁資料（輸出顯示用的標記如 `&nbsp;`、每列一次的查詢、重排／替換列表等）的 ListVM，在其中依 `SearcherMode`（`Export`、`CheckExport`）分支，或覆寫 `RunAfterDoSearcherOnExport` 回傳 `false`。demo 的 `FrameworkGroupListVM` 的 `AfterDoSearcher` 只做樹狀排列與縮排顯示並替換列表，已設為 `false`，匯出內容不變。
+
+**限制**：匯出超過 `ExportMaxCount` 而拆成多個檔案時，`AfterDoSearcher` 以每個檔案的列為單位執行，跨檔案的處理（例如跨批的樹狀排列）不會看到其他檔案的列。
+
+**回滾**：覆寫 `RunAfterDoSearcherOnExport` 為 `false`（單一 ListVM），或還原該次提交。不涉及資料格式，沒有設定檔開關。
+
+**LayUI 影響**：不涉及 TagHelper 與 view；LayUI 匯出入口、欄位與檔案格式不變，只是匯出前多執行 ListVM 既有的 `AfterDoSearcher`。
+
+**測試**：`Core.Test` 的 `ExcelExportAfterDoSearcherTests`（匯出與勾選匯出都帶出 `AfterDoSearcher` 補上的欄位；開關為 `false` 時維持原行為；`AfterDoSearcher` 內看到的 `SearcherMode` 為匯出模式；`AfterDoSearcher` 替換 `EntityList` 時以替換後的列匯出）。暫時拿掉修正後，匯出、勾選匯出、`SearcherMode` 與替換 `EntityList` 這四項測試會失敗（變異檢查），關閉開關的兩項仍通過。

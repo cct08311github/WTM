@@ -80,6 +80,9 @@ namespace WalkingTec.Mvvm.Mvc.Admin.ViewModels.FrameworkGroupVMs
                  })
                 .OrderBy(x => x.GroupCode);
         }
+        // AfterDoSearcher only arranges the tree and indents the names for display, and replaces the list; the export keeps its flat order
+        protected override bool RunAfterDoSearcherOnExport => false;
+
         public override void AfterDoSearcher()
         {
             // MakeTree links every row to its parent but only returns the rows without a parent, so a matching row whose
