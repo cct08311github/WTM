@@ -221,6 +221,7 @@ git merge --no-ff upstream/dotnet10
 | `test/WalkingTec.Mvvm.LayUI.E2EHost/Startup.cs`、`appsettings.json`、`Fixtures/E2EUploadFileRule.cs`（新增） | 測試用：預設上傳規則只對帶 `X-E2E-Upload-AllowList` 標頭的請求生效，設定了 `FileEndpoints:UploadAllowList` | 第 33 節 |
 | `src/WalkingTec.Mvvm.Core/Extensions/DCExtension.cs`、`Extensions/ProtectedCondition.cs`（新增）、`Support/ExpressionVisitors.cs`、`ConfigOptions/DataPrivilegeOptions.cs`（新增）、`ConfigOptions/Configs.cs`、`BasePagedListVM.cs`、`test/WalkingTec.Mvvm.Core.Test/VM/DataPrivilegeBatchQueryTest.cs`（新增） | 列表查詢縮小為勾選的資料時保留數據權限條件：`DPWhere` 的條件以 lambda 名稱標記；`WhereReplaceModifier` 新增 `(where, keepProtected)` 建構函式；`BasePagedListVM.KeepDataPrivilegeInBatchQuery`（`protected virtual`）；設定 `DataPrivilegeOptions:KeepInBatchQuery`（預設 true）；新增 `WhereProtected` | 第 35 節 |
 | `src/WalkingTec.Mvvm.Core/BasePagedListVM.cs`、`demo/WalkingTec.Mvvm.Vue3Demo/Areas/_Admin/ViewModels/FrameworkGroupVMs/FrameworkGroupListVM.cs`、`test/WalkingTec.Mvvm.Core.Test/Excel/ExcelExportAfterDoSearcherTests.cs`（新增） | `GenerateExcel` 在寫出檔案前對要匯出的列執行 `AfterDoSearcher()`；新增 `protected virtual bool RunAfterDoSearcherOnExport`（預設 true，可關閉）；demo 的 `FrameworkGroupListVM` 設為 false | #437，第 38 節 |
+| `src/WalkingTec.Mvvm.Core/Extensions/DCExtension.cs`、`ConfigOptions/DataPrivilegeOptions.cs`、`test/WalkingTec.Mvvm.Core.Test/VM/DataPrivilegeBatchQueryTest.cs` | `DPWhere` 作用在投影後的檢視型別（`X_View : X`）時也套用數據權限：沿基類解析表名與外鍵；新增設定 `DataPrivilegeOptions:ResolveProjectedTypes`（預設 true）、`DataPrivilegeOptions:UnresolvedTypeMode`（`Legacy`／`Audit`／`Enforce`，預設 `Audit`） | 第 39 節 |
 | Dependabot 的依賴升級 | 各 csproj／`package-lock.json` 的版本號 | 見各 `dependencies` PR |
 
 fork 自己新增的檔案（上游沒有，不會衝突）：`FORK.md`、`fork.props`、`CHANGELOG.fork.md`、`.github/workflows/*`、`.github/dependabot.yml`、`src/WalkingTec.Mvvm.Mvc/Helper/{WtmEnvironmentHelper（含 Oracle `Version` 檢查）,WtmCorsHelper,WorkflowApiSecurity（含 `WorkflowApiDisabledConvention`、`WorkflowApiStubRemovalConvention`）}.cs`、`src/WalkingTec.Mvvm.Mvc/_WorkflowApiDisabledController.cs`（`EnableWorkflow=false` 時 `/_WorkflowApi/*` 的 404 stub，#210）、`src/WalkingTec.Mvvm.Core/WorkFlow/WorkflowLookup.cs`、`src/WalkingTec.Mvvm.Core/Support/{JsStringEncoder,HtmlAttributeEncoder,GenericEndpointGuard,UploadFileRule}.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/GenericEndpointOptions.cs`、`docs/security/generic-endpoint-authz.md`、`test/WalkingTec.Mvvm.LayUI.E2EHost/Controllers/ReportController.cs`（授權測試用頁面）、`src/WalkingTec.Mvvm.Core/Support/FileHandlers/FileNameSanitizer.cs`、`src/WalkingTec.Mvvm.Core/ConfigOptions/WorkflowOption.cs`、`test/WalkingTec.Mvvm.Core.Test/` 下 fork 新增的測試（`TagHelpers/LayUI/**`、`Excel/**`、`*Test.cs`）、`test/WalkingTec.Mvvm.Admin.Test/WorkflowLookupTest.cs`、`test/WalkingTec.Mvvm.LayUI.E2EHost/`（E2E 測試用的 LayUI 網站，#270）、`test/WalkingTec.Mvvm.E2E/`（Playwright E2E 測試，#270、#272）、`test/WalkingTec.Mvvm.E2E.Instrumentation/`（E2E 的路由覆蓋與 hosting startup，#272）。
@@ -1289,3 +1290,39 @@ Excel 把日期存成「數值（日期序列值）＋日期數字格式」。�
 **LayUI 影響**：不涉及 TagHelper 與 view；LayUI 匯出入口、欄位與檔案格式不變，只是匯出前多執行 ListVM 既有的 `AfterDoSearcher`。
 
 **測試**：`Core.Test` 的 `ExcelExportAfterDoSearcherTests`（匯出與勾選匯出都帶出 `AfterDoSearcher` 補上的欄位；開關為 `false` 時維持原行為；`AfterDoSearcher` 內看到的 `SearcherMode` 為匯出模式；`AfterDoSearcher` 替換 `EntityList` 時以替換後的列匯出）。暫時拿掉修正後，匯出、勾選匯出、`SearcherMode` 與替換 `EntityList` 這四項測試會失敗（變異檢查），關閉開關的兩項仍通過。
+
+## 39. `DPWhere` 作用在投影後的檢視型別時也套用數據權限，無法判斷型別時的處理模式（安全強化／行為變更，預設開啟，可關閉）
+
+**範圍**：`IQueryable<T>.DPWhere(wtmContext, 欄位...)`（`DCExtension.cs`）。`T` 是 `.Select(x => new X_View { ... })` 產生的檢視型別（`X_View : X`，本身不是資料模型中的實體）時，原本以 `T` 的名稱查數據權限設定：欄位是 `ID` 時用成員所屬型別的名稱（`X_View`），其他欄位用 `GetPropertyNameByFk(X_View, 欄位)`（型別不在模型中，回傳空字串）。兩者都對不到任何設定，這個欄位被略過，查詢原封不動回傳，沒有記錄。因此「在實體上先 `DPWhere` 再投影」有作用，「先投影再 `DPWhere`」沒有。
+
+**變更**：
+
+| 項目 | 行為 |
+|---|---|
+| 沿基類解析 | 欄位所屬型別不是模型中的實體時，**先按原本的方式解析**（`ID` 用成員所屬型別的名稱、其他欄位用 `GetPropertyNameByFk`），結果非空且對得到已設定的數據權限設定時直接使用（以型別自己的名稱登記的設定、或另一個 DbContext 中實體的子類別，與原本一致）；對不到時才沿 `BaseType` 找第一個模型有實體型別的類型，用它查表名（`ID` 欄位）與外鍵對應的導覽屬性（`GetPropertyNameByFk`）。條件仍以 `T` 自己的參數與成員產生，EF 在投影的成員上翻譯。`ProtectedCondition` 標記照舊，批量與勾選匯出的行為見第 35 節。預設開啟：`DataPrivilegeOptions:ResolveProjectedTypes`（`true`／`false`） |
+| 沒有登入資訊 | 解析成功後，檢視型別上的外鍵欄位與實體一致：沒有登入資訊的使用者得到空集合（原本整個被略過、回傳全部；`ID` 欄位原本就得到空集合，不變） |
+| 無法判斷的型別 | 只有在「欄位所屬型別不是實體、也找不到實體基類、原本的解析（`ID` 用型別名稱、外鍵用 `GetPropertyNameByFk`）也對不到任何數據權限設定、且確實有要求這個欄位」時才進入；原本的解析對得到設定的欄位照舊過濾，不受三種模式影響（例如不是由實體衍生的檢視型別）。`DataPrivilegeOptions:UnresolvedTypeMode`：`Legacy`（舊行為，靜默略過）／`Audit`（**預設**，略過並以 Warning 記錄型別與欄位，查詢不變）／`Enforce`（加入永遠為假的條件，回傳空集合，並記錄） |
+| 不進入的情況 | 實體型別（含欄位與外鍵無關，例如 `x => x.Name`，查詢仍原樣回傳）；沒有設定任何數據權限的應用程式 |
+| 可存取全部資料的使用者 | 對**每一個已設定的數據權限表**都可存取全部（`RelateId` 為 null）的使用者：不受影響，三種模式都不加條件、不記錄（由於不知道欄位對應哪個表，必須對所有已設定的表都成立）。只在部分表可存取全部的使用者，在未知的表上視為受限：`Audit` 記錄並略過、`Enforce` 回傳空集合。`Enforce` 下完全不受限的使用者與實體上的行為一致（看得到全部） |
+| 不變 | `DPWhere` 的簽章；`AppendSelfDPWhere`（私有，只用在 `GetSelectListItems`／`GetTreeSelectListItems`）；實體上的行為；先 `DPWhere` 再投影的查詢（第 35 節「不變」列） |
+
+**影響範圍與可觀察的變化**：
+- 原本靜默沒有過濾的查詢（先 `Select` 成衍生檢視型別、再 `DPWhere`）現在會過濾：有限制的使用者只看到允許的資料，沒有登入資訊的使用者看到空集合。
+- 投影沒有帶著要過濾的成員（例如 `Select(x => new X_View { ID = x.ID, Name = x.Name })` 之後 `DPWhere(c, x => x.ParentId)`）：條件落在投影沒有賦值的成員上，EF 無法翻譯，查詢在執行時丟出 `InvalidOperationException`（LINQ 運算式無法翻譯），**不再靜默回傳全部資料**。這個行為有測試固定。處理方式：把成員放進投影，或在投影前套用 `DPWhere`。
+- 多個欄位（`DPWhere(view, f1, f2)`）：多個 `IdFields` 之間是 OR 組合（框架既有語意，不變：允許 f1 **或** f2 的資料列）。在衍生檢視型別上，原本被靜默略過的欄位現在也貢獻自己的條件，因此結果變得與「在投影前對實體做同一個呼叫」相同；原本只有能解析的欄位（例如 f1）生效、只回傳 f1 允許的資料列，現在會多出 f2 允許的資料列。有測試固定：投影後與投影前的多欄位結果資料列與 SQL 相同，以及 `ResolveProjectedTypes=false` 與預設的差異。
+- 不是由實體衍生的檢視型別：預設（`Audit`）下查詢不變，只多一則 Warning；這是這個修正涵蓋不到的情況，需要在投影前套用 `DPWhere`，或設 `UnresolvedTypeMode=Enforce` 讓它失敗為「沒有資料」。`Audit`（預設）只記錄、不過濾；應用程式只要有不由實體衍生的檢視型別會用在 `DPWhere` 上，就應設定 `Enforce`。
+- 沒有資料庫結構、資料格式或 SQL 結構的變化：投影後套用的條件產生的 SQL 與投影前套用的相同（有測試）。
+
+**遷移步驟**：不需要。對衍生檢視型別使用多個欄位呼叫 `DPWhere` 的應用程式，請確認 OR 組合符合預期：結果現在等同在投影前套用 `DPWhere`（f1 或 f2 允許的資料列），不再只是 f1 的資料列。先觀察 Warning（訊息含型別與欄位），把相應查詢改為在投影前 `DPWhere` 或改用衍生自實體的檢視型別，再考慮 `UnresolvedTypeMode=Enforce`。投影缺少成員而在執行時失敗的查詢，補上成員。
+
+**設定值**：`DataPrivilegeOptions:ResolveProjectedTypes` 只接受 `true` 或 `false`（不分大小寫），其他值（`0`、`1`、空字串等）在啟動讀取設定時拋出 `InvalidOperationException`，應用程式不會啟動；`DataPrivilegeOptions:UnresolvedTypeMode` 接受 `Legacy`／`Audit`／`Enforce`（不分大小寫，或其數字 0／1／2），其他文字與不屬於這三個值的數字在啟動讀取設定時拋出例外。預設 `true`／`Audit`。
+
+**回滾**：`DataPrivilegeOptions:ResolveProjectedTypes=false` 與 `DataPrivilegeOptions:UnresolvedTypeMode=Legacy` 同時設定，恢復原行為（衍生檢視型別被略過、沒有記錄）。只設 `ResolveProjectedTypes=false` 時，衍生檢視型別視為「無法判斷」，預設 `Audit` 下查詢不變，只多記錄一則 Warning；也可還原該次提交。不涉及資料格式。
+
+**LayUI 影響**：預期沒有。框架與 LayUI 範本中的 `DPWhere` 都作用在實體查詢（`IQueryable<實體>`），實體型別的行為不變；TagHelper 輸出不變。（以 `git grep` 檢查 `src` 與範本，沒有對檢視型別使用 `DPWhere`；下游應用的查詢形狀未驗證。）
+
+**測試**：Core.Test 的 `DataPrivilegeBatchQueryTest`（SQLite；設定 `WTM_TEST_PGSQL`／`WTM_TEST_MSSQL` 時同樣在該資料庫執行）：`ID` 與外鍵欄位在衍生檢視型別上（有限制／可存取全部／沒有登入資訊）、投影前與投影後套用的資料列與 SQL 相同、批量與勾選匯出、`ResolveProjectedTypes=false`、不是由實體衍生的檢視型別在三種模式下的行為與記錄、完全不受限與部分不受限的使用者、實體上與外鍵無關的欄位不受影響、投影缺少成員時的行為、兩個設定的預設值與無效值、先按名稱解析（以型別自己的名稱登記的設定、只有基底型別設定）、多欄位在投影前後的結果與 SQL、清單區段（`x => x.Children[0].ID`）在衍生檢視型別上、`DataPrivilegeSettings` 為 null、Warning 只記錄一次且 `Enforce` 照常過濾。停用沿基類解析的變異檢查會讓上述衍生檢視型別的測試失敗。停用先按名稱解析的變異檢查會讓以型別自己的名稱登記設定的測試失敗。
+
+**已知限制**：(1) 不是由實體衍生的檢視型別（含匿名型別）只受 `UnresolvedTypeMode` 涵蓋，無法由框架得知它對應哪個實體。(2) 解析只看欄位所屬型別的基類；經由導覽屬性到達的實體（例如 `x => x.Parent.ID`）本來就以實體型別查設定。(3) 多次投影：每次 `Select` 之後的型別各自判斷，條件作用在套用 `DPWhere` 當下的 `T`；中間的投影必須帶著要過濾的成員。(4) `GetSelectListItems`／`GetTreeSelectListItems` 內部的 `AppendSelfDPWhere` 以查詢元素型別的名稱對應設定，若對衍生檢視型別的查詢呼叫，會遇到同樣的情形，本次不處理。(5) 無法判斷型別的 Warning 在每個行程內，對每一組（型別、欄位、模式）只記錄一次（以靜態的 `ConcurrentDictionary` 記錄；鍵數達 1000 之後不再加入新的組合，也不再為新組合記錄，已記錄的組合仍只記一次）；是否記錄不影響 `Enforce` 的過濾，重複的呼叫照樣回傳空集合。因此行程啟動後首次出現的組合才看得到 Warning，不要用 Warning 的數量判斷受影響的查詢數。(6) 查詢來自 `WTMContext.DC` 以外的 DbContext（多連接字串／`CreateDC`）、而實體只在那個 context 的模型中時：框架只看 `WTMContext.DC.Model`，不取查詢自己 provider 的模型（沒有不依賴內部 API 的做法）。為避免比原本更寬鬆，這種情況先走原本的解析（`ID` 用成員所屬型別的名稱、其他欄位用 `GetPropertyNameByFk`），只有原本的結果也對不到任何數據權限設定時才當作無法判斷：`ID` 欄位與原本一致照樣過濾（沒有登入資訊時原本拼接永遠為假的條件，同樣保留），外鍵欄位原本就因 `DC` 的模型沒有該實體而被略過，現在依 `UnresolvedTypeMode` 記錄或拒絕。
+
+**維護者決定**：預設開啟，附兩個關閉／降級的開關。

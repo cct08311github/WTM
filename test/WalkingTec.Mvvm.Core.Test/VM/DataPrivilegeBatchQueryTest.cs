@@ -38,6 +38,11 @@ namespace WalkingTec.Mvvm.Core.Test.VM
         public string ParentName_view { get; set; }
     }
 
+    /// <summary>A projection type derived from the parent entity, not mapped to a table.</summary>
+    public class DpParentView : DpParent
+    {
+    }
+
     public class DpContext : FrameworkContext
     {
         public DpContext(string cs, DBTypeEnum type) : base(cs, type) { }
@@ -54,7 +59,7 @@ namespace WalkingTec.Mvvm.Core.Test.VM
     [TestClass]
     public class DataPrivilegeBatchQueryTest
     {
-        private enum User { LimitedToParentA, AllAccess, NoLogin, LimitedToChild1 }
+        private enum User { LimitedToParentA, AllAccess, NoLogin, LimitedToChild1, AllAccessEverywhere }
 
         private static readonly string[] Everyone = { "m1", "m2", "m3", "m4invalid", "m5tenantX" };
 
@@ -130,22 +135,27 @@ namespace WalkingTec.Mvvm.Core.Test.VM
             public List<string> AllChildIds() => Everyone.Select(x => Child[x].ToString()).ToList();
             public List<string> AllParentIds() => new List<string> { ParentA.ToString(), ParentB.ToString() };
 
-            public WTMContext Ctx(User user, bool? configKeep = null)
+            public WTMContext Ctx(User user, bool? configKeep = null, DataPrivilegeOptions options = null, Microsoft.Extensions.Logging.ILoggerFactory loggerFactory = null, IDataContext dc = null, List<IDataPrivilege> settingsOverride = null, bool nullSettings = false)
             {
-                var settings = new List<IDataPrivilege>
+                var settings = settingsOverride ?? new List<IDataPrivilege>
                 {
                     new DataPrivilegeInfo<DpParent>("parent", x => x.Name),
                     new DataPrivilegeInfo<DpChild>("child", x => x.Name),
                 };
+                if (nullSettings)
+                {
+                    settings = null;
+                }
                 Microsoft.Extensions.Options.IOptionsMonitor<Configs> monitor = null;
-                if (configKeep != null)
+                if (configKeep != null || options != null)
                 {
                     var m = new Mock<IOptionsMonitor<Configs>>();
-                    m.Setup(x => x.CurrentValue).Returns(new Configs { DataPrivilegeOptions = new DataPrivilegeOptions { KeepInBatchQuery = configKeep.Value } });
+                    var o = options ?? new DataPrivilegeOptions { KeepInBatchQuery = configKeep.Value };
+                    m.Setup(x => x.CurrentValue).Returns(new Configs { DataPrivilegeOptions = o });
                     monitor = m.Object;
                 }
                 var cache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
-                var ctx = new WTMContext(monitor, null, null, null, settings, new DpContext(Cs, Type), cache: cache);
+                var ctx = new WTMContext(monitor, null, null, null, settings, dc ?? new DpContext(Cs, Type), loggerFactory: loggerFactory, cache: cache);
                 switch (user)
                 {
                     case User.LimitedToParentA:
@@ -153,6 +163,9 @@ namespace WalkingTec.Mvvm.Core.Test.VM
                         break;
                     case User.AllAccess:
                         ctx.LoginUserInfo = new LoginUserInfo { ITCode = "u", DataPrivileges = new List<SimpleDataPri> { new SimpleDataPri { TableName = "DpParent", RelateId = null } } };
+                        break;
+                    case User.AllAccessEverywhere:
+                        ctx.LoginUserInfo = new LoginUserInfo { ITCode = "u", DataPrivileges = new List<SimpleDataPri> { new SimpleDataPri { TableName = "DpParent", RelateId = null }, new SimpleDataPri { TableName = "DpChild", RelateId = null } } };
                         break;
                     case User.LimitedToChild1:
                         ctx.LoginUserInfo = new LoginUserInfo { ITCode = "u", DataPrivileges = new List<SimpleDataPri> { new SimpleDataPri { TableName = "DpChild", RelateId = Child["m1"].ToString() } } };
@@ -676,6 +689,488 @@ namespace WalkingTec.Mvvm.Core.Test.VM
                 lost.DoSearch();
                 Assert.AreEqual("m1,m2,m3", Names(lost.EntityList), "mark lost by an expression visitor");
             });
+        }
+
+        // ---- DPWhere on a projected view type -------------------------------------------------------------------------------------------
+
+        /// <summary>A view type that is not derived from an entity: nothing ties it to a table.</summary>
+        public class DpFlatView
+        {
+            public Guid ID { get; set; }
+            public string Name { get; set; }
+            public Guid? ParentId { get; set; }
+        }
+
+        /// <summary>A view type of its own for each scenario: the unresolved-type warning is logged once per process for each (type, field, mode), so scenarios use distinct closed types.</summary>
+        public class DpFlatView<TTag> : DpFlatView { }
+        public sealed class TagLegacy { }
+        public sealed class TagAudit { }
+        public sealed class TagAuditDefault { }
+        public sealed class TagEnforce { }
+        public sealed class TagPartial { }
+        public sealed class TagRepeat { }
+        public sealed class TagList { }
+        public sealed class TagMulti { }
+
+        // the warning is logged once per process for each (type, field, mode): only the first provider of a scenario sees it
+        private static int Once(Env env, int n) => env.ProviderName == "sqlite" ? n : 0;
+
+        private sealed class CapturingLoggerFactory : Microsoft.Extensions.Logging.ILoggerFactory
+        {
+            public readonly List<(Microsoft.Extensions.Logging.LogLevel Level, string Category, string Message)> Entries = new List<(Microsoft.Extensions.Logging.LogLevel, string, string)>();
+            public void AddProvider(Microsoft.Extensions.Logging.ILoggerProvider provider) { }
+            public Microsoft.Extensions.Logging.ILogger CreateLogger(string categoryName) => new L(this, categoryName);
+            public void Dispose() { }
+            private sealed class L : Microsoft.Extensions.Logging.ILogger
+            {
+                private readonly CapturingLoggerFactory _f; private readonly string _c;
+                public L(CapturingLoggerFactory f, string c) { _f = f; _c = c; }
+                public IDisposable BeginScope<TState>(TState state) where TState : notnull => null;
+                public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+                public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+                    => _f.Entries.Add((logLevel, _c, formatter(state, exception)));
+            }
+        }
+
+        private static DataPrivilegeOptions Opts(bool resolve = true, DataPrivilegeUnresolvedTypeMode mode = DataPrivilegeUnresolvedTypeMode.Audit)
+            => new DataPrivilegeOptions { ResolveProjectedTypes = resolve, UnresolvedTypeMode = mode };
+
+        private static IQueryable<DpChildView> ToView(IQueryable<DpChild> q)
+            => q.Select(x => new DpChildView { ID = x.ID, Name = x.Name, ParentId = x.ParentId });
+
+        private static IQueryable<DpFlatView> ToFlat(IQueryable<DpChild> q)
+            => q.Select(x => new DpFlatView { ID = x.ID, Name = x.Name, ParentId = x.ParentId });
+
+        private static IQueryable<DpFlatView<TTag>> ToFlat<TTag>(IQueryable<DpChild> q)
+            => q.Select(x => new DpFlatView<TTag> { ID = x.ID, Name = x.Name, ParentId = x.ParentId });
+
+        private static string Rows(IEnumerable<DpChildView> rows) => string.Join(",", rows.Select(x => x.Name).OrderBy(x => x));
+        private static string Rows(IEnumerable<DpFlatView> rows) => string.Join(",", rows.Select(x => x.Name).OrderBy(x => x));
+
+        [TestMethod]
+        public void ProjectedView_IdField_LimitedUserGetsOnlyAllowedRows()
+        {
+            Each(env =>
+            {
+                var c = env.Ctx(User.LimitedToChild1, options: Opts());
+                Assert.AreEqual("m1", Names(c.DC.Set<DpChild>().DPWhere(c, x => x.ID).ToList()), "on the entity");
+                Assert.AreEqual("m1", Rows(ToView(c.DC.Set<DpChild>()).DPWhere(c, x => x.ID).ToList()), "on the projected view");
+                var all = env.Ctx(User.AllAccessEverywhere, options: Opts());
+                Assert.AreEqual("m1,m2,m3", Rows(ToView(all.DC.Set<DpChild>()).DPWhere(all, x => x.ID).ToList()));
+                var none = env.Ctx(User.NoLogin, options: Opts());
+                Assert.AreEqual("", Rows(ToView(none.DC.Set<DpChild>()).DPWhere(none, x => x.ID).ToList()), "no login: no rows, as on the entity");
+                Assert.AreEqual("", Names(none.DC.Set<DpChild>().DPWhere(none, x => x.ID).ToList()));
+            });
+        }
+
+        [TestMethod]
+        public void ProjectedView_FkField_LimitedAllAccessAndNoLogin()
+        {
+            Each(env =>
+            {
+                foreach (var (user, expected) in new[] { (User.LimitedToParentA, "m1,m2"), (User.AllAccess, "m1,m2,m3"), (User.NoLogin, "") })
+                {
+                    var c = env.Ctx(user, options: Opts());
+                    Assert.AreEqual(expected, Names(c.DC.Set<DpChild>().DPWhere(c, x => x.ParentId).ToList()), "entity " + user);
+                    Assert.AreEqual(expected, Rows(ToView(c.DC.Set<DpChild>()).DPWhere(c, x => x.ParentId).ToList()), "view " + user);
+                    // the default configuration (no options at all) behaves the same
+                    var d = env.Ctx(user);
+                    Assert.AreEqual(expected, Rows(ToView(d.DC.Set<DpChild>()).DPWhere(d, x => x.ParentId).ToList()), "view, defaults " + user);
+                }
+            });
+        }
+
+        [TestMethod]
+        public void ProjectedView_BeforeAndAfterProjection_SameRowsAndSql()
+        {
+            Each(env =>
+            {
+                foreach (var user in new[] { User.LimitedToParentA, User.AllAccess, User.NoLogin })
+                {
+                    var c = env.Ctx(user, options: Opts());
+                    var before = ToView(c.DC.Set<DpChild>().Where(x => x.Name != "m3").DPWhere(c, x => x.ParentId)).OrderBy(x => x.Name);
+                    var after = ToView(c.DC.Set<DpChild>().Where(x => x.Name != "m3")).DPWhere(c, x => x.ParentId).OrderBy(x => x.Name);
+                    Assert.AreEqual(Rows(before.ToList()), Rows(after.ToList()), "rows " + user);
+                    Assert.AreEqual(Normalize(before.ToQueryString()), Normalize(after.ToQueryString()), "sql " + user);
+                }
+            });
+        }
+
+        [TestMethod]
+        public void ProjectedView_MarkSurvives_InBatchAndCheckExport_WhenKeepIsOn()
+        {
+            Each(env =>
+            {
+                Func<DpListVM<DpChildView>, IQueryable<DpChildView>> q = vm => ToView(vm.DC.Set<DpChild>()).DPWhere(vm.Wtm, x => x.ParentId).OrderBy(x => x.Name);
+                var lambda = (LambdaExpression)((UnaryExpression)((MethodCallExpression)((MethodCallExpression)q(Vm<DpChildView>(env.Ctx(User.LimitedToParentA), ListVMSearchModeEnum.Search, q, null)).Expression).Arguments[0]).Arguments[1]).Operand;
+                Assert.AreEqual(ProtectedCondition.LambdaName, lambda.Name, "the condition added on the view carries the mark");
+                foreach (var mode in new[] { ListVMSearchModeEnum.Batch, ListVMSearchModeEnum.CheckExport })
+                {
+                    // the condition is added after the projection, where the narrowing of the query stops: it stays in place with the switch on and off
+                    foreach (var keep in new[] { true, false })
+                    {
+                        var vm = Vm<DpChildView>(env.Ctx(User.LimitedToParentA, keep), mode, q, env.AllChildIds());
+                        vm.DoSearch();
+                        Assert.AreEqual("m1,m2", Rows(vm.EntityList), $"keep={keep} {mode}");
+                    }
+                    // a ticked row outside the privilege is not reachable by its id
+                    var other = Vm<DpChildView>(env.Ctx(User.LimitedToParentA, true), mode, q, new List<string> { env.Child["m3"].ToString() });
+                    other.DoSearch();
+                    Assert.AreEqual("", Rows(other.EntityList), "m3 belongs to the other parent " + mode);
+                }
+            });
+        }
+
+        [TestMethod]
+        public void ProjectedView_ResolveProjectedTypesOff_KeepsThePreviousUnfilteredBehavior()
+        {
+            Each(env =>
+            {
+                var log = new CapturingLoggerFactory();
+                foreach (var user in new[] { User.LimitedToParentA, User.NoLogin })
+                {
+                    var c = env.Ctx(user, options: Opts(resolve: false, mode: DataPrivilegeUnresolvedTypeMode.Legacy), loggerFactory: log);
+                    Assert.AreEqual("m1,m2,m3", Rows(ToView(c.DC.Set<DpChild>()).DPWhere(c, x => x.ParentId).ToList()), "fk " + user);
+                    // the ID field with no login: the type name of the view is a table name the old code took as is, so no rows (as at the base commit)
+                    Assert.AreEqual(user == User.NoLogin ? "" : "m1,m2,m3", Rows(ToView(c.DC.Set<DpChild>()).DPWhere(c, x => x.ID).ToList()), "id " + user);
+                    // the same type of the entity is still filtered
+                    Assert.AreEqual(user == User.NoLogin ? "" : "m1,m2", Names(c.DC.Set<DpChild>().DPWhere(c, x => x.ParentId).ToList()));
+                }
+                Assert.AreEqual(0, log.Entries.Count, "Legacy is silent");
+                // with the default mode (Audit) the rows are the same and the skipped field is logged
+                var a = env.Ctx(User.LimitedToParentA, options: Opts(resolve: false), loggerFactory: log);
+                Assert.AreEqual("m1,m2,m3", Rows(ToView(a.DC.Set<DpChild>()).DPWhere(a, x => x.ParentId).ToList()));
+                Assert.AreEqual(Once(env, 1), log.Entries.Count);
+            });
+        }
+
+        [TestMethod]
+        public void NonDerivedView_Legacy_Audit_Enforce()
+        {
+            Each(env =>
+            {
+                // Legacy: silent, all rows
+                var legacyLog = new CapturingLoggerFactory();
+                var l = env.Ctx(User.LimitedToParentA, options: Opts(mode: DataPrivilegeUnresolvedTypeMode.Legacy), loggerFactory: legacyLog);
+                Assert.AreEqual("m1,m2,m3", Rows(ToFlat<TagLegacy>(l.DC.Set<DpChild>()).DPWhere(l, x => x.ParentId).ToList()));
+                Assert.AreEqual(0, legacyLog.Entries.Count);
+
+                // Audit (also the default without any option): a warning naming the type and the field, all rows
+                // (a distinct view type for each, so each one logs)
+                {
+                    var log = new CapturingLoggerFactory();
+                    var a = env.Ctx(User.LimitedToParentA, options: Opts(mode: DataPrivilegeUnresolvedTypeMode.Audit), loggerFactory: log);
+                    var q = ToFlat<TagAudit>(a.DC.Set<DpChild>());
+                    Assert.AreSame(q, q.DPWhere(a, x => x.ParentId), "the query is returned unchanged");
+                    Assert.AreEqual("m1,m2,m3", Rows(q.DPWhere(a, x => x.ParentId).ToList()));
+                    // logged once for the type, field and mode, although the field was handled twice
+                    Assert.AreEqual(Once(env, 1), log.Entries.Count);
+                    if (log.Entries.Count > 0)
+                    {
+                        Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Warning, log.Entries[0].Level);
+                        StringAssert.Contains(log.Entries[0].Message, nameof(DpFlatView));
+                        StringAssert.Contains(log.Entries[0].Message, "ParentId");
+                        StringAssert.Contains(log.Entries[0].Message, "Audit");
+                    }
+                }
+                {
+                    // the options absent altogether: the default is Audit
+                    var log = new CapturingLoggerFactory();
+                    var a = env.Ctx(User.LimitedToParentA, options: null, loggerFactory: log);
+                    var q = ToFlat<TagAuditDefault>(a.DC.Set<DpChild>());
+                    Assert.AreSame(q, q.DPWhere(a, x => x.ParentId));
+                    Assert.AreEqual("m1,m2,m3", Rows(q.DPWhere(a, x => x.ParentId).ToList()));
+                    Assert.AreEqual(Once(env, 1), log.Entries.Count);
+                }
+
+                // Enforce: no rows, and a warning
+                var elog = new CapturingLoggerFactory();
+                var e = env.Ctx(User.LimitedToParentA, options: Opts(mode: DataPrivilegeUnresolvedTypeMode.Enforce), loggerFactory: elog);
+                Assert.AreEqual("", Rows(ToFlat<TagEnforce>(e.DC.Set<DpChild>()).DPWhere(e, x => x.ParentId).ToList()));
+                Assert.AreEqual("", Rows(ToFlat<TagEnforce>(e.DC.Set<DpChild>()).DPWhere(e, x => x.ID).ToList()));
+                Assert.AreEqual(Once(env, 2), elog.Entries.Count);
+                if (elog.Entries.Count > 0)
+                {
+                    StringAssert.Contains(elog.Entries[0].Message, "Enforce");
+                }
+                // the filtering does not depend on the log: the same call again logs nothing and still returns no rows
+                var before = elog.Entries.Count;
+                Assert.AreEqual("", Rows(ToFlat<TagEnforce>(e.DC.Set<DpChild>()).DPWhere(e, x => x.ParentId).ToList()));
+                Assert.AreEqual(before, elog.Entries.Count, "once per type, field and mode");
+                // no login: no rows in Enforce, unchanged and logged in Audit
+                var en = env.Ctx(User.NoLogin, options: Opts(mode: DataPrivilegeUnresolvedTypeMode.Enforce), loggerFactory: elog);
+                Assert.AreEqual("", Rows(ToFlat<TagEnforce>(en.DC.Set<DpChild>()).DPWhere(en, x => x.ParentId).ToList()));
+                var an = env.Ctx(User.NoLogin, options: Opts(), loggerFactory: elog);
+                Assert.AreEqual("m1,m2,m3", Rows(ToFlat<TagAudit>(an.DC.Set<DpChild>()).DPWhere(an, x => x.ParentId).ToList()));
+            });
+        }
+
+        [TestMethod]
+        public void NonDerivedView_UnrestrictedUser_IsNotAffected_AndNothingIsLogged()
+        {
+            Each(env =>
+            {
+                foreach (var mode in new[] { DataPrivilegeUnresolvedTypeMode.Audit, DataPrivilegeUnresolvedTypeMode.Enforce })
+                {
+                    var log = new CapturingLoggerFactory();
+                    var c = env.Ctx(User.AllAccessEverywhere, options: Opts(mode: mode), loggerFactory: log);
+                    Assert.AreEqual("m1,m2,m3", Rows(ToFlat<TagPartial>(c.DC.Set<DpChild>()).DPWhere(c, x => x.ParentId).ToList()), mode.ToString());
+                    Assert.AreEqual(0, log.Entries.Count, mode + " logs nothing for a user who can read everything");
+                    // a user who is unrestricted on one table only is restricted on the other, so the unknown table is still checked
+                    var partial = env.Ctx(User.AllAccess, options: Opts(mode: mode), loggerFactory: log);
+                    var rows = Rows(ToFlat<TagPartial>(partial.DC.Set<DpChild>()).DPWhere(partial, x => x.ParentId).ToList());
+                    Assert.AreEqual(mode == DataPrivilegeUnresolvedTypeMode.Enforce ? "" : "m1,m2,m3", rows, "partial " + mode);
+                    Assert.AreEqual(Once(env, 1), log.Entries.Count, "partial " + mode);
+                }
+            });
+        }
+
+        [TestMethod]
+        public void MappedEntity_UnrelatedField_IsNotTreatedAsUnresolved()
+        {
+            Each(env =>
+            {
+                var log = new CapturingLoggerFactory();
+                var c = env.Ctx(User.LimitedToParentA, options: Opts(mode: DataPrivilegeUnresolvedTypeMode.Enforce), loggerFactory: log);
+                var plain = c.DC.Set<DpChild>();
+                Assert.AreSame(plain, plain.DPWhere(c, x => x.Name), "a mapped entity with a non-key field adds nothing, whatever the mode");
+                Assert.AreEqual(0, log.Entries.Count);
+                // a derived view with an unrelated field resolves to its entity and behaves the same
+                var view = ToView(c.DC.Set<DpChild>());
+                Assert.AreSame(view, view.DPWhere(c, x => x.Name));
+                Assert.AreEqual(0, log.Entries.Count);
+            });
+        }
+
+        [TestMethod]
+        public void ProjectedView_WithoutThePrivilegeMember_Behavior_IsPinned()
+        {
+            Each(env =>
+            {
+                var c = env.Ctx(User.LimitedToParentA, options: Opts());
+                // the projection does not assign ParentId: EF cannot translate a condition on a member the projection does not carry
+                var noParent = c.DC.Set<DpChild>().Select(x => new DpChildView { ID = x.ID, Name = x.Name });
+                var filtered = noParent.DPWhere(c, x => x.ParentId);
+                string outcome;
+                try { outcome = "rows:" + Rows(filtered.ToList()); }
+                catch (Exception ex) { outcome = "throws:" + ex.GetType().Name; }
+                Assert.AreEqual("throws:InvalidOperationException", outcome, "the query fails at translation; it does not return every row");
+                // the same projection without DPWhere works, so the failure is the condition on the missing member
+                Assert.AreEqual("m1,m2,m3", Rows(noParent.ToList()));
+            });
+        }
+
+        // ---- name-first resolution, multiple fields, list segments, missing settings -------------------------------------------------
+
+        private static List<SimpleDataPri> Pri(params (string Table, string Id)[] items)
+            => items.Select(x => new SimpleDataPri { TableName = x.Table, RelateId = x.Id }).ToList();
+
+        private static WTMContext With(WTMContext c, List<SimpleDataPri> dps)
+        {
+            c.LoginUserInfo = new LoginUserInfo { ITCode = "u", DataPrivileges = dps };
+            return c;
+        }
+
+        [TestMethod]
+        public void NameFirst_UnmappedDerivedType_SettingUnderItsOwnName_IsUsed_AsAtTheBaseCommit()
+        {
+            Each(env =>
+            {
+                // the type is not mapped in WTMContext.DC, but it has a setting under its own name (the entity of another context): that setting wins over the mapped base type
+                var settings = new List<IDataPrivilege> { new DataPrivilegeInfo<DpChildView>("view", x => x.Name) };
+                foreach (var resolve in new[] { true, false })
+                {
+                    var c = With(env.Ctx(User.NoLogin, options: Opts(resolve), settingsOverride: settings), Pri(("DpChildView", env.Child["m1"].ToString())));
+                    Assert.AreEqual("m1", Rows(ToView(c.DC.Set<DpChild>()).DPWhere(c, x => x.ID).ToList()), "own name, resolve=" + resolve);
+                    var all = With(env.Ctx(User.NoLogin, options: Opts(resolve), settingsOverride: settings), Pri(("DpChildView", null)));
+                    Assert.AreEqual("m1,m2,m3", Rows(ToView(all.DC.Set<DpChild>()).DPWhere(all, x => x.ID).ToList()), "own name, all access, resolve=" + resolve);
+                    // a user with no entry for the setting gets no rows
+                    var none = With(env.Ctx(User.NoLogin, options: Opts(resolve), settingsOverride: settings), Pri(("DpChild", env.Child["m1"].ToString())));
+                    Assert.AreEqual("", Rows(ToView(none.DC.Set<DpChild>()).DPWhere(none, x => x.ID).ToList()), "own name, no entry, resolve=" + resolve);
+                }
+            });
+        }
+
+        [TestMethod]
+        public void NameFirst_UnmappedDerivedType_SettingOnlyForTheBaseType_ResolvesViaTheBaseType()
+        {
+            Each(env =>
+            {
+                var settings = new List<IDataPrivilege> { new DataPrivilegeInfo<DpChild>("child", x => x.Name) };
+                var c = With(env.Ctx(User.NoLogin, options: Opts(), settingsOverride: settings), Pri(("DpChild", env.Child["m1"].ToString())));
+                Assert.AreEqual("m1", Rows(ToView(c.DC.Set<DpChild>()).DPWhere(c, x => x.ID).ToList()), "resolved via the base type");
+                // with the walk off the type stays unresolved (silently skipped in Audit, as before)
+                var off = With(env.Ctx(User.NoLogin, options: Opts(resolve: false, mode: DataPrivilegeUnresolvedTypeMode.Legacy), settingsOverride: settings), Pri(("DpChild", env.Child["m1"].ToString())));
+                Assert.AreEqual("m1,m2,m3", Rows(ToView(off.DC.Set<DpChild>()).DPWhere(off, x => x.ID).ToList()), "resolve=false");
+            });
+        }
+
+        // the user may read the rows of parent B and the child m1 (m3 belongs to B)
+        private static List<SimpleDataPri> ParentBAndChild1(Env env) => Pri(("DpParent", env.ParentB.ToString()), ("DpChild", env.Child["m1"].ToString()));
+
+        [TestMethod]
+        public void MultiField_OrCombined_AfterProjection_EqualsBeforeProjection()
+        {
+            Each(env =>
+            {
+                // several fields are OR-combined (rows allowed by the first OR by the second); a derived view now contributes every field, as the entity does
+                var c = With(env.Ctx(User.NoLogin, options: Opts()), ParentBAndChild1(env));
+                var entity = c.DC.Set<DpChild>().Where(x => x.Name != "zzz");
+                Assert.AreEqual("m3", Names(entity.DPWhere(c, x => x.ParentId).ToList()), "first field alone");
+                Assert.AreEqual("m1", Names(entity.DPWhere(c, x => x.ID).ToList()), "second field alone");
+                var before = ToView(entity.DPWhere(c, x => x.ParentId, x => x.ID)).OrderBy(x => x.Name);
+                var after = ToView(entity).DPWhere(c, x => x.ParentId, x => x.ID).OrderBy(x => x.Name);
+                Assert.AreEqual("m1,m3", Rows(before.ToList()), "before the projection");
+                Assert.AreEqual(Rows(before.ToList()), Rows(after.ToList()), "after the projection: the same rows");
+                Assert.AreEqual(Normalize(before.ToQueryString()), Normalize(after.ToQueryString()), "after the projection: the same sql");
+                // the order of the fields does not matter
+                var swapped = ToView(entity).DPWhere(c, x => x.ID, x => x.ParentId).OrderBy(x => x.Name);
+                Assert.AreEqual("m1,m3", Rows(swapped.ToList()));
+            });
+        }
+
+        [TestMethod]
+        public void MultiField_OnAView_PreviousVersusNewResult_IsDocumented()
+        {
+            Each(env =>
+            {
+                // the view type has a setting under its own name for ID (resolved before and now); ParentId used to be skipped on the view and is now resolved via the entity
+                var settings = new List<IDataPrivilege>
+                {
+                    new DataPrivilegeInfo<DpParent>("parent", x => x.Name),
+                    new DataPrivilegeInfo<DpChildView>("view", x => x.Name),
+                };
+                var dps = Pri(("DpParent", env.ParentB.ToString()), ("DpChildView", env.Child["m1"].ToString()));
+                var previous = With(env.Ctx(User.NoLogin, options: Opts(resolve: false, mode: DataPrivilegeUnresolvedTypeMode.Legacy), settingsOverride: settings), dps);
+                var now = With(env.Ctx(User.NoLogin, options: Opts(), settingsOverride: settings), dps);
+                Assert.AreEqual("m1", Rows(ToView(previous.DC.Set<DpChild>()).DPWhere(previous, x => x.ParentId, x => x.ID).ToList()), "ResolveProjectedTypes=false: only the field that resolved contributes");
+                Assert.AreEqual("m1,m3", Rows(ToView(now.DC.Set<DpChild>()).DPWhere(now, x => x.ParentId, x => x.ID).ToList()), "default: both fields contribute (rows of either)");
+            });
+        }
+
+        [TestMethod]
+        public void ListSegment_OnADerivedView_IsPinned()
+        {
+            Each(env =>
+            {
+                // the last member of Children[0].ID belongs to the child entity, so the condition resolves as it does on the entity; the view carries the list
+                var c = With(env.Ctx(User.LimitedToChild1, options: Opts(mode: DataPrivilegeUnresolvedTypeMode.Enforce)), Pri(("DpChild", env.Child["m1"].ToString())));
+                Assert.AreEqual("A", Names(c.DC.Set<DpParent>().DPWhere(c, x => x.Children[0].ID).ToList()), "entity");
+                var view = c.DC.Set<DpParent>().Select(x => new DpParentView { ID = x.ID, Name = x.Name, Children = x.Children });
+                string outcome;
+                try { outcome = "rows:" + string.Join(",", view.DPWhere(c, x => x.Children[0].ID).ToList().Select(x => x.Name).OrderBy(x => x)); }
+                catch (Exception ex) { outcome = "throws:" + ex.GetType().Name; }
+                Assert.AreEqual("rows:A", outcome, "the view gives the same rows as the entity");
+                // a view that does not carry the list fails at translation, it does not return every parent
+                var noList = c.DC.Set<DpParent>().Select(x => new DpParentView { ID = x.ID, Name = x.Name });
+                try { outcome = "rows:" + string.Join(",", noList.DPWhere(c, x => x.Children[0].ID).ToList().Select(x => x.Name).OrderBy(x => x)); }
+                catch (Exception ex) { outcome = "throws:" + ex.GetType().Name; }
+                Assert.AreNotEqual("rows:A,B", outcome, "never every row");
+            });
+        }
+
+        [TestMethod]
+        public void NullDataPrivilegeSettings_NoException_MappedTypesAsAtTheBase_ViewsUnaffected()
+        {
+            Each(env =>
+            {
+                foreach (var mode in new[] { DataPrivilegeUnresolvedTypeMode.Legacy, DataPrivilegeUnresolvedTypeMode.Audit, DataPrivilegeUnresolvedTypeMode.Enforce })
+                {
+                    var log = new CapturingLoggerFactory();
+                    // the context turns a null list into an empty one: nothing is configured, so nothing is protected
+                    var c = With(env.Ctx(User.NoLogin, options: Opts(mode: mode), loggerFactory: log, nullSettings: true), Pri(("DpChild", env.Child["m1"].ToString())));
+                    Assert.AreEqual("m1,m2,m3", Names(c.DC.Set<DpChild>().DPWhere(c, x => x.ID).ToList()), "mapped, " + mode);
+                    Assert.AreEqual("m1,m2,m3", Names(c.DC.Set<DpChild>().DPWhere(c, x => x.ParentId).ToList()), "mapped fk, " + mode);
+                    Assert.AreEqual("m1,m2,m3", Rows(ToView(c.DC.Set<DpChild>()).DPWhere(c, x => x.ID).ToList()), "derived view, " + mode);
+                    Assert.AreEqual("m1,m2,m3", Rows(ToFlat<TagList>(c.DC.Set<DpChild>()).DPWhere(c, x => x.ParentId).ToList()), "non-derived view, " + mode);
+                    Assert.AreEqual(0, log.Entries.Count, "nothing to protect, nothing logged, " + mode);
+                    // no login as well
+                    var nl = env.Ctx(User.NoLogin, options: Opts(mode: mode), loggerFactory: log, nullSettings: true);
+                    // as on the entity (and at the base commit), no login information gives no rows even when no setting is configured
+                    Assert.AreEqual("", Names(nl.DC.Set<DpChild>().DPWhere(nl, x => x.ParentId).ToList()), "mapped, no login, " + mode);
+                    Assert.AreEqual("", Rows(ToView(nl.DC.Set<DpChild>()).DPWhere(nl, x => x.ParentId).ToList()), "derived view, no login, " + mode);
+                }
+            });
+        }
+
+        // ---- a query from another DbContext than WTMContext.DC ------------------------------------------------------------------------
+
+        [TestMethod]
+        public void EntityMappedOnlyInAnotherContext_IdField_IsStillFiltered_InEveryMode_AndNothingIsLogged()
+        {
+            Each(env =>
+            {
+                // WTMContext.DC (an EmptyContext) does not map DpChild; the query runs on a context that does.
+                // At the base commit the table name came from the member's owner type name, so the condition was applied in every case below.
+                using var queryDc = new DpContext(env.Cs, env.Type);
+                foreach (var mode in new[] { DataPrivilegeUnresolvedTypeMode.Legacy, DataPrivilegeUnresolvedTypeMode.Audit, DataPrivilegeUnresolvedTypeMode.Enforce })
+                {
+                    foreach (var resolve in new[] { true, false })
+                    {
+                        var log = new CapturingLoggerFactory();
+                        var gap = new EmptyContext(env.Cs, env.Type);
+                        Assert.IsNull(gap.Model.FindEntityType(typeof(DpChild)), "the harness: DC does not map the entity");
+                        foreach (var (user, expected) in new[] { (User.LimitedToChild1, "m1"), (User.AllAccessEverywhere, "m1,m2,m3"), (User.NoLogin, "") })
+                        {
+                            var c = env.Ctx(user, options: Opts(resolve, mode), loggerFactory: log, dc: new EmptyContext(env.Cs, env.Type));
+                            Assert.AreEqual(expected, Names(queryDc.Set<DpChild>().DPWhere(c, x => x.ID).ToList()), $"{user} {mode} resolve={resolve}");
+                        }
+                        Assert.AreEqual(0, log.Entries.Count, $"{mode} resolve={resolve} logs nothing: the condition was resolved");
+                    }
+                }
+                // the options absent altogether behave the same
+                var d = env.Ctx(User.LimitedToChild1, dc: new EmptyContext(env.Cs, env.Type));
+                Assert.AreEqual("m1", Names(queryDc.Set<DpChild>().DPWhere(d, x => x.ID).ToList()), "defaults");
+            });
+        }
+
+        [TestMethod]
+        public void EntityMappedOnlyInAnotherContext_FkField_StaysUnresolved_AsAtTheBaseCommit()
+        {
+            Each(env =>
+            {
+                // the foreign key cannot be resolved without the model of the query's own context (as at the base commit: the field was skipped); with Enforce it fails closed
+                using var queryDc = new DpContext(env.Cs, env.Type);
+                var log = new CapturingLoggerFactory();
+                var a = env.Ctx(User.LimitedToParentA, options: Opts(), loggerFactory: log, dc: new EmptyContext(env.Cs, env.Type));
+                Assert.AreEqual("m1,m2,m3", Names(queryDc.Set<DpChild>().DPWhere(a, x => x.ParentId).ToList()));
+                Assert.AreEqual(Once(env, 1), log.Entries.Count, "Audit logs the skipped field");
+                var e = env.Ctx(User.LimitedToParentA, options: Opts(mode: DataPrivilegeUnresolvedTypeMode.Enforce), loggerFactory: log, dc: new EmptyContext(env.Cs, env.Type));
+                Assert.AreEqual("", Names(queryDc.Set<DpChild>().DPWhere(e, x => x.ParentId).ToList()));
+            });
+        }
+
+        [TestMethod]
+        public void Options_Binding_ProjectedTypeSettings_DefaultsAndInvalidValues()
+        {
+            var d = new Configs().DataPrivilegeOptions;
+            Assert.IsTrue(d.ResolveProjectedTypes);
+            Assert.AreEqual(DataPrivilegeUnresolvedTypeMode.Audit, d.UnresolvedTypeMode);
+            var empty = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string> { ["CookiePre"] = "x" }).Build().Get<Configs>();
+            Assert.IsTrue(empty.DataPrivilegeOptions.ResolveProjectedTypes);
+            Assert.AreEqual(DataPrivilegeUnresolvedTypeMode.Audit, empty.DataPrivilegeOptions.UnresolvedTypeMode);
+
+            var off = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string> { ["DataPrivilegeOptions:ResolveProjectedTypes"] = "false" }).Build().Get<Configs>();
+            Assert.IsFalse(off.DataPrivilegeOptions.ResolveProjectedTypes);
+            foreach (var (text, expected) in new[] { ("Legacy", DataPrivilegeUnresolvedTypeMode.Legacy), ("audit", DataPrivilegeUnresolvedTypeMode.Audit), ("ENFORCE", DataPrivilegeUnresolvedTypeMode.Enforce) })
+            {
+                var cfg = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string> { ["DataPrivilegeOptions:UnresolvedTypeMode"] = text }).Build().Get<Configs>();
+                Assert.AreEqual(expected, cfg.DataPrivilegeOptions.UnresolvedTypeMode, text);
+            }
+
+            foreach (var value in new[] { "0", "1", "", "abc" })
+            {
+                var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string> { ["DataPrivilegeOptions:ResolveProjectedTypes"] = value }).Build();
+                Assert.ThrowsException<InvalidOperationException>(() => config.Get<Configs>(), $"ResolveProjectedTypes '{value}' must be rejected");
+            }
+            foreach (var value in new[] { "abc", "Enforced", "off", "-1" })
+            {
+                var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string> { ["DataPrivilegeOptions:UnresolvedTypeMode"] = value }).Build();
+                // text that is not a mode: InvalidOperationException from the binder; a number that is no mode: the setter's exception (also at startup)
+                var rejected = false;
+                try { config.Get<Configs>(); } catch (Exception) { rejected = true; }
+                Assert.IsTrue(rejected, $"UnresolvedTypeMode '{value}' must be rejected");
+            }
         }
 
         // ---- Excel -------------------------------------------------------------------------------------------------------------------------
